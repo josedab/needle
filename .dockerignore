@@ -1,0 +1,35 @@
+# Build artifacts
+target/
+*.rs.bk
+
+# IDE files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Git
+.git/
+.gitignore
+
+# Documentation
+docs/
+*.md
+!README.md
+
+# Test data
+*.needle
+*.db
+
+# Logs
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Development files
+.env.local
+.env.development
+docker-compose.override.yml
