@@ -1,0 +1,1014 @@
+# Needle Custom Resource Definitions
+# ====================================
+# CRDs extend Kubernetes with custom resource types for Needle.
+# This enables declarative management of Needle clusters using kubectl.
+#
+# Custom Resources Defined:
+# - NeedleCluster: Manages a complete Needle cluster deployment
+# - NeedleIndex: Manages vector index configurations
+# - NeedleBackup: Manages backup schedules and retention
+#
+# Installation:
+# kubectl apply -f crd.yaml
+#
+# Usage:
+# kubectl get needleclusters
+# kubectl describe needlecluster my-cluster
+
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: needleclusters.needle.io
+  labels:
+    app: needle
+  annotations:
+    # Controller version compatibility
+    controller-gen.kubebuilder.io/version: v0.14.0
+spec:
+  group: needle.io
+
+  names:
+    kind: NeedleCluster
+    listKind: NeedleClusterList
+    plural: needleclusters
+    singular: needlecluster
+    shortNames:
+      - nc
+      - needle
+    categories:
+      - all
+      - needle
+
+  scope: Namespaced
+
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+
+      # Subresources for status and scale
+      subresources:
+        status: {}
+        scale:
+          specReplicasPath: .spec.storage.replicas
+          statusReplicasPath: .status.storageReplicas
+          labelSelectorPath: .status.selector
+
+      # Additional columns for kubectl get
+      additionalPrinterColumns:
+        - name: Status
+          type: string
+          jsonPath: .status.phase
+          description: Current phase of the cluster
+        - name: Storage
+          type: integer
+          jsonPath: .spec.storage.replicas
+          description: Number of storage replicas
+        - name: API
+          type: integer
+          jsonPath: .spec.api.replicas
+          description: Number of API replicas
+        - name: Version
+          type: string
+          jsonPath: .spec.version
+          description: Needle version
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+
+      schema:
+        openAPIV3Schema:
+          type: object
+          description: NeedleCluster represents a Needle vector database cluster
+          required:
+            - spec
+          properties:
+            apiVersion:
+              type: string
+            kind:
+              type: string
+            metadata:
+              type: object
+
+            spec:
+              type: object
+              description: Desired state of the NeedleCluster
+              required:
+                - version
+              properties:
+                # Needle version to deploy
+                version:
+                  type: string
+                  description: Needle version (e.g., v1.0.0)
+                  pattern: "^v[0-9]+\\.[0-9]+\\.[0-9]+(-[a-zA-Z0-9]+)?$"
+
+                # Image configuration
+                image:
+                  type: object
+                  description: Container image configuration
+                  properties:
+                    repository:
+                      type: string
+                      description: Image repository
+                      default: needle/needle
+                    pullPolicy:
+                      type: string
+                      description: Image pull policy
+                      enum: [Always, IfNotPresent, Never]
+                      default: IfNotPresent
+                    pullSecrets:
+                      type: array
+                      description: Image pull secrets
+                      items:
+                        type: object
+                        properties:
+                          name:
+                            type: string
+
+                # Storage node configuration
+                storage:
+                  type: object
+                  description: Storage node configuration
+                  required:
+                    - replicas
+                  properties:
+                    replicas:
+                      type: integer
+                      description: Number of storage replicas
+                      minimum: 1
+                      maximum: 100
+                      default: 3
+
+                    resources:
+                      type: object
+                      description: Resource requirements
+                      properties:
+                        requests:
+                          type: object
+                          properties:
+                            cpu:
+                              type: string
+                              default: "1000m"
+                            memory:
+                              type: string
+                              default: "2Gi"
+                        limits:
+                          type: object
+                          properties:
+                            cpu:
+                              type: string
+                              default: "4000m"
+                            memory:
+                              type: string
+                              default: "8Gi"
+
+                    # Tiered storage configuration
+                    tiers:
+                      type: object
+                      description: Tiered storage configuration
+                      properties:
+                        hot:
+                          type: object
+                          description: Hot tier (SSD) configuration
+                          properties:
+                            storageClass:
+                              type: string
+                              default: ssd-storage
+                            size:
+                              type: string
+                              description: Storage size
+                              default: "100Gi"
+                        warm:
+                          type: object
+                          description: Warm tier (HDD) configuration
+                          properties:
+                            storageClass:
+                              type: string
+                              default: hdd-storage
+                            size:
+                              type: string
+                              default: "500Gi"
+                        cold:
+                          type: object
+                          description: Cold tier (object storage) configuration
+                          properties:
+                            enabled:
+                              type: boolean
+                              default: false
+                            endpoint:
+                              type: string
+                              description: S3-compatible endpoint
+                            bucket:
+                              type: string
+                              description: Bucket name
+                            secretRef:
+                              type: object
+                              description: Secret containing credentials
+                              properties:
+                                name:
+                                  type: string
+                                accessKeyKey:
+                                  type: string
+                                  default: access-key
+                                secretKeyKey:
+                                  type: string
+                                  default: secret-key
+
+                    # Persistence configuration
+                    persistence:
+                      type: object
+                      properties:
+                        enabled:
+                          type: boolean
+                          default: true
+                        storageClass:
+                          type: string
+                        size:
+                          type: string
+                          default: "100Gi"
+
+                    # Pod anti-affinity
+                    antiAffinity:
+                      type: string
+                      description: Anti-affinity type
+                      enum: [soft, hard]
+                      default: hard
+
+                    # Node selector
+                    nodeSelector:
+                      type: object
+                      additionalProperties:
+                        type: string
+
+                    # Tolerations
+                    tolerations:
+                      type: array
+                      items:
+                        type: object
+                        properties:
+                          key:
+                            type: string
+                          operator:
+                            type: string
+                          value:
+                            type: string
+                          effect:
+                            type: string
+                          tolerationSeconds:
+                            type: integer
+
+                # API node configuration
+                api:
+                  type: object
+                  description: API node configuration
+                  properties:
+                    replicas:
+                      type: integer
+                      description: Number of API replicas
+                      minimum: 1
+                      maximum: 100
+                      default: 3
+
+                    resources:
+                      type: object
+                      properties:
+                        requests:
+                          type: object
+                          properties:
+                            cpu:
+                              type: string
+                              default: "500m"
+                            memory:
+                              type: string
+                              default: "512Mi"
+                        limits:
+                          type: object
+                          properties:
+                            cpu:
+                              type: string
+                              default: "2000m"
+                            memory:
+                              type: string
+                              default: "2Gi"
+
+                    # Autoscaling configuration
+                    autoscaling:
+                      type: object
+                      properties:
+                        enabled:
+                          type: boolean
+                          default: true
+                        minReplicas:
+                          type: integer
+                          default: 3
+                        maxReplicas:
+                          type: integer
+                          default: 20
+                        targetCPU:
+                          type: integer
+                          description: Target CPU utilization percentage
+                          default: 70
+                        targetMemory:
+                          type: integer
+                          description: Target memory utilization percentage
+                          default: 80
+
+                    # Service configuration
+                    service:
+                      type: object
+                      properties:
+                        type:
+                          type: string
+                          enum: [ClusterIP, NodePort, LoadBalancer]
+                          default: ClusterIP
+                        port:
+                          type: integer
+                          default: 80
+                        annotations:
+                          type: object
+                          additionalProperties:
+                            type: string
+
+                    # Ingress configuration
+                    ingress:
+                      type: object
+                      properties:
+                        enabled:
+                          type: boolean
+                          default: false
+                        className:
+                          type: string
+                        annotations:
+                          type: object
+                          additionalProperties:
+                            type: string
+                        hosts:
+                          type: array
+                          items:
+                            type: object
+                            properties:
+                              host:
+                                type: string
+                              paths:
+                                type: array
+                                items:
+                                  type: object
+                                  properties:
+                                    path:
+                                      type: string
+                                    pathType:
+                                      type: string
+                        tls:
+                          type: array
+                          items:
+                            type: object
+                            properties:
+                              secretName:
+                                type: string
+                              hosts:
+                                type: array
+                                items:
+                                  type: string
+
+                # Replication configuration
+                replication:
+                  type: object
+                  properties:
+                    factor:
+                      type: integer
+                      description: Replication factor
+                      minimum: 1
+                      maximum: 10
+                      default: 3
+                    minReplicas:
+                      type: integer
+                      description: Minimum replicas for writes
+                      default: 2
+
+                # Index configuration
+                index:
+                  type: object
+                  properties:
+                    type:
+                      type: string
+                      description: Index algorithm
+                      enum: [hnsw, flat, ivf]
+                      default: hnsw
+                    hnsw:
+                      type: object
+                      properties:
+                        m:
+                          type: integer
+                          description: HNSW M parameter
+                          default: 16
+                        efConstruction:
+                          type: integer
+                          default: 200
+                        efSearch:
+                          type: integer
+                          default: 100
+
+                # Security configuration
+                security:
+                  type: object
+                  properties:
+                    authentication:
+                      type: object
+                      properties:
+                        enabled:
+                          type: boolean
+                          default: true
+                        type:
+                          type: string
+                          enum: [token, mtls, oidc]
+                          default: token
+                    encryption:
+                      type: object
+                      properties:
+                        atRest:
+                          type: boolean
+                          default: true
+                        inTransit:
+                          type: boolean
+                          default: true
+                    podSecurityContext:
+                      type: object
+                      properties:
+                        runAsNonRoot:
+                          type: boolean
+                          default: true
+                        runAsUser:
+                          type: integer
+                          default: 1000
+                        fsGroup:
+                          type: integer
+                          default: 1000
+
+                # Monitoring configuration
+                monitoring:
+                  type: object
+                  properties:
+                    enabled:
+                      type: boolean
+                      default: true
+                    serviceMonitor:
+                      type: object
+                      properties:
+                        enabled:
+                          type: boolean
+                          default: false
+                        interval:
+                          type: string
+                          default: "30s"
+                        labels:
+                          type: object
+                          additionalProperties:
+                            type: string
+                    prometheus:
+                      type: object
+                      properties:
+                        scrape:
+                          type: boolean
+                          default: true
+                        port:
+                          type: integer
+                          default: 9090
+                        path:
+                          type: string
+                          default: "/metrics"
+
+                # Backup configuration
+                backup:
+                  type: object
+                  properties:
+                    enabled:
+                      type: boolean
+                      default: false
+                    schedule:
+                      type: string
+                      description: Cron schedule for backups
+                      default: "0 2 * * *"
+                    retention:
+                      type: object
+                      properties:
+                        days:
+                          type: integer
+                          default: 7
+                        count:
+                          type: integer
+                          default: 10
+                    destination:
+                      type: object
+                      properties:
+                        type:
+                          type: string
+                          enum: [s3, gcs, azure]
+                        bucket:
+                          type: string
+                        prefix:
+                          type: string
+                        secretRef:
+                          type: object
+                          properties:
+                            name:
+                              type: string
+
+            status:
+              type: object
+              description: Observed state of the NeedleCluster
+              properties:
+                phase:
+                  type: string
+                  description: Current phase
+                  enum:
+                    - Pending
+                    - Creating
+                    - Running
+                    - Updating
+                    - Failed
+                    - Terminating
+                conditions:
+                  type: array
+                  description: Current conditions
+                  items:
+                    type: object
+                    properties:
+                      type:
+                        type: string
+                      status:
+                        type: string
+                        enum: ["True", "False", "Unknown"]
+                      lastTransitionTime:
+                        type: string
+                        format: date-time
+                      reason:
+                        type: string
+                      message:
+                        type: string
+                storageReplicas:
+                  type: integer
+                  description: Current storage replica count
+                apiReplicas:
+                  type: integer
+                  description: Current API replica count
+                readyStorageReplicas:
+                  type: integer
+                  description: Ready storage replicas
+                readyApiReplicas:
+                  type: integer
+                  description: Ready API replicas
+                selector:
+                  type: string
+                  description: Label selector for pods
+                currentVersion:
+                  type: string
+                  description: Currently deployed version
+                observedGeneration:
+                  type: integer
+                  description: Last observed generation
+                endpoints:
+                  type: object
+                  properties:
+                    api:
+                      type: string
+                      description: API endpoint URL
+                    grpc:
+                      type: string
+                      description: gRPC endpoint URL
+                    metrics:
+                      type: string
+                      description: Metrics endpoint URL
+                lastBackup:
+                  type: object
+                  properties:
+                    time:
+                      type: string
+                      format: date-time
+                    status:
+                      type: string
+                    location:
+                      type: string
+
+---
+# NeedleIndex CRD
+# Manages vector index configurations
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: needleindexes.needle.io
+  labels:
+    app: needle
+spec:
+  group: needle.io
+  names:
+    kind: NeedleIndex
+    listKind: NeedleIndexList
+    plural: needleindexes
+    singular: needleindex
+    shortNames:
+      - nidx
+    categories:
+      - needle
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Cluster
+          type: string
+          jsonPath: .spec.clusterRef.name
+        - name: Dimensions
+          type: integer
+          jsonPath: .spec.dimensions
+        - name: Vectors
+          type: integer
+          jsonPath: .status.vectorCount
+        - name: Status
+          type: string
+          jsonPath: .status.phase
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+      schema:
+        openAPIV3Schema:
+          type: object
+          description: NeedleIndex represents a vector index in a NeedleCluster
+          required:
+            - spec
+          properties:
+            apiVersion:
+              type: string
+            kind:
+              type: string
+            metadata:
+              type: object
+            spec:
+              type: object
+              required:
+                - clusterRef
+                - dimensions
+              properties:
+                clusterRef:
+                  type: object
+                  description: Reference to the NeedleCluster
+                  required:
+                    - name
+                  properties:
+                    name:
+                      type: string
+                    namespace:
+                      type: string
+                dimensions:
+                  type: integer
+                  description: Vector dimensions
+                  minimum: 1
+                  maximum: 65536
+                metric:
+                  type: string
+                  description: Distance metric
+                  enum: [cosine, euclidean, dot]
+                  default: cosine
+                algorithm:
+                  type: object
+                  properties:
+                    type:
+                      type: string
+                      enum: [hnsw, flat, ivf]
+                      default: hnsw
+                    hnsw:
+                      type: object
+                      properties:
+                        m:
+                          type: integer
+                          default: 16
+                        efConstruction:
+                          type: integer
+                          default: 200
+                sharding:
+                  type: object
+                  properties:
+                    enabled:
+                      type: boolean
+                      default: true
+                    shards:
+                      type: integer
+                      default: 3
+                    replicationFactor:
+                      type: integer
+                      default: 2
+            status:
+              type: object
+              properties:
+                phase:
+                  type: string
+                  enum: [Pending, Building, Ready, Rebuilding, Failed]
+                vectorCount:
+                  type: integer
+                sizeBytes:
+                  type: integer
+                shards:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      id:
+                        type: integer
+                      node:
+                        type: string
+                      vectorCount:
+                        type: integer
+                      status:
+                        type: string
+                lastOptimized:
+                  type: string
+                  format: date-time
+                conditions:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      type:
+                        type: string
+                      status:
+                        type: string
+                      lastTransitionTime:
+                        type: string
+                        format: date-time
+                      reason:
+                        type: string
+                      message:
+                        type: string
+
+---
+# NeedleBackup CRD
+# Manages backup configurations
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: needlebackups.needle.io
+  labels:
+    app: needle
+spec:
+  group: needle.io
+  names:
+    kind: NeedleBackup
+    listKind: NeedleBackupList
+    plural: needlebackups
+    singular: needlebackup
+    shortNames:
+      - nbak
+    categories:
+      - needle
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Cluster
+          type: string
+          jsonPath: .spec.clusterRef.name
+        - name: Schedule
+          type: string
+          jsonPath: .spec.schedule
+        - name: Last Backup
+          type: date
+          jsonPath: .status.lastBackupTime
+        - name: Status
+          type: string
+          jsonPath: .status.phase
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+      schema:
+        openAPIV3Schema:
+          type: object
+          description: NeedleBackup manages backup schedules for a NeedleCluster
+          required:
+            - spec
+          properties:
+            apiVersion:
+              type: string
+            kind:
+              type: string
+            metadata:
+              type: object
+            spec:
+              type: object
+              required:
+                - clusterRef
+                - destination
+              properties:
+                clusterRef:
+                  type: object
+                  required:
+                    - name
+                  properties:
+                    name:
+                      type: string
+                    namespace:
+                      type: string
+                schedule:
+                  type: string
+                  description: Cron schedule (empty for one-time backup)
+                  pattern: "^(@(annually|yearly|monthly|weekly|daily|hourly))|((((\\d+,)+\\d+|(\\d+(/|-)\\d+)|\\d+|\\*) ?){5,7})$"
+                destination:
+                  type: object
+                  required:
+                    - type
+                    - bucket
+                  properties:
+                    type:
+                      type: string
+                      enum: [s3, gcs, azure]
+                    bucket:
+                      type: string
+                    prefix:
+                      type: string
+                    region:
+                      type: string
+                    endpoint:
+                      type: string
+                    secretRef:
+                      type: object
+                      properties:
+                        name:
+                          type: string
+                retention:
+                  type: object
+                  properties:
+                    keepLast:
+                      type: integer
+                      default: 5
+                    keepDaily:
+                      type: integer
+                      default: 7
+                    keepWeekly:
+                      type: integer
+                      default: 4
+                    keepMonthly:
+                      type: integer
+                      default: 6
+                paused:
+                  type: boolean
+                  default: false
+            status:
+              type: object
+              properties:
+                phase:
+                  type: string
+                  enum: [Pending, Running, Completed, Failed]
+                lastBackupTime:
+                  type: string
+                  format: date-time
+                lastSuccessfulBackup:
+                  type: string
+                  format: date-time
+                backupHistory:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      id:
+                        type: string
+                      startTime:
+                        type: string
+                        format: date-time
+                      completionTime:
+                        type: string
+                        format: date-time
+                      status:
+                        type: string
+                      sizeBytes:
+                        type: integer
+                      location:
+                        type: string
+                conditions:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      type:
+                        type: string
+                      status:
+                        type: string
+                      lastTransitionTime:
+                        type: string
+                        format: date-time
+                      reason:
+                        type: string
+                      message:
+                        type: string
+
+---
+# Example NeedleCluster resource
+# This can be used as a template for creating clusters
+apiVersion: needle.io/v1alpha1
+kind: NeedleCluster
+metadata:
+  name: production-cluster
+  namespace: needle
+  labels:
+    environment: production
+spec:
+  version: v1.0.0
+
+  image:
+    repository: needle/needle
+    pullPolicy: IfNotPresent
+
+  storage:
+    replicas: 3
+    resources:
+      requests:
+        cpu: "2000m"
+        memory: "4Gi"
+      limits:
+        cpu: "4000m"
+        memory: "8Gi"
+    tiers:
+      hot:
+        storageClass: ssd-storage
+        size: "200Gi"
+      warm:
+        storageClass: hdd-storage
+        size: "1Ti"
+      cold:
+        enabled: true
+        endpoint: "https://s3.amazonaws.com"
+        bucket: "needle-cold-storage"
+        secretRef:
+          name: needle-s3-credentials
+    antiAffinity: hard
+
+  api:
+    replicas: 3
+    resources:
+      requests:
+        cpu: "500m"
+        memory: "512Mi"
+      limits:
+        cpu: "2000m"
+        memory: "2Gi"
+    autoscaling:
+      enabled: true
+      minReplicas: 3
+      maxReplicas: 20
+      targetCPU: 70
+    service:
+      type: LoadBalancer
+    ingress:
+      enabled: true
+      className: nginx
+      hosts:
+        - host: needle.example.com
+          paths:
+            - path: /
+              pathType: Prefix
+      tls:
+        - secretName: needle-tls
+          hosts:
+            - needle.example.com
+
+  replication:
+    factor: 3
+    minReplicas: 2
+
+  index:
+    type: hnsw
+    hnsw:
+      m: 16
+      efConstruction: 200
+      efSearch: 100
+
+  security:
+    authentication:
+      enabled: true
+      type: token
+    encryption:
+      atRest: true
+      inTransit: true
+
+  monitoring:
+    enabled: true
+    serviceMonitor:
+      enabled: true
+      interval: "30s"
+
+  backup:
+    enabled: true
+    schedule: "0 2 * * *"
+    retention:
+      days: 7
+      count: 10
+    destination:
+      type: s3
+      bucket: needle-backups
+      prefix: production
+      secretRef:
+        name: needle-backup-credentials
