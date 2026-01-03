@@ -1,0 +1,39 @@
+# Development environment values for Needle
+# Usage: helm install needle ./helm/needle -f ./helm/needle/values-dev.yaml
+
+replicaCount: 1
+
+image:
+  pullPolicy: Always
+  tag: "latest"
+
+resources:
+  limits:
+    cpu: 1000m
+    memory: 2Gi
+  requests:
+    cpu: 250m
+    memory: 512Mi
+
+persistence:
+  enabled: true
+  size: 5Gi
+
+needle:
+  logLevel: debug
+
+metrics:
+  enabled: true
+  serviceMonitor:
+    enabled: false
+
+# Disable probes for faster dev iteration
+livenessProbe:
+  initialDelaySeconds: 5
+  periodSeconds: 10
+  failureThreshold: 10
+
+readinessProbe:
+  initialDelaySeconds: 3
+  periodSeconds: 5
+  failureThreshold: 10

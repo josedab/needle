@@ -1,0 +1,21 @@
+apiVersion: v2
+name: needle
+description: A Helm chart for Needle Vector Database - SQLite for vectors
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords:
+  - vector-database
+  - embeddings
+  - similarity-search
+  - hnsw
+  - ann
+home: https://github.com/needle-db/needle
+sources:
+  - https://github.com/needle-db/needle
+maintainers:
+  - name: Needle Team
+    email: maintainers@needle.dev
+annotations:
+  artifacthub.io/license: MIT
+  artifacthub.io/category: database
