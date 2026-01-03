@@ -1,0 +1,68 @@
+# Production environment values for Needle
+# Usage: helm install needle ./helm/needle -f ./helm/needle/values-prod.yaml
+
+replicaCount: 1
+
+image:
+  pullPolicy: IfNotPresent
+  # tag: "v1.0.0"  # Pin to specific version in production
+
+resources:
+  limits:
+    cpu: 4000m
+    memory: 8Gi
+  requests:
+    cpu: 1000m
+    memory: 2Gi
+
+persistence:
+  enabled: true
+  storageClass: "fast-ssd"  # Use fast storage in production
+  size: 100Gi
+
+needle:
+  logLevel: info
+
+metrics:
+  enabled: true
+  serviceMonitor:
+    enabled: true
+    interval: 15s
+    scrapeTimeout: 10s
+    labels:
+      release: prometheus
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
+# Production-grade probes
+livenessProbe:
+  initialDelaySeconds: 30
+  periodSeconds: 30
+  timeoutSeconds: 10
+  failureThreshold: 3
+
+readinessProbe:
+  initialDelaySeconds: 10
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 3
+
+# Example: Schedule on dedicated nodes
+# nodeSelector:
+#   workload: vector-db
+
+# Example: Anti-affinity for HA (if running multiple replicas)
+# affinity:
+#   podAntiAffinity:
+#     preferredDuringSchedulingIgnoredDuringExecution:
+#       - weight: 100
+#         podAffinityTerm:
+#           labelSelector:
+#             matchExpressions:
+#               - key: app.kubernetes.io/name
+#                 operator: In
+#                 values:
+#                   - needle
+#           topologyKey: kubernetes.io/hostname
