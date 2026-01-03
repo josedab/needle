@@ -1,0 +1,515 @@
+# Needle StatefulSet Configuration
+# =================================
+# StatefulSet manages stateful applications with persistent storage.
+# Use this for Needle storage nodes that require:
+# - Stable network identities (needle-storage-0, needle-storage-1, etc.)
+# - Persistent storage that survives pod restarts
+# - Ordered deployment and scaling
+# - Ordered rolling updates
+#
+# Key Differences from Deployment:
+# - Pods have persistent identifiers
+# - PVCs are created per pod and retained on deletion
+# - Pods are created/deleted in order
+# - Network identity persists across rescheduling
+
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: needle-storage
+  namespace: needle
+  labels:
+    app: needle
+    component: storage
+spec:
+  # Service that provides network identity
+  serviceName: needle-storage-headless
+
+  # Number of storage replicas
+  # Should match replication factor for proper data distribution
+  replicas: 3
+
+  # Pod management policy
+  # OrderedReady: Pods are created/deleted sequentially (default)
+  # Parallel: Pods are created/deleted simultaneously
+  podManagementPolicy: OrderedReady
+
+  # Update strategy for rolling updates
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      # Update one pod at a time
+      # Ensure data is replicated before proceeding
+      partition: 0
+
+  # Revision history for rollbacks
+  revisionHistoryLimit: 10
+
+  selector:
+    matchLabels:
+      app: needle
+      component: storage
+
+  template:
+    metadata:
+      labels:
+        app: needle
+        component: storage
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9090"
+        prometheus.io/path: "/metrics"
+
+    spec:
+      # Service account with appropriate permissions
+      serviceAccountName: needle-storage
+
+      # Security context for the pod
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+
+      # Anti-affinity for high availability
+      # Ensures storage nodes are spread across failure domains
+      affinity:
+        podAntiAffinity:
+          # Require different nodes for storage pods
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchExpressions:
+                  - key: app
+                    operator: In
+                    values:
+                      - needle
+                  - key: component
+                    operator: In
+                    values:
+                      - storage
+              topologyKey: kubernetes.io/hostname
+          # Prefer different availability zones
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchExpressions:
+                    - key: app
+                      operator: In
+                      values:
+                        - needle
+                    - key: component
+                      operator: In
+                      values:
+                        - storage
+                topologyKey: topology.kubernetes.io/zone
+
+        # Node affinity for storage-optimized nodes
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              preference:
+                matchExpressions:
+                  - key: node.kubernetes.io/storage-class
+                    operator: In
+                    values:
+                      - ssd
+                      - nvme
+            - weight: 50
+              preference:
+                matchExpressions:
+                  - key: node.kubernetes.io/instance-type
+                    operator: In
+                    values:
+                      - i3.xlarge
+                      - i3.2xlarge
+                      - d2.xlarge
+                      - d2.2xlarge
+
+      # Topology spread for even distribution
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              app: needle
+              component: storage
+
+      # Extended termination period for data sync
+      terminationGracePeriodSeconds: 300
+
+      # Init containers for setup
+      initContainers:
+        # Initialize storage directories and permissions
+        - name: init-storage
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - |
+              echo "Initializing storage directories..."
+
+              # Create tiered storage directories
+              mkdir -p /data/needle/hot
+              mkdir -p /data/needle/warm
+              mkdir -p /data/needle/wal
+              mkdir -p /data/needle/snapshots
+
+              # Create cold storage directory if mounted
+              if [ -d "/data/cold" ]; then
+                mkdir -p /data/cold/needle
+              fi
+
+              # Set ownership (runs as root init container)
+              chown -R 1000:1000 /data/needle
+              if [ -d "/data/cold" ]; then
+                chown -R 1000:1000 /data/cold
+              fi
+
+              echo "Storage initialization complete"
+          securityContext:
+            runAsUser: 0
+            runAsNonRoot: false
+          volumeMounts:
+            - name: data-hot
+              mountPath: /data/needle
+            - name: data-cold
+              mountPath: /data/cold
+
+        # Wait for cluster quorum (for non-first pods)
+        - name: wait-for-quorum
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - |
+              # Extract ordinal from hostname
+              ORDINAL="${HOSTNAME##*-}"
+
+              # First pod doesn't wait
+              if [ "$ORDINAL" = "0" ]; then
+                echo "First pod, no need to wait for quorum"
+                exit 0
+              fi
+
+              # Wait for previous pods to be ready
+              echo "Waiting for previous storage nodes..."
+              for i in $(seq 0 $((ORDINAL - 1))); do
+                until nc -z needle-storage-$i.needle-storage-headless.needle.svc.cluster.local 8080; do
+                  echo "Waiting for needle-storage-$i..."
+                  sleep 5
+                done
+                echo "needle-storage-$i is ready"
+              done
+
+              echo "Quorum established, proceeding with startup"
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+
+      containers:
+        - name: needle-storage
+          image: needle/needle-storage:v1.0.0
+          imagePullPolicy: IfNotPresent
+
+          # Container security context
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+            - name: grpc
+              containerPort: 9000
+              protocol: TCP
+            - name: gossip
+              containerPort: 7946
+              protocol: TCP
+            - name: gossip-udp
+              containerPort: 7946
+              protocol: UDP
+            - name: metrics
+              containerPort: 9090
+              protocol: TCP
+
+          # Environment configuration
+          envFrom:
+            - configMapRef:
+                name: needle-config
+
+          env:
+            # Pod identity for cluster membership
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            # Stable hostname for service discovery
+            - name: NEEDLE_NODE_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: NEEDLE_ADVERTISE_ADDR
+              value: "$(POD_NAME).needle-storage-headless.$(POD_NAMESPACE).svc.cluster.local"
+            # Storage paths
+            - name: NEEDLE_STORAGE_HOT_PATH
+              value: "/data/hot"
+            - name: NEEDLE_STORAGE_WARM_PATH
+              value: "/data/warm"
+            - name: NEEDLE_STORAGE_COLD_PATH
+              value: "/data/cold"
+            # Secrets
+            - name: NEEDLE_GOSSIP_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: needle-secrets
+                  key: gossip-key
+                  optional: true
+            - name: NEEDLE_ENCRYPTION_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: needle-secrets
+                  key: encryption-key
+                  optional: true
+
+          # Resource configuration
+          # Storage nodes need more resources than API nodes
+          resources:
+            requests:
+              cpu: "1000m"
+              memory: "2Gi"
+              ephemeral-storage: "2Gi"
+            limits:
+              cpu: "4000m"
+              memory: "8Gi"
+              ephemeral-storage: "4Gi"
+
+          # Startup probe
+          # Storage nodes may take longer to start due to data loading
+          startupProbe:
+            httpGet:
+              path: /health/startup
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            # Allow up to 10 minutes for startup (data recovery)
+            failureThreshold: 60
+
+          # Readiness probe
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+            successThreshold: 1
+
+          # Liveness probe
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: http
+            initialDelaySeconds: 60
+            periodSeconds: 15
+            timeoutSeconds: 10
+            failureThreshold: 3
+
+          # Volume mounts for tiered storage
+          volumeMounts:
+            # Hot tier storage (SSD)
+            - name: data-hot
+              mountPath: /data/hot
+            # Warm tier storage (HDD)
+            - name: data-warm
+              mountPath: /data/warm
+            # Cold tier storage (object storage mount)
+            - name: data-cold
+              mountPath: /data/cold
+            # Temporary directory
+            - name: tmp
+              mountPath: /tmp
+            # Configuration
+            - name: config
+              mountPath: /etc/needle
+              readOnly: true
+            # Scripts
+            - name: scripts
+              mountPath: /opt/needle/scripts
+              readOnly: true
+
+          # Lifecycle hooks for graceful shutdown
+          lifecycle:
+            preStop:
+              exec:
+                command:
+                  - /bin/sh
+                  - -c
+                  - |
+                    echo "Starting graceful shutdown..."
+
+                    # Signal the node to start draining
+                    curl -X POST http://localhost:8080/admin/drain
+
+                    # Wait for data replication to complete
+                    echo "Waiting for data replication..."
+                    sleep 30
+
+                    # Wait for in-flight requests
+                    curl -X POST http://localhost:8080/admin/shutdown
+                    sleep 10
+
+                    echo "Graceful shutdown complete"
+
+      # Volumes (non-persistent)
+      volumes:
+        - name: tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 256Mi
+        - name: config
+          configMap:
+            name: needle-config
+            items:
+              - key: needle.yaml
+                path: needle.yaml
+        - name: scripts
+          configMap:
+            name: needle-scripts
+            defaultMode: 0755
+        # Cold tier may be an external mount
+        - name: data-cold
+          emptyDir:
+            sizeLimit: 10Gi
+
+      # Image pull secrets
+      imagePullSecrets:
+        - name: needle-registry-secret
+
+  # Persistent Volume Claim templates
+  # Creates a PVC for each pod in the StatefulSet
+  volumeClaimTemplates:
+    # Hot tier storage - High-performance SSD
+    - metadata:
+        name: data-hot
+        labels:
+          app: needle
+          component: storage
+          tier: hot
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        # Storage class for SSD volumes
+        storageClassName: ssd-storage
+        resources:
+          requests:
+            storage: 100Gi
+
+    # Warm tier storage - Standard HDD
+    - metadata:
+        name: data-warm
+        labels:
+          app: needle
+          component: storage
+          tier: warm
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        # Storage class for HDD volumes
+        storageClassName: hdd-storage
+        resources:
+          requests:
+            storage: 500Gi
+
+---
+# Pod Disruption Budget for Storage nodes
+# More conservative than API nodes due to data replication requirements
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: needle-storage-pdb
+  namespace: needle
+  labels:
+    app: needle
+    component: storage
+spec:
+  # Never disrupt more than one storage node at a time
+  # This ensures quorum is maintained during updates
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app: needle
+      component: storage
+
+---
+# Service Account for Storage pods
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: needle-storage
+  namespace: needle
+  labels:
+    app: needle
+    component: storage
+automountServiceAccountToken: true
+
+---
+# Role for Storage pods
+# Allows pods to read their own endpoints for cluster discovery
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: needle-storage
+  namespace: needle
+  labels:
+    app: needle
+    component: storage
+rules:
+  # Allow reading endpoints for service discovery
+  - apiGroups: [""]
+    resources: ["endpoints", "pods"]
+    verbs: ["get", "list", "watch"]
+  # Allow reading configmaps and secrets
+  - apiGroups: [""]
+    resources: ["configmaps", "secrets"]
+    verbs: ["get", "list", "watch"]
+
+---
+# RoleBinding for Storage pods
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: needle-storage
+  namespace: needle
+  labels:
+    app: needle
+    component: storage
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: needle-storage
+subjects:
+  - kind: ServiceAccount
+    name: needle-storage
+    namespace: needle

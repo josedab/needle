@@ -1,0 +1,396 @@
+# Needle Persistent Volume Claim Configuration
+# =============================================
+# PersistentVolumeClaims request storage resources from the cluster.
+# This file defines storage requirements for Needle components.
+#
+# Storage Tiers:
+# - Hot: High-performance SSD for active data (fastest access)
+# - Warm: Standard SSD/HDD for less frequently accessed data
+# - Cold: Object storage or archival for rarely accessed data
+#
+# Note: StatefulSets use volumeClaimTemplates (defined in statefulset.yaml).
+# These PVCs are for standalone or shared storage needs.
+
+# ==========================================
+# Storage Classes (define before PVCs)
+# ==========================================
+
+# SSD Storage Class for Hot Tier
+# High-performance storage for active data
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: ssd-storage
+  labels:
+    app: needle
+    tier: hot
+  annotations:
+    storageclass.kubernetes.io/is-default-class: "false"
+# AWS EBS gp3 (recommended for AWS)
+provisioner: ebs.csi.aws.com
+parameters:
+  type: gp3
+  iops: "3000"
+  throughput: "125"
+  encrypted: "true"
+  # KMS key for encryption (optional)
+  # kmsKeyId: "arn:aws:kms:region:account:key/key-id"
+# GCP PD SSD (uncomment for GKE)
+# provisioner: pd.csi.storage.gke.io
+# parameters:
+#   type: pd-ssd
+#   replication-type: regional-pd
+# Azure Premium SSD (uncomment for AKS)
+# provisioner: disk.csi.azure.com
+# parameters:
+#   skuName: Premium_LRS
+reclaimPolicy: Retain
+allowVolumeExpansion: true
+volumeBindingMode: WaitForFirstConsumer
+mountOptions:
+  - discard
+  - noatime
+
+---
+# HDD Storage Class for Warm Tier
+# Cost-effective storage for less frequently accessed data
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: hdd-storage
+  labels:
+    app: needle
+    tier: warm
+# AWS EBS st1 (throughput-optimized HDD)
+provisioner: ebs.csi.aws.com
+parameters:
+  type: st1
+  encrypted: "true"
+# GCP PD Standard (uncomment for GKE)
+# provisioner: pd.csi.storage.gke.io
+# parameters:
+#   type: pd-standard
+# Azure Standard HDD (uncomment for AKS)
+# provisioner: disk.csi.azure.com
+# parameters:
+#   skuName: Standard_LRS
+reclaimPolicy: Retain
+allowVolumeExpansion: true
+volumeBindingMode: WaitForFirstConsumer
+mountOptions:
+  - noatime
+
+---
+# Archive Storage Class for Cold Tier
+# Cheapest storage for rarely accessed historical data
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: archive-storage
+  labels:
+    app: needle
+    tier: cold
+# AWS EBS sc1 (cold HDD) - cheapest block storage
+provisioner: ebs.csi.aws.com
+parameters:
+  type: sc1
+  encrypted: "true"
+reclaimPolicy: Retain
+allowVolumeExpansion: true
+volumeBindingMode: WaitForFirstConsumer
+mountOptions:
+  - noatime
+  - nodiratime
+
+---
+# NFS Storage Class for Shared Access
+# Use for data that needs to be accessed by multiple pods
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: nfs-storage
+  labels:
+    app: needle
+    tier: shared
+# AWS EFS
+provisioner: efs.csi.aws.com
+parameters:
+  provisioningMode: efs-ap
+  fileSystemId: fs-xxxxxxxxx  # Replace with your EFS ID
+  directoryPerms: "700"
+  uid: "1000"
+  gid: "1000"
+# GCP Filestore (uncomment for GKE)
+# provisioner: filestore.csi.storage.gke.io
+# parameters:
+#   tier: standard
+#   network: default
+# Azure Files (uncomment for AKS)
+# provisioner: file.csi.azure.com
+# parameters:
+#   skuName: Standard_LRS
+reclaimPolicy: Retain
+allowVolumeExpansion: true
+volumeBindingMode: Immediate
+mountOptions:
+  - nfsvers=4.1
+  - rsize=1048576
+  - wsize=1048576
+  - hard
+  - timeo=600
+  - retrans=2
+
+---
+# ==========================================
+# Persistent Volume Claims
+# ==========================================
+
+# Shared Configuration Storage
+# Used for configuration files that need to be shared across pods
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: needle-shared-config
+  namespace: needle
+  labels:
+    app: needle
+    component: config
+    tier: shared
+spec:
+  accessModes:
+    # ReadWriteMany allows multiple pods to mount simultaneously
+    - ReadWriteMany
+  storageClassName: nfs-storage
+  resources:
+    requests:
+      storage: 1Gi
+
+---
+# Backup Storage
+# Used for storing backup snapshots
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: needle-backup
+  namespace: needle
+  labels:
+    app: needle
+    component: backup
+    tier: cold
+  annotations:
+    # Velero backup annotation
+    backup.velero.io/backup-volumes: "true"
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: archive-storage
+  resources:
+    requests:
+      storage: 500Gi
+
+---
+# Write-Ahead Log Storage (Standalone)
+# High-performance storage for WAL
+# Only use if not using StatefulSet's volumeClaimTemplate
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: needle-wal
+  namespace: needle
+  labels:
+    app: needle
+    component: wal
+    tier: hot
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: ssd-storage
+  resources:
+    requests:
+      # WAL needs fast, reliable storage
+      storage: 50Gi
+
+---
+# Index Cache Storage
+# Fast storage for caching index data
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: needle-index-cache
+  namespace: needle
+  labels:
+    app: needle
+    component: index
+    tier: hot
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: ssd-storage
+  resources:
+    requests:
+      storage: 100Gi
+
+---
+# Query Cache Storage
+# Persistent cache for query results
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: needle-query-cache
+  namespace: needle
+  labels:
+    app: needle
+    component: cache
+    tier: warm
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: hdd-storage
+  resources:
+    requests:
+      storage: 50Gi
+
+---
+# ==========================================
+# Pre-provisioned Persistent Volumes
+# ==========================================
+# Use these when you need to bind to existing storage
+# or when using storage that doesn't support dynamic provisioning
+
+# Example: Pre-provisioned NFS Volume
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: needle-nfs-pv
+  labels:
+    app: needle
+    type: nfs
+spec:
+  capacity:
+    storage: 1Ti
+  accessModes:
+    - ReadWriteMany
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: ""  # Empty for manual binding
+  # NFS configuration
+  nfs:
+    server: nfs.example.com
+    path: /exports/needle
+  mountOptions:
+    - nfsvers=4.1
+    - hard
+    - timeo=600
+
+---
+# PVC to bind to pre-provisioned NFS volume
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: needle-nfs-data
+  namespace: needle
+  labels:
+    app: needle
+    component: storage
+    tier: shared
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: ""  # Empty for manual binding
+  volumeName: needle-nfs-pv
+  resources:
+    requests:
+      storage: 1Ti
+
+---
+# ==========================================
+# Volume Snapshot Classes
+# ==========================================
+# Enable point-in-time snapshots for backup and recovery
+
+apiVersion: snapshot.storage.k8s.io/v1
+kind: VolumeSnapshotClass
+metadata:
+  name: needle-snapshot-class
+  labels:
+    app: needle
+# AWS EBS Snapshot
+driver: ebs.csi.aws.com
+deletionPolicy: Retain
+parameters:
+  # Optional: Use Fast Snapshot Restore
+  # fastSnapshotRestoreAvailabilityZones: "us-east-1a,us-east-1b"
+# GCP Snapshot (uncomment for GKE)
+# driver: pd.csi.storage.gke.io
+# Azure Snapshot (uncomment for AKS)
+# driver: disk.csi.azure.com
+
+---
+# ==========================================
+# Example Volume Snapshot
+# ==========================================
+# Create snapshots for backup/recovery
+
+apiVersion: snapshot.storage.k8s.io/v1
+kind: VolumeSnapshot
+metadata:
+  name: needle-data-snapshot-example
+  namespace: needle
+  labels:
+    app: needle
+    backup-type: scheduled
+spec:
+  volumeSnapshotClassName: needle-snapshot-class
+  source:
+    # Reference to the PVC to snapshot
+    # For StatefulSet PVCs, use: data-hot-needle-storage-0
+    persistentVolumeClaimName: needle-index-cache
+
+---
+# ==========================================
+# Resource Quotas for Storage
+# ==========================================
+# Limit total storage consumption in the namespace
+
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: needle-storage-quota
+  namespace: needle
+  labels:
+    app: needle
+spec:
+  hard:
+    # Total PVC count
+    persistentvolumeclaims: "50"
+    # Storage by class
+    ssd-storage.storageclass.storage.k8s.io/requests.storage: "2Ti"
+    hdd-storage.storageclass.storage.k8s.io/requests.storage: "10Ti"
+    archive-storage.storageclass.storage.k8s.io/requests.storage: "50Ti"
+    nfs-storage.storageclass.storage.k8s.io/requests.storage: "5Ti"
+    # Total storage across all classes
+    requests.storage: "100Ti"
+
+---
+# ==========================================
+# Limit Range for PVCs
+# ==========================================
+# Set default and maximum sizes for PVCs
+
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: needle-storage-limits
+  namespace: needle
+  labels:
+    app: needle
+spec:
+  limits:
+    - type: PersistentVolumeClaim
+      default:
+        storage: 10Gi
+      defaultRequest:
+        storage: 10Gi
+      max:
+        storage: 2Ti
+      min:
+        storage: 1Gi

@@ -1,0 +1,414 @@
+# Needle Horizontal Pod Autoscaler Configuration
+# ===============================================
+# HPA automatically scales the number of pod replicas based on metrics.
+# This enables Needle to handle varying workloads efficiently.
+#
+# Scaling Strategies:
+# - CPU-based: Scale when CPU usage exceeds threshold
+# - Memory-based: Scale when memory usage exceeds threshold
+# - Custom metrics: Scale based on application-specific metrics
+#
+# Best Practices:
+# - Set appropriate min/max replicas
+# - Use multiple metrics for better scaling decisions
+# - Configure scale-down stabilization to prevent thrashing
+# - Consider Pod Disruption Budgets (defined in deployment.yaml)
+
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: needle-api-hpa
+  namespace: needle
+  labels:
+    app: needle
+    component: api
+spec:
+  # Target deployment to scale
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: needle-api
+
+  # Replica count boundaries
+  minReplicas: 3    # Minimum for HA (spread across AZs)
+  maxReplicas: 20   # Maximum based on cluster capacity
+
+  # Scaling metrics
+  metrics:
+    # CPU-based scaling
+    # Scale up when average CPU exceeds 70%
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+
+    # Memory-based scaling
+    # Scale up when average memory exceeds 80%
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80
+
+    # Custom metrics from Prometheus
+    # Requires prometheus-adapter or KEDA
+
+    # Scale based on requests per second
+    - type: Pods
+      pods:
+        metric:
+          name: http_requests_per_second
+        target:
+          type: AverageValue
+          # Scale when RPS exceeds 1000 per pod
+          averageValue: "1000"
+
+    # Scale based on request latency
+    - type: Pods
+      pods:
+        metric:
+          name: http_request_duration_p95
+        target:
+          type: AverageValue
+          # Scale when P95 latency exceeds 500ms
+          averageValue: "500m"
+
+    # Scale based on queue depth
+    - type: Pods
+      pods:
+        metric:
+          name: needle_pending_queries
+        target:
+          type: AverageValue
+          # Scale when pending queries exceed 100 per pod
+          averageValue: "100"
+
+    # External metrics (e.g., from message queues)
+    # - type: External
+    #   external:
+    #     metric:
+    #       name: sqs_queue_messages_visible
+    #       selector:
+    #         matchLabels:
+    #           queue: needle-requests
+    #     target:
+    #       type: Value
+    #       value: "1000"
+
+  # Scaling behavior configuration
+  behavior:
+    # Scale up behavior
+    scaleUp:
+      # Stabilization window - wait before scaling up again
+      stabilizationWindowSeconds: 60
+
+      # Scaling policies
+      policies:
+        # Add 100% more pods (double)
+        - type: Percent
+          value: 100
+          periodSeconds: 60
+        # Or add 4 pods, whichever is greater
+        - type: Pods
+          value: 4
+          periodSeconds: 60
+
+      # Use the policy that scales up fastest
+      selectPolicy: Max
+
+    # Scale down behavior (more conservative)
+    scaleDown:
+      # Wait 5 minutes before scaling down
+      # Prevents thrashing during traffic fluctuations
+      stabilizationWindowSeconds: 300
+
+      policies:
+        # Remove at most 10% of pods
+        - type: Percent
+          value: 10
+          periodSeconds: 60
+        # Or remove at most 2 pods
+        - type: Pods
+          value: 2
+          periodSeconds: 60
+
+      # Use the policy that scales down slowest
+      selectPolicy: Min
+
+---
+# HPA for Storage Query Nodes (if using separate query replicas)
+# Note: Storage nodes typically use StatefulSet which doesn't support HPA
+# This HPA is for read-replica query nodes if implemented
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: needle-query-hpa
+  namespace: needle
+  labels:
+    app: needle
+    component: query
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: needle-query
+
+  minReplicas: 2
+  maxReplicas: 10
+
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 75
+
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 85
+
+    # Query-specific metrics
+    - type: Pods
+      pods:
+        metric:
+          name: needle_active_queries
+        target:
+          type: AverageValue
+          averageValue: "50"
+
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 30
+      policies:
+        - type: Percent
+          value: 50
+          periodSeconds: 30
+    scaleDown:
+      stabilizationWindowSeconds: 180
+      policies:
+        - type: Percent
+          value: 20
+          periodSeconds: 60
+
+---
+# Vertical Pod Autoscaler (VPA)
+# Automatically adjusts CPU and memory requests/limits
+# Useful for right-sizing pods based on actual usage
+apiVersion: autoscaling.k8s.io/v1
+kind: VerticalPodAutoscaler
+metadata:
+  name: needle-api-vpa
+  namespace: needle
+  labels:
+    app: needle
+    component: api
+spec:
+  targetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: needle-api
+
+  updatePolicy:
+    # UpdateMode options:
+    # - Off: Only provide recommendations, don't update
+    # - Initial: Apply recommendations only on pod creation
+    # - Auto: Automatically update running pods (may cause restarts)
+    updateMode: "Auto"
+
+  resourcePolicy:
+    containerPolicies:
+      - containerName: needle-api
+        # Minimum resources (never go below)
+        minAllowed:
+          cpu: "250m"
+          memory: "256Mi"
+        # Maximum resources (never exceed)
+        maxAllowed:
+          cpu: "4000m"
+          memory: "8Gi"
+        # Which resources to control
+        controlledResources:
+          - cpu
+          - memory
+        # Control mode: RequestsOnly, RequestsAndLimits
+        controlledValues: RequestsAndLimits
+
+---
+# VPA for Storage nodes
+apiVersion: autoscaling.k8s.io/v1
+kind: VerticalPodAutoscaler
+metadata:
+  name: needle-storage-vpa
+  namespace: needle
+  labels:
+    app: needle
+    component: storage
+spec:
+  targetRef:
+    apiVersion: apps/v1
+    kind: StatefulSet
+    name: needle-storage
+
+  updatePolicy:
+    # Use "Off" for StatefulSets to avoid unexpected restarts
+    # Review recommendations manually
+    updateMode: "Off"
+
+  resourcePolicy:
+    containerPolicies:
+      - containerName: needle-storage
+        minAllowed:
+          cpu: "500m"
+          memory: "1Gi"
+        maxAllowed:
+          cpu: "8000m"
+          memory: "32Gi"
+        controlledResources:
+          - cpu
+          - memory
+
+---
+# KEDA ScaledObject for event-driven autoscaling
+# Requires KEDA to be installed in the cluster
+# https://keda.sh
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: needle-api-scaledobject
+  namespace: needle
+  labels:
+    app: needle
+    component: api
+spec:
+  scaleTargetRef:
+    name: needle-api
+
+  minReplicaCount: 3
+  maxReplicaCount: 50
+
+  # Cooldown periods
+  cooldownPeriod: 300      # 5 minutes after last trigger
+  pollingInterval: 30      # Check triggers every 30 seconds
+
+  # Advanced scaling settings
+  advanced:
+    horizontalPodAutoscalerConfig:
+      behavior:
+        scaleUp:
+          stabilizationWindowSeconds: 60
+        scaleDown:
+          stabilizationWindowSeconds: 300
+
+  triggers:
+    # Prometheus-based scaling
+    - type: prometheus
+      metadata:
+        serverAddress: http://prometheus.monitoring.svc.cluster.local:9090
+        metricName: needle_http_requests_total
+        query: |
+          sum(rate(needle_http_requests_total{namespace="needle",service="needle-api"}[2m]))
+        threshold: "10000"
+
+    # Scale based on P99 latency
+    - type: prometheus
+      metadata:
+        serverAddress: http://prometheus.monitoring.svc.cluster.local:9090
+        metricName: needle_request_latency_p99
+        query: |
+          histogram_quantile(0.99, sum(rate(needle_http_request_duration_seconds_bucket{namespace="needle"}[5m])) by (le))
+        threshold: "1"  # 1 second P99
+
+    # Scale based on CPU
+    - type: cpu
+      metricType: Utilization
+      metadata:
+        value: "70"
+
+    # Scale based on memory
+    - type: memory
+      metricType: Utilization
+      metadata:
+        value: "80"
+
+    # AWS SQS queue depth (uncomment for AWS)
+    # - type: aws-sqs-queue
+    #   metadata:
+    #     queueURL: https://sqs.us-east-1.amazonaws.com/123456789/needle-requests
+    #     queueLength: "100"
+    #     awsRegion: us-east-1
+
+    # Redis list length (uncomment if using Redis)
+    # - type: redis
+    #   metadata:
+    #     address: redis.needle.svc.cluster.local:6379
+    #     listName: needle-job-queue
+    #     listLength: "100"
+
+---
+# Prometheus Adapter configuration for custom metrics
+# This ConfigMap configures how Prometheus metrics are exposed to HPA
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-adapter-config
+  namespace: monitoring
+  labels:
+    app: needle
+data:
+  config.yaml: |
+    rules:
+    # HTTP requests per second
+    - seriesQuery: 'needle_http_requests_total{namespace="needle"}'
+      resources:
+        overrides:
+          namespace:
+            resource: namespace
+          pod:
+            resource: pod
+      name:
+        matches: "^(.*)_total$"
+        as: "${1}_per_second"
+      metricsQuery: 'sum(rate(<<.Series>>{<<.LabelMatchers>>}[2m])) by (<<.GroupBy>>)'
+
+    # Request duration P95
+    - seriesQuery: 'needle_http_request_duration_seconds_bucket{namespace="needle"}'
+      resources:
+        overrides:
+          namespace:
+            resource: namespace
+          pod:
+            resource: pod
+      name:
+        as: "http_request_duration_p95"
+      metricsQuery: 'histogram_quantile(0.95, sum(rate(<<.Series>>{<<.LabelMatchers>>}[5m])) by (le, <<.GroupBy>>))'
+
+    # Active queries
+    - seriesQuery: 'needle_active_queries{namespace="needle"}'
+      resources:
+        overrides:
+          namespace:
+            resource: namespace
+          pod:
+            resource: pod
+      name:
+        as: "needle_active_queries"
+      metricsQuery: 'sum(<<.Series>>{<<.LabelMatchers>>}) by (<<.GroupBy>>)'
+
+    # Pending queries
+    - seriesQuery: 'needle_pending_queries{namespace="needle"}'
+      resources:
+        overrides:
+          namespace:
+            resource: namespace
+          pod:
+            resource: pod
+      name:
+        as: "needle_pending_queries"
+      metricsQuery: 'sum(<<.Series>>{<<.LabelMatchers>>}) by (<<.GroupBy>>)'

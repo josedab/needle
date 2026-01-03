@@ -1,0 +1,14 @@
+# Grafana dashboard provisioning for Needle Vector Database
+apiVersion: 1
+
+providers:
+  - name: 'Needle Dashboards'
+    orgId: 1
+    folder: 'Needle'
+    folderUid: 'needle'
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 30
+    allowUiUpdates: true
+    options:
+      path: /etc/grafana/provisioning/dashboards/json

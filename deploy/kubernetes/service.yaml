@@ -1,0 +1,388 @@
+# Needle Service Definitions
+# ==========================
+# This file defines the network services for Needle components.
+# Services provide stable network endpoints for pod communication.
+#
+# Service Types:
+# - ClusterIP: Internal-only access (default)
+# - NodePort: Expose on each node's IP
+# - LoadBalancer: Cloud provider load balancer
+# - Headless: Direct pod access for StatefulSets
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: needle-api
+  namespace: needle
+  labels:
+    app: needle
+    component: api
+  annotations:
+    # Service discovery annotations
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "9090"
+    # For AWS ALB Ingress Controller
+    # service.beta.kubernetes.io/aws-load-balancer-type: "nlb"
+    # service.beta.kubernetes.io/aws-load-balancer-cross-zone-load-balancing-enabled: "true"
+spec:
+  type: ClusterIP
+
+  # Session affinity for stateful connections (optional)
+  # Use 'None' for stateless APIs, 'ClientIP' for sticky sessions
+  sessionAffinity: None
+
+  selector:
+    app: needle
+    component: api
+
+  ports:
+    # HTTP API port
+    - name: http
+      port: 80
+      targetPort: http
+      protocol: TCP
+
+    # gRPC port for internal communication
+    - name: grpc
+      port: 9000
+      targetPort: grpc
+      protocol: TCP
+
+    # Metrics port for Prometheus
+    - name: metrics
+      port: 9090
+      targetPort: metrics
+      protocol: TCP
+
+---
+# External LoadBalancer Service
+# Exposes the API to external traffic through a cloud load balancer
+apiVersion: v1
+kind: Service
+metadata:
+  name: needle-api-lb
+  namespace: needle
+  labels:
+    app: needle
+    component: api
+    exposure: external
+  annotations:
+    # AWS Network Load Balancer configuration
+    service.beta.kubernetes.io/aws-load-balancer-type: "nlb"
+    service.beta.kubernetes.io/aws-load-balancer-scheme: "internet-facing"
+    service.beta.kubernetes.io/aws-load-balancer-cross-zone-load-balancing-enabled: "true"
+    service.beta.kubernetes.io/aws-load-balancer-backend-protocol: "tcp"
+    # Health check configuration
+    service.beta.kubernetes.io/aws-load-balancer-healthcheck-path: "/health/ready"
+    service.beta.kubernetes.io/aws-load-balancer-healthcheck-protocol: "HTTP"
+    service.beta.kubernetes.io/aws-load-balancer-healthcheck-interval: "10"
+    service.beta.kubernetes.io/aws-load-balancer-healthcheck-timeout: "5"
+    service.beta.kubernetes.io/aws-load-balancer-healthcheck-healthy-threshold: "2"
+    service.beta.kubernetes.io/aws-load-balancer-healthcheck-unhealthy-threshold: "3"
+    # SSL termination (if using ACM)
+    # service.beta.kubernetes.io/aws-load-balancer-ssl-cert: "arn:aws:acm:region:account:certificate/cert-id"
+    # service.beta.kubernetes.io/aws-load-balancer-ssl-ports: "443"
+
+    # GCP Load Balancer configuration (uncomment for GKE)
+    # cloud.google.com/load-balancer-type: "External"
+    # cloud.google.com/neg: '{"ingress": true}'
+spec:
+  type: LoadBalancer
+
+  # Preserve client source IP
+  externalTrafficPolicy: Local
+
+  # Health check node port (automatically allocated)
+  # healthCheckNodePort: 30000
+
+  selector:
+    app: needle
+    component: api
+
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+      protocol: TCP
+    - name: https
+      port: 443
+      targetPort: http
+      protocol: TCP
+
+---
+# Headless Service for StatefulSet
+# Enables direct pod-to-pod communication and stable network identities
+apiVersion: v1
+kind: Service
+metadata:
+  name: needle-storage-headless
+  namespace: needle
+  labels:
+    app: needle
+    component: storage
+spec:
+  # Headless service - no cluster IP
+  clusterIP: None
+
+  # Publish not-ready addresses for service discovery
+  # Allows pods to find each other during startup
+  publishNotReadyAddresses: true
+
+  selector:
+    app: needle
+    component: storage
+
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+      protocol: TCP
+    - name: grpc
+      port: 9000
+      targetPort: grpc
+      protocol: TCP
+    - name: gossip
+      port: 7946
+      targetPort: gossip
+      protocol: TCP
+    - name: gossip-udp
+      port: 7946
+      targetPort: gossip
+      protocol: UDP
+
+---
+# Internal ClusterIP Service for Storage
+# Provides a stable endpoint for accessing storage nodes
+apiVersion: v1
+kind: Service
+metadata:
+  name: needle-storage
+  namespace: needle
+  labels:
+    app: needle
+    component: storage
+spec:
+  type: ClusterIP
+
+  selector:
+    app: needle
+    component: storage
+
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+      protocol: TCP
+    - name: grpc
+      port: 9000
+      targetPort: grpc
+      protocol: TCP
+
+---
+# Metrics Service for Prometheus ServiceMonitor
+# Dedicated service for scraping metrics from all Needle components
+apiVersion: v1
+kind: Service
+metadata:
+  name: needle-metrics
+  namespace: needle
+  labels:
+    app: needle
+    component: metrics
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "9090"
+spec:
+  type: ClusterIP
+
+  # Select all Needle components for metrics
+  selector:
+    app: needle
+
+  ports:
+    - name: metrics
+      port: 9090
+      targetPort: metrics
+      protocol: TCP
+
+---
+# NodePort Service for Development/Testing
+# Exposes the API on a static port on each node
+# Use only for development; prefer LoadBalancer or Ingress for production
+apiVersion: v1
+kind: Service
+metadata:
+  name: needle-api-nodeport
+  namespace: needle
+  labels:
+    app: needle
+    component: api
+    environment: development
+spec:
+  type: NodePort
+
+  selector:
+    app: needle
+    component: api
+
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+      # Static node port for consistent access
+      nodePort: 30080
+      protocol: TCP
+
+---
+# Ingress for HTTP(S) routing
+# Routes external traffic to the Needle API based on host/path rules
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: needle-api-ingress
+  namespace: needle
+  labels:
+    app: needle
+    component: api
+  annotations:
+    # NGINX Ingress Controller annotations
+    kubernetes.io/ingress.class: nginx
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/backend-protocol: "HTTP"
+    nginx.ingress.kubernetes.io/proxy-body-size: "100m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "300"
+    # Rate limiting
+    nginx.ingress.kubernetes.io/limit-rps: "100"
+    nginx.ingress.kubernetes.io/limit-connections: "50"
+    # CORS configuration
+    nginx.ingress.kubernetes.io/enable-cors: "true"
+    nginx.ingress.kubernetes.io/cors-allow-origin: "*"
+    nginx.ingress.kubernetes.io/cors-allow-methods: "GET, POST, PUT, DELETE, OPTIONS"
+
+    # AWS ALB Ingress Controller annotations (uncomment for EKS with ALB)
+    # kubernetes.io/ingress.class: alb
+    # alb.ingress.kubernetes.io/scheme: internet-facing
+    # alb.ingress.kubernetes.io/target-type: ip
+    # alb.ingress.kubernetes.io/listen-ports: '[{"HTTP": 80}, {"HTTPS": 443}]'
+    # alb.ingress.kubernetes.io/ssl-redirect: '443'
+    # alb.ingress.kubernetes.io/certificate-arn: arn:aws:acm:region:account:certificate/cert-id
+
+    # cert-manager for automatic TLS certificates
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+spec:
+  ingressClassName: nginx
+
+  # TLS configuration
+  tls:
+    - hosts:
+        - needle.example.com
+        - api.needle.example.com
+      secretName: needle-tls-secret
+
+  rules:
+    # Main API endpoint
+    - host: needle.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: needle-api
+                port:
+                  name: http
+
+    # API subdomain
+    - host: api.needle.example.com
+      http:
+        paths:
+          - path: /v1
+            pathType: Prefix
+            backend:
+              service:
+                name: needle-api
+                port:
+                  name: http
+
+---
+# Network Policy for API pods
+# Restricts network traffic to/from API pods for security
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: needle-api-network-policy
+  namespace: needle
+  labels:
+    app: needle
+    component: api
+spec:
+  podSelector:
+    matchLabels:
+      app: needle
+      component: api
+
+  policyTypes:
+    - Ingress
+    - Egress
+
+  ingress:
+    # Allow traffic from ingress controller
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              name: ingress-nginx
+      ports:
+        - protocol: TCP
+          port: 8080
+
+    # Allow traffic from other Needle components
+    - from:
+        - podSelector:
+            matchLabels:
+              app: needle
+      ports:
+        - protocol: TCP
+          port: 8080
+        - protocol: TCP
+          port: 9000
+
+    # Allow Prometheus scraping
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              name: monitoring
+      ports:
+        - protocol: TCP
+          port: 9090
+
+  egress:
+    # Allow DNS resolution
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+
+    # Allow traffic to storage nodes
+    - to:
+        - podSelector:
+            matchLabels:
+              app: needle
+              component: storage
+      ports:
+        - protocol: TCP
+          port: 8080
+        - protocol: TCP
+          port: 9000
+
+    # Allow traffic to external services (uncomment as needed)
+    # - to:
+    #     - ipBlock:
+    #         cidr: 0.0.0.0/0
+    #         except:
+    #           - 10.0.0.0/8
+    #           - 172.16.0.0/12
+    #           - 192.168.0.0/16
