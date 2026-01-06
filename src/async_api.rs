@@ -1581,4 +1581,127 @@ mod tests {
 
         assert_eq!(db.count("test").await, 100);
     }
+
+    // AsyncDatabaseConfig tests
+    #[test]
+    fn test_async_config_default() {
+        let config = AsyncDatabaseConfig::default();
+        assert_eq!(config.max_concurrency, 4);
+        assert_eq!(config.stream_batch_size, 100);
+    }
+
+    #[test]
+    fn test_async_config_with_max_concurrency() {
+        let config = AsyncDatabaseConfig::default().with_max_concurrency(8);
+        assert_eq!(config.max_concurrency, 8);
+        assert_eq!(config.stream_batch_size, 100); // unchanged
+    }
+
+    #[test]
+    fn test_async_config_with_stream_batch_size() {
+        let config = AsyncDatabaseConfig::default().with_stream_batch_size(50);
+        assert_eq!(config.max_concurrency, 4); // unchanged
+        assert_eq!(config.stream_batch_size, 50);
+    }
+
+    #[test]
+    fn test_async_config_chained() {
+        let config = AsyncDatabaseConfig::default()
+            .with_max_concurrency(16)
+            .with_stream_batch_size(200);
+        assert_eq!(config.max_concurrency, 16);
+        assert_eq!(config.stream_batch_size, 200);
+    }
+
+    #[tokio::test]
+    async fn test_collection_not_found_error() {
+        let db = AsyncDatabase::in_memory();
+
+        // Searching non-existent collection should return error
+        let result = db.search("nonexistent", vec![0.0; 32], 10).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_dimension_mismatch_error() {
+        let db = AsyncDatabase::in_memory();
+        db.create_collection("test", 64).await.unwrap();
+
+        // Insert with wrong dimensions
+        let result = db.insert("test", "doc1", vec![0.0; 32], None).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_duplicate_collection_error() {
+        let db = AsyncDatabase::in_memory();
+        db.create_collection("test", 64).await.unwrap();
+
+        // Creating same collection again should error
+        let result = db.create_collection("test", 64).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_batch_search_empty_queries() {
+        let db = AsyncDatabase::in_memory();
+        db.create_collection("test", 32).await.unwrap();
+
+        // Insert some vectors first
+        for i in 0..10 {
+            db.insert("test", format!("doc{}", i), random_vector(32), None)
+                .await
+                .unwrap();
+        }
+
+        // Batch search with empty query list
+        let results = db.batch_search("test", Vec::new(), 10).await.unwrap();
+        assert!(results.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_batch_insert_empty() {
+        let db = AsyncDatabase::in_memory();
+        db.create_collection("test", 32).await.unwrap();
+
+        // Batch insert with empty list should succeed
+        let entries: Vec<(String, Vec<f32>, Option<Value>)> = Vec::new();
+        db.batch_insert("test", entries).await.unwrap();
+
+        assert_eq!(db.count("test").await, 0);
+    }
+
+    #[tokio::test]
+    async fn test_batch_delete_empty() {
+        let db = AsyncDatabase::in_memory();
+        db.create_collection("test", 32).await.unwrap();
+
+        // Insert some vectors
+        for i in 0..5 {
+            db.insert("test", format!("doc{}", i), random_vector(32), None)
+                .await
+                .unwrap();
+        }
+
+        // Batch delete with empty list
+        let deleted = db.batch_delete("test", Vec::new()).await.unwrap();
+        assert_eq!(deleted, 0);
+        assert_eq!(db.count("test").await, 5); // unchanged
+    }
+
+    #[tokio::test]
+    async fn test_batch_operation_builder_empty() {
+        let db = AsyncDatabase::in_memory();
+        db.create_collection("test", 32).await.unwrap();
+
+        // Empty batch operation should succeed
+        let result = BatchOperationBuilder::new(&db, "test")
+            .execute()
+            .await
+            .unwrap();
+
+        assert_eq!(result.inserted, 0);
+        assert_eq!(result.deleted, 0);
+        assert!(result.is_success());
+    }
 }
