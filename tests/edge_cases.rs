@@ -470,3 +470,156 @@ fn test_database_list_empty() {
     let collections = db.list_collections();
     assert!(collections.is_empty());
 }
+
+// ============================================================================
+// Validation Edge Cases (new tests for Phase 3)
+// ============================================================================
+
+#[test]
+#[should_panic(expected = "dimensions must be greater than 0")]
+fn test_zero_dimension_collection_panics() {
+    // Zero dimensions should panic
+    CollectionConfig::new("invalid", 0);
+}
+
+#[test]
+fn test_large_k_is_clamped() {
+    let mut collection = Collection::with_dimensions("test", 8);
+
+    // Insert only 5 vectors
+    for i in 0..5 {
+        let vector: Vec<f32> = (0..8).map(|j| ((i * 8 + j) as f32) / 40.0).collect();
+        collection.insert(format!("vec_{}", i), &vector, None).unwrap();
+    }
+
+    // Search with k=1000000 - should be clamped to 5
+    let query: Vec<f32> = vec![0.5; 8];
+    let results = collection.search(&query, 1_000_000).unwrap();
+    assert_eq!(results.len(), 5, "Results should be clamped to collection size");
+}
+
+#[test]
+fn test_k_zero_returns_empty() {
+    let mut collection = Collection::with_dimensions("test", 8);
+
+    for i in 0..5 {
+        let vector: Vec<f32> = (0..8).map(|j| ((i * 8 + j) as f32) / 40.0).collect();
+        collection.insert(format!("vec_{}", i), &vector, None).unwrap();
+    }
+
+    let query: Vec<f32> = vec![0.5; 8];
+    let results = collection.search(&query, 0).unwrap();
+    assert!(results.is_empty(), "k=0 should return empty results");
+}
+
+#[test]
+fn test_nan_vector_rejected() {
+    let mut collection = Collection::with_dimensions("test", 4);
+
+    // Vector with NaN should be rejected
+    let nan_vector = vec![1.0, f32::NAN, 3.0, 4.0];
+    let result = collection.insert("nan_vec", &nan_vector, None);
+    assert!(result.is_err(), "NaN vector should be rejected");
+}
+
+#[test]
+fn test_infinity_vector_rejected() {
+    let mut collection = Collection::with_dimensions("test", 4);
+
+    // Vector with Infinity should be rejected
+    let inf_vector = vec![1.0, f32::INFINITY, 3.0, 4.0];
+    let result = collection.insert("inf_vec", &inf_vector, None);
+    assert!(result.is_err(), "Infinity vector should be rejected");
+}
+
+#[test]
+fn test_negative_infinity_vector_rejected() {
+    let mut collection = Collection::with_dimensions("test", 4);
+
+    // Vector with -Infinity should be rejected
+    let neg_inf_vector = vec![1.0, f32::NEG_INFINITY, 3.0, 4.0];
+    let result = collection.insert("neg_inf_vec", &neg_inf_vector, None);
+    assert!(result.is_err(), "Negative infinity vector should be rejected");
+}
+
+#[test]
+fn test_nan_query_rejected() {
+    let mut collection = Collection::with_dimensions("test", 4);
+
+    // Insert valid vector
+    let valid_vector = vec![1.0, 2.0, 3.0, 4.0];
+    collection.insert("valid", &valid_vector, None).unwrap();
+
+    // Query with NaN should be rejected
+    let nan_query = vec![1.0, f32::NAN, 3.0, 4.0];
+    let result = collection.search(&nan_query, 5);
+    assert!(result.is_err(), "NaN query should be rejected");
+}
+
+#[test]
+fn test_batch_search_large_k_clamped() {
+    let mut collection = Collection::with_dimensions("test", 4);
+
+    // Insert 3 vectors
+    for i in 0..3 {
+        let vector: Vec<f32> = vec![i as f32; 4];
+        collection.insert(format!("vec_{}", i), &vector, None).unwrap();
+    }
+
+    // Batch search with k > collection size
+    let queries = vec![vec![0.0; 4], vec![1.0; 4]];
+    let results = collection.batch_search(&queries, 100).unwrap();
+
+    assert_eq!(results.len(), 2);
+    for r in &results {
+        assert_eq!(r.len(), 3, "Results should be clamped to collection size");
+    }
+}
+
+#[test]
+fn test_filtered_search_large_k_clamped() {
+    use needle::Filter;
+
+    let mut collection = Collection::with_dimensions("test", 4);
+
+    // Insert vectors with category metadata
+    for i in 0..10 {
+        let vector: Vec<f32> = vec![i as f32 / 10.0; 4];
+        let category = if i % 2 == 0 { "even" } else { "odd" };
+        collection.insert(
+            format!("vec_{}", i),
+            &vector,
+            Some(json!({"category": category})),
+        ).unwrap();
+    }
+
+    // Filtered search with very large k
+    let query: Vec<f32> = vec![0.5; 4];
+    let filter = Filter::eq("category", "even");
+    let results = collection.search_with_filter(&query, 1_000_000, &filter).unwrap();
+
+    // Should only return even vectors (5 of them)
+    assert!(results.len() <= 5, "Should return at most 5 even vectors");
+    for r in &results {
+        let meta = r.metadata.as_ref().unwrap();
+        assert_eq!(meta["category"], "even");
+    }
+}
+
+#[test]
+#[should_panic(expected = "not finite")]
+fn test_sparse_vector_nan_rejected() {
+    use needle::SparseVector;
+
+    // Sparse vector with NaN should panic
+    SparseVector::new(vec![0, 1, 2], vec![1.0, f32::NAN, 3.0]);
+}
+
+#[test]
+#[should_panic(expected = "not finite")]
+fn test_sparse_vector_inf_rejected() {
+    use needle::SparseVector;
+
+    // Sparse vector with Infinity should panic
+    SparseVector::new(vec![0, 1, 2], vec![1.0, f32::INFINITY, 3.0]);
+}
