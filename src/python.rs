@@ -1,4 +1,44 @@
 //! Python bindings for Needle using PyO3
+//!
+//! This module provides Python bindings for Needle's vector database functionality,
+//! enabling Python applications to use Needle for similarity search.
+//!
+//! # Features
+//!
+//! - Thread-safe collection management with RwLock
+//! - Vector insertion with optional JSON metadata
+//! - Similarity search with configurable k and distance functions
+//! - Metadata filtering using MongoDB-style query syntax
+//! - Batch operations for efficient bulk processing
+//! - Serialization/deserialization for persistence
+//!
+//! # Installation
+//!
+//! Build with maturin:
+//! ```bash
+//! maturin build --features python
+//! pip install target/wheels/needle-*.whl
+//! ```
+//!
+//! # Usage
+//!
+//! ```python
+//! import needle
+//!
+//! # Create a collection
+//! collection = needle.NeedleCollection("my_vectors", 128, "cosine")
+//!
+//! # Insert vectors
+//! collection.insert("id1", [0.1] * 128, '{"category": "books"}')
+//!
+//! # Search
+//! results = collection.search([0.1] * 128, 5)
+//! for result in results:
+//!     print(f"{result.id}: {result.distance}")
+//!
+//! # Save to file
+//! collection.save("/path/to/collection.bin")
+//! ```
 
 use crate::collection::{Collection, CollectionConfig, SearchResult as RustSearchResult};
 use crate::distance::DistanceFunction;
