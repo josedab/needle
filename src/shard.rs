@@ -569,7 +569,7 @@ mod tests {
     #[test]
     fn test_shard_manager() {
         let config = ShardConfig::new(4);
-        let mut manager = ShardManager::new(config);
+        let manager = ShardManager::new(config);
 
         assert_eq!(manager.num_shards(), 4);
         assert_eq!(manager.list_shards().len(), 4);
