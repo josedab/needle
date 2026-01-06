@@ -106,7 +106,7 @@ pub mod routing;
 pub mod security;
 pub mod shard;
 pub mod sparse;
-pub mod storage;
+pub(crate) mod storage;
 #[cfg(feature = "server")]
 pub mod streaming;
 pub mod telemetry;
