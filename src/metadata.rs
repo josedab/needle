@@ -327,24 +327,40 @@ impl Filter {
         }
     }
 
+    /// Maximum depth for nested filters to prevent stack overflow
+    const MAX_FILTER_DEPTH: usize = 32;
+
     /// Parse a filter from a JSON value (MongoDB-like syntax)
     ///
     /// Supports:
     /// - Simple equality: `{"field": "value"}`
     /// - Comparison operators: `{"field": {"$gt": 5}}`
     /// - Logical operators: `{"$and": [...]}`, `{"$or": [...]}`, `{"$not": {...}}`
+    ///
+    /// Filter nesting is limited to 32 levels to prevent stack overflow.
     pub fn parse(value: &Value) -> std::result::Result<Self, String> {
+        Self::parse_with_depth(value, 0)
+    }
+
+    fn parse_with_depth(value: &Value, depth: usize) -> std::result::Result<Self, String> {
+        if depth > Self::MAX_FILTER_DEPTH {
+            return Err(format!(
+                "Filter nesting too deep (max {} levels)",
+                Self::MAX_FILTER_DEPTH
+            ));
+        }
+
         match value {
             Value::Object(map) => {
                 // Check for logical operators
                 if let Some(and_value) = map.get("$and") {
-                    return Self::parse_logical_and(and_value);
+                    return Self::parse_logical_and_with_depth(and_value, depth + 1);
                 }
                 if let Some(or_value) = map.get("$or") {
-                    return Self::parse_logical_or(or_value);
+                    return Self::parse_logical_or_with_depth(or_value, depth + 1);
                 }
                 if let Some(not_value) = map.get("$not") {
-                    return Self::parse_logical_not(not_value);
+                    return Self::parse_logical_not_with_depth(not_value, depth + 1);
                 }
 
                 // Parse field conditions
@@ -370,28 +386,30 @@ impl Filter {
         }
     }
 
-    fn parse_logical_and(value: &Value) -> std::result::Result<Self, String> {
+    fn parse_logical_and_with_depth(value: &Value, depth: usize) -> std::result::Result<Self, String> {
         match value {
             Value::Array(arr) => {
-                let filters: std::result::Result<Vec<Filter>, String> = arr.iter().map(Self::parse).collect();
+                let filters: std::result::Result<Vec<Filter>, String> =
+                    arr.iter().map(|v| Self::parse_with_depth(v, depth)).collect();
                 Ok(Filter::And(filters?))
             }
             _ => Err("$and must be an array".to_string()),
         }
     }
 
-    fn parse_logical_or(value: &Value) -> std::result::Result<Self, String> {
+    fn parse_logical_or_with_depth(value: &Value, depth: usize) -> std::result::Result<Self, String> {
         match value {
             Value::Array(arr) => {
-                let filters: std::result::Result<Vec<Filter>, String> = arr.iter().map(Self::parse).collect();
+                let filters: std::result::Result<Vec<Filter>, String> =
+                    arr.iter().map(|v| Self::parse_with_depth(v, depth)).collect();
                 Ok(Filter::Or(filters?))
             }
             _ => Err("$or must be an array".to_string()),
         }
     }
 
-    fn parse_logical_not(value: &Value) -> std::result::Result<Self, String> {
-        let inner = Self::parse(value)?;
+    fn parse_logical_not_with_depth(value: &Value, depth: usize) -> std::result::Result<Self, String> {
+        let inner = Self::parse_with_depth(value, depth)?;
         Ok(Filter::Not(Box::new(inner)))
     }
 
@@ -714,5 +732,35 @@ mod tests {
         let metadata = json!({"category": "greeting"});
 
         assert!(filter.matches(Some(&metadata)));
+    }
+
+    #[test]
+    fn test_filter_max_depth() {
+        // Build a deeply nested filter that exceeds MAX_FILTER_DEPTH (32)
+        let mut nested = json!({"field": "value"});
+        for _ in 0..35 {
+            nested = json!({"$not": nested});
+        }
+
+        let result = Filter::parse(&nested);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("too deep"));
+    }
+
+    #[test]
+    fn test_filter_valid_depth() {
+        // A reasonably nested filter should work
+        let filter_json = json!({
+            "$and": [
+                {"$or": [
+                    {"category": "a"},
+                    {"category": "b"}
+                ]},
+                {"$not": {"status": "deleted"}}
+            ]
+        });
+
+        let result = Filter::parse(&filter_json);
+        assert!(result.is_ok());
     }
 }
