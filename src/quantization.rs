@@ -17,6 +17,9 @@ pub struct ScalarQuantizer {
 
 impl ScalarQuantizer {
     /// Train the quantizer on a set of vectors
+    ///
+    /// # Panics
+    /// Panics if any vector contains NaN or infinite values.
     pub fn train(vectors: &[&[f32]]) -> Self {
         if vectors.is_empty() {
             return Self {
@@ -34,6 +37,7 @@ impl ScalarQuantizer {
         // Find min/max per dimension
         for vec in vectors {
             for (i, &v) in vec.iter().enumerate() {
+                assert!(v.is_finite(), "Training vector contains non-finite value at index {}: {}", i, v);
                 min_vals[i] = min_vals[i].min(v);
                 max_vals[i] = max_vals[i].max(v);
             }
