@@ -92,7 +92,12 @@ impl Database {
                 if state_len > 0 {
                     let state_bytes =
                         storage.read_at(header.metadata_offset, state_len as usize)?;
-                    serde_json::from_slice(&state_bytes).unwrap_or_default()
+                    serde_json::from_slice(&state_bytes).map_err(|e| {
+                        NeedleError::Corruption(format!(
+                            "Failed to deserialize database state: {}. Database file may be corrupted.",
+                            e
+                        ))
+                    })?
                 } else {
                     DatabaseState::default()
                 }
