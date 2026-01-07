@@ -372,6 +372,28 @@ impl Collection {
         Ok(())
     }
 
+    /// Validate query vector dimensions and values
+    fn validate_query(&self, query: &[f32]) -> Result<()> {
+        if query.len() != self.config.dimensions {
+            return Err(NeedleError::DimensionMismatch {
+                expected: self.config.dimensions,
+                got: query.len(),
+            });
+        }
+        Self::validate_vector(query)
+    }
+
+    /// Validate insert input (dimensions and vector values)
+    fn validate_insert_input(&self, vector: &[f32]) -> Result<()> {
+        if vector.len() != self.config.dimensions {
+            return Err(NeedleError::DimensionMismatch {
+                expected: self.config.dimensions,
+                got: vector.len(),
+            });
+        }
+        Self::validate_vector(vector)
+    }
+
     /// Insert a vector with ID and optional metadata
     pub fn insert(
         &mut self,
@@ -381,16 +403,8 @@ impl Collection {
     ) -> Result<()> {
         let id = id.into();
 
-        // Check dimensions
-        if vector.len() != self.config.dimensions {
-            return Err(NeedleError::DimensionMismatch {
-                expected: self.config.dimensions,
-                got: vector.len(),
-            });
-        }
-
-        // Validate vector values
-        Self::validate_vector(vector)?;
+        // Validate dimensions and vector values
+        self.validate_insert_input(vector)?;
 
         // Check if ID already exists
         if self.metadata.contains(&id) {
@@ -422,16 +436,8 @@ impl Collection {
     ) -> Result<()> {
         let id = id.into();
 
-        // Check dimensions
-        if vector.len() != self.config.dimensions {
-            return Err(NeedleError::DimensionMismatch {
-                expected: self.config.dimensions,
-                got: vector.len(),
-            });
-        }
-
-        // Validate vector values
-        Self::validate_vector(&vector)?;
+        // Validate dimensions and vector values
+        self.validate_insert_input(&vector)?;
 
         // Check if ID already exists
         if self.metadata.contains(&id) {
@@ -491,15 +497,7 @@ impl Collection {
 
     /// Search for k nearest neighbors
     pub fn search(&self, query: &[f32], k: usize) -> Result<Vec<SearchResult>> {
-        if query.len() != self.config.dimensions {
-            return Err(NeedleError::DimensionMismatch {
-                expected: self.config.dimensions,
-                got: query.len(),
-            });
-        }
-
-        // Validate query vector
-        Self::validate_vector(query)?;
+        self.validate_query(query)?;
 
         let results = self.index.search(query, k, self.vectors.as_slice());
 
@@ -508,14 +506,7 @@ impl Collection {
 
     /// Search and return only IDs (faster, no metadata lookup)
     pub fn search_ids(&self, query: &[f32], k: usize) -> Result<Vec<(String, f32)>> {
-        if query.len() != self.config.dimensions {
-            return Err(NeedleError::DimensionMismatch {
-                expected: self.config.dimensions,
-                got: query.len(),
-            });
-        }
-
-        Self::validate_vector(query)?;
+        self.validate_query(query)?;
 
         let results = self.index.search(query, k, self.vectors.as_slice());
 
@@ -535,13 +526,7 @@ impl Collection {
     pub fn batch_search(&self, queries: &[Vec<f32>], k: usize) -> Result<Vec<Vec<SearchResult>>> {
         // Validate all queries have correct dimensions and values
         for query in queries.iter() {
-            if query.len() != self.config.dimensions {
-                return Err(NeedleError::DimensionMismatch {
-                    expected: self.config.dimensions,
-                    got: query.len(),
-                });
-            }
-            Self::validate_vector(query)?;
+            self.validate_query(query)?;
         }
 
         // Perform parallel search
@@ -566,13 +551,7 @@ impl Collection {
     ) -> Result<Vec<Vec<SearchResult>>> {
         // Validate all queries have correct dimensions and values
         for query in queries.iter() {
-            if query.len() != self.config.dimensions {
-                return Err(NeedleError::DimensionMismatch {
-                    expected: self.config.dimensions,
-                    got: query.len(),
-                });
-            }
-            Self::validate_vector(query)?;
+            self.validate_query(query)?;
         }
 
         // Perform parallel filtered search
@@ -605,14 +584,7 @@ impl Collection {
         k: usize,
         filter: &Filter,
     ) -> Result<Vec<SearchResult>> {
-        if query.len() != self.config.dimensions {
-            return Err(NeedleError::DimensionMismatch {
-                expected: self.config.dimensions,
-                got: query.len(),
-            });
-        }
-
-        Self::validate_vector(query)?;
+        self.validate_query(query)?;
 
         // For filtered search, we need to retrieve more candidates and filter
         let candidates = self.index.search(query, k * 10, self.vectors.as_slice());
