@@ -537,3 +537,379 @@ Available metrics:
 - `needle_search_duration_seconds` - Search latency histogram
 - `needle_insert_duration_seconds` - Insert latency histogram
 - `needle_memory_bytes` - Memory usage by collection
+
+---
+
+## Cloud Storage
+
+Abstracted storage backends for distributed deployments.
+
+### Storage Backends
+
+```rust
+use needle::{S3Backend, S3Config, StorageBackend};
+
+// S3-compatible storage
+let config = S3Config::new("my-bucket", "us-east-1")
+    .with_endpoint("http://localhost:9000")  // MinIO
+    .with_credentials("access_key", "secret_key");
+
+let backend = S3Backend::new(config).await?;
+
+// Basic operations (StorageBackend trait)
+backend.write("vectors/v1", &data).await?;
+let data = backend.read("vectors/v1").await?;
+backend.delete("vectors/v1").await?;
+let keys = backend.list("vectors/").await?;
+let exists = backend.exists("vectors/v1").await?;
+```
+
+### Available Backends
+
+| Backend | Description |
+|---------|-------------|
+| `S3Backend` | Amazon S3, MinIO, DigitalOcean Spaces |
+| `AzureBlobBackend` | Azure Blob Storage |
+| `GCSBackend` | Google Cloud Storage |
+| `LocalBackend` | Local filesystem |
+| `CachedBackend` | Caching wrapper for any backend |
+
+### Caching
+
+```rust
+use needle::{CachedBackend, CacheConfig};
+
+let cache_config = CacheConfig::new()
+    .with_max_size(1024 * 1024 * 100)  // 100MB cache
+    .with_ttl(Duration::from_secs(3600));
+
+let cached = CachedBackend::new(backend, cache_config);
+```
+
+---
+
+## Write-Ahead Log (WAL)
+
+Crash recovery and durability guarantees.
+
+```rust
+use needle::{WalManager, WalConfig};
+
+// Create WAL manager
+let config = WalConfig::default()
+    .with_sync_on_write(true)
+    .with_max_segment_size(64 * 1024 * 1024);  // 64MB
+
+let wal = WalManager::open("/path/to/wal", config)?;
+
+// Append operations
+let lsn = wal.append(WalRecord::Insert {
+    collection: "docs".into(),
+    id: "doc1".into(),
+    vector: vec![0.1; 384],
+})?;
+
+// Checkpoint to main storage
+wal.checkpoint()?;
+
+// Recovery after crash
+let entries = wal.recover(last_known_lsn)?;
+```
+
+---
+
+## Sharding
+
+Horizontal scaling with consistent hashing.
+
+```rust
+use needle::{ShardManager, ShardConfig, ConsistentHashRing};
+
+// Create shard manager
+let config = ShardConfig::new(4)  // 4 shards
+    .with_replication(3);         // replication factor of 3
+
+let manager = ShardManager::new(config)?;
+
+// Route operations to shards
+let shard_id = manager.get_shard_for_key("doc123");
+
+// Rebalancing
+let moves = manager.plan_rebalance()?;
+manager.execute_rebalance(moves).await?;
+```
+
+### Query Routing
+
+```rust
+use needle::{QueryRouter, RouteConfig, LoadBalancing};
+
+let config = RouteConfig::new()
+    .with_load_balancing(LoadBalancing::LeastConnections)
+    .with_timeout(Duration::from_secs(30));
+
+let router = QueryRouter::new(shards, config);
+
+// Fan-out search to all shards
+let results = router.search(&query, k).await?;
+```
+
+---
+
+## Multi-Tenancy (Namespaces)
+
+Logical isolation for multi-tenant deployments.
+
+```rust
+use needle::{NamespaceManager, Namespace, TenantConfig, AccessLevel};
+
+// Create namespace manager
+let mut manager = NamespaceManager::new();
+
+// Create tenant namespace
+let config = TenantConfig::new()
+    .with_max_vectors(1_000_000)
+    .with_max_collections(10);
+
+manager.create_namespace("tenant_123", config)?;
+
+// Get tenant-scoped collection
+let ns = manager.namespace("tenant_123")?;
+let collection = ns.collection("documents")?;
+
+// Access control
+ns.grant_access("user@example.com", AccessLevel::ReadWrite)?;
+```
+
+---
+
+## Security & RBAC
+
+Role-based access control with audit logging.
+
+### Access Control
+
+```rust
+use needle::{AccessController, Role, Permission, Resource, User};
+
+let mut controller = AccessController::new();
+
+// Define roles
+let reader_role = Role::new("reader")
+    .with_permission(Permission::Read, Resource::Collection("*".into()));
+
+let writer_role = Role::new("writer")
+    .with_permission(Permission::Read, Resource::Collection("*".into()))
+    .with_permission(Permission::Write, Resource::Collection("*".into()));
+
+controller.add_role(reader_role)?;
+controller.add_role(writer_role)?;
+
+// Assign roles to users
+controller.assign_role("user@example.com", "reader")?;
+
+// Check permissions
+let ctx = SecurityContext::new("user@example.com");
+let decision = controller.check_permission(&ctx, Permission::Write, &resource);
+```
+
+### Audit Logging
+
+```rust
+use needle::{AuditLogger, FileAuditLog, AuditQuery};
+
+// Create audit logger
+let log = FileAuditLog::new("/var/log/needle/audit.json")?;
+let logger = AuditLogger::new(Box::new(log));
+
+// Events are logged automatically, query later:
+let query = AuditQuery::new()
+    .with_action(AuditAction::Search)
+    .with_resource("documents")
+    .with_time_range(start, end);
+
+let events = logger.query(&query)?;
+```
+
+---
+
+## Encryption
+
+Encrypt vectors at rest using ChaCha20-Poly1305.
+
+```rust
+use needle::{VectorEncryptor, EncryptionConfig, KeyManager};
+
+// Set up encryption (master key must be at least 32 bytes)
+let master_key: [u8; 32] = /* your 32-byte key */;
+let key_manager = KeyManager::new(&master_key)?;
+
+let config = EncryptionConfig::new()
+    .with_algorithm(Algorithm::ChaCha20Poly1305);
+
+let encryptor = VectorEncryptor::new(key_manager, config);
+
+// Encrypt/decrypt vectors
+let encrypted = encryptor.encrypt("doc1", &vector)?;
+let decrypted = encryptor.decrypt("doc1", &encrypted)?;
+```
+
+---
+
+## Backup & Restore
+
+```rust
+use needle::{BackupManager, BackupConfig, BackupType};
+
+let config = BackupConfig::new("/backups")
+    .with_compression(true)
+    .with_encryption(Some(encryption_key));
+
+let manager = BackupManager::new(config);
+
+// Create backup
+let metadata = manager.create_backup(&db, BackupType::Full)?;
+println!("Backup created: {}", metadata.id);
+
+// List backups
+let backups = manager.list_backups()?;
+
+// Restore
+manager.restore(&metadata.id, "/path/to/restore")?;
+```
+
+---
+
+## Query Language (NeedleQL)
+
+SQL-like query language for complex operations.
+
+```rust
+use needle::{QueryParser, QueryExecutor};
+
+let parser = QueryParser::new();
+let executor = QueryExecutor::new(&db);
+
+// Parse and execute queries
+let query = parser.parse(r#"
+    SELECT * FROM documents
+    WHERE vector SIMILAR TO $query AND category = 'tech'
+    ORDER BY distance ASC
+    LIMIT 10
+"#)?;
+
+let results = executor.execute(&query)?;
+```
+
+### Query Syntax
+
+```sql
+-- Vector similarity search
+SELECT * FROM <collection>
+WHERE vector SIMILAR TO <query_vector>
+[AND <filter_expression>]
+[ORDER BY distance ASC|DESC]
+[LIMIT <n>]
+
+-- With metadata filters
+SELECT * FROM documents
+WHERE vector SIMILAR TO $query
+  AND category = 'tech'
+  AND score > 0.5
+LIMIT 10
+
+-- Aggregations
+SELECT COUNT(*), AVG(score)
+FROM documents
+WHERE category = 'tech'
+GROUP BY author
+```
+
+---
+
+## Embedding Providers
+
+When compiled with `--features embedding-providers`:
+
+```rust
+use needle::{OpenAIProvider, OpenAIConfig, EmbeddingProvider};
+
+// OpenAI
+let config = OpenAIConfig::new("sk-...")
+    .with_model("text-embedding-3-small");
+let provider = OpenAIProvider::new(config);
+
+let embeddings = provider.embed(&["Hello world", "How are you?"]).await?;
+
+// Cohere
+use needle::{CohereProvider, CohereConfig};
+let provider = CohereProvider::new(CohereConfig::new("api-key"));
+
+// Ollama (local)
+use needle::{OllamaProvider, OllamaConfig};
+let provider = OllamaProvider::new(
+    OllamaConfig::new("http://localhost:11434", "nomic-embed-text")
+);
+```
+
+---
+
+## GPU Acceleration
+
+```rust
+use needle::{GpuAccelerator, GpuConfig, GpuBackend};
+
+let config = GpuConfig::new()
+    .with_backend(GpuBackend::CUDA)
+    .with_device(0);
+
+let gpu = GpuAccelerator::new(config)?;
+
+// Batch distance computation
+let distances = gpu.batch_distances(&query, &vectors)?;
+
+// GPU-accelerated search
+let results = gpu.knn_search(&query, &vectors, k)?;
+```
+
+---
+
+## Clustering & Analytics
+
+```rust
+use needle::{KMeans, ClusteringConfig, silhouette_score};
+
+// K-means clustering
+let config = ClusteringConfig::default()
+    .with_max_iterations(100)
+    .with_tolerance(1e-4);
+
+// Fit K-means with k=10 clusters
+let vectors_refs: Vec<&[f32]> = vectors.iter().map(|v| v.as_slice()).collect();
+let kmeans = KMeans::fit(&vectors_refs, 10, config)?;
+
+// Get cluster assignments
+let labels = kmeans.predict(&vectors_refs);
+
+// Evaluate clustering
+let score = silhouette_score(&vectors, &labels);
+println!("Silhouette score: {:.3}", score);
+
+// Find optimal k with elbow method
+let optimal_k = elbow_method(&vectors, 2..20)?;
+```
+
+### Anomaly Detection
+
+```rust
+use needle::{IsolationForest, LocalOutlierFactor};
+
+// Isolation Forest
+let forest = IsolationForest::new(100);  // 100 trees
+forest.fit(&vectors)?;
+let anomaly_scores = forest.predict(&new_vectors)?;
+
+// Local Outlier Factor
+let lof = LocalOutlierFactor::new(20);  // k=20 neighbors
+let outlier_scores = lof.fit_predict(&vectors)?;
+```

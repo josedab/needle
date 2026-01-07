@@ -1,3 +1,61 @@
+//! Metadata Storage and Filtering
+//!
+//! This module provides metadata storage for vectors and MongoDB-style query filters
+//! for search result filtering.
+//!
+//! # Overview
+//!
+//! Each vector can have associated JSON metadata. Metadata can be used to:
+//! - Store additional information about vectors (titles, categories, timestamps)
+//! - Filter search results based on field values
+//! - Implement faceted search and refinement
+//!
+//! # Filter Syntax
+//!
+//! Filters use MongoDB-style query syntax:
+//!
+//! ```rust
+//! use needle::metadata::Filter;
+//! use serde_json::json;
+//!
+//! // Simple equality
+//! let filter = Filter::eq("category", "books");
+//!
+//! // Comparison operators
+//! let filter = Filter::gt("price", 10.0);
+//! let filter = Filter::lte("rating", 5);
+//!
+//! // Logical operators
+//! let filter = Filter::and(vec![
+//!     Filter::eq("category", "books"),
+//!     Filter::lt("price", 50.0),
+//! ]);
+//!
+//! // Parse from JSON (MongoDB syntax)
+//! let filter = Filter::parse(&json!({
+//!     "category": "books",
+//!     "price": { "$lt": 50 }
+//! }))?;
+//! # Ok::<(), String>(())
+//! ```
+//!
+//! # Supported Operators
+//!
+//! | Operator | Description |
+//! |----------|-------------|
+//! | `$eq` | Equal to |
+//! | `$ne` | Not equal to |
+//! | `$gt` | Greater than |
+//! | `$gte` | Greater than or equal |
+//! | `$lt` | Less than |
+//! | `$lte` | Less than or equal |
+//! | `$in` | In array |
+//! | `$nin` | Not in array |
+//! | `$contains` | Array contains value |
+//! | `$and` | Logical AND |
+//! | `$or` | Logical OR |
+//! | `$not` | Logical NOT |
+
 use crate::error::{NeedleError, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
