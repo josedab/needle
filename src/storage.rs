@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::Path;
+use tracing::{debug, info, warn};
 
 /// Magic number for Needle database files
 pub const MAGIC: &[u8; 8] = b"NEEDLE01";
@@ -305,6 +306,7 @@ impl StorageEngine {
     fn create_new(path: &Path) -> Result<Self> {
         // Validate path to prevent path traversal attacks
         let canonical_path = Self::validate_path(path, false)?;
+        debug!(path = ?canonical_path, "Creating new database file");
 
         let mut file = OpenOptions::new()
             .read(true)
@@ -316,6 +318,8 @@ impl StorageEngine {
         let header = Header::default();
         file.write_all(&header.to_bytes())?;
         file.flush()?;
+
+        info!(path = ?canonical_path, "Created new database file");
 
         Ok(Self {
             file,
@@ -330,6 +334,7 @@ impl StorageEngine {
     fn open_existing(path: &Path) -> Result<Self> {
         // Validate path to prevent path traversal attacks
         let canonical_path = Self::validate_path(path, true)?;
+        debug!(path = ?canonical_path, "Opening existing database file");
 
         let mut file = OpenOptions::new().read(true).write(true).open(&canonical_path)?;
 
@@ -340,6 +345,11 @@ impl StorageEngine {
 
         // Version check
         if header.version > VERSION {
+            warn!(
+                file_version = header.version,
+                max_version = VERSION,
+                "Unsupported database version"
+            );
             return Err(NeedleError::InvalidDatabase(format!(
                 "Unsupported version: {} (max: {})",
                 header.version, VERSION
@@ -350,10 +360,19 @@ impl StorageEngine {
 
         // Memory-map if large enough
         let mmap = if file_size > MMAP_THRESHOLD {
+            debug!(file_size = file_size, "Using memory-mapped I/O");
             Some(unsafe { Mmap::map(&file)? })
         } else {
+            debug!(file_size = file_size, "Using standard file I/O");
             None
         };
+
+        info!(
+            path = ?canonical_path,
+            vectors = header.vector_count,
+            version = header.version,
+            "Opened existing database file"
+        );
 
         Ok(Self {
             file,
@@ -407,6 +426,42 @@ impl StorageEngine {
         Ok(buffer)
     }
 
+    /// Read data from a specific offset as a borrowed slice (zero-copy when mmap available)
+    ///
+    /// This method provides zero-copy access to memory-mapped file data, avoiding
+    /// the allocation and copy overhead of `read_at`. Use this when:
+    /// - You only need temporary read access to the data
+    /// - You want to avoid memory allocation for large reads
+    /// - The data will be processed immediately and not stored
+    ///
+    /// Returns an error if mmap is not available or if the range is out of bounds.
+    /// In those cases, use `read_at` instead which falls back to file I/O.
+    pub fn read_at_ref(&self, offset: u64, len: usize) -> Result<&[u8]> {
+        if let Some(ref mmap) = self.mmap {
+            let start = offset as usize;
+            let end = start + len;
+            if end <= mmap.len() {
+                return Ok(&mmap[start..end]);
+            }
+            return Err(NeedleError::Io(std::io::Error::new(
+                std::io::ErrorKind::UnexpectedEof,
+                format!("read range [{}, {}) exceeds mmap size {}", start, end, mmap.len()),
+            )));
+        }
+        Err(NeedleError::Io(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            "zero-copy read requires mmap; use read_at instead",
+        )))
+    }
+
+    /// Check if zero-copy reads are available
+    ///
+    /// Returns true if the storage has an active memory map, making
+    /// `read_at_ref` available for zero-copy reads.
+    pub fn has_mmap(&self) -> bool {
+        self.mmap.is_some()
+    }
+
     /// Append data to the end of the file
     pub fn append(&mut self, data: &[u8]) -> Result<u64> {
         let offset = self.file.seek(SeekFrom::End(0))?;
@@ -435,6 +490,12 @@ impl StorageEngine {
     /// The header's state_size and state_checksum fields will be computed automatically.
     pub fn atomic_save(&mut self, header: &Header, state_bytes: &[u8]) -> Result<()> {
         use std::fs;
+
+        debug!(
+            state_bytes = state_bytes.len(),
+            vectors = header.vector_count,
+            "Starting atomic save"
+        );
 
         // Create a header with computed state integrity fields
         let mut final_header = header.clone();
@@ -478,6 +539,8 @@ impl StorageEngine {
 
         // Refresh mmap if needed
         self.refresh_mmap()?;
+
+        debug!(path = ?self.path, "Atomic save completed");
 
         Ok(())
     }
