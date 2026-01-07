@@ -232,6 +232,101 @@ proptest! {
             prop_assert!(coll.get(id).is_none());
         }
     }
+
+    /// Property: Search should be idempotent - same query returns same results
+    #[test]
+    fn prop_search_idempotence(
+        vectors in prop::collection::vec(arb_vector(32), 20..50),
+        k in 5usize..15
+    ) {
+        let db = Database::in_memory();
+        db.create_collection("test", 32).unwrap();
+        let coll = db.collection("test").unwrap();
+
+        for (i, vec) in vectors.iter().enumerate() {
+            coll.insert(format!("vec_{}", i), vec, None).unwrap();
+        }
+
+        let query = &vectors[0];
+
+        // Run the same search twice
+        let results1 = coll.search(query, k).unwrap();
+        let results2 = coll.search(query, k).unwrap();
+
+        // Results should be identical
+        prop_assert_eq!(results1.len(), results2.len());
+        for (r1, r2) in results1.iter().zip(results2.iter()) {
+            prop_assert_eq!(&r1.id, &r2.id);
+            prop_assert!((r1.distance - r2.distance).abs() < 1e-6);
+        }
+    }
+
+    /// Property: Triangle inequality for Euclidean distance - d(a,c) <= d(a,b) + d(b,c)
+    #[test]
+    fn prop_distance_triangle_inequality(
+        a in arb_vector(32),
+        b in arb_vector(32),
+        c in arb_vector(32)
+    ) {
+        let d_ab = DistanceFunction::Euclidean.compute(&a, &b);
+        let d_bc = DistanceFunction::Euclidean.compute(&b, &c);
+        let d_ac = DistanceFunction::Euclidean.compute(&a, &c);
+
+        // Triangle inequality: d(a,c) <= d(a,b) + d(b,c)
+        // Allow small epsilon for floating point errors
+        prop_assert!(
+            d_ac <= d_ab + d_bc + 1e-5,
+            "Triangle inequality violated: d(a,c)={} > d(a,b)={} + d(b,c)={}",
+            d_ac, d_ab, d_bc
+        );
+    }
+
+    /// Property: Collection serialization roundtrip - export then import preserves data
+    #[test]
+    fn prop_serialization_roundtrip(
+        vectors in prop::collection::vec(arb_vector(16), 5..20)
+    ) {
+        // Create database and collection
+        let db1 = Database::in_memory();
+        db1.create_collection("test", 16).unwrap();
+        let coll1 = db1.collection("test").unwrap();
+
+        // Insert vectors with metadata
+        for (i, vec) in vectors.iter().enumerate() {
+            let metadata = json!({"index": i, "value": format!("item_{}", i)});
+            coll1.insert(format!("vec_{}", i), vec, Some(metadata)).unwrap();
+        }
+
+        // Export all data
+        let exported = coll1.export_all().unwrap();
+
+        // Create second database/collection and import
+        let db2 = Database::in_memory();
+        db2.create_collection("test2", 16).unwrap();
+        let coll2 = db2.collection("test2").unwrap();
+
+        for (id, vector, metadata) in exported {
+            coll2.insert(&id, &vector, metadata).unwrap();
+        }
+
+        // Verify collections match
+        prop_assert_eq!(coll1.len(), coll2.len());
+
+        // Verify each vector
+        for i in 0..vectors.len() {
+            let id = format!("vec_{}", i);
+            let (v1, m1) = coll1.get(&id).unwrap();
+            let (v2, m2) = coll2.get(&id).unwrap();
+
+            // Vectors should match
+            for (a, b) in v1.iter().zip(v2.iter()) {
+                prop_assert!((a - b).abs() < 1e-6);
+            }
+
+            // Metadata should match
+            prop_assert_eq!(m1, m2);
+        }
+    }
 }
 
 /// Test distance function symmetry
