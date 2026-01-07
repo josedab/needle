@@ -6,6 +6,7 @@ Needle is a high-performance, zero-configuration vector database designed for AI
 
 ## Features
 
+### Core
 - **HNSW Index**: Sub-10ms queries using Hierarchical Navigable Small World graphs
 - **SIMD Optimized**: Distance functions optimized for AVX2 (x86_64) and NEON (ARM)
 - **Single-File Storage**: All data in one file, easy to backup and distribute
@@ -14,6 +15,24 @@ Needle is a high-performance, zero-configuration vector database designed for AI
 - **Quantization**: Scalar (4x), Product (8-32x), and Binary (32x) compression
 - **Batch Search**: Parallel search for multiple queries using Rayon
 - **Multi-Language**: Rust, Python, JavaScript/WASM, Swift, and Kotlin bindings
+
+### Advanced
+- **Hybrid Search**: BM25 + vector search with Reciprocal Rank Fusion (RRF)
+- **IVF Index**: Inverted File Index for large-scale approximate search
+- **Sparse Vectors**: TF-IDF and SPLADE support with inverted index
+- **Multi-Vector (ColBERT)**: MaxSim search for token-level embeddings
+- **Reranking**: Cross-encoder reranking with Cohere, HuggingFace, and custom providers
+- **GPU Acceleration**: CUDA/OpenCL support for distance computation
+
+### Enterprise
+- **Encryption at Rest**: ChaCha20-Poly1305 authenticated encryption
+- **RBAC**: Role-based access control with audit logging
+- **Write-Ahead Log (WAL)**: Crash recovery and durability guarantees
+- **Cloud Storage**: S3, Azure Blob, and GCS backends with caching
+- **Sharding**: Consistent hash ring for horizontal scaling
+- **Multi-Tenancy**: Namespace isolation with access control
+- **Raft Consensus**: Leader election and log replication for high availability
+- **CRDT Support**: Conflict-free replicated data types for eventual consistency
 
 ## Installation
 
@@ -329,6 +348,32 @@ needle stats mydata.needle -c documents
 | `count` | Count vectors in a collection |
 | `clear` | Delete all vectors from a collection |
 | `compact` | Remove deleted vectors and reclaim space |
+| `serve` | Start HTTP REST API server (requires `server` feature) |
+| `tune` | Auto-tune HNSW parameters for a workload |
+
+## Feature Flags
+
+| Flag | Description |
+|------|-------------|
+| `simd` | SIMD-optimized distance functions |
+| `server` | HTTP REST API server |
+| `web-ui` | Web-based admin UI |
+| `metrics` | Prometheus metrics |
+| `hybrid` | BM25 hybrid search |
+| `embeddings` | ONNX embedding inference |
+| `embedding-providers` | OpenAI, Cohere, Ollama embedding providers |
+| `tui` | Terminal user interface |
+| `full` | All non-binding features (server + web-ui + metrics + hybrid + embedding-providers) |
+| `python` | Python bindings |
+| `wasm` | WebAssembly bindings |
+| `uniffi-bindings` | Swift/Kotlin bindings |
+
+Build with features:
+
+```bash
+cargo build --features full            # All features
+cargo build --features server,metrics  # Server with metrics only
+```
 
 ## Benchmarks
 

@@ -1,3 +1,50 @@
+//! Database Management
+//!
+//! The database is the top-level container for collections in Needle.
+//! It provides thread-safe access to collections and handles persistence.
+//!
+//! # Overview
+//!
+//! A `Database` can be either:
+//! - **File-backed**: Persisted to a single `.needle` file on disk
+//! - **In-memory**: Ephemeral storage for testing or temporary use
+//!
+//! # Example
+//!
+//! ```rust,no_run
+//! use needle::{Database, CollectionConfig, DistanceFunction};
+//! use serde_json::json;
+//!
+//! // File-backed database
+//! let mut db = Database::open("vectors.needle")?;
+//!
+//! // Create a collection
+//! db.create_collection("documents", 384)?;
+//!
+//! // Get a thread-safe reference
+//! let collection = db.collection("documents")?;
+//!
+//! // Insert vectors
+//! collection.insert("doc1", &vec![0.1; 384], Some(json!({"title": "Hello"})))?;
+//!
+//! // Save to disk
+//! db.save()?;
+//! # Ok::<(), needle::NeedleError>(())
+//! ```
+//!
+//! # Thread Safety
+//!
+//! The `Database` uses `parking_lot::RwLock` internally for concurrent access.
+//! Multiple readers can access collections simultaneously, while writers get
+//! exclusive access. The `CollectionRef` type provides a safe handle for
+//! concurrent collection operations.
+//!
+//! # Persistence
+//!
+//! Changes are not automatically persisted. Call `save()` to write changes to disk.
+//! For applications requiring durability, consider using the WAL (Write-Ahead Log)
+//! feature or calling `save()` after critical operations.
+
 use crate::collection::{Collection, CollectionConfig, SearchResult};
 use crate::error::{NeedleError, Result};
 use crate::metadata::Filter;

@@ -31,6 +31,72 @@ Needle is designed as "SQLite for vectors" - a single-file, embedded vector data
 └─────────────────────────────────────────────────────────────────┘
 ```
 
+## Module Overview
+
+```
+src/
+├── lib.rs              # Library entry, re-exports public API
+├── main.rs             # CLI application
+│
+├── Core Data
+│   ├── collection.rs   # Collection: vectors + metadata + index
+│   ├── database.rs     # Database: multi-collection management
+│   ├── storage.rs      # File I/O, mmap, vector storage
+│   └── metadata.rs     # Metadata storage and filtering
+│
+├── Indexing
+│   ├── hnsw.rs         # HNSW index implementation
+│   ├── ivf.rs          # IVF (Inverted File) index
+│   ├── sparse.rs       # Sparse vector inverted index
+│   ├── multivec.rs     # Multi-vector (ColBERT) support
+│   └── diskann.rs      # DiskANN on-disk index
+│
+├── Search & Retrieval
+│   ├── distance.rs     # Distance functions (Cosine, Euclidean, etc.)
+│   ├── quantization.rs # Scalar, Product, Binary quantization
+│   ├── hybrid.rs       # BM25 + RRF hybrid search
+│   ├── reranker.rs     # Cross-encoder reranking
+│   └── query_lang.rs   # NeedleQL query language
+│
+├── Infrastructure
+│   ├── wal.rs          # Write-ahead logging
+│   ├── backup.rs       # Backup and restore
+│   ├── cloud_storage.rs# S3, Azure, GCS backends
+│   └── gpu.rs          # GPU acceleration
+│
+├── Distributed
+│   ├── shard.rs        # Sharding with consistent hashing
+│   ├── routing.rs      # Query routing and aggregation
+│   ├── raft.rs         # Raft consensus
+│   ├── crdt.rs         # CRDT for eventual consistency
+│   └── rebalance.rs    # Shard rebalancing
+│
+├── Enterprise
+│   ├── security.rs     # RBAC and audit logging
+│   ├── encryption.rs   # Encryption at rest
+│   ├── namespace.rs    # Multi-tenancy
+│   └── telemetry.rs    # Observability
+│
+├── ML & Analytics
+│   ├── clustering.rs   # K-means, hierarchical clustering
+│   ├── anomaly.rs      # Anomaly detection
+│   ├── dimreduce.rs    # PCA, random projection
+│   ├── drift.rs        # Distribution drift detection
+│   └── embeddings.rs   # ONNX embedding inference
+│
+├── Interfaces
+│   ├── server.rs       # HTTP REST API
+│   ├── python.rs       # Python bindings
+│   ├── wasm.rs         # WASM bindings
+│   └── tui.rs          # Terminal UI
+│
+└── Utilities
+    ├── error.rs        # Error types
+    ├── tuning.rs       # Auto-tuning HNSW parameters
+    ├── profiler.rs     # Query profiling
+    └── optimizer.rs    # Query optimization
+```
+
 ## Core Components
 
 ### Database
@@ -191,6 +257,95 @@ Reduces memory usage with minimal accuracy loss:
 - 32x compression
 - Good for candidate generation
 
+### IVF Index
+
+Inverted File Index for large-scale approximate search:
+
+```rust
+pub struct IvfIndex {
+    centroids: Vec<Vec<f32>>,
+    inverted_lists: HashMap<usize, Vec<usize>>,
+    config: IvfConfig,
+}
+```
+
+**Parameters:**
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `n_clusters` | 256 | Number of Voronoi cells |
+| `n_probe` | 16 | Clusters to search at query time |
+
+### Write-Ahead Log (WAL)
+
+Crash recovery and durability:
+
+```rust
+pub struct WalManager {
+    log_path: PathBuf,
+    current_lsn: AtomicU64,
+    entries: RwLock<Vec<WalEntry>>,
+}
+```
+
+**Operations:**
+- `append()` - Write operation to log before applying
+- `checkpoint()` - Flush log to main storage
+- `recover()` - Replay log after crash
+
+### Cloud Storage
+
+Abstracted storage backends for distributed deployments:
+
+```rust
+pub trait StorageBackend: Send + Sync {
+    fn get(&self, key: &str) -> Result<Vec<u8>>;
+    fn put(&self, key: &str, data: &[u8]) -> Result<()>;
+    fn delete(&self, key: &str) -> Result<()>;
+    fn list(&self, prefix: &str) -> Result<Vec<String>>;
+}
+```
+
+**Backends:**
+- `S3Backend` - Amazon S3 / MinIO
+- `AzureBlobBackend` - Azure Blob Storage
+- `GCSBackend` - Google Cloud Storage
+- `LocalBackend` - Local filesystem
+- `CachedBackend` - Caching wrapper for any backend
+
+### GPU Acceleration
+
+GPU-accelerated distance computation:
+
+```rust
+pub struct GpuAccelerator {
+    backend: GpuBackend,  // CUDA, OpenCL, or Vulkan
+    device: GpuDevice,
+    config: GpuConfig,
+}
+```
+
+**Supported Operations:**
+- Batch distance computation
+- K-nearest neighbor search
+- Quantization training
+
+### Query Language (NeedleQL)
+
+SQL-like query language for complex operations:
+
+```sql
+SEARCH "machine learning"
+FROM documents
+WHERE category = 'tech' AND score > 0.5
+LIMIT 10
+```
+
+Components:
+- `QueryParser` - Tokenizes and parses queries
+- `QueryValidator` - Validates query semantics
+- `QueryOptimizer` - Optimizes query execution plan
+- `QueryExecutor` - Executes optimized queries
+
 ## Thread Safety
 
 Needle uses a hierarchical locking strategy:
@@ -231,20 +386,62 @@ For horizontal scaling, Needle supports sharding and replication:
 └─────────────────────────────────────────────────────────────┘
 ```
 
-**Sharding:**
+### Sharding (`shard.rs`)
+
+```rust
+pub struct ShardManager {
+    shards: HashMap<ShardId, ShardInfo>,
+    hash_ring: ConsistentHashRing,
+    config: ShardConfig,
+}
+```
+
 - Consistent hashing for even distribution
 - Virtual nodes for balance
-- Automatic rebalancing
+- Automatic rebalancing via `RebalanceCoordinator`
 
-**Replication (Raft):**
+### Query Routing (`routing.rs`)
+
+```rust
+pub struct QueryRouter {
+    shards: Vec<ShardInfo>,
+    load_balancing: LoadBalancing,
+    config: RouteConfig,
+}
+```
+
+- Fan-out queries to relevant shards
+- Aggregate and merge results
+- Load balancing (round-robin, least-connections, random)
+
+### Replication with Raft (`raft.rs`)
+
+```rust
+pub struct RaftNode {
+    state: RaftState,
+    storage: Box<dyn RaftStorage>,
+    peers: Vec<NodeId>,
+}
+```
+
 - Leader election
 - Log replication
-- Consistency guarantees
+- Snapshot support for fast recovery
 
-**CRDT (Conflict-free):**
-- Eventual consistency
-- No coordination required
-- Hybrid logical clocks
+### CRDT Support (`crdt.rs`)
+
+```rust
+pub struct VectorCRDT {
+    id: String,
+    vector: Vec<f32>,
+    hlc: HLC,  // Hybrid Logical Clock
+    tombstone: bool,
+}
+```
+
+- Conflict-free replicated data types
+- Eventual consistency without coordination
+- Hybrid logical clocks for ordering
 
 ## Performance Characteristics
 
@@ -282,17 +479,71 @@ Similar to memory, plus:
 |------|-------------|
 | `simd` | SIMD-optimized distance functions |
 | `server` | HTTP REST API server |
+| `web-ui` | Web-based admin interface |
 | `metrics` | Prometheus metrics |
 | `hybrid` | BM25 hybrid search |
 | `embeddings` | ONNX embedding inference |
-| `full` | All non-binding features |
+| `embedding-providers` | OpenAI, Cohere, Ollama providers |
+| `tui` | Terminal user interface |
+| `python` | Python bindings (PyO3) |
+| `wasm` | WebAssembly bindings |
+| `uniffi-bindings` | Swift/Kotlin bindings |
+| `full` | All non-binding features (server + web-ui + metrics + hybrid + embedding-providers) |
 
 ## Security Model
 
-- **Encryption at rest:** ChaCha20-Poly1305 (optional)
-- **RBAC:** Role-based access control
-- **Audit logging:** All operations logged
-- **Rate limiting:** Per-IP request limits
+### Encryption (`encryption.rs`)
+
+```rust
+pub struct VectorEncryptor {
+    key_manager: KeyManager,
+    config: EncryptionConfig,
+}
+```
+
+- **Encryption at rest:** ChaCha20-Poly1305 authenticated encryption
+- **Key derivation:** HKDF for key expansion
+- **Per-vector encryption:** Optional granular encryption
+
+### Access Control (`security.rs`)
+
+```rust
+pub struct AccessController {
+    roles: HashMap<String, Role>,
+    users: HashMap<String, User>,
+    grants: Vec<PermissionGrant>,
+}
+```
+
+- **RBAC:** Role-based access control with hierarchical permissions
+- **Resources:** Collections, vectors, metadata
+- **Permissions:** Read, Write, Delete, Admin
+- **Policy decisions:** Allow, Deny, NotApplicable
+
+### Audit Logging (`security.rs`)
+
+```rust
+pub struct AuditLogger {
+    backend: Box<dyn AuditLog>,
+}
+```
+
+- **File-based logging:** JSON audit trail
+- **In-memory logging:** For testing
+- **Queryable:** Filter by action, resource, time range
+
+### Multi-Tenancy (`namespace.rs`)
+
+```rust
+pub struct NamespaceManager {
+    namespaces: HashMap<String, Namespace>,
+    access_control: AccessControl,
+}
+```
+
+- **Namespace isolation:** Logical separation of data
+- **Tenant configuration:** Per-tenant quotas and settings
+- **Access control integration:** Namespace-scoped permissions
 
 ## Future Considerations
 
