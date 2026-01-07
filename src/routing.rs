@@ -481,9 +481,9 @@ mod tests {
         let router = create_test_router();
 
         let shard1 = router.select_shard();
-        let shard2 = router.select_shard();
-        let shard3 = router.select_shard();
-        let shard4 = router.select_shard();
+        let _shard2 = router.select_shard();
+        let _shard3 = router.select_shard();
+        let _shard4 = router.select_shard();
         let shard5 = router.select_shard();
 
         // Should cycle through shards

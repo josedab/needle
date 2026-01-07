@@ -337,8 +337,7 @@ impl TemporalIndex {
                 // Find the version that was current at as_of_timestamp
                 let valid_version = versions
                     .iter()
-                    .filter(|v| v.timestamp <= as_of_timestamp && v.change_type != ChangeType::Delete)
-                    .next_back();
+                    .rfind(|v| v.timestamp <= as_of_timestamp && v.change_type != ChangeType::Delete);
 
                 valid_version.map(|_| id)
             })
