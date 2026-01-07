@@ -353,26 +353,36 @@ needle stats mydata.needle -c documents
 
 ## Feature Flags
 
-| Flag | Description |
-|------|-------------|
-| `simd` | SIMD-optimized distance functions |
-| `server` | HTTP REST API server |
-| `web-ui` | Web-based admin UI |
-| `metrics` | Prometheus metrics |
-| `hybrid` | BM25 hybrid search |
-| `embeddings` | ONNX embedding inference |
-| `embedding-providers` | OpenAI, Cohere, Ollama embedding providers |
-| `tui` | Terminal user interface |
-| `full` | All non-binding features (server + web-ui + metrics + hybrid + embedding-providers) |
-| `python` | Python bindings |
-| `wasm` | WebAssembly bindings |
-| `uniffi-bindings` | Swift/Kotlin bindings |
+Needle uses Cargo feature flags to enable optional functionality. By default, no features are enabled for minimal compile time.
+
+| Flag | Description | Stability |
+|------|-------------|-----------|
+| `simd` | SIMD-optimized distance functions (AVX2, NEON) | Stable |
+| `server` | HTTP REST API server (Axum-based) | Stable |
+| `web-ui` | Web-based admin UI | Stable |
+| `metrics` | Prometheus metrics endpoint | Stable |
+| `hybrid` | BM25 + vector hybrid search with RRF fusion | Stable |
+| `embeddings` | ONNX embedding inference | **Unstable** (pre-release dependency) |
+| `embedding-providers` | OpenAI, Cohere, Ollama embedding providers | Stable |
+| `tui` | Terminal user interface | Stable |
+| `full` | All stable features (server + web-ui + metrics + hybrid + embedding-providers) | Stable |
+| `python` | Python bindings via PyO3 | Stable |
+| `wasm` | WebAssembly bindings | Stable |
+| `uniffi-bindings` | Swift/Kotlin bindings via UniFFI | Stable |
+
+> **Note**: The `embeddings` feature uses a pre-release version of the `ort` crate (ONNX Runtime). API stability is not guaranteed for this feature until `ort` reaches a stable release.
 
 Build with features:
 
 ```bash
-cargo build --features full            # All features
-cargo build --features server,metrics  # Server with metrics only
+# Build with all stable features
+cargo build --features full
+
+# Build with specific features
+cargo build --features server,metrics
+
+# Build with all features including unstable
+cargo build --features full,embeddings
 ```
 
 ## Benchmarks
