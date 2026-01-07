@@ -901,6 +901,90 @@ fn bench_brute_force_baseline(c: &mut Criterion) {
 }
 
 // ============================================================================
+// Optimization Validation Benchmarks
+// These benchmarks measure the specific operations that were optimized:
+// - CRC32 checksum (storage.rs) - measured via file I/O
+// - Vec<u8> visited tracking (hnsw.rs) - measured via search operations
+// - sort_unstable_by (hnsw.rs) - measured via insert/search operations
+// ============================================================================
+
+fn bench_optimization_validation(c: &mut Criterion) {
+    let mut group = c.benchmark_group("optimization_validation");
+
+    // Benchmark HNSW search - validates Vec<u8> visited tracking optimization
+    let dim = 128;
+    let n = 10_000;
+    let vectors = random_vectors(n, dim);
+
+    let mut index = HnswIndex::with_distance(DistanceFunction::Euclidean);
+    for (id, vec) in vectors.iter().enumerate() {
+        index.insert(id, vec, &vectors).unwrap();
+    }
+
+    let query = random_vector(dim);
+
+    group.bench_function("hnsw_search_10k_vectors", |bencher| {
+        bencher.iter(|| index.search(black_box(&query), 10, &vectors))
+    });
+
+    // Benchmark HNSW insert - validates sort_unstable_by optimization
+    group.bench_function("hnsw_insert_into_10k", |bencher| {
+        bencher.iter_batched(
+            || {
+                let mut idx = HnswIndex::with_distance(DistanceFunction::Euclidean);
+                for (id, vec) in vectors.iter().enumerate() {
+                    idx.insert(id, vec, &vectors).unwrap();
+                }
+                (idx, random_vector(dim))
+            },
+            |(mut idx, new_vec)| {
+                idx.insert(n, black_box(&new_vec), &vectors).unwrap()
+            },
+            criterion::BatchSize::SmallInput,
+        )
+    });
+
+    // Benchmark neighbor selection (sort_unstable_by optimization)
+    // This is measured indirectly through insert operations with pruning
+    let dense_vectors = random_vectors(1000, dim);
+    group.bench_function("hnsw_build_1k_dense", |bencher| {
+        bencher.iter(|| {
+            let mut idx = HnswIndex::new(
+                HnswConfig::with_m(32), // Higher M = more neighbor selection
+                DistanceFunction::Euclidean
+            );
+            for (id, vec) in dense_vectors.iter().enumerate() {
+                idx.insert(id, vec, &dense_vectors).unwrap();
+            }
+        })
+    });
+
+    // Benchmark storage operations (CRC32 lookup table optimization)
+    // Measured via database persistence
+    group.bench_function("database_save_1k_vectors", |bencher| {
+        bencher.iter_batched(
+            || {
+                let tmp = tempfile::NamedTempFile::new().unwrap();
+                let path = tmp.path().to_string_lossy().to_string();
+                let db = Database::open(&path).unwrap();
+                db.create_collection("test", dim).unwrap();
+                let coll = db.collection("test").unwrap();
+                for (i, vec) in dense_vectors.iter().enumerate() {
+                    coll.insert(format!("doc{}", i), vec, None).unwrap();
+                }
+                (db, tmp)
+            },
+            |(mut db, _tmp)| {
+                db.save().unwrap()
+            },
+            criterion::BatchSize::SmallInput,
+        )
+    });
+
+    group.finish();
+}
+
+// ============================================================================
 // Criterion Groups
 // ============================================================================
 
@@ -942,6 +1026,11 @@ criterion_group!(
     bench_brute_force_baseline,
 );
 
+criterion_group!(
+    optimization_benches,
+    bench_optimization_validation,
+);
+
 // Note: 1M vector benchmark is separate due to long runtime
 criterion_group! {
     name = large_scale_benches;
@@ -955,6 +1044,7 @@ criterion_main!(
     index_benches,
     advanced_benches,
     supplementary_benches,
+    optimization_benches,
     // Uncomment to run large-scale benchmarks (slow):
     // large_scale_benches,
 );
