@@ -50,10 +50,20 @@ use ordered_float::OrderedFloat;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::cmp::Reverse;
-use std::collections::{BinaryHeap, HashMap, HashSet};
+use std::collections::{BinaryHeap, HashMap};
+use tracing::debug;
 
 /// Internal vector ID
 pub type VectorId = usize;
+
+/// Statistics from an HNSW search operation
+#[derive(Debug, Clone, Default)]
+pub struct SearchStats {
+    /// Number of nodes visited during the search
+    pub visited_nodes: usize,
+    /// Number of layers traversed (including layer 0)
+    pub layers_traversed: usize,
+}
 
 /// HNSW configuration parameters
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -178,6 +188,93 @@ impl Layer {
     }
 }
 
+/// Bit-packed set for efficient deleted vector tracking
+///
+/// Uses 1 bit per potential vector ID, providing O(1) lookups with
+/// better cache performance than HashSet for dense ID spaces.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct BitSet {
+    /// Bit storage: each u64 holds 64 bits
+    bits: Vec<u64>,
+    /// Cached count of set bits
+    count: usize,
+}
+
+impl BitSet {
+    /// Create a new empty BitSet
+    pub fn new() -> Self {
+        Self {
+            bits: Vec::new(),
+            count: 0,
+        }
+    }
+
+    /// Check if an ID is in the set
+    #[inline]
+    pub fn contains(&self, id: &usize) -> bool {
+        let word_idx = *id / 64;
+        let bit_idx = *id % 64;
+        self.bits.get(word_idx).map_or(false, |word| (word >> bit_idx) & 1 == 1)
+    }
+
+    /// Insert an ID into the set, returns true if it was newly inserted
+    pub fn insert(&mut self, id: usize) -> bool {
+        let word_idx = id / 64;
+        let bit_idx = id % 64;
+
+        // Grow if necessary
+        if word_idx >= self.bits.len() {
+            self.bits.resize(word_idx + 1, 0);
+        }
+
+        let mask = 1u64 << bit_idx;
+        let was_set = (self.bits[word_idx] & mask) != 0;
+        if !was_set {
+            self.bits[word_idx] |= mask;
+            self.count += 1;
+        }
+        !was_set
+    }
+
+    /// Remove an ID from the set, returns true if it was present
+    #[allow(dead_code)]
+    pub fn remove(&mut self, id: &usize) -> bool {
+        let word_idx = *id / 64;
+        let bit_idx = *id % 64;
+
+        if word_idx >= self.bits.len() {
+            return false;
+        }
+
+        let mask = 1u64 << bit_idx;
+        let was_set = (self.bits[word_idx] & mask) != 0;
+        if was_set {
+            self.bits[word_idx] &= !mask;
+            self.count -= 1;
+        }
+        was_set
+    }
+
+    /// Get the number of elements in the set
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.count
+    }
+
+    /// Check if the set is empty
+    #[inline]
+    #[allow(dead_code)]
+    pub fn is_empty(&self) -> bool {
+        self.count == 0
+    }
+
+    /// Clear all elements from the set
+    pub fn clear(&mut self) {
+        self.bits.clear();
+        self.count = 0;
+    }
+}
+
 /// HNSW index for approximate nearest neighbor search
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HnswIndex {
@@ -195,9 +292,9 @@ pub struct HnswIndex {
     distance: DistanceFunction,
     /// Number of vectors (not counting deleted)
     count: usize,
-    /// Set of deleted vector IDs
+    /// Bit-packed set of deleted vector IDs for cache-efficient lookups
     #[serde(default)]
-    deleted: HashSet<VectorId>,
+    deleted: BitSet,
 }
 
 impl HnswIndex {
@@ -211,7 +308,7 @@ impl HnswIndex {
             config,
             distance,
             count: 0,
-            deleted: HashSet::new(),
+            deleted: BitSet::new(),
         }
     }
 
@@ -347,6 +444,16 @@ impl HnswIndex {
         self.search_with_ef(query, k, self.config.ef_search, vectors)
     }
 
+    /// Search for k nearest neighbors and return statistics
+    pub fn search_with_stats(
+        &self,
+        query: &[f32],
+        k: usize,
+        vectors: &[Vec<f32>],
+    ) -> (Vec<(VectorId, f32)>, SearchStats) {
+        self.search_with_ef_stats(query, k, self.config.ef_search, vectors)
+    }
+
     /// Search for k nearest neighbors with a custom ef_search parameter
     pub fn search_with_ef(
         &self,
@@ -355,26 +462,45 @@ impl HnswIndex {
         ef_search: usize,
         vectors: &[Vec<f32>],
     ) -> Vec<(VectorId, f32)> {
+        self.search_with_ef_stats(query, k, ef_search, vectors).0
+    }
+
+    /// Search for k nearest neighbors with custom ef_search and return statistics
+    pub fn search_with_ef_stats(
+        &self,
+        query: &[f32],
+        k: usize,
+        ef_search: usize,
+        vectors: &[Vec<f32>],
+    ) -> (Vec<(VectorId, f32)>, SearchStats) {
+        let mut stats = SearchStats::default();
+
         if self.entry_point.is_none() {
-            return vec![];
+            return (vec![], stats);
         }
 
         // Safety: entry_point is Some because we just checked is_none() above
         let mut current = self.entry_point.expect("entry_point should be Some after is_none check");
 
         // Traverse from top layer down to layer 1
+        let layers_to_traverse = self.entry_level;
         for l in (1..=self.entry_level).rev() {
-            let result = self.search_layer(query, current, 1, l, vectors);
+            let (result, visited) = self.search_layer_with_stats(query, current, 1, l, vectors);
+            stats.visited_nodes += visited;
             if let Some((closest, _)) = result.first() {
                 current = *closest;
             }
         }
 
         // Search layer 0 with custom ef_search
-        let candidates = self.search_layer(query, current, ef_search, 0, vectors);
+        let (candidates, visited) = self.search_layer_with_stats(query, current, ef_search, 0, vectors);
+        stats.visited_nodes += visited;
+
+        // Total layers traversed = upper layers + layer 0
+        stats.layers_traversed = layers_to_traverse + 1;
 
         // Return top k
-        candidates.into_iter().take(k).collect()
+        (candidates.into_iter().take(k).collect(), stats)
     }
 
     /// Search a single layer using beam search
@@ -443,6 +569,62 @@ impl HnswIndex {
         result_vec
     }
 
+    /// Search a single layer and return the number of visited nodes
+    fn search_layer_with_stats(
+        &self,
+        query: &[f32],
+        entry: VectorId,
+        ef: usize,
+        layer: usize,
+        vectors: &[Vec<f32>],
+    ) -> (Vec<(VectorId, f32)>, usize) {
+        let mut visited = vec![0u8; vectors.len()];
+        let mut candidates: BinaryHeap<Reverse<(OrderedFloat<f32>, VectorId)>> = BinaryHeap::new();
+        let mut results: BinaryHeap<(OrderedFloat<f32>, VectorId)> = BinaryHeap::new();
+        let mut visited_count = 0usize;
+
+        let entry_dist = self.distance.compute(query, &vectors[entry]);
+        candidates.push(Reverse((OrderedFloat(entry_dist), entry)));
+        if !self.deleted.contains(&entry) {
+            results.push((OrderedFloat(entry_dist), entry));
+        }
+        visited[entry] = 1;
+        visited_count += 1;
+
+        while let Some(Reverse((OrderedFloat(c_dist), c_id))) = candidates.pop() {
+            let worst_dist = results.peek().map(|(d, _)| d.0).unwrap_or(f32::INFINITY);
+
+            if c_dist > worst_dist && results.len() >= ef {
+                break;
+            }
+
+            let connections = self.layers[layer].get_connections(c_id);
+            for &neighbor in connections {
+                if visited[neighbor] == 0 {
+                    visited[neighbor] = 1;
+                    visited_count += 1;
+                    let dist = self.distance.compute(query, &vectors[neighbor]);
+
+                    if dist < worst_dist || results.len() < ef {
+                        candidates.push(Reverse((OrderedFloat(dist), neighbor)));
+
+                        if !self.deleted.contains(&neighbor) {
+                            results.push((OrderedFloat(dist), neighbor));
+
+                            if results.len() > ef {
+                                results.pop();
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        let mut result_vec: Vec<_> = results.into_iter().map(|(d, id)| (id, d.0)).collect();
+        result_vec.sort_unstable_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+        (result_vec, visited_count)
+    }
+
     /// Select neighbors using the simple heuristic
     fn select_neighbors(
         &self,
@@ -486,8 +668,15 @@ impl HnswIndex {
     /// Returns a mapping from old IDs to new IDs
     pub fn compact(&mut self, vectors: &[Vec<f32>]) -> HashMap<VectorId, VectorId> {
         if self.deleted.is_empty() {
+            debug!("Compact called but no deleted vectors");
             return HashMap::new();
         }
+
+        debug!(
+            deleted = self.deleted.len(),
+            total = self.count + self.deleted.len(),
+            "Starting index compaction"
+        );
 
         // Build mapping from old IDs to new IDs
         let mut id_map: HashMap<VectorId, VectorId> = HashMap::new();
@@ -528,6 +717,12 @@ impl HnswIndex {
         self.node_levels = new_index.node_levels;
         self.count = new_index.count;
         self.deleted.clear();
+
+        debug!(
+            new_count = self.count,
+            remapped = id_map.len(),
+            "Index compaction completed"
+        );
 
         id_map
     }
@@ -618,6 +813,7 @@ pub struct HnswStats {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashSet;
 
     fn random_vector(dim: usize) -> Vec<f32> {
         let mut rng = rand::thread_rng();

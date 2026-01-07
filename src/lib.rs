@@ -162,7 +162,7 @@ pub use collection::{Collection, CollectionConfig, CollectionIter, CollectionSta
 pub use database::{CollectionRef, Database, DatabaseConfig, ExportEntry};
 pub use distance::DistanceFunction;
 pub use error::{NeedleError, Result};
-pub use hnsw::{HnswConfig, HnswIndex, HnswStats};
+pub use hnsw::{HnswConfig, HnswIndex, HnswStats, SearchStats};
 pub use metadata::{Filter, MetadataStore};
 pub use multivec::{MultiVector, MultiVectorConfig, MultiVectorIndex, MultiVectorSearchResult};
 pub use quantization::{BinaryQuantizer, ProductQuantizer, ScalarQuantizer};
