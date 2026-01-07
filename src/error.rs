@@ -65,6 +65,12 @@ pub enum NeedleError {
 
     #[error("Lock error: failed to acquire lock")]
     LockError,
+
+    #[error("Operation timed out after {0:?}")]
+    Timeout(std::time::Duration),
+
+    #[error("Lock acquisition timed out after {0:?}")]
+    LockTimeout(std::time::Duration),
 }
 
 /// Result type alias for Needle operations
