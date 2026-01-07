@@ -967,3 +967,176 @@ pub async fn serve(config: ServerConfig) -> Result<(), Box<dyn std::error::Error
 pub async fn serve_default() -> Result<(), Box<dyn std::error::Error>> {
     serve(ServerConfig::default()).await
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::http::StatusCode;
+
+    // RateLimitConfig tests
+    #[test]
+    fn test_rate_limit_config_default() {
+        let config = RateLimitConfig::default();
+        assert!(config.enabled);
+        assert_eq!(config.requests_per_second, 100);
+        assert_eq!(config.burst_size, 50);
+    }
+
+    #[test]
+    fn test_rate_limit_config_disabled() {
+        let config = RateLimitConfig::disabled();
+        assert!(!config.enabled);
+        assert_eq!(config.requests_per_second, 0);
+        assert_eq!(config.burst_size, 0);
+    }
+
+    #[test]
+    fn test_rate_limit_config_with_rate() {
+        let config = RateLimitConfig::default().with_rate(200);
+        assert_eq!(config.requests_per_second, 200);
+        assert_eq!(config.burst_size, 50); // unchanged
+    }
+
+    #[test]
+    fn test_rate_limit_config_with_burst() {
+        let config = RateLimitConfig::default().with_burst(100);
+        assert_eq!(config.requests_per_second, 100); // unchanged
+        assert_eq!(config.burst_size, 100);
+    }
+
+    #[test]
+    fn test_rate_limit_config_chained() {
+        let config = RateLimitConfig::default()
+            .with_rate(500)
+            .with_burst(250);
+        assert!(config.enabled);
+        assert_eq!(config.requests_per_second, 500);
+        assert_eq!(config.burst_size, 250);
+    }
+
+    // CorsConfig tests
+    #[test]
+    fn test_cors_config_default() {
+        let config = CorsConfig::default();
+        assert!(config.enabled);
+        assert!(!config.allow_credentials);
+        assert_eq!(config.max_age_secs, 3600);
+        let origins = config.allowed_origins.unwrap();
+        assert!(origins.contains(&"http://localhost:3000".to_string()));
+        assert!(origins.contains(&"http://localhost:8080".to_string()));
+    }
+
+    #[test]
+    fn test_cors_config_permissive() {
+        let config = CorsConfig::permissive();
+        assert!(config.enabled);
+        assert!(config.allow_credentials);
+        assert!(config.allowed_origins.is_none()); // Allow all
+        assert_eq!(config.max_age_secs, 3600);
+    }
+
+    #[test]
+    fn test_cors_config_restrictive() {
+        let config = CorsConfig::restrictive();
+        assert!(config.enabled);
+        assert!(!config.allow_credentials);
+        assert_eq!(config.max_age_secs, 0);
+        let origins = config.allowed_origins.unwrap();
+        assert!(origins.is_empty()); // No external origins
+    }
+
+    #[test]
+    fn test_cors_config_with_origin() {
+        let config = CorsConfig::restrictive()
+            .with_origin("https://example.com");
+        let origins = config.allowed_origins.unwrap();
+        assert_eq!(origins.len(), 1);
+        assert!(origins.contains(&"https://example.com".to_string()));
+    }
+
+    #[test]
+    fn test_cors_config_with_multiple_origins() {
+        let config = CorsConfig::restrictive()
+            .with_origin("https://example.com")
+            .with_origin("https://api.example.com");
+        let origins = config.allowed_origins.unwrap();
+        assert_eq!(origins.len(), 2);
+    }
+
+    // Error response formatting tests
+    #[test]
+    fn test_error_collection_not_found() {
+        let err = NeedleError::CollectionNotFound("test".to_string());
+        let (status, json): (StatusCode, Json<ApiError>) = err.into();
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(json.code, "COLLECTION_NOT_FOUND");
+    }
+
+    #[test]
+    fn test_error_vector_not_found() {
+        let err = NeedleError::VectorNotFound("vec1".to_string());
+        let (status, json): (StatusCode, Json<ApiError>) = err.into();
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(json.code, "VECTOR_NOT_FOUND");
+    }
+
+    #[test]
+    fn test_error_collection_already_exists() {
+        let err = NeedleError::CollectionAlreadyExists("test".to_string());
+        let (status, json): (StatusCode, Json<ApiError>) = err.into();
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(json.code, "COLLECTION_EXISTS");
+    }
+
+    #[test]
+    fn test_error_vector_already_exists() {
+        let err = NeedleError::VectorAlreadyExists("vec1".to_string());
+        let (status, json): (StatusCode, Json<ApiError>) = err.into();
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(json.code, "VECTOR_EXISTS");
+    }
+
+    #[test]
+    fn test_error_dimension_mismatch() {
+        let err = NeedleError::DimensionMismatch { expected: 384, got: 128 };
+        let (status, json): (StatusCode, Json<ApiError>) = err.into();
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(json.code, "DIMENSION_MISMATCH");
+        assert!(json.error.contains("384"));
+        assert!(json.error.contains("128"));
+    }
+
+    #[test]
+    fn test_error_invalid_vector() {
+        let err = NeedleError::InvalidVector("contains NaN".to_string());
+        let (status, json): (StatusCode, Json<ApiError>) = err.into();
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(json.code, "INVALID_VECTOR");
+    }
+
+    #[test]
+    fn test_error_invalid_config() {
+        let err = NeedleError::InvalidConfig("bad M value".to_string());
+        let (status, json): (StatusCode, Json<ApiError>) = err.into();
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(json.code, "INVALID_CONFIG");
+    }
+
+    #[test]
+    fn test_error_internal_fallback() {
+        let err = NeedleError::Corruption("data corrupted".to_string());
+        let (status, json): (StatusCode, Json<ApiError>) = err.into();
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(json.code, "INTERNAL_ERROR");
+    }
+
+    // ServerConfig tests
+    #[test]
+    fn test_server_config_default() {
+        let config = ServerConfig::default();
+        assert_eq!(config.max_body_size, 100 * 1024 * 1024); // 100MB
+        assert!(config.db_path.is_none());
+        assert!(config.cors_config.enabled);
+        assert!(config.rate_limit.enabled);
+    }
+}
