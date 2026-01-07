@@ -1,3 +1,7 @@
+// Allow dead_code for this public API module - types are exported for library users
+#![allow(dead_code)]
+#![allow(clippy::redundant_closure)]
+
 //! Write-Ahead Log (WAL) for durability and crash recovery.
 //!
 //! The WAL provides durability guarantees by writing operations to a log
