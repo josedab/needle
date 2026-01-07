@@ -91,6 +91,10 @@ crossterm = { version = "0.28", optional = true }
 # File hashing for backup
 sha2 = "0.10"
 
+# Authentication - JWT support (optional, used with server)
+hmac = { version = "0.12", optional = true }
+base64 = { version = "0.22", optional = true }
+
 # Cryptography - AEAD encryption
 chacha20poly1305 = "0.10"
 hkdf = "0.12"
@@ -122,18 +126,21 @@ harness = false
 [features]
 default = []
 simd = []
-server = ["axum", "tokio", "tower", "tower-http", "futures", "governor", "tracing-subscriber"]
-web-ui = ["axum", "tokio"]
+# Async API without HTTP server - enables embedded async usage
+async = ["tokio", "futures"]
+# HTTP server (depends on async)
+server = ["async", "axum", "tower", "tower-http", "governor", "tracing-subscriber", "hmac", "base64"]
+web-ui = ["async", "axum"]
 metrics = ["prometheus"]
 hybrid = ["rust-stemmers"]
 # Note: embeddings feature uses pre-release ort crate, consider unstable
 embeddings = ["ort", "ndarray", "tokenizers"]
-embedding-providers = ["async-trait", "reqwest", "tokio"]
+embedding-providers = ["async", "async-trait", "reqwest"]
 full = ["server", "metrics", "hybrid", "web-ui", "embedding-providers"]
 python = ["pyo3", "pythonize"]
 wasm = ["wasm-bindgen", "js-sys", "web-sys"]
 uniffi-bindings = ["uniffi"]
-tui = ["ratatui", "crossterm", "tokio"]
+tui = ["async", "ratatui", "crossterm"]
 
 [profile.release]
 lto = true
