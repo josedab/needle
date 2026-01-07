@@ -1030,7 +1030,8 @@ async fn test_cors_config_permissive() {
     let config = CorsConfig::permissive();
     assert!(config.enabled);
     assert!(config.allowed_origins.is_none());
-    assert!(config.allow_credentials);
+    // Note: allow_credentials must be false when using wildcard origins (CORS security requirement)
+    assert!(!config.allow_credentials);
 }
 
 #[tokio::test]

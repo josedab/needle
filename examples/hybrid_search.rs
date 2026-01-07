@@ -76,8 +76,8 @@ fn main() -> needle::Result<()> {
         );
 
         println!("\nHybrid Search Results (RRF):");
-        for (id, score) in &hybrid_results {
-            println!("  {}: {:.4}", id, score);
+        for result in &hybrid_results {
+            println!("  {}: {:.4}", result.id, result.score);
         }
     }
 
