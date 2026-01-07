@@ -1762,4 +1762,284 @@ mod tests {
         assert_eq!(commands.len(), 1);
         assert_eq!(node.last_applied, 1);
     }
+
+    // ================== Storage Tests ==================
+
+    #[test]
+    fn test_memory_storage_state() {
+        let storage = MemoryStorage::new();
+
+        // Initial state should be empty/default
+        let state = storage.load_state().unwrap();
+        assert!(state.is_some());
+
+        // Save new state
+        let new_state = PersistentState {
+            current_term: 5,
+            voted_for: Some(NodeId(1)),
+            cluster: vec![NodeId(1), NodeId(2), NodeId(3)],
+        };
+        storage.save_state(&new_state).unwrap();
+
+        // Load and verify
+        let loaded = storage.load_state().unwrap().unwrap();
+        assert_eq!(loaded.current_term, 5);
+        assert_eq!(loaded.voted_for, Some(NodeId(1)));
+        assert_eq!(loaded.cluster.len(), 3);
+    }
+
+    #[test]
+    fn test_memory_storage_log_entries() {
+        let storage = MemoryStorage::new();
+
+        // Append entries
+        let entries = vec![
+            LogEntry { term: 1, index: 1, command: Command::Noop },
+            LogEntry { term: 1, index: 2, command: Command::Noop },
+            LogEntry { term: 2, index: 3, command: Command::Noop },
+        ];
+        storage.append_entries(&entries).unwrap();
+
+        // Load entries
+        let loaded = storage.load_entries(1).unwrap();
+        assert_eq!(loaded.len(), 3);
+
+        // Load from middle
+        let partial = storage.load_entries(2).unwrap();
+        assert_eq!(partial.len(), 2);
+
+        // Last log index
+        assert_eq!(storage.last_log_index().unwrap(), 3);
+    }
+
+    #[test]
+    fn test_memory_storage_truncate() {
+        let storage = MemoryStorage::new();
+
+        let entries = vec![
+            LogEntry { term: 1, index: 1, command: Command::Noop },
+            LogEntry { term: 1, index: 2, command: Command::Noop },
+            LogEntry { term: 2, index: 3, command: Command::Noop },
+        ];
+        storage.append_entries(&entries).unwrap();
+
+        // Truncate from index 2
+        storage.truncate_log(2).unwrap();
+
+        let remaining = storage.load_entries(1).unwrap();
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].index, 1);
+    }
+
+    #[test]
+    fn test_memory_storage_snapshot() {
+        let storage = MemoryStorage::new();
+
+        // Initially no snapshot
+        assert!(storage.load_snapshot().unwrap().is_none());
+
+        // Save snapshot
+        let snapshot = Snapshot {
+            metadata: SnapshotMetadata {
+                last_included_index: 10,
+                last_included_term: 2,
+                config: vec![NodeId(1), NodeId(2)],
+            },
+            data: b"snapshot data".to_vec(),
+        };
+        storage.save_snapshot(&snapshot).unwrap();
+
+        // Load snapshot
+        let loaded = storage.load_snapshot().unwrap().unwrap();
+        assert_eq!(loaded.metadata.last_included_index, 10);
+        assert_eq!(loaded.metadata.last_included_term, 2);
+        assert_eq!(loaded.data, b"snapshot data");
+    }
+
+    #[test]
+    fn test_memory_storage_compact() {
+        let storage = MemoryStorage::new();
+
+        let entries = vec![
+            LogEntry { term: 1, index: 1, command: Command::Noop },
+            LogEntry { term: 1, index: 2, command: Command::Noop },
+            LogEntry { term: 2, index: 3, command: Command::Noop },
+            LogEntry { term: 2, index: 4, command: Command::Noop },
+        ];
+        storage.append_entries(&entries).unwrap();
+
+        // Compact up to index 2 (keep entries > 2)
+        storage.compact_log(2).unwrap();
+
+        let remaining = storage.load_entries(1).unwrap();
+        assert_eq!(remaining.len(), 2);
+        assert!(remaining.iter().all(|e| e.index > 2));
+    }
+
+    #[test]
+    fn test_memory_storage_sync() {
+        let storage = MemoryStorage::new();
+        // Sync should succeed (no-op for memory)
+        assert!(storage.sync().is_ok());
+    }
+
+    #[test]
+    fn test_file_storage_basic() {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let storage = FileStorage::open(temp_dir.path()).unwrap();
+
+        // Save state
+        let state = PersistentState {
+            current_term: 3,
+            voted_for: Some(NodeId(5)),
+            cluster: vec![NodeId(5), NodeId(6)],
+        };
+        storage.save_state(&state).unwrap();
+
+        // Load state
+        let loaded = storage.load_state().unwrap().unwrap();
+        assert_eq!(loaded.current_term, 3);
+        assert_eq!(loaded.voted_for, Some(NodeId(5)));
+    }
+
+    #[test]
+    fn test_file_storage_log_entries() {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let storage = FileStorage::open(temp_dir.path()).unwrap();
+
+        // Append entries
+        let entries = vec![
+            LogEntry { term: 1, index: 1, command: Command::Noop },
+            LogEntry {
+                term: 1,
+                index: 2,
+                command: Command::Insert {
+                    id: "vec1".to_string(),
+                    vector: vec![1.0, 2.0, 3.0],
+                    metadata: HashMap::new(),
+                },
+            },
+        ];
+        storage.append_entries(&entries).unwrap();
+
+        // Load entries
+        let loaded = storage.load_entries(1).unwrap();
+        assert_eq!(loaded.len(), 2);
+        assert_eq!(storage.last_log_index().unwrap(), 2);
+    }
+
+    #[test]
+    fn test_file_storage_snapshot() {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let storage = FileStorage::open(temp_dir.path()).unwrap();
+
+        let snapshot = Snapshot {
+            metadata: SnapshotMetadata {
+                last_included_index: 100,
+                last_included_term: 5,
+                config: vec![NodeId(1)],
+            },
+            data: vec![1, 2, 3, 4, 5],
+        };
+        storage.save_snapshot(&snapshot).unwrap();
+
+        let loaded = storage.load_snapshot().unwrap().unwrap();
+        assert_eq!(loaded.metadata.last_included_index, 100);
+        assert_eq!(loaded.data, vec![1, 2, 3, 4, 5]);
+    }
+
+    #[test]
+    fn test_snapshot_builder() {
+        let snapshot = SnapshotBuilder::new(50, 3)
+            .config(vec![NodeId(1), NodeId(2)])
+            .data(b"state machine data".to_vec())
+            .build();
+
+        assert_eq!(snapshot.metadata.last_included_index, 50);
+        assert_eq!(snapshot.metadata.last_included_term, 3);
+        assert_eq!(snapshot.metadata.config.len(), 2);
+        assert_eq!(snapshot.data, b"state machine data");
+    }
+
+    #[test]
+    fn test_persistent_state_default() {
+        let state = PersistentState::default();
+        assert_eq!(state.current_term, 0);
+        assert!(state.voted_for.is_none());
+        assert!(state.cluster.is_empty());
+    }
+
+    #[test]
+    fn test_raft_config_default() {
+        let config = RaftConfig::default();
+        assert_eq!(config.election_timeout_min, Duration::from_millis(150));
+        assert_eq!(config.election_timeout_max, Duration::from_millis(300));
+        assert_eq!(config.heartbeat_interval, Duration::from_millis(50));
+        assert_eq!(config.max_entries_per_append, 100);
+        assert_eq!(config.snapshot_threshold, 10000);
+    }
+
+    #[test]
+    fn test_node_with_storage() {
+        let storage = MemoryStorage::new();
+
+        // Pre-populate storage
+        let state = PersistentState {
+            current_term: 10,
+            voted_for: Some(NodeId(2)),
+            cluster: vec![NodeId(1), NodeId(2), NodeId(3)],
+        };
+        storage.save_state(&state).unwrap();
+
+        // Create node with storage
+        let node = RaftNode::with_storage(NodeId(1), RaftConfig::default(), Box::new(storage)).unwrap();
+
+        // Node should have restored state
+        assert_eq!(node.term(), 10);
+    }
+
+    #[test]
+    fn test_should_snapshot() {
+        let config = RaftConfig {
+            snapshot_threshold: 5,
+            ..Default::default()
+        };
+        let mut node = RaftNode::new(NodeId(1), config);
+
+        // Initially no snapshot needed
+        assert!(!node.should_snapshot());
+
+        // Add entries to exceed threshold
+        for i in 1..=6 {
+            node.log.push(LogEntry {
+                term: 1,
+                index: i,
+                command: Command::Noop,
+            });
+        }
+
+        assert!(node.should_snapshot());
+    }
+
+    #[test]
+    fn test_persistent_state_roundtrip() {
+        let node = RaftNode::new(NodeId(5), RaftConfig::default());
+        let state = node.persistent_state();
+
+        assert_eq!(state.current_term, 0);
+        assert!(state.voted_for.is_none());
+    }
+
+    #[test]
+    fn test_log_entries_accessor() {
+        let mut node = RaftNode::new(NodeId(1), RaftConfig::default());
+        node.log.push(LogEntry {
+            term: 1,
+            index: 1,
+            command: Command::Noop,
+        });
+
+        let entries = node.log_entries();
+        assert_eq!(entries.len(), 1);
+    }
 }
