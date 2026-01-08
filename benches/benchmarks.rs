@@ -2,6 +2,7 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion, BenchmarkId};
 use criterion::Throughput;
 use needle::{Collection, Database, DistanceFunction, HnswConfig, HnswIndex, Filter};
+use needle::{IvfConfig, IvfIndex, DiskAnnConfig, DiskAnnIndex};
 use needle::quantization::{BinaryQuantizer, ProductQuantizer, ScalarQuantizer};
 use needle::rag::{RagPipeline, RagConfig, ChunkingStrategy, MockEmbedder};
 use needle::temporal::{TemporalIndex, TemporalConfig, DecayFunction};
@@ -985,6 +986,272 @@ fn bench_optimization_validation(c: &mut Criterion) {
 }
 
 // ============================================================================
+// Index Comparison Benchmarks - HNSW vs IVF vs DiskANN
+// ============================================================================
+
+/// Benchmark index build time across HNSW, IVF, and DiskANN.
+///
+/// Note: DiskANN requires filesystem I/O and includes that overhead.
+/// For pure in-memory comparison, see HNSW vs IVF results.
+fn bench_index_build_comparison(c: &mut Criterion) {
+    let dim = 128;
+
+    let mut group = c.benchmark_group("index_build_comparison");
+    group.sample_size(10);
+
+    for &n in &[1_000, 5_000, 10_000] {
+        let vectors = random_vectors(n, dim);
+        let refs: Vec<&[f32]> = vectors.iter().map(|v| v.as_slice()).collect();
+
+        // HNSW build time
+        group.throughput(Throughput::Elements(n as u64));
+        group.bench_with_input(
+            BenchmarkId::new("hnsw", n),
+            &n,
+            |bencher, _| {
+                bencher.iter(|| {
+                    let mut index = HnswIndex::with_distance(DistanceFunction::Euclidean);
+                    for (id, vec) in vectors.iter().enumerate() {
+                        index.insert(id, vec, &vectors).unwrap();
+                    }
+                })
+            },
+        );
+
+        // IVF build time (train + insert)
+        let n_clusters = ((n as f64).sqrt() as usize).max(4);
+        group.bench_with_input(
+            BenchmarkId::new("ivf", n),
+            &n,
+            |bencher, _| {
+                bencher.iter(|| {
+                    let config = IvfConfig::new(n_clusters);
+                    let mut index = IvfIndex::new(dim, config);
+                    index.train(&refs).unwrap();
+                    for (id, vec) in vectors.iter().enumerate() {
+                        index.insert(id, vec).unwrap();
+                    }
+                })
+            },
+        );
+
+        // DiskANN build time (includes filesystem I/O)
+        group.bench_with_input(
+            BenchmarkId::new("diskann", n),
+            &n,
+            |bencher, _| {
+                bencher.iter_batched(
+                    || tempfile::tempdir().unwrap(),
+                    |tmp_dir| {
+                        let config = DiskAnnConfig::default();
+                        let mut index = DiskAnnIndex::create(tmp_dir.path(), dim, config).unwrap();
+                        for (id, vec) in vectors.iter().enumerate() {
+                            index.add(&format!("v{}", id), vec).unwrap();
+                        }
+                        index.build().unwrap();
+                    },
+                    criterion::BatchSize::SmallInput,
+                )
+            },
+        );
+    }
+
+    group.finish();
+}
+
+/// Benchmark search latency across HNSW, IVF, and DiskANN
+fn bench_index_search_comparison(c: &mut Criterion) {
+    let dim = 128;
+    let n = 10_000;
+    let vectors = random_vectors(n, dim);
+    let refs: Vec<&[f32]> = vectors.iter().map(|v| v.as_slice()).collect();
+    let query = random_vector(dim);
+
+    let mut group = c.benchmark_group("index_search_comparison");
+
+    // Build HNSW index
+    let mut hnsw_index = HnswIndex::with_distance(DistanceFunction::Euclidean);
+    for (id, vec) in vectors.iter().enumerate() {
+        hnsw_index.insert(id, vec, &vectors).unwrap();
+    }
+
+    // Build IVF index
+    let n_clusters = ((n as f64).sqrt() as usize).max(4);
+    let config = IvfConfig::new(n_clusters);
+    let mut ivf_index = IvfIndex::new(dim, config);
+    ivf_index.train(&refs).unwrap();
+    for (id, vec) in vectors.iter().enumerate() {
+        ivf_index.insert(id, vec).unwrap();
+    }
+
+    // Build DiskANN index (on disk)
+    let diskann_dir = tempfile::tempdir().unwrap();
+    let diskann_config = DiskAnnConfig::default();
+    let mut diskann_index = DiskAnnIndex::create(diskann_dir.path(), dim, diskann_config).unwrap();
+    for (id, vec) in vectors.iter().enumerate() {
+        diskann_index.add(&format!("v{}", id), vec).unwrap();
+    }
+    diskann_index.build().unwrap();
+
+    // Benchmark search for different k values
+    for &k in &[10, 50, 100] {
+        group.bench_with_input(
+            BenchmarkId::new(format!("hnsw_k{}", k), n),
+            &k,
+            |bencher, &k_val| {
+                bencher.iter(|| hnsw_index.search(black_box(&query), k_val, &vectors))
+            },
+        );
+
+        group.bench_with_input(
+            BenchmarkId::new(format!("ivf_k{}", k), n),
+            &k,
+            |bencher, &k_val| {
+                bencher.iter(|| ivf_index.search(black_box(&query), k_val))
+            },
+        );
+
+        group.bench_with_input(
+            BenchmarkId::new(format!("diskann_k{}", k), n),
+            &k,
+            |bencher, &k_val| {
+                bencher.iter(|| diskann_index.search(black_box(&query), k_val))
+            },
+        );
+    }
+
+    group.finish();
+}
+
+/// Benchmark search at different collection sizes (scalability)
+fn bench_index_scalability_comparison(c: &mut Criterion) {
+    let dim = 128;
+
+    let mut group = c.benchmark_group("index_scalability_comparison");
+    group.sample_size(20);
+
+    for &n in &[1_000, 5_000, 10_000, 25_000] {
+        let vectors = random_vectors(n, dim);
+        let refs: Vec<&[f32]> = vectors.iter().map(|v| v.as_slice()).collect();
+        let query = random_vector(dim);
+
+        // Build HNSW
+        let mut hnsw_index = HnswIndex::with_distance(DistanceFunction::Euclidean);
+        for (id, vec) in vectors.iter().enumerate() {
+            hnsw_index.insert(id, vec, &vectors).unwrap();
+        }
+
+        // Build IVF
+        let n_clusters = ((n as f64).sqrt() as usize).max(4);
+        let config = IvfConfig::new(n_clusters);
+        let mut ivf_index = IvfIndex::new(dim, config);
+        ivf_index.train(&refs).unwrap();
+        for (id, vec) in vectors.iter().enumerate() {
+            ivf_index.insert(id, vec).unwrap();
+        }
+
+        // Build DiskANN
+        let diskann_dir = tempfile::tempdir().unwrap();
+        let diskann_config = DiskAnnConfig::default();
+        let mut diskann_index = DiskAnnIndex::create(diskann_dir.path(), dim, diskann_config).unwrap();
+        for (id, vec) in vectors.iter().enumerate() {
+            diskann_index.add(&format!("v{}", id), vec).unwrap();
+        }
+        diskann_index.build().unwrap();
+
+        group.bench_with_input(
+            BenchmarkId::new("hnsw", n),
+            &n,
+            |bencher, _| {
+                bencher.iter(|| hnsw_index.search(black_box(&query), 10, &vectors))
+            },
+        );
+
+        group.bench_with_input(
+            BenchmarkId::new("ivf", n),
+            &n,
+            |bencher, _| {
+                bencher.iter(|| ivf_index.search(black_box(&query), 10))
+            },
+        );
+
+        group.bench_with_input(
+            BenchmarkId::new("diskann", n),
+            &n,
+            |bencher, _| {
+                bencher.iter(|| diskann_index.search(black_box(&query), 10))
+            },
+        );
+    }
+
+    group.finish();
+}
+
+/// Benchmark index comparison at different dimensions
+fn bench_index_dimension_comparison(c: &mut Criterion) {
+    let n = 5_000;
+
+    let mut group = c.benchmark_group("index_dimension_comparison");
+    group.sample_size(15);
+
+    for &dim in &[64, 128, 256, 384] {
+        let vectors = random_vectors(n, dim);
+        let refs: Vec<&[f32]> = vectors.iter().map(|v| v.as_slice()).collect();
+        let query = random_vector(dim);
+
+        // Build HNSW
+        let mut hnsw_index = HnswIndex::with_distance(DistanceFunction::Euclidean);
+        for (id, vec) in vectors.iter().enumerate() {
+            hnsw_index.insert(id, vec, &vectors).unwrap();
+        }
+
+        // Build IVF
+        let n_clusters = ((n as f64).sqrt() as usize).max(4);
+        let config = IvfConfig::new(n_clusters);
+        let mut ivf_index = IvfIndex::new(dim, config);
+        ivf_index.train(&refs).unwrap();
+        for (id, vec) in vectors.iter().enumerate() {
+            ivf_index.insert(id, vec).unwrap();
+        }
+
+        // Build DiskANN
+        let diskann_dir = tempfile::tempdir().unwrap();
+        let diskann_config = DiskAnnConfig::default();
+        let mut diskann_index = DiskAnnIndex::create(diskann_dir.path(), dim, diskann_config).unwrap();
+        for (id, vec) in vectors.iter().enumerate() {
+            diskann_index.add(&format!("v{}", id), vec).unwrap();
+        }
+        diskann_index.build().unwrap();
+
+        group.bench_with_input(
+            BenchmarkId::new("hnsw", dim),
+            &dim,
+            |bencher, _| {
+                bencher.iter(|| hnsw_index.search(black_box(&query), 10, &vectors))
+            },
+        );
+
+        group.bench_with_input(
+            BenchmarkId::new("ivf", dim),
+            &dim,
+            |bencher, _| {
+                bencher.iter(|| ivf_index.search(black_box(&query), 10))
+            },
+        );
+
+        group.bench_with_input(
+            BenchmarkId::new("diskann", dim),
+            &dim,
+            |bencher, _| {
+                bencher.iter(|| diskann_index.search(black_box(&query), 10))
+            },
+        );
+    }
+
+    group.finish();
+}
+
+// ============================================================================
 // Criterion Groups
 // ============================================================================
 
@@ -1031,6 +1298,14 @@ criterion_group!(
     bench_optimization_validation,
 );
 
+criterion_group!(
+    index_comparison_benches,
+    bench_index_build_comparison,
+    bench_index_search_comparison,
+    bench_index_scalability_comparison,
+    bench_index_dimension_comparison,
+);
+
 // Note: 1M vector benchmark is separate due to long runtime
 criterion_group! {
     name = large_scale_benches;
@@ -1045,6 +1320,7 @@ criterion_main!(
     advanced_benches,
     supplementary_benches,
     optimization_benches,
+    index_comparison_benches,
     // Uncomment to run large-scale benchmarks (slow):
     // large_scale_benches,
 );
