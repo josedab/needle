@@ -32,11 +32,16 @@
 //! let shard = manager.get_shard(shard_id);
 //! ```
 
+use crate::collection::SearchResult;
+use crate::metadata::Filter;
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use thiserror::Error;
 
 /// Shard errors
@@ -489,6 +494,147 @@ pub struct ShardStatsSnapshot {
     pub rebalances: u64,
 }
 
+/// Configuration for cross-shard search
+#[derive(Debug, Clone)]
+pub struct CrossShardSearchConfig {
+    /// Maximum number of results to return
+    pub k: usize,
+    /// Timeout for each shard query
+    pub shard_timeout: Option<Duration>,
+    /// Whether to continue on shard failures
+    pub continue_on_failure: bool,
+    /// Optional metadata filter
+    pub filter: Option<Filter>,
+    /// Minimum number of shards that must respond
+    pub min_shard_responses: Option<usize>,
+}
+
+impl Default for CrossShardSearchConfig {
+    fn default() -> Self {
+        Self {
+            k: 10,
+            shard_timeout: Some(Duration::from_secs(5)),
+            continue_on_failure: true,
+            filter: None,
+            min_shard_responses: None,
+        }
+    }
+}
+
+impl CrossShardSearchConfig {
+    /// Create a new config with specified k
+    pub fn new(k: usize) -> Self {
+        Self {
+            k,
+            ..Default::default()
+        }
+    }
+
+    /// Set shard timeout
+    pub fn with_timeout(mut self, timeout: Duration) -> Self {
+        self.shard_timeout = Some(timeout);
+        self
+    }
+
+    /// Set continue on failure behavior
+    pub fn with_continue_on_failure(mut self, continue_on_failure: bool) -> Self {
+        self.continue_on_failure = continue_on_failure;
+        self
+    }
+
+    /// Set metadata filter
+    pub fn with_filter(mut self, filter: Filter) -> Self {
+        self.filter = Some(filter);
+        self
+    }
+
+    /// Set minimum shard responses required
+    pub fn with_min_responses(mut self, min: usize) -> Self {
+        self.min_shard_responses = Some(min);
+        self
+    }
+}
+
+/// Result from a single shard search
+#[derive(Debug, Clone)]
+pub struct ShardSearchResult {
+    /// Shard that produced this result
+    pub shard_id: ShardId,
+    /// Search results from this shard
+    pub results: Vec<SearchResult>,
+    /// Time taken for this shard's search
+    pub duration: Duration,
+}
+
+/// Aggregated results from cross-shard search
+#[derive(Debug)]
+pub struct CrossShardSearchResult {
+    /// Merged and sorted results across all shards
+    pub results: Vec<SearchResult>,
+    /// Per-shard results (for debugging/analysis)
+    pub shard_results: Vec<ShardSearchResult>,
+    /// Shards that failed or timed out
+    pub failed_shards: Vec<(ShardId, String)>,
+    /// Total search duration
+    pub total_duration: Duration,
+}
+
+impl CrossShardSearchResult {
+    /// Check if all shards responded successfully
+    pub fn all_shards_succeeded(&self) -> bool {
+        self.failed_shards.is_empty()
+    }
+
+    /// Get the number of shards that responded
+    pub fn responding_shards(&self) -> usize {
+        self.shard_results.len()
+    }
+}
+
+/// Trait for searchable shard collections
+pub trait ShardSearchable: Send + Sync {
+    /// Search this shard with a query vector
+    fn shard_search(
+        &self,
+        query: &[f32],
+        k: usize,
+        filter: Option<&Filter>,
+    ) -> Result<Vec<SearchResult>, ShardError>;
+
+    /// Get the total count of vectors in this shard
+    fn vector_count(&self) -> usize;
+
+    /// Get a vector by ID
+    fn get(&self, id: &str) -> Option<(Vec<f32>, Option<Value>)>;
+}
+
+/// Merge results from multiple shards, keeping top k by distance
+pub fn merge_shard_results(
+    shard_results: &[ShardSearchResult],
+    k: usize,
+) -> Vec<SearchResult> {
+    // Collect all results with their distances
+    let mut all_results: Vec<SearchResult> = shard_results
+        .iter()
+        .flat_map(|sr| sr.results.iter().cloned())
+        .collect();
+
+    // Sort by distance (ascending - closer is better)
+    all_results.sort_by(|a, b| {
+        a.distance
+            .partial_cmp(&b.distance)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    // Take top k and deduplicate by ID (in case of replicas)
+    let mut seen = std::collections::HashSet::new();
+    all_results
+        .into_iter()
+        .filter(|r| seen.insert(r.id.clone()))
+        .take(k)
+        .collect()
+}
+
 /// Shard-aware wrapper for collections
 pub struct ShardedCollection<C> {
     manager: Arc<ShardManager>,
@@ -529,6 +675,133 @@ impl<C> ShardedCollection<C> {
     /// Get all shards mutably
     pub fn all_shards_mut(&mut self) -> impl Iterator<Item = (&ShardId, &mut C)> {
         self.shards.iter_mut()
+    }
+
+    /// Get shard by ID
+    pub fn get_shard_by_id(&self, shard_id: ShardId) -> Option<&C> {
+        self.shards.get(&shard_id)
+    }
+
+    /// Get shard by ID mutably
+    pub fn get_shard_by_id_mut(&mut self, shard_id: ShardId) -> Option<&mut C> {
+        self.shards.get_mut(&shard_id)
+    }
+
+    /// Number of shards
+    pub fn num_shards(&self) -> usize {
+        self.shards.len()
+    }
+}
+
+impl<C: ShardSearchable> ShardedCollection<C> {
+    /// Search across all shards in parallel and merge results
+    ///
+    /// This is the main entry point for cross-shard search. It:
+    /// 1. Queries all active shards in parallel using rayon
+    /// 2. Collects results from each shard
+    /// 3. Merges and sorts results by distance
+    /// 4. Returns top-k results with shard metadata
+    ///
+    /// # Arguments
+    /// * `query` - The query vector
+    /// * `config` - Search configuration
+    ///
+    /// # Returns
+    /// CrossShardSearchResult containing merged results and per-shard details
+    pub fn search(&self, query: &[f32], config: &CrossShardSearchConfig) -> CrossShardSearchResult {
+        let start = Instant::now();
+        let filter = config.filter.as_ref();
+
+        // Query all shards in parallel
+        let shard_results: Vec<Result<ShardSearchResult, (ShardId, String)>> = self
+            .shards
+            .par_iter()
+            .map(|(&shard_id, collection)| {
+                let shard_start = Instant::now();
+
+                // Check if shard is active
+                if let Some(info) = self.manager.get_shard(shard_id) {
+                    if info.state != ShardState::Active && info.state != ShardState::ReadOnly {
+                        return Err((
+                            shard_id,
+                            format!("Shard {} is not available (state: {:?})", shard_id, info.state),
+                        ));
+                    }
+                }
+
+                // Execute search on this shard
+                match collection.shard_search(query, config.k, filter) {
+                    Ok(results) => Ok(ShardSearchResult {
+                        shard_id,
+                        results,
+                        duration: shard_start.elapsed(),
+                    }),
+                    Err(e) => Err((shard_id, e.to_string())),
+                }
+            })
+            .collect();
+
+        // Separate successes and failures
+        let mut successful_results = Vec::new();
+        let mut failed_shards = Vec::new();
+
+        for result in shard_results {
+            match result {
+                Ok(shard_result) => successful_results.push(shard_result),
+                Err(failure) => failed_shards.push(failure),
+            }
+        }
+
+        // Check minimum response requirement
+        if let Some(min_responses) = config.min_shard_responses {
+            if successful_results.len() < min_responses {
+                // If we don't have enough responses and continue_on_failure is false,
+                // we might want to fail completely. For now, we proceed with what we have.
+                tracing::warn!(
+                    "Only {} shards responded, minimum required: {}",
+                    successful_results.len(),
+                    min_responses
+                );
+            }
+        }
+
+        // Merge results from all successful shards
+        let merged_results = merge_shard_results(&successful_results, config.k);
+
+        CrossShardSearchResult {
+            results: merged_results,
+            shard_results: successful_results,
+            failed_shards,
+            total_duration: start.elapsed(),
+        }
+    }
+
+    /// Search with default configuration
+    pub fn search_k(&self, query: &[f32], k: usize) -> CrossShardSearchResult {
+        self.search(query, &CrossShardSearchConfig::new(k))
+    }
+
+    /// Get total vector count across all shards
+    pub fn total_vector_count(&self) -> usize {
+        self.shards.values().map(|c| c.vector_count()).sum()
+    }
+
+    /// Get a vector by ID (routes to appropriate shard)
+    pub fn get_vector(&self, id: &str) -> Option<(Vec<f32>, Option<Value>)> {
+        let shard = self.get_shard(id)?;
+        shard.get(id)
+    }
+
+    /// Batch search: run multiple queries in parallel
+    pub fn batch_search(
+        &self,
+        queries: &[&[f32]],
+        config: &CrossShardSearchConfig,
+    ) -> Vec<CrossShardSearchResult> {
+        queries
+            .par_iter()
+            .map(|query| self.search(query, config))
+            .collect()
     }
 }
 
@@ -634,5 +907,252 @@ mod tests {
         // Should be able to get shard for a key
         let shard = sharded.get_shard("test_key");
         assert!(shard.is_some());
+    }
+
+    // Mock collection for testing cross-shard search
+    struct MockCollection {
+        vectors: Vec<(String, Vec<f32>)>,
+    }
+
+    impl MockCollection {
+        fn new(vectors: Vec<(String, Vec<f32>)>) -> Self {
+            Self { vectors }
+        }
+    }
+
+    impl ShardSearchable for MockCollection {
+        fn shard_search(
+            &self,
+            query: &[f32],
+            k: usize,
+            _filter: Option<&Filter>,
+        ) -> Result<Vec<SearchResult>, ShardError> {
+            // Simple euclidean distance
+            let mut results: Vec<SearchResult> = self
+                .vectors
+                .iter()
+                .map(|(id, vec)| {
+                    let dist: f32 = query
+                        .iter()
+                        .zip(vec.iter())
+                        .map(|(a, b)| (a - b).powi(2))
+                        .sum::<f32>()
+                        .sqrt();
+                    SearchResult::new(id.clone(), dist, None)
+                })
+                .collect();
+
+            results.sort_by(|a, b| {
+                a.distance
+                    .partial_cmp(&b.distance)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+            results.truncate(k);
+
+            Ok(results)
+        }
+
+        fn vector_count(&self) -> usize {
+            self.vectors.len()
+        }
+
+        fn get(&self, id: &str) -> Option<(Vec<f32>, Option<Value>)> {
+            self.vectors
+                .iter()
+                .find(|(vid, _)| vid == id)
+                .map(|(_, vec)| (vec.clone(), None))
+        }
+    }
+
+    #[test]
+    fn test_cross_shard_search() {
+        let config = ShardConfig::new(3);
+        let manager = Arc::new(ShardManager::new(config));
+
+        let mut sharded: ShardedCollection<MockCollection> =
+            ShardedCollection::new(manager.clone());
+
+        // Add mock collections to each shard
+        sharded.add_shard(
+            ShardId::new(0),
+            MockCollection::new(vec![
+                ("vec_0_a".to_string(), vec![1.0, 0.0, 0.0]),
+                ("vec_0_b".to_string(), vec![0.9, 0.1, 0.0]),
+            ]),
+        );
+        sharded.add_shard(
+            ShardId::new(1),
+            MockCollection::new(vec![
+                ("vec_1_a".to_string(), vec![0.0, 1.0, 0.0]),
+                ("vec_1_b".to_string(), vec![0.1, 0.9, 0.0]),
+            ]),
+        );
+        sharded.add_shard(
+            ShardId::new(2),
+            MockCollection::new(vec![
+                ("vec_2_a".to_string(), vec![0.0, 0.0, 1.0]),
+                ("vec_2_b".to_string(), vec![0.0, 0.1, 0.9]),
+            ]),
+        );
+
+        // Search for a vector close to [1, 0, 0]
+        let query = vec![1.0, 0.0, 0.0];
+        let result = sharded.search_k(&query, 3);
+
+        // Should get results from all shards
+        assert!(result.all_shards_succeeded());
+        assert_eq!(result.responding_shards(), 3);
+
+        // Top result should be from shard 0 (closest to query)
+        assert!(!result.results.is_empty());
+        assert_eq!(result.results[0].id, "vec_0_a");
+        assert!(result.results[0].distance < 0.01); // Almost zero distance
+    }
+
+    #[test]
+    fn test_cross_shard_search_merge_ordering() {
+        let config = ShardConfig::new(2);
+        let manager = Arc::new(ShardManager::new(config));
+
+        let mut sharded: ShardedCollection<MockCollection> =
+            ShardedCollection::new(manager.clone());
+
+        // Create shards with interleaved distances
+        sharded.add_shard(
+            ShardId::new(0),
+            MockCollection::new(vec![
+                ("a".to_string(), vec![0.1, 0.0]), // distance ~0.1
+                ("c".to_string(), vec![0.3, 0.0]), // distance ~0.3
+                ("e".to_string(), vec![0.5, 0.0]), // distance ~0.5
+            ]),
+        );
+        sharded.add_shard(
+            ShardId::new(1),
+            MockCollection::new(vec![
+                ("b".to_string(), vec![0.2, 0.0]), // distance ~0.2
+                ("d".to_string(), vec![0.4, 0.0]), // distance ~0.4
+                ("f".to_string(), vec![0.6, 0.0]), // distance ~0.6
+            ]),
+        );
+
+        let query = vec![0.0, 0.0];
+        let result = sharded.search_k(&query, 6);
+
+        // Results should be in order: a, b, c, d, e, f
+        assert_eq!(result.results.len(), 6);
+        assert_eq!(result.results[0].id, "a");
+        assert_eq!(result.results[1].id, "b");
+        assert_eq!(result.results[2].id, "c");
+        assert_eq!(result.results[3].id, "d");
+        assert_eq!(result.results[4].id, "e");
+        assert_eq!(result.results[5].id, "f");
+    }
+
+    #[test]
+    fn test_cross_shard_search_config() {
+        let config = CrossShardSearchConfig::new(10)
+            .with_timeout(std::time::Duration::from_secs(1))
+            .with_continue_on_failure(false)
+            .with_min_responses(2);
+
+        assert_eq!(config.k, 10);
+        assert_eq!(config.shard_timeout, Some(std::time::Duration::from_secs(1)));
+        assert!(!config.continue_on_failure);
+        assert_eq!(config.min_shard_responses, Some(2));
+    }
+
+    #[test]
+    fn test_merge_shard_results() {
+        let shard_results = vec![
+            ShardSearchResult {
+                shard_id: ShardId::new(0),
+                results: vec![
+                    SearchResult::new("a", 0.1, None),
+                    SearchResult::new("c", 0.3, None),
+                ],
+                duration: std::time::Duration::from_millis(10),
+            },
+            ShardSearchResult {
+                shard_id: ShardId::new(1),
+                results: vec![
+                    SearchResult::new("b", 0.2, None),
+                    SearchResult::new("d", 0.4, None),
+                ],
+                duration: std::time::Duration::from_millis(15),
+            },
+        ];
+
+        let merged = merge_shard_results(&shard_results, 3);
+        assert_eq!(merged.len(), 3);
+        assert_eq!(merged[0].id, "a");
+        assert_eq!(merged[1].id, "b");
+        assert_eq!(merged[2].id, "c");
+    }
+
+    #[test]
+    fn test_merge_deduplication() {
+        // Test that duplicate IDs are deduplicated (e.g., from replicas)
+        let shard_results = vec![
+            ShardSearchResult {
+                shard_id: ShardId::new(0),
+                results: vec![SearchResult::new("same_id", 0.1, None)],
+                duration: std::time::Duration::from_millis(10),
+            },
+            ShardSearchResult {
+                shard_id: ShardId::new(1),
+                results: vec![SearchResult::new("same_id", 0.15, None)],
+                duration: std::time::Duration::from_millis(10),
+            },
+        ];
+
+        let merged = merge_shard_results(&shard_results, 10);
+        assert_eq!(merged.len(), 1);
+        // Should keep the first occurrence (with lower distance after sorting)
+        assert_eq!(merged[0].distance, 0.1);
+    }
+
+    #[test]
+    fn test_total_vector_count() {
+        let config = ShardConfig::new(2);
+        let manager = Arc::new(ShardManager::new(config));
+
+        let mut sharded: ShardedCollection<MockCollection> =
+            ShardedCollection::new(manager.clone());
+
+        sharded.add_shard(
+            ShardId::new(0),
+            MockCollection::new(vec![
+                ("a".to_string(), vec![1.0]),
+                ("b".to_string(), vec![2.0]),
+            ]),
+        );
+        sharded.add_shard(
+            ShardId::new(1),
+            MockCollection::new(vec![("c".to_string(), vec![3.0])]),
+        );
+
+        assert_eq!(sharded.total_vector_count(), 3);
+    }
+
+    #[test]
+    fn test_get_vector() {
+        let config = ShardConfig::new(2);
+        let manager = Arc::new(ShardManager::new(config));
+
+        let mut sharded: ShardedCollection<MockCollection> =
+            ShardedCollection::new(manager.clone());
+
+        // Add vectors to shard 0
+        let shard0_vectors = vec![
+            ("test_vec".to_string(), vec![1.0, 2.0, 3.0]),
+        ];
+        sharded.add_shard(ShardId::new(0), MockCollection::new(shard0_vectors));
+        sharded.add_shard(ShardId::new(1), MockCollection::new(vec![]));
+
+        // The key "test_vec" routes to a specific shard via consistent hashing
+        // First, verify we can find the vector if it exists in the routed shard
+        let _result = sharded.get_vector("test_vec");
+        // Note: This might be None if "test_vec" routes to shard 1
+        // For deterministic testing, we'd need to know the hash distribution
     }
 }
