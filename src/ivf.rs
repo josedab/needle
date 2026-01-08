@@ -29,6 +29,40 @@
 //! // Search
 //! let results = index.search(&query, 10);
 //! ```
+//!
+//! # When to Use IVF
+//!
+//! IVF is best suited for memory-constrained scenarios with large, static datasets:
+//!
+//! | Use Case | IVF Suitability |
+//! |----------|-----------------|
+//! | Memory constrained | ✅ Excellent - lower memory than HNSW |
+//! | Static datasets | ✅ Excellent - train once, query many times |
+//! | Batch processing | ✅ Good - efficient for bulk operations |
+//! | Very high dimensions | ✅ Good - PQ compression helps |
+//! | Real-time search | ⚠️ Slower than HNSW |
+//! | Frequent updates | ⚠️ May require retraining |
+//! | Small datasets (<100K) | ⚠️ HNSW is simpler and faster |
+//!
+//! ## IVF vs HNSW
+//!
+//! - **IVF** requires training but uses less memory
+//! - **HNSW** is faster but uses more memory
+//! - Choose IVF when memory is limited and you can tolerate slower queries
+//! - Choose HNSW when query latency is critical
+//!
+//! ## IVF vs DiskANN
+//!
+//! - **IVF** keeps centroids in memory, vectors can be on disk with PQ
+//! - **DiskANN** is purpose-built for disk-based search
+//! - Choose IVF for moderate-scale datasets with memory constraints
+//! - Choose DiskANN for very large datasets (>100M vectors)
+//!
+//! ## Configuration Guidelines
+//!
+//! - **n_clusters**: sqrt(n) is a good starting point
+//! - **n_probe**: 1-5% of n_clusters for speed/recall tradeoff
+//! - **use_pq**: Enable for 4-16x memory reduction at slight accuracy cost
 
 use crate::distance::euclidean_distance;
 use crate::quantization::ProductQuantizer;
