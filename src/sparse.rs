@@ -2,6 +2,76 @@
 //!
 //! Provides efficient storage and operations for sparse vectors,
 //! useful for lexical features (TF-IDF, BM25, SPLADE) and hybrid search.
+//!
+//! # Overview
+//!
+//! Sparse vectors store only non-zero values, making them memory-efficient
+//! for high-dimensional data where most values are zero. Common use cases:
+//!
+//! - **TF-IDF vectors**: Term frequency-inverse document frequency
+//! - **BM25 vectors**: Best Match 25 scoring
+//! - **SPLADE vectors**: Sparse neural retrieval
+//!
+//! # Example: Creating Sparse Vectors
+//!
+//! ```
+//! use needle::SparseVector;
+//!
+//! // Create from indices and values
+//! let sparse = SparseVector::new(
+//!     vec![0, 5, 10],       // Non-zero indices
+//!     vec![0.5, 1.2, 0.8],  // Corresponding values
+//! );
+//! assert_eq!(sparse.len(), 3);
+//!
+//! // Create from a dense vector (values below threshold become zero)
+//! let dense = vec![0.0, 0.0, 0.5, 0.0, 0.3, 0.0, 0.0, 0.7];
+//! let sparse = SparseVector::from_dense(&dense, 0.1);
+//! assert_eq!(sparse.len(), 3); // Only values > 0.1 are kept
+//! ```
+//!
+//! # Example: Using the Sparse Index
+//!
+//! ```
+//! use needle::{SparseIndex, SparseVector, SparseDistance};
+//!
+//! // Create a sparse index
+//! let mut index = SparseIndex::new();
+//!
+//! // Insert sparse vectors (returns internal ID)
+//! let v1 = SparseVector::new(vec![0, 1, 2], vec![1.0, 2.0, 3.0]);
+//! let v2 = SparseVector::new(vec![1, 2, 3], vec![2.0, 1.0, 1.0]);
+//! let v3 = SparseVector::new(vec![0, 3], vec![1.0, 2.0]);
+//!
+//! let id1 = index.insert(v1);
+//! let id2 = index.insert(v2);
+//! let id3 = index.insert(v3);
+//!
+//! assert_eq!(index.len(), 3);
+//!
+//! // Search for similar vectors
+//! let query = SparseVector::new(vec![0, 1], vec![1.0, 1.0]);
+//! let results = index.search(&query, 2);
+//!
+//! assert_eq!(results.len(), 2);
+//! ```
+//!
+//! # Example: Computing Sparse Distance
+//!
+//! ```
+//! use needle::{SparseVector, SparseDistance};
+//!
+//! let v1 = SparseVector::new(vec![0, 1, 2], vec![1.0, 0.0, 1.0]);
+//! let v2 = SparseVector::new(vec![0, 1, 2], vec![1.0, 1.0, 0.0]);
+//!
+//! // Compute cosine similarity
+//! let similarity = SparseDistance::cosine_similarity(&v1, &v2);
+//! println!("Cosine similarity: {}", similarity);
+//!
+//! // Compute dot product
+//! let dot = SparseDistance::dot_product(&v1, &v2);
+//! assert!((dot - 1.0).abs() < 0.001);
+//! ```
 
 use ordered_float::OrderedFloat;
 use serde::{Deserialize, Serialize};
