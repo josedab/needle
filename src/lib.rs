@@ -123,7 +123,7 @@ pub mod wal;
 #[cfg(feature = "tui")]
 pub mod tui;
 
-#[cfg(feature = "server")]
+#[cfg(feature = "async")]
 pub mod async_api;
 
 #[cfg(feature = "hybrid")]
@@ -158,7 +158,7 @@ pub mod uniffi_bindings;
 uniffi::setup_scaffolding!();
 
 // Re-export main types at crate root
-pub use collection::{Collection, CollectionConfig, CollectionIter, CollectionStats, SearchResult};
+pub use collection::{Collection, CollectionConfig, CollectionIter, CollectionStats, SearchExplain, SearchResult};
 pub use database::{CollectionRef, Database, DatabaseConfig, ExportEntry};
 pub use distance::DistanceFunction;
 pub use error::{NeedleError, Result};
@@ -167,7 +167,10 @@ pub use metadata::{Filter, MetadataStore};
 pub use multivec::{MultiVector, MultiVectorConfig, MultiVectorIndex, MultiVectorSearchResult};
 pub use quantization::{BinaryQuantizer, ProductQuantizer, ScalarQuantizer};
 pub use sparse::{SparseDistance, SparseIndex, SparseVector};
-pub use tuning::{auto_tune, PerformanceProfile, TuningConstraints, TuningResult};
+pub use tuning::{
+    auto_tune, IndexRecommendation, IndexSelectionConstraints, PerformanceProfile,
+    RecommendedIndex, TuningConstraints, TuningResult, quick_recommend_index, recommend_index,
+};
 
 // Analytics and advanced features
 pub use anomaly::{
@@ -220,8 +223,12 @@ pub use reranker::{
 };
 // Routing: Main types for query routing, internal details stay in module
 pub use routing::{LoadBalancing, QueryRouter, RouteConfig, RoutingError, RoutingResult};
-// Shard: Main types for sharding, internal details stay in module
-pub use shard::{ShardConfig, ShardId, ShardInfo, ShardManager, ShardState, ShardedCollection};
+// Shard: Main types for sharding and cross-shard search
+pub use shard::{
+    CrossShardSearchConfig, CrossShardSearchResult, ShardConfig, ShardError, ShardId, ShardInfo,
+    ShardManager, ShardSearchResult, ShardSearchable, ShardState, ShardedCollection,
+    merge_shard_results,
+};
 // WAL: Only export main types, internal record types stay in module
 pub use wal::{Lsn, WalConfig, WalManager, WalStats};
 
@@ -237,7 +244,7 @@ pub use hybrid::{Bm25Index, HybridSearchResult, RrfConfig, reciprocal_rank_fusio
 #[cfg(feature = "server")]
 pub use server::{ServerConfig, serve};
 
-#[cfg(feature = "server")]
+#[cfg(feature = "async")]
 pub use async_api::{AsyncDatabase, AsyncDatabaseConfig, BatchOperationBuilder, BatchResult, ExportStream, SearchStream};
 
 #[cfg(feature = "metrics")]
