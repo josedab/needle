@@ -1,0 +1,56 @@
+# CODEOWNERS - Automatic PR review assignment
+# See: https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+
+# Default owners for everything in the repo
+* @anthropics/needle-maintainers
+
+# Core database and collection logic
+/src/database.rs @anthropics/needle-core
+/src/collection.rs @anthropics/needle-core
+/src/storage.rs @anthropics/needle-core
+/src/error.rs @anthropics/needle-core
+
+# HNSW index implementation
+/src/hnsw.rs @anthropics/needle-core
+/src/distance.rs @anthropics/needle-core
+/src/tuning.rs @anthropics/needle-core
+
+# Advanced search features
+/src/hybrid.rs @anthropics/needle-search
+/src/sparse.rs @anthropics/needle-search
+/src/multivec.rs @anthropics/needle-search
+/src/metadata.rs @anthropics/needle-search
+
+# Quantization
+/src/quantization.rs @anthropics/needle-core
+
+# HTTP Server and API
+/src/server.rs @anthropics/needle-api
+/src/metrics.rs @anthropics/needle-api
+
+# Language bindings
+/src/python.rs @anthropics/needle-bindings
+/src/wasm.rs @anthropics/needle-bindings
+/src/uniffi_bindings.rs @anthropics/needle-bindings
+
+# Embeddings
+/src/embeddings.rs @anthropics/needle-ml
+
+# Documentation
+/docs/ @anthropics/needle-docs
+*.md @anthropics/needle-docs
+/CLAUDE.md @anthropics/needle-maintainers
+
+# CI/CD and infrastructure
+/.github/ @anthropics/needle-infra
+/Cargo.toml @anthropics/needle-maintainers
+/Cargo.lock @anthropics/needle-maintainers
+
+# Tests
+/tests/ @anthropics/needle-core
+/benches/ @anthropics/needle-core
+
+# Security-sensitive files
+/SECURITY.md @anthropics/needle-security @anthropics/needle-maintainers
+/src/encryption.rs @anthropics/needle-security
+/src/auth.rs @anthropics/needle-security
