@@ -26,11 +26,7 @@
 //! }
 //! ```
 
-use crate::{
-    clustering::{ClusteringConfig, KMeans},
-    anomaly::{IsolationForest, LocalOutlierFactor},
-    Database, SearchResult,
-};
+use crate::Database;
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers},
     execute,
@@ -39,18 +35,17 @@ use crossterm::{
 use ratatui::{
     backend::CrosstermBackend,
     layout::{Alignment, Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style, Stylize},
-    text::{Line, Span, Text},
+    style::{Color, Modifier, Style},
+    text::{Line, Span},
     widgets::{
-        Block, Borders, Cell, Clear, List, ListItem, ListState, Paragraph, Row, Scrollbar,
-        ScrollbarOrientation, ScrollbarState, Sparkline, Table, TableState, Tabs, Wrap,
+        Block, Borders, Cell, List, ListItem, ListState, Paragraph, Row, Sparkline, Table,
+        TableState, Tabs, Wrap,
     },
     Frame, Terminal,
 };
 use std::io::{self, Stdout};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::sync::mpsc;
 
 /// Application state for the TUI
 pub struct NeedleTui {
@@ -116,6 +111,7 @@ struct AppState {
     // Collections view
     collections: Vec<CollectionInfo>,
     collection_state: ListState,
+    #[allow(dead_code)]
     selected_collection: Option<String>,
     // Search view
     search_input: String,
@@ -127,6 +123,7 @@ struct AppState {
     anomaly_data: Option<AnomalyData>,
     // Streaming view
     stream_events: Vec<StreamEvent>,
+    #[allow(dead_code)]
     stream_scroll: u16,
     // Stats for dashboard
     stats: DashboardStats,
@@ -161,21 +158,27 @@ struct SearchResultDisplay {
 
 #[derive(Debug, Clone)]
 struct ClusterData {
+    #[allow(dead_code)]
     collection: String,
     k: usize,
     clusters: Vec<ClusterInfo>,
+    #[allow(dead_code)]
     inertia: f32,
+    algorithm: String,
+    iterations: usize,
 }
 
 #[derive(Debug, Clone)]
 struct ClusterInfo {
     id: usize,
     size: usize,
+    #[allow(dead_code)]
     centroid_preview: String,
 }
 
 #[derive(Debug, Clone)]
 struct AnomalyData {
+    #[allow(dead_code)]
     collection: String,
     outliers: Vec<OutlierInfo>,
     method: String,
@@ -202,8 +205,549 @@ struct DashboardStats {
     total_vectors: usize,
     total_storage_mb: f64,
     avg_dimensions: usize,
+    #[allow(dead_code)]
     queries_per_second: f64,
+    #[allow(dead_code)]
     uptime_seconds: u64,
+}
+
+/// Render the UI - standalone function to avoid borrow conflicts
+fn render_ui(f: &mut Frame, _db: &Arc<Database>, state: &mut AppState) {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(3), // Header/tabs
+            Constraint::Min(0),    // Main content
+            Constraint::Length(3), // Status bar
+        ])
+        .split(f.area());
+
+    render_header(f, state, chunks[0]);
+    render_content(f, state, chunks[1]);
+    render_status_bar(f, state, chunks[2]);
+}
+
+fn render_header(f: &mut Frame, state: &AppState, area: Rect) {
+    let titles: Vec<Line> = View::all()
+        .iter()
+        .map(|v| {
+            let style = if *v == state.current_view {
+                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::Gray)
+            };
+            Line::from(Span::styled(format!(" {} ", v.title()), style))
+        })
+        .collect();
+
+    let tabs = Tabs::new(titles)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" Needle Vector Database ")
+                .title_style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+        )
+        .select(state.current_view.index())
+        .style(Style::default().fg(Color::White))
+        .highlight_style(Style::default().fg(Color::Yellow));
+
+    f.render_widget(tabs, area);
+}
+
+fn render_content(f: &mut Frame, state: &mut AppState, area: Rect) {
+    match state.current_view {
+        View::Dashboard => render_dashboard(f, state, area),
+        View::Collections => render_collections(f, state, area),
+        View::Search => render_search(f, state, area),
+        View::Clusters => render_clusters(f, state, area),
+        View::Anomalies => render_anomalies(f, state, area),
+        View::Streaming => render_streaming(f, state, area),
+        View::Help => render_help(f, state, area),
+    }
+}
+
+fn render_dashboard(f: &mut Frame, state: &AppState, area: Rect) {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(7),  // Stats cards
+            Constraint::Min(10),    // Query activity
+            Constraint::Length(10), // Recent activity
+        ])
+        .split(area);
+
+    // Stats cards row
+    let card_chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage(25),
+            Constraint::Percentage(25),
+            Constraint::Percentage(25),
+            Constraint::Percentage(25),
+        ])
+        .split(chunks[0]);
+
+    render_stat_card(
+        f,
+        card_chunks[0],
+        "Collections",
+        &state.stats.total_collections.to_string(),
+        Color::Cyan,
+    );
+    render_stat_card(
+        f,
+        card_chunks[1],
+        "Total Vectors",
+        &format_number(state.stats.total_vectors),
+        Color::Green,
+    );
+    render_stat_card(
+        f,
+        card_chunks[2],
+        "Storage",
+        &format!("{:.2} MB", state.stats.total_storage_mb),
+        Color::Yellow,
+    );
+    render_stat_card(
+        f,
+        card_chunks[3],
+        "Avg Dimensions",
+        &state.stats.avg_dimensions.to_string(),
+        Color::Magenta,
+    );
+
+    // Query activity sparkline
+    let sparkline = Sparkline::default()
+        .block(
+            Block::default()
+                .title(" Query Activity (last 60s) ")
+                .borders(Borders::ALL),
+        )
+        .data(&state.query_history)
+        .style(Style::default().fg(Color::Green));
+    f.render_widget(sparkline, chunks[1]);
+
+    // Recent activity
+    let events: Vec<ListItem> = state
+        .stream_events
+        .iter()
+        .rev()
+        .take(5)
+        .map(|e| {
+            let color = match e.event_type.as_str() {
+                "INSERT" => Color::Green,
+                "DELETE" => Color::Red,
+                "SEARCH" => Color::Cyan,
+                _ => Color::Gray,
+            };
+            ListItem::new(Line::from(vec![
+                Span::styled(&e.timestamp, Style::default().fg(Color::DarkGray)),
+                Span::raw(" "),
+                Span::styled(&e.event_type, Style::default().fg(color)),
+                Span::raw(" on "),
+                Span::styled(&e.collection, Style::default().fg(Color::Yellow)),
+            ]))
+        })
+        .collect();
+
+    let activity_list = List::new(events).block(
+        Block::default()
+            .title(" Recent Activity ")
+            .borders(Borders::ALL),
+    );
+    f.render_widget(activity_list, chunks[2]);
+}
+
+fn render_stat_card(f: &mut Frame, area: Rect, title: &str, value: &str, color: Color) {
+    let block = Block::default()
+        .title(format!(" {} ", title))
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(color));
+
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    let text = Paragraph::new(vec![
+        Line::from(""),
+        Line::from(Span::styled(
+            value,
+            Style::default()
+                .fg(color)
+                .add_modifier(Modifier::BOLD),
+        )),
+    ])
+    .alignment(Alignment::Center);
+    f.render_widget(text, inner);
+}
+
+fn render_collections(f: &mut Frame, state: &mut AppState, area: Rect) {
+    let chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])
+        .split(area);
+
+    let items: Vec<ListItem> = state
+        .collections
+        .iter()
+        .map(|c| {
+            ListItem::new(Line::from(vec![
+                Span::styled(&c.name, Style::default().fg(Color::Cyan)),
+                Span::raw(" - "),
+                Span::styled(
+                    format!("{} vectors", c.count),
+                    Style::default().fg(Color::Gray),
+                ),
+            ]))
+        })
+        .collect();
+
+    let list = List::new(items)
+        .block(
+            Block::default()
+                .title(" Collections [↑↓ navigate, Enter select] ")
+                .borders(Borders::ALL),
+        )
+        .highlight_style(
+            Style::default()
+                .bg(Color::DarkGray)
+                .add_modifier(Modifier::BOLD),
+        )
+        .highlight_symbol("▶ ");
+
+    f.render_stateful_widget(list, chunks[0], &mut state.collection_state);
+
+    let detail_text = if let Some(idx) = state.collection_state.selected() {
+        if let Some(col) = state.collections.get(idx) {
+            vec![
+                Line::from(vec![
+                    Span::styled("Name: ", Style::default().fg(Color::Gray)),
+                    Span::styled(&col.name, Style::default().fg(Color::Cyan)),
+                ]),
+                Line::from(""),
+                Line::from(vec![
+                    Span::styled("Dimensions: ", Style::default().fg(Color::Gray)),
+                    Span::styled(
+                        col.dimensions.to_string(),
+                        Style::default().fg(Color::Yellow),
+                    ),
+                ]),
+                Line::from(""),
+                Line::from(vec![
+                    Span::styled("Vector Count: ", Style::default().fg(Color::Gray)),
+                    Span::styled(
+                        format_number(col.count),
+                        Style::default().fg(Color::Green),
+                    ),
+                ]),
+                Line::from(""),
+                Line::from(vec![
+                    Span::styled("Index Type: ", Style::default().fg(Color::Gray)),
+                    Span::styled(&col.index_type, Style::default().fg(Color::Magenta)),
+                ]),
+                Line::from(""),
+                Line::from(""),
+                Line::from(Span::styled(
+                    "Actions:",
+                    Style::default().add_modifier(Modifier::BOLD),
+                )),
+                Line::from("  [s] Search in collection"),
+                Line::from("  [c] Run clustering"),
+                Line::from("  [a] Detect anomalies"),
+                Line::from("  [d] Delete collection"),
+                Line::from("  [e] Export to JSON"),
+            ]
+        } else {
+            vec![Line::from("Select a collection")]
+        }
+    } else {
+        vec![Line::from("Select a collection to view details")]
+    };
+
+    let details = Paragraph::new(detail_text)
+        .block(
+            Block::default()
+                .title(" Collection Details ")
+                .borders(Borders::ALL),
+        )
+        .wrap(Wrap { trim: true });
+
+    f.render_widget(details, chunks[1]);
+}
+
+fn render_search(f: &mut Frame, state: &mut AppState, area: Rect) {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(3), // Search input
+            Constraint::Min(0),    // Results
+        ])
+        .split(area);
+
+    let input_style = match state.input_mode {
+        InputMode::Normal => Style::default(),
+        InputMode::Editing => Style::default().fg(Color::Yellow),
+    };
+
+    let input = Paragraph::new(state.search_input.as_str())
+        .style(input_style)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" Search Query [Press 'i' to edit, Enter to search] "),
+        );
+    f.render_widget(input, chunks[0]);
+
+    if state.input_mode == InputMode::Editing {
+        f.set_cursor_position((
+            chunks[0].x + state.search_input.len() as u16 + 1,
+            chunks[0].y + 1,
+        ));
+    }
+
+    let header_cells = ["ID", "Distance", "Metadata"]
+        .iter()
+        .map(|h| Cell::from(*h).style(Style::default().fg(Color::Yellow)));
+    let header = Row::new(header_cells).height(1).bottom_margin(1);
+
+    let rows = state.search_results.iter().map(|r| {
+        Row::new(vec![
+            Cell::from(r.id.clone()),
+            Cell::from(format!("{:.6}", r.distance)),
+            Cell::from(truncate_string(&r.metadata, 50)),
+        ])
+    });
+
+    let table = Table::new(
+        rows,
+        [
+            Constraint::Percentage(20),
+            Constraint::Percentage(15),
+            Constraint::Percentage(65),
+        ],
+    )
+    .header(header)
+    .block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(format!(
+                " Results ({}) ",
+                state.search_results.len()
+            )),
+    )
+    .row_highlight_style(Style::default().bg(Color::DarkGray))
+    .highlight_symbol("▶ ");
+
+    f.render_stateful_widget(table, chunks[1], &mut state.search_state);
+}
+
+fn render_clusters(f: &mut Frame, state: &AppState, area: Rect) {
+    let chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .split(area);
+
+    let cluster_items: Vec<ListItem> = if let Some(ref data) = state.cluster_data {
+        data.clusters
+            .iter()
+            .map(|c| {
+                ListItem::new(vec![
+                    Line::from(vec![
+                        Span::styled(
+                            format!("Cluster {}", c.id),
+                            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                        ),
+                    ]),
+                    Line::from(vec![
+                        Span::raw("  Size: "),
+                        Span::styled(
+                            c.size.to_string(),
+                            Style::default().fg(Color::Green),
+                        ),
+                    ]),
+                ])
+            })
+            .collect()
+    } else {
+        vec![ListItem::new("No clustering results. Press 'r' to run clustering.")]
+    };
+
+    let cluster_list = List::new(cluster_items).block(
+        Block::default()
+            .title(" Clusters ")
+            .borders(Borders::ALL),
+    );
+    f.render_widget(cluster_list, chunks[0]);
+
+    let info_text = if let Some(ref data) = state.cluster_data {
+        vec![
+            Line::from(vec![
+                Span::styled("Algorithm: ", Style::default().fg(Color::Gray)),
+                Span::styled(&data.algorithm, Style::default().fg(Color::Cyan)),
+            ]),
+            Line::from(vec![
+                Span::styled("K: ", Style::default().fg(Color::Gray)),
+                Span::styled(data.k.to_string(), Style::default().fg(Color::Yellow)),
+            ]),
+            Line::from(vec![
+                Span::styled("Iterations: ", Style::default().fg(Color::Gray)),
+                Span::styled(data.iterations.to_string(), Style::default().fg(Color::Green)),
+            ]),
+        ]
+    } else {
+        vec![Line::from("Run clustering to see results")]
+    };
+
+    let info = Paragraph::new(info_text)
+        .block(Block::default().title(" Info ").borders(Borders::ALL));
+    f.render_widget(info, chunks[1]);
+}
+
+fn render_anomalies(f: &mut Frame, state: &AppState, area: Rect) {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(3), Constraint::Min(0)])
+        .split(area);
+
+    let method_info = if let Some(ref data) = state.anomaly_data {
+        format!("Method: {} | Outliers: {}", data.method, data.outliers.len())
+    } else {
+        "No anomaly detection results. Press 'r' to run detection.".to_string()
+    };
+
+    let header = Paragraph::new(method_info)
+        .block(Block::default().borders(Borders::ALL).title(" Anomaly Detection "));
+    f.render_widget(header, chunks[0]);
+
+    let items: Vec<ListItem> = if let Some(ref data) = state.anomaly_data {
+        data.outliers
+            .iter()
+            .map(|o| {
+                ListItem::new(vec![
+                    Line::from(vec![
+                        Span::styled(&o.id, Style::default().fg(Color::Red)),
+                        Span::raw(" - Score: "),
+                        Span::styled(format!("{:.4}", o.score), Style::default().fg(Color::Yellow)),
+                    ]),
+                    Line::from(vec![
+                        Span::raw("  "),
+                        Span::styled(&o.reason, Style::default().fg(Color::Gray)),
+                    ]),
+                ])
+            })
+            .collect()
+    } else {
+        vec![]
+    };
+
+    let list = List::new(items).block(Block::default().borders(Borders::ALL).title(" Outliers "));
+    f.render_widget(list, chunks[1]);
+}
+
+fn render_streaming(f: &mut Frame, state: &AppState, area: Rect) {
+    let items: Vec<ListItem> = state
+        .stream_events
+        .iter()
+        .rev()
+        .map(|e| {
+            let color = match e.event_type.as_str() {
+                "INSERT" => Color::Green,
+                "DELETE" => Color::Red,
+                "SEARCH" => Color::Cyan,
+                "UPDATE" => Color::Yellow,
+                _ => Color::Gray,
+            };
+            ListItem::new(Line::from(vec![
+                Span::styled(&e.timestamp, Style::default().fg(Color::DarkGray)),
+                Span::raw(" | "),
+                Span::styled(
+                    format!("{:8}", e.event_type),
+                    Style::default().fg(color),
+                ),
+                Span::raw(" | "),
+                Span::styled(&e.collection, Style::default().fg(Color::Cyan)),
+                Span::raw(" | "),
+                Span::raw(&e.details),
+            ]))
+        })
+        .collect();
+
+    let list = List::new(items).block(
+        Block::default()
+            .title(" Event Stream (newest first) ")
+            .borders(Borders::ALL),
+    );
+    f.render_widget(list, area);
+}
+
+fn render_help(f: &mut Frame, _state: &AppState, area: Rect) {
+    let help_text = vec![
+        Line::from(Span::styled(
+            "Navigation",
+            Style::default().add_modifier(Modifier::BOLD).fg(Color::Cyan),
+        )),
+        Line::from("  Tab / Shift+Tab  - Switch between views"),
+        Line::from("  ↑ / ↓           - Navigate lists"),
+        Line::from("  Enter           - Select / Confirm"),
+        Line::from("  q / Ctrl+C      - Quit"),
+        Line::from(""),
+        Line::from(Span::styled(
+            "Search View",
+            Style::default().add_modifier(Modifier::BOLD).fg(Color::Cyan),
+        )),
+        Line::from("  i               - Enter edit mode"),
+        Line::from("  Esc             - Exit edit mode"),
+        Line::from("  Enter           - Execute search"),
+        Line::from(""),
+        Line::from(Span::styled(
+            "Collections View",
+            Style::default().add_modifier(Modifier::BOLD).fg(Color::Cyan),
+        )),
+        Line::from("  s               - Search in collection"),
+        Line::from("  c               - Run clustering"),
+        Line::from("  a               - Detect anomalies"),
+        Line::from("  d               - Delete collection"),
+        Line::from("  e               - Export to JSON"),
+        Line::from(""),
+        Line::from(Span::styled(
+            "Clusters / Anomalies View",
+            Style::default().add_modifier(Modifier::BOLD).fg(Color::Cyan),
+        )),
+        Line::from("  r               - Run analysis"),
+    ];
+
+    let help = Paragraph::new(help_text)
+        .block(
+            Block::default()
+                .title(" Help ")
+                .borders(Borders::ALL),
+        )
+        .wrap(Wrap { trim: true });
+    f.render_widget(help, area);
+}
+
+fn render_status_bar(f: &mut Frame, state: &AppState, area: Rect) {
+    let status = if let Some((ref msg, time)) = state.status_message {
+        if time.elapsed() < Duration::from_secs(5) {
+            msg.clone()
+        } else {
+            "Ready".to_string()
+        }
+    } else {
+        "Ready".to_string()
+    };
+
+    let status_bar = Paragraph::new(Line::from(vec![
+        Span::styled(" Status: ", Style::default().fg(Color::Gray)),
+        Span::styled(status, Style::default().fg(Color::Green)),
+        Span::raw(" | "),
+        Span::styled("Press ", Style::default().fg(Color::Gray)),
+        Span::styled("?", Style::default().fg(Color::Yellow)),
+        Span::styled(" for help, ", Style::default().fg(Color::Gray)),
+        Span::styled("q", Style::default().fg(Color::Yellow)),
+        Span::styled(" to quit", Style::default().fg(Color::Gray)),
+    ]))
+    .block(Block::default().borders(Borders::ALL));
+    f.render_widget(status_bar, area);
 }
 
 impl NeedleTui {
@@ -232,7 +776,14 @@ impl NeedleTui {
         let mut last_tick = Instant::now();
 
         loop {
-            self.terminal.draw(|f| self.ui(f))?;
+            // Use a scope to isolate the terminal borrow from the rest of self
+            {
+                let db = Arc::clone(&self.db);
+                let state = &mut self.state;
+                self.terminal.draw(|f| {
+                    render_ui(f, &db, state);
+                })?;
+            }
 
             let timeout = tick_rate
                 .checked_sub(last_tick.elapsed())
@@ -266,6 +817,7 @@ impl NeedleTui {
         Ok(())
     }
 
+    #[allow(dead_code)]
     fn ui(&mut self, f: &mut Frame) {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
@@ -281,6 +833,7 @@ impl NeedleTui {
         self.render_status_bar(f, chunks[2]);
     }
 
+    #[allow(dead_code)]
     fn render_header(&self, f: &mut Frame, area: Rect) {
         let titles: Vec<Line> = View::all()
             .iter()
@@ -308,6 +861,7 @@ impl NeedleTui {
         f.render_widget(tabs, area);
     }
 
+    #[allow(dead_code)]
     fn render_content(&mut self, f: &mut Frame, area: Rect) {
         match self.state.current_view {
             View::Dashboard => self.render_dashboard(f, area),
@@ -320,6 +874,7 @@ impl NeedleTui {
         }
     }
 
+    #[allow(dead_code)]
     fn render_dashboard(&self, f: &mut Frame, area: Rect) {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
@@ -410,6 +965,7 @@ impl NeedleTui {
         f.render_widget(list, chart_chunks[1]);
     }
 
+    #[allow(dead_code)]
     fn render_stat_card(&self, f: &mut Frame, area: Rect, title: &str, value: &str, color: Color) {
         let block = Block::default()
             .title(format!(" {} ", title))
@@ -440,6 +996,7 @@ impl NeedleTui {
         f.render_widget(value_paragraph, v_center[1]);
     }
 
+    #[allow(dead_code)]
     fn render_collections(&mut self, f: &mut Frame, area: Rect) {
         let chunks = Layout::default()
             .direction(Direction::Horizontal)
@@ -537,6 +1094,7 @@ impl NeedleTui {
         f.render_widget(details, chunks[1]);
     }
 
+    #[allow(dead_code)]
     fn render_search(&mut self, f: &mut Frame, area: Rect) {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
@@ -600,7 +1158,7 @@ impl NeedleTui {
                     self.state.search_results.len()
                 )),
         )
-        .highlight_style(Style::default().bg(Color::DarkGray))
+        .row_highlight_style(Style::default().bg(Color::DarkGray))
         .highlight_symbol("▶ ");
 
         f.render_stateful_widget(table, chunks[1], &mut self.state.search_state);
@@ -975,7 +1533,7 @@ impl NeedleTui {
         )
     }
 
-    fn handle_key(&mut self, key: KeyCode, modifiers: KeyModifiers) {
+    fn handle_key(&mut self, key: KeyCode, _modifiers: KeyModifiers) {
         // Handle input mode first
         if self.state.input_mode == InputMode::Editing {
             match key {
@@ -1186,6 +1744,8 @@ impl NeedleTui {
                     },
                 ],
                 inertia: 1234.5678,
+                algorithm: "K-Means".to_string(),
+                iterations: 42,
             });
             self.set_status("Clustering completed: 5 clusters found");
         } else {
@@ -1240,11 +1800,10 @@ impl NeedleTui {
             .into_iter()
             .filter_map(|name| {
                 self.db.collection(&name).ok().map(|col| {
-                    let stats = col.stats();
                     CollectionInfo {
                         name,
-                        dimensions: stats.dimensions,
-                        count: stats.num_vectors,
+                        dimensions: col.dimensions().unwrap_or(0),
+                        count: col.len(),
                         index_type: "HNSW".to_string(),
                     }
                 })
@@ -1312,11 +1871,10 @@ impl AppState {
             .into_iter()
             .filter_map(|name| {
                 db.collection(&name).ok().map(|col| {
-                    let stats = col.stats();
                     CollectionInfo {
                         name,
-                        dimensions: stats.dimensions,
-                        count: stats.num_vectors,
+                        dimensions: col.dimensions().unwrap_or(0),
+                        count: col.len(),
                         index_type: "HNSW".to_string(),
                     }
                 })
