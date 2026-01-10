@@ -26,7 +26,7 @@
 //! # Example
 //!
 //! ```rust
-//! use needle::error::{NeedleError, Result, ErrorCode};
+//! use needle::error::{NeedleError, Result, ErrorCode, Recoverable};
 //!
 //! fn example_operation() -> Result<()> {
 //!     // Use Result<T> which is an alias for std::result::Result<T, NeedleError>
@@ -35,7 +35,7 @@
 //!
 //! fn handle_error(err: NeedleError) {
 //!     // Get the error code for programmatic handling
-//!     let code = err.code();
+//!     let code = err.error_code();
 //!     println!("Error code: {:?} ({})", code, code.code());
 //!
 //!     // Match on specific error variants
