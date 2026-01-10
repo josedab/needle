@@ -2080,7 +2080,7 @@ impl ReplicatedDatabase {
     ///
     /// If `allow_follower_reads` is false and this node is not the leader,
     /// this will return an error.
-    pub fn read_collection(&self, name: &str) -> std::result::Result<CollectionRef, ReplicatedDatabaseError> {
+    pub fn read_collection(&self, name: &str) -> std::result::Result<CollectionRef<'_>, ReplicatedDatabaseError> {
         if !self.config.allow_follower_reads && !self.is_leader() {
             return Err(ReplicatedDatabaseError::NotLeader(self.leader()));
         }

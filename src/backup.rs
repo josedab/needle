@@ -591,7 +591,7 @@ mod tests {
         for i in 0..10 {
             coll.insert(
                 format!("doc{}", i),
-                &vec![i as f32; 8],
+                &[i as f32; 8],
                 Some(serde_json::json!({"index": i})),
             )
             .unwrap();

@@ -632,11 +632,9 @@ mod tests {
         let mut encryptor = create_encryptor();
         encryptor.initialize(4);
 
-        let vectors = vec![
-            ([1.0, 0.0, 0.0, 0.0], "a"),
+        let vectors = [([1.0, 0.0, 0.0, 0.0], "a"),
             ([0.0, 1.0, 0.0, 0.0], "b"),
-            ([0.0, 0.0, 1.0, 0.0], "c"),
-        ];
+            ([0.0, 0.0, 1.0, 0.0], "c")];
 
         let encrypted: Vec<EncryptedVector> = vectors.iter()
             .map(|(v, id)| encryptor.encrypt(id, v, HashMap::new()).unwrap())

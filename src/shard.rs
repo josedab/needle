@@ -66,7 +66,7 @@ pub enum ShardError {
 pub type ShardResult<T> = std::result::Result<T, ShardError>;
 
 /// Unique identifier for a shard
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 pub struct ShardId(pub u32);
 
 impl ShardId {

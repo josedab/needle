@@ -767,7 +767,7 @@ mod tests {
         let refs: Vec<&[f32]> = vectors.iter().map(|v| v.as_slice()).collect();
 
         let optimal = find_optimal_components(&refs, 0.9).unwrap();
-        assert!(optimal >= 1 && optimal <= 20);
+        assert!((1..=20).contains(&optimal));
     }
 
     #[test]
@@ -784,7 +784,7 @@ mod tests {
 
     #[test]
     fn test_single_vector() {
-        let vectors = vec![vec![1.0, 2.0, 3.0, 4.0]];
+        let vectors = [vec![1.0, 2.0, 3.0, 4.0]];
         let refs: Vec<&[f32]> = vectors.iter().map(|v| v.as_slice()).collect();
 
         let pca = PCA::fit(&refs, 2).unwrap();
