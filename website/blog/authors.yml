@@ -1,8 +1,28 @@
 needle-team:
   name: Needle Team
-  title: Core Contributors
+  title: Core Contributors @ Anthropic
   url: https://github.com/anthropics/needle
   image_url: https://github.com/anthropics.png
   page: true
+  description: The team behind Needle - building the SQLite for vectors.
+  socials:
+    github: anthropics
+    x: AnthropicAI
+
+engineering:
+  name: Needle Engineering
+  title: Engineering Team
+  url: https://github.com/anthropics/needle
+  image_url: https://github.com/anthropics.png
+  description: Deep dives into Needle's architecture and performance.
+  socials:
+    github: anthropics
+
+community:
+  name: Needle Community
+  title: Community Contributors
+  url: https://github.com/anthropics/needle/graphs/contributors
+  image_url: https://github.com/anthropics.png
+  description: Contributions from the Needle community.
   socials:
     github: anthropics
