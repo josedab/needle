@@ -151,10 +151,12 @@ fn test_cli_insert_and_search() {
         .expect("Failed to start insert command");
 
     use std::io::Write;
-    let stdin = insert.stdin.as_mut().expect("Failed to open stdin");
-    writeln!(stdin, r#"{{"id": "vec1", "vector": [1.0, 0.0, 0.0, 0.0]}}"#).unwrap();
-    writeln!(stdin, r#"{{"id": "vec2", "vector": [0.0, 1.0, 0.0, 0.0]}}"#).unwrap();
-    drop(stdin);
+    {
+        let stdin = insert.stdin.as_mut().expect("Failed to open stdin");
+        writeln!(stdin, r#"{{"id": "vec1", "vector": [1.0, 0.0, 0.0, 0.0]}}"#).unwrap();
+        writeln!(stdin, r#"{{"id": "vec2", "vector": [0.0, 1.0, 0.0, 0.0]}}"#).unwrap();
+    } // stdin ref dropped here, but we also take ownership to close it
+    drop(insert.stdin.take());
 
     let output = insert.wait_with_output().expect("Failed to wait for insert");
     assert!(output.status.success(), "Insert failed: {:?}", String::from_utf8_lossy(&output.stderr));
@@ -200,9 +202,11 @@ fn test_cli_get_vector() {
         .unwrap();
 
     use std::io::Write;
-    let stdin = insert.stdin.as_mut().unwrap();
-    writeln!(stdin, r#"{{"id": "test_vec", "vector": [1.0, 2.0, 3.0, 4.0], "metadata": {{"key": "value"}}}}"#).unwrap();
-    drop(stdin);
+    {
+        let stdin = insert.stdin.as_mut().unwrap();
+        writeln!(stdin, r#"{{"id": "test_vec", "vector": [1.0, 2.0, 3.0, 4.0], "metadata": {{"key": "value"}}}}"#).unwrap();
+    }
+    drop(insert.stdin.take());
     insert.wait().unwrap();
 
     // Get the vector
@@ -240,9 +244,11 @@ fn test_cli_delete_vector() {
         .unwrap();
 
     use std::io::Write;
-    let stdin = insert.stdin.as_mut().unwrap();
-    writeln!(stdin, r#"{{"id": "to_delete", "vector": [1.0, 2.0, 3.0, 4.0]}}"#).unwrap();
-    drop(stdin);
+    {
+        let stdin = insert.stdin.as_mut().unwrap();
+        writeln!(stdin, r#"{{"id": "to_delete", "vector": [1.0, 2.0, 3.0, 4.0]}}"#).unwrap();
+    }
+    drop(insert.stdin.take());
     insert.wait().unwrap();
 
     // Verify count is 1
@@ -339,10 +345,12 @@ fn test_cli_export_import() {
         .unwrap();
 
     use std::io::Write;
-    let stdin = insert.stdin.as_mut().unwrap();
-    writeln!(stdin, r#"{{"id": "exp1", "vector": [1.0, 0.0, 0.0, 0.0]}}"#).unwrap();
-    writeln!(stdin, r#"{{"id": "exp2", "vector": [0.0, 1.0, 0.0, 0.0]}}"#).unwrap();
-    drop(stdin);
+    {
+        let stdin = insert.stdin.as_mut().unwrap();
+        writeln!(stdin, r#"{{"id": "exp1", "vector": [1.0, 0.0, 0.0, 0.0]}}"#).unwrap();
+        writeln!(stdin, r#"{{"id": "exp2", "vector": [0.0, 1.0, 0.0, 0.0]}}"#).unwrap();
+    }
+    drop(insert.stdin.take());
     insert.wait().unwrap();
 
     // Export

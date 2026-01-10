@@ -141,8 +141,7 @@ fn test_partial_write_recovery() {
     // The file might still be valid if the implementation ignores trailing data
     // or it might fail if it validates the entire file
     // Either behavior is acceptable for corruption handling
-    if result.is_ok() {
-        let db = result.unwrap();
+    if let Ok(db) = result {
         // If it loads, verify data is intact
         let collection = db.collection("test").unwrap();
         let (vec, _) = collection.get("vec1").unwrap();
@@ -208,7 +207,7 @@ fn test_serialization_roundtrip_integrity() {
 
     // Verify all data
     for (id, expected_vec, expected_meta) in &test_cases {
-        let (vec, meta) = restored.get(*id).expect("Vector should exist");
+        let (vec, meta) = restored.get(id).expect("Vector should exist");
 
         // Verify vector values
         assert_eq!(vec.len(), expected_vec.len());
@@ -451,7 +450,7 @@ fn test_wal_recovery_truncated_segment() {
 
     // Should have recovered at least some entries
     assert!(
-        replayed.len() > 0,
+        !replayed.is_empty(),
         "Should recover at least some entries before truncation point"
     );
 }
@@ -1229,7 +1228,7 @@ fn test_pitr_recovery_ordering() {
 
         wal.replay(0, |record| {
             if let WalEntry::Insert { id, .. } = record.entry {
-                let idx: i32 = id.split('_').last().unwrap().parse().unwrap();
+                let idx: i32 = id.split('_').next_back().unwrap().parse().unwrap();
                 assert!(idx > last_idx, "Entries not in order: {} should come after {}", idx, last_idx);
                 last_idx = idx;
             }
