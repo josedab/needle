@@ -156,3 +156,15 @@ Needle is designed for applications that need fast, reliable vector search:
 ## Getting Started
 
 Ready to build? Check out the [Getting Started](/docs/getting-started) guide to install Needle and build your first vector search application.
+
+## Documentation Resources
+
+| Resource | Description |
+|----------|-------------|
+| [Getting Started](/docs/getting-started) | Install Needle and build your first app |
+| [Core Concepts](/docs/concepts/vectors) | Understand vectors, collections, and indexing |
+| [Guides](/docs/guides/semantic-search) | Step-by-step tutorials for common use cases |
+| [Performance & Benchmarks](/docs/benchmarks) | Detailed benchmarks and tuning tips |
+| [Migration Guide](/docs/migration) | Migrate from Chroma, Qdrant, Pinecone, and more |
+| [Troubleshooting](/docs/troubleshooting) | Solutions to common issues |
+| [API Reference](/docs/api-reference) | Complete API documentation |
