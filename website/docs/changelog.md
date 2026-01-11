@@ -21,6 +21,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 ### Fixed
 - Memory leak in batch search operations
 
+### Documentation
+- Added comprehensive [Troubleshooting Guide](/docs/troubleshooting) with solutions for common issues
+- Added [Performance & Benchmarks](/docs/benchmarks) page with methodology and comparison data
+- Added [Migration Guide](/docs/migration) with step-by-step instructions for Chroma, Qdrant, Pinecone, pgvector, FAISS, and Milvus
+- Enhanced landing page with architecture diagram and multi-language install tabs
+- Added Mermaid diagrams to RAG and Hybrid Search guides
+- Improved cross-linking between documentation pages
+
 ---
 
 ## [0.1.0] - 2024-01-15
