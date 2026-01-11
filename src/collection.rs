@@ -108,6 +108,7 @@ pub struct SearchResult {
 
 impl SearchResult {
     /// Create a new search result
+    #[must_use]
     pub fn new(id: impl Into<String>, distance: f32, metadata: Option<Value>) -> Self {
         Self {
             id: id.into(),
@@ -298,6 +299,7 @@ pub struct SearchBuilder<'a> {
 
 impl<'a> SearchBuilder<'a> {
     /// Create a new search builder
+    #[must_use]
     pub fn new(collection: &'a Collection, query: &'a [f32]) -> Self {
         Self {
             collection,
@@ -313,6 +315,7 @@ impl<'a> SearchBuilder<'a> {
     }
 
     /// Set the number of results to return
+    #[must_use]
     pub fn k(mut self, k: usize) -> Self {
         self.k = k;
         self
@@ -322,6 +325,7 @@ impl<'a> SearchBuilder<'a> {
     ///
     /// Pre-filtering is efficient when the filter is selective and fast to evaluate.
     /// Candidates that don't match the filter are skipped during search.
+    #[must_use]
     pub fn filter(mut self, filter: &'a Filter) -> Self {
         self.filter = Some(filter);
         self
@@ -336,6 +340,7 @@ impl<'a> SearchBuilder<'a> {
     ///
     /// The search fetches `k * post_filter_factor` candidates, then filters.
     /// Default over-fetch factor is 3x.
+    #[must_use]
     pub fn post_filter(mut self, filter: &'a Filter) -> Self {
         self.post_filter = Some(filter);
         self
@@ -345,18 +350,21 @@ impl<'a> SearchBuilder<'a> {
     ///
     /// When post-filtering, the search fetches `k * factor` candidates
     /// to ensure enough results remain after filtering.
+    #[must_use]
     pub fn post_filter_factor(mut self, factor: usize) -> Self {
         self.post_filter_factor = factor.max(1);
         self
     }
 
     /// Set ef_search parameter for this query
+    #[must_use]
     pub fn ef_search(mut self, ef: usize) -> Self {
         self.ef_search = Some(ef);
         self
     }
 
     /// Whether to include metadata in results (default: true)
+    #[must_use]
     pub fn include_metadata(mut self, include: bool) -> Self {
         self.include_metadata = include;
         self
@@ -386,6 +394,7 @@ impl<'a> SearchBuilder<'a> {
     ///     .execute()?;
     /// # Ok::<(), needle::NeedleError>(())
     /// ```
+    #[must_use]
     pub fn distance(mut self, distance: DistanceFunction) -> Self {
         self.distance_override = Some(distance);
         self
@@ -701,6 +710,7 @@ impl CollectionConfig {
     ///
     /// # Panics
     /// Panics if dimensions is 0.
+    #[must_use]
     pub fn new(name: impl Into<String>, dimensions: usize) -> Self {
         assert!(dimensions > 0, "Vector dimensions must be greater than 0");
         Self {
@@ -716,18 +726,21 @@ impl CollectionConfig {
     }
 
     /// Set the distance function
+    #[must_use]
     pub fn with_distance(mut self, distance: DistanceFunction) -> Self {
         self.distance = distance;
         self
     }
 
     /// Set the HNSW M parameter
+    #[must_use]
     pub fn with_m(mut self, m: usize) -> Self {
         self.hnsw = HnswConfig::with_m(m);
         self
     }
 
     /// Set ef_construction
+    #[must_use]
     pub fn with_ef_construction(mut self, ef: usize) -> Self {
         self.hnsw.ef_construction = ef;
         self
@@ -747,6 +760,7 @@ impl CollectionConfig {
     /// let config = CollectionConfig::new("embeddings", 128)
     ///     .with_slow_query_threshold_us(100_000);
     /// ```
+    #[must_use]
     pub fn with_slow_query_threshold_us(mut self, threshold_us: u64) -> Self {
         self.slow_query_threshold_us = Some(threshold_us);
         self
@@ -767,6 +781,7 @@ impl CollectionConfig {
     /// let config = CollectionConfig::new("embeddings", 128)
     ///     .with_query_cache(QueryCacheConfig::new(1000));
     /// ```
+    #[must_use]
     pub fn with_query_cache(mut self, cache_config: QueryCacheConfig) -> Self {
         self.query_cache = cache_config;
         self
@@ -785,6 +800,7 @@ impl CollectionConfig {
     /// let config = CollectionConfig::new("embeddings", 128)
     ///     .with_query_cache_capacity(500);
     /// ```
+    #[must_use]
     pub fn with_query_cache_capacity(mut self, capacity: usize) -> Self {
         self.query_cache = QueryCacheConfig::new(capacity);
         self
@@ -805,6 +821,7 @@ impl CollectionConfig {
     /// let config = CollectionConfig::new("ephemeral", 128)
     ///     .with_default_ttl_seconds(3600);
     /// ```
+    #[must_use]
     pub fn with_default_ttl_seconds(mut self, ttl_seconds: u64) -> Self {
         self.default_ttl_seconds = Some(ttl_seconds);
         self
@@ -828,6 +845,7 @@ impl CollectionConfig {
     ///     .with_default_ttl_seconds(3600)
     ///     .with_lazy_expiration(false);
     /// ```
+    #[must_use]
     pub fn with_lazy_expiration(mut self, enabled: bool) -> Self {
         self.lazy_expiration = enabled;
         self
