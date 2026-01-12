@@ -970,8 +970,8 @@ impl FileStorage {
         let log_dir = dir.join("log");
         let snapshot_dir = dir.join("snapshots");
 
-        fs::create_dir_all(&log_dir).map_err(|e| NeedleError::IoError(e.to_string()))?;
-        fs::create_dir_all(&snapshot_dir).map_err(|e| NeedleError::IoError(e.to_string()))?;
+        fs::create_dir_all(&log_dir).map_err(|e| NeedleError::Io(e))?;
+        fs::create_dir_all(&snapshot_dir).map_err(|e| NeedleError::Io(e))?;
 
         let storage = Self {
             dir,
@@ -1032,7 +1032,7 @@ impl FileStorage {
             if let Some(ref mut writer) = *segment {
                 writer
                     .flush()
-                    .map_err(|e| NeedleError::IoError(e.to_string()))?;
+                    .map_err(|e| NeedleError::Io(e))?;
             }
             *segment = None;
         }
@@ -1065,7 +1065,7 @@ impl FileStorage {
                 .create(true)
                 .append(true)
                 .open(&path)
-                .map_err(|e| NeedleError::IoError(e.to_string()))?;
+                .map_err(|e| NeedleError::Io(e))?;
             *segment = Some(BufWriter::new(file));
         }
 
@@ -1077,7 +1077,7 @@ impl FileStorage {
             return Ok(Vec::new());
         }
 
-        let file = File::open(path).map_err(|e| NeedleError::IoError(e.to_string()))?;
+        let file = File::open(path).map_err(|e| NeedleError::Io(e))?;
         let mut reader = BufReader::new(file);
         let mut entries = Vec::new();
 
@@ -1086,17 +1086,17 @@ impl FileStorage {
             match reader.read_exact(&mut len_buf) {
                 Ok(_) => {}
                 Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
-                Err(e) => return Err(NeedleError::IoError(e.to_string())),
+                Err(e) => return Err(NeedleError::Io(e)),
             }
 
             let len = u32::from_le_bytes(len_buf) as usize;
             let mut data = vec![0u8; len];
             reader
                 .read_exact(&mut data)
-                .map_err(|e| NeedleError::IoError(e.to_string()))?;
+                .map_err(|e| NeedleError::Io(e))?;
 
             let entry: LogEntry = serde_json::from_slice(&data)
-                .map_err(|e| NeedleError::SerializationError(e.to_string()))?;
+                .map_err(|e| NeedleError::Serialization(e))?;
             entries.push(entry);
         }
 
@@ -1127,24 +1127,24 @@ impl RaftStorage for FileStorage {
         }
 
         let file =
-            File::open(&self.state_path).map_err(|e| NeedleError::IoError(e.to_string()))?;
+            File::open(&self.state_path).map_err(|e| NeedleError::Io(e))?;
         let reader = BufReader::new(file);
         let state: PersistentState = serde_json::from_reader(reader)
-            .map_err(|e| NeedleError::SerializationError(e.to_string()))?;
+            .map_err(|e| NeedleError::Serialization(e))?;
         Ok(Some(state))
     }
 
     fn save_state(&self, state: &PersistentState) -> Result<()> {
         let temp_path = self.state_path.with_extension("tmp");
         let file =
-            File::create(&temp_path).map_err(|e| NeedleError::IoError(e.to_string()))?;
+            File::create(&temp_path).map_err(|e| NeedleError::Io(e))?;
         let writer = BufWriter::new(file);
         serde_json::to_writer_pretty(writer, state)
-            .map_err(|e| NeedleError::SerializationError(e.to_string()))?;
+            .map_err(|e| NeedleError::Serialization(e))?;
 
         // Atomic rename
         fs::rename(&temp_path, &self.state_path)
-            .map_err(|e| NeedleError::IoError(e.to_string()))?;
+            .map_err(|e| NeedleError::Io(e))?;
         Ok(())
     }
 
@@ -1163,19 +1163,19 @@ impl RaftStorage for FileStorage {
         if let Some(ref mut writer) = *segment {
             for entry in entries {
                 let data = serde_json::to_vec(entry)
-                    .map_err(|e| NeedleError::SerializationError(e.to_string()))?;
+                    .map_err(|e| NeedleError::Serialization(e))?;
                 let len = (data.len() as u32).to_le_bytes();
                 writer
                     .write_all(&len)
-                    .map_err(|e| NeedleError::IoError(e.to_string()))?;
+                    .map_err(|e| NeedleError::Io(e))?;
                 writer
                     .write_all(&data)
-                    .map_err(|e| NeedleError::IoError(e.to_string()))?;
+                    .map_err(|e| NeedleError::Io(e))?;
                 segment_entries.push(entry.clone());
             }
             writer
                 .flush()
-                .map_err(|e| NeedleError::IoError(e.to_string()))?;
+                .map_err(|e| NeedleError::Io(e))?;
         }
 
         // Check if we need to rotate
@@ -1212,7 +1212,7 @@ impl RaftStorage for FileStorage {
 
         // Delete all segments
         for path in self.all_segment_paths()? {
-            fs::remove_file(&path).map_err(|e| NeedleError::IoError(e.to_string()))?;
+            fs::remove_file(&path).map_err(|e| NeedleError::Io(e))?;
         }
 
         // Reset segment
@@ -1272,13 +1272,13 @@ impl RaftStorage for FileStorage {
         ));
         let temp_path = snapshot_path.with_extension("tmp");
 
-        let file = File::create(&temp_path).map_err(|e| NeedleError::IoError(e.to_string()))?;
+        let file = File::create(&temp_path).map_err(|e| NeedleError::Io(e))?;
         let writer = BufWriter::new(file);
         serde_json::to_writer(writer, snapshot)
-            .map_err(|e| NeedleError::SerializationError(e.to_string()))?;
+            .map_err(|e| NeedleError::Serialization(e))?;
 
         fs::rename(&temp_path, &snapshot_path)
-            .map_err(|e| NeedleError::IoError(e.to_string()))?;
+            .map_err(|e| NeedleError::Io(e))?;
         Ok(())
     }
 
@@ -1297,10 +1297,10 @@ impl RaftStorage for FileStorage {
         snapshots.sort();
 
         if let Some(latest) = snapshots.last() {
-            let file = File::open(latest).map_err(|e| NeedleError::IoError(e.to_string()))?;
+            let file = File::open(latest).map_err(|e| NeedleError::Io(e))?;
             let reader = BufReader::new(file);
             let snapshot: Snapshot = serde_json::from_reader(reader)
-                .map_err(|e| NeedleError::SerializationError(e.to_string()))?;
+                .map_err(|e| NeedleError::Serialization(e))?;
             return Ok(Some(snapshot));
         }
 
@@ -1316,7 +1316,7 @@ impl RaftStorage for FileStorage {
 
         // Delete old segments
         for path in self.all_segment_paths()? {
-            fs::remove_file(&path).map_err(|e| NeedleError::IoError(e.to_string()))?;
+            fs::remove_file(&path).map_err(|e| NeedleError::Io(e))?;
         }
 
         // Reset
@@ -1373,7 +1373,7 @@ impl RaftStorage for FileStorage {
             writer
                 .get_ref()
                 .sync_all()
-                .map_err(|e| NeedleError::IoError(e.to_string()))?;
+                .map_err(|e| NeedleError::Io(e))?;
         }
         Ok(())
     }
