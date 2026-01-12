@@ -4,7 +4,7 @@
 
 use needle::{Database, CollectionConfig, DistanceFunction};
 use std::fs;
-use std::io::{Read, Write, Seek, SeekFrom};
+use std::io::{Write, Seek, SeekFrom};
 use tempfile::tempdir;
 
 /// Test that corrupted database files are detected
