@@ -1,0 +1,102 @@
+name: Benchmarks
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  benchmark:
+    name: Performance Regression Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-bench-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-bench-
+
+      # Download baseline from main branch (if exists)
+      - name: Download baseline
+        uses: actions/cache@v4
+        with:
+          path: target/criterion-baseline
+          key: criterion-baseline-${{ runner.os }}
+          restore-keys: |
+            criterion-baseline-${{ runner.os }}
+
+      # Run benchmarks and save results
+      - name: Run benchmarks
+        run: |
+          cargo bench --bench benchmarks -- --noplot --save-baseline current
+
+      # Compare against baseline on PRs
+      - name: Compare against baseline
+        if: github.event_name == 'pull_request'
+        run: |
+          if [ -d "target/criterion-baseline" ]; then
+            echo "Comparing against baseline..."
+            # Copy baseline for comparison
+            cp -r target/criterion-baseline target/criterion/baseline 2>/dev/null || true
+
+            # Run comparison benchmark
+            cargo bench --bench benchmarks -- --noplot --baseline baseline 2>&1 | tee benchmark-results.txt
+
+            # Check for significant regressions (>15% slower)
+            if grep -E "regressed.*\+[1-9][5-9]%|regressed.*\+[2-9][0-9]%|regressed.*\+[0-9]{3,}%" benchmark-results.txt; then
+              echo "::error::Significant performance regression detected (>15%)"
+              echo "## Performance Regression Detected" >> $GITHUB_STEP_SUMMARY
+              echo "One or more benchmarks regressed by more than 15%." >> $GITHUB_STEP_SUMMARY
+              echo '```' >> $GITHUB_STEP_SUMMARY
+              grep -E "regressed" benchmark-results.txt >> $GITHUB_STEP_SUMMARY || true
+              echo '```' >> $GITHUB_STEP_SUMMARY
+              exit 1
+            fi
+
+            echo "## Benchmark Results" >> $GITHUB_STEP_SUMMARY
+            echo "No significant regressions detected." >> $GITHUB_STEP_SUMMARY
+          else
+            echo "No baseline found, skipping comparison"
+            echo "## Benchmark Results" >> $GITHUB_STEP_SUMMARY
+            echo "No baseline available for comparison. Baselines are generated from main branch." >> $GITHUB_STEP_SUMMARY
+          fi
+
+      # Save baseline on main branch pushes
+      - name: Save baseline
+        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+        run: |
+          mkdir -p target/criterion-baseline
+          cp -r target/criterion/current/* target/criterion-baseline/ 2>/dev/null || true
+
+      # Update baseline cache on main branch
+      - name: Update baseline cache
+        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+        uses: actions/cache/save@v4
+        with:
+          path: target/criterion-baseline
+          key: criterion-baseline-${{ runner.os }}-${{ github.sha }}
+
+      # Upload benchmark results as artifact
+      - name: Upload benchmark results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-results
+          path: |
+            target/criterion/
+            benchmark-results.txt
+          retention-days: 30
