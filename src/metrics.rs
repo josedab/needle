@@ -1,10 +1,35 @@
 //! Prometheus-compatible metrics for Needle
 //!
-//! Provides observability into database operations including:
-//! - Query latencies
-//! - Operation counts
-//! - Collection statistics
-//! - Index health metrics
+//! This module provides observability into database operations using Prometheus metrics,
+//! enabling monitoring and alerting for production deployments.
+//!
+//! # Metrics
+//!
+//! - **operations_total**: Counter for total operations by type (insert, search, delete)
+//! - **errors_total**: Counter for errors by type
+//! - **operation_duration_seconds**: Histogram of operation latencies
+//! - **collection_vectors_total**: Gauge of vectors per collection
+//! - **collection_dimensions**: Gauge of dimensions per collection
+//! - **index_health**: Gauge indicating index health status
+//!
+//! # Usage
+//!
+//! ```rust,ignore
+//! use needle::metrics::{metrics, MetricsGuard};
+//!
+//! // Record an operation
+//! let _guard = MetricsGuard::new("search", "my_collection");
+//! // ... perform search ...
+//! // Guard records duration on drop
+//!
+//! // Export metrics for Prometheus scraping
+//! let output = metrics().export();
+//! ```
+//!
+//! # Integration
+//!
+//! When using the HTTP server (feature: server), metrics are automatically exposed
+//! at the `/metrics` endpoint for Prometheus scraping.
 
 use prometheus::{
     register_counter_vec, register_gauge_vec, register_histogram_vec,
