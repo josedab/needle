@@ -219,11 +219,11 @@ impl ProductQuantizer {
             out.len() >= self.num_subvectors,
             "output buffer too small"
         );
-        for i in 0..self.num_subvectors {
+        for (i, out_byte) in out.iter_mut().take(self.num_subvectors).enumerate() {
             let start = i * self.subvector_dim;
             let end = start + self.subvector_dim;
             let subvec = &vector[start..end];
-            out[i] = self.find_nearest_centroid(i, subvec);
+            *out_byte = self.find_nearest_centroid(i, subvec);
         }
     }
 
