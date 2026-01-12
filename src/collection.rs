@@ -261,7 +261,11 @@ pub struct CollectionConfig {
 
 impl CollectionConfig {
     /// Create a new collection config with default settings
+    ///
+    /// # Panics
+    /// Panics if dimensions is 0.
     pub fn new(name: impl Into<String>, dimensions: usize) -> Self {
+        assert!(dimensions > 0, "Vector dimensions must be greater than 0");
         Self {
             name: name.into(),
             dimensions,
@@ -383,6 +387,12 @@ impl Collection {
         Self::validate_vector(query)
     }
 
+    /// Clamp k to the collection size to avoid wasting resources
+    #[inline]
+    fn clamp_k(&self, k: usize) -> usize {
+        k.min(self.len())
+    }
+
     /// Validate insert input (dimensions and vector values)
     fn validate_insert_input(&self, vector: &[f32]) -> Result<()> {
         if vector.len() != self.config.dimensions {
@@ -498,6 +508,10 @@ impl Collection {
     /// Search for k nearest neighbors
     pub fn search(&self, query: &[f32], k: usize) -> Result<Vec<SearchResult>> {
         self.validate_query(query)?;
+        let k = self.clamp_k(k);
+        if k == 0 {
+            return Ok(Vec::new());
+        }
 
         let results = self.index.search(query, k, self.vectors.as_slice());
 
@@ -507,6 +521,10 @@ impl Collection {
     /// Search and return only IDs (faster, no metadata lookup)
     pub fn search_ids(&self, query: &[f32], k: usize) -> Result<Vec<(String, f32)>> {
         self.validate_query(query)?;
+        let k = self.clamp_k(k);
+        if k == 0 {
+            return Ok(Vec::new());
+        }
 
         let results = self.index.search(query, k, self.vectors.as_slice());
 
@@ -522,11 +540,53 @@ impl Collection {
             .collect()
     }
 
+    /// Search and return borrowed ID references (zero-copy, fastest)
+    ///
+    /// This method returns references to the stored IDs rather than cloning them,
+    /// making it the most efficient option when you only need IDs and distances.
+    ///
+    /// # Example
+    /// ```
+    /// # use needle::{Collection, CollectionConfig};
+    /// # let config = CollectionConfig::new("test", 4);
+    /// # let mut collection = Collection::new(config);
+    /// # collection.insert("vec1", &[1.0, 0.0, 0.0, 0.0], None).unwrap();
+    /// let query = vec![1.0, 0.0, 0.0, 0.0];
+    /// let results = collection.search_ids_ref(&query, 5).unwrap();
+    /// for (id, distance) in results {
+    ///     println!("{}: {}", id, distance);
+    /// }
+    /// ```
+    pub fn search_ids_ref(&self, query: &[f32], k: usize) -> Result<Vec<(&str, f32)>> {
+        self.validate_query(query)?;
+        let k = self.clamp_k(k);
+        if k == 0 {
+            return Ok(Vec::new());
+        }
+
+        let results = self.index.search(query, k, self.vectors.as_slice());
+
+        results
+            .into_iter()
+            .map(|(id, distance)| {
+                let entry = self
+                    .metadata
+                    .get(id)
+                    .ok_or_else(|| NeedleError::Index("Missing metadata for vector".into()))?;
+                Ok((entry.external_id.as_str(), distance))
+            })
+            .collect()
+    }
+
     /// Batch search for multiple queries in parallel
     pub fn batch_search(&self, queries: &[Vec<f32>], k: usize) -> Result<Vec<Vec<SearchResult>>> {
         // Validate all queries have correct dimensions and values
         for query in queries.iter() {
             self.validate_query(query)?;
+        }
+        let k = self.clamp_k(k);
+        if k == 0 {
+            return Ok(vec![Vec::new(); queries.len()]);
         }
 
         // Perform parallel search
@@ -552,6 +612,10 @@ impl Collection {
         // Validate all queries have correct dimensions and values
         for query in queries.iter() {
             self.validate_query(query)?;
+        }
+        let k = self.clamp_k(k);
+        if k == 0 {
+            return Ok(vec![Vec::new(); queries.len()]);
         }
 
         // Perform parallel filtered search
@@ -585,6 +649,10 @@ impl Collection {
         filter: &Filter,
     ) -> Result<Vec<SearchResult>> {
         self.validate_query(query)?;
+        let k = self.clamp_k(k);
+        if k == 0 {
+            return Ok(Vec::new());
+        }
 
         // For filtered search, we need to retrieve more candidates and filter
         let candidates = self.index.search(query, k * 10, self.vectors.as_slice());
