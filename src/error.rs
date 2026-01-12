@@ -65,12 +65,6 @@ pub enum NeedleError {
 
     #[error("Lock error: failed to acquire lock")]
     LockError,
-
-    #[error("IO error: {0}")]
-    IoError(String),
-
-    #[error("Serialization error: {0}")]
-    SerializationError(String),
 }
 
 /// Result type alias for Needle operations

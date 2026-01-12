@@ -801,7 +801,7 @@ where
             )?;
 
             if !verified {
-                return Err(NeedleError::IoError(
+                return Err(NeedleError::Corruption(
                     "Transfer verification failed".to_string(),
                 ));
             }
