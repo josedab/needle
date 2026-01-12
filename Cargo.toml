@@ -2,6 +2,7 @@
 name = "needle"
 version = "0.1.0"
 edition = "2021"
+authors = ["Anthropic <support@anthropic.com>"]
 description = "An embedded vector database - SQLite for vectors"
 license = "MIT"
 keywords = ["vector", "database", "embedding", "hnsw", "similarity-search"]
@@ -74,7 +75,7 @@ web-sys = { version = "0.3", optional = true }
 # UniFFI for Swift/Kotlin bindings (optional)
 uniffi = { version = "0.28", optional = true }
 
-# ONNX Runtime for embedding inference (optional)
+# ONNX Runtime for embedding inference (optional, unstable - uses pre-release version)
 ort = { version = "2.0.0-rc.9", optional = true }
 ndarray = { version = "0.16", optional = true }
 tokenizers = { version = "0.20", optional = true }
@@ -121,6 +122,7 @@ server = ["axum", "tokio", "tower", "tower-http", "futures", "governor"]
 web-ui = ["axum", "tokio"]
 metrics = ["prometheus"]
 hybrid = ["rust-stemmers"]
+# Note: embeddings feature uses pre-release ort crate, consider unstable
 embeddings = ["ort", "ndarray", "tokenizers"]
 embedding-providers = ["async-trait", "reqwest", "tokio"]
 full = ["server", "metrics", "hybrid", "web-ui", "embedding-providers"]
