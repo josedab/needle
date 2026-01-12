@@ -82,8 +82,9 @@ web-sys = { version = "0.3", optional = true }
 # UniFFI for Swift/Kotlin bindings (optional)
 uniffi = { version = "0.28", optional = true }
 
-# ONNX Runtime for embedding inference (optional, unstable - uses pre-release version)
-ort = { version = "2.0.0-rc.9", optional = true }
+# ONNX Runtime for embedding inference (optional)
+# Note: Using pre-release 2.0 as all 1.x versions have been yanked
+ort = { version = "2.0.0-rc.11", optional = true }
 ndarray = { version = "0.16", optional = true }
 tokenizers = { version = "0.20", optional = true }
 
