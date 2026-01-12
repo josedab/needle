@@ -62,8 +62,12 @@ impl DistanceFunction {
 }
 
 /// Compute cosine distance (1 - cosine similarity)
+///
+/// # Panics
+/// Panics if `a` and `b` have different lengths.
 #[inline]
 pub fn cosine_distance(a: &[f32], b: &[f32]) -> f32 {
+    assert_eq!(a.len(), b.len(), "vectors must have equal length for cosine distance");
     let dot = dot_product(a, b);
     let norm_a = dot_product(a, a).sqrt();
     let norm_b = dot_product(b, b).sqrt();
@@ -76,14 +80,21 @@ pub fn cosine_distance(a: &[f32], b: &[f32]) -> f32 {
 }
 
 /// Compute Euclidean (L2) distance
+///
+/// # Panics
+/// Panics if `a` and `b` have different lengths.
 #[inline]
 pub fn euclidean_distance(a: &[f32], b: &[f32]) -> f32 {
     euclidean_distance_squared(a, b).sqrt()
 }
 
 /// Compute squared Euclidean distance (faster, for comparisons)
+///
+/// # Panics
+/// Panics if `a` and `b` have different lengths.
 #[inline]
 pub fn euclidean_distance_squared(a: &[f32], b: &[f32]) -> f32 {
+    assert_eq!(a.len(), b.len(), "vectors must have equal length for euclidean distance");
     #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
     {
         if is_x86_feature_detected!("avx2") {
@@ -116,14 +127,21 @@ fn euclidean_squared_scalar(a: &[f32], b: &[f32]) -> f32 {
 }
 
 /// Compute dot product distance (negative dot product)
+///
+/// # Panics
+/// Panics if `a` and `b` have different lengths.
 #[inline]
 pub fn dot_product_distance(a: &[f32], b: &[f32]) -> f32 {
     -dot_product(a, b)
 }
 
 /// Compute dot product of two vectors
+///
+/// # Panics
+/// Panics if `a` and `b` have different lengths.
 #[inline]
 pub fn dot_product(a: &[f32], b: &[f32]) -> f32 {
+    assert_eq!(a.len(), b.len(), "vectors must have equal length for dot product");
     #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
     {
         if is_x86_feature_detected!("avx2") {
@@ -150,8 +168,12 @@ fn dot_product_scalar(a: &[f32], b: &[f32]) -> f32 {
 }
 
 /// Compute Manhattan (L1) distance
+///
+/// # Panics
+/// Panics if `a` and `b` have different lengths.
 #[inline]
 pub fn manhattan_distance(a: &[f32], b: &[f32]) -> f32 {
+    assert_eq!(a.len(), b.len(), "vectors must have equal length for manhattan distance");
     #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
     {
         if is_x86_feature_detected!("avx2") {
