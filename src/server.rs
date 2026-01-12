@@ -17,9 +17,10 @@ use axum::{
 };
 use governor::{
     clock::DefaultClock,
-    state::{InMemoryState, NotKeyed},
+    state::keyed::DashMapStateStore,
     Quota, RateLimiter,
 };
+use std::net::IpAddr;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::net::SocketAddr;
@@ -191,13 +192,13 @@ impl ServerConfig {
     }
 }
 
-/// Rate limiter type
-type GlobalRateLimiter = RateLimiter<NotKeyed, InMemoryState, DefaultClock>;
+/// Per-IP rate limiter type
+type PerIpRateLimiter = RateLimiter<IpAddr, DashMapStateStore<IpAddr>, DefaultClock>;
 
 /// Shared application state
 pub struct AppState {
     db: RwLock<Database>,
-    rate_limiter: Option<Arc<GlobalRateLimiter>>,
+    rate_limiter: Option<Arc<PerIpRateLimiter>>,
 }
 
 impl AppState {
@@ -898,8 +899,8 @@ pub fn create_router(state: Arc<AppState>) -> Router {
     create_router_with_config(state, &config)
 }
 
-/// Create a rate limiter from configuration
-fn create_rate_limiter(config: &RateLimitConfig) -> Option<Arc<GlobalRateLimiter>> {
+/// Create a per-IP rate limiter from configuration
+fn create_rate_limiter(config: &RateLimitConfig) -> Option<Arc<PerIpRateLimiter>> {
     if !config.enabled || config.requests_per_second == 0 {
         return None;
     }
@@ -912,17 +913,45 @@ fn create_rate_limiter(config: &RateLimitConfig) -> Option<Arc<GlobalRateLimiter
         NonZeroU32::new(config.burst_size).unwrap_or(NonZeroU32::new(1).unwrap()),
     );
 
-    Some(Arc::new(RateLimiter::direct(quota)))
+    Some(Arc::new(RateLimiter::dashmap(quota)))
 }
 
-/// Rate limiting middleware - returns 429 if rate limit exceeded
+/// Extract client IP from request, checking X-Forwarded-For header first
+fn extract_client_ip(request: &Request<Body>) -> IpAddr {
+    // Check X-Forwarded-For header first (for proxied requests)
+    if let Some(forwarded_for) = request.headers().get("x-forwarded-for") {
+        if let Ok(value) = forwarded_for.to_str() {
+            // X-Forwarded-For can contain multiple IPs, take the first one
+            if let Some(first_ip) = value.split(',').next() {
+                if let Ok(ip) = first_ip.trim().parse::<IpAddr>() {
+                    return ip;
+                }
+            }
+        }
+    }
+
+    // Check X-Real-IP header
+    if let Some(real_ip) = request.headers().get("x-real-ip") {
+        if let Ok(value) = real_ip.to_str() {
+            if let Ok(ip) = value.trim().parse::<IpAddr>() {
+                return ip;
+            }
+        }
+    }
+
+    // Fallback to localhost if no IP found
+    IpAddr::V4(std::net::Ipv4Addr::new(127, 0, 0, 1))
+}
+
+/// Rate limiting middleware - returns 429 if rate limit exceeded (per-IP)
 async fn rate_limit_middleware(
     State(state): State<Arc<AppState>>,
     request: Request<Body>,
     next: Next,
 ) -> Response {
     if let Some(limiter) = &state.rate_limiter {
-        match limiter.check() {
+        let client_ip = extract_client_ip(&request);
+        match limiter.check_key(&client_ip) {
             Ok(_) => next.run(request).await,
             Err(_) => {
                 let error = ApiError {
