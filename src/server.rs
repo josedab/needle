@@ -44,6 +44,9 @@ pub struct ServerConfig {
     pub rate_limit: RateLimitConfig,
     /// Maximum request body size in bytes (default: 100MB)
     pub max_body_size: usize,
+    /// Maximum number of items in a batch operation (default: 10000)
+    /// Prevents memory exhaustion from large batch requests
+    pub max_batch_size: usize,
 }
 
 /// CORS configuration
@@ -78,13 +81,27 @@ impl Default for CorsConfig {
 
 impl CorsConfig {
     /// Create a permissive CORS config (not recommended for production)
+    ///
+    /// Note: Credentials are NOT enabled by default even in permissive mode.
+    /// Combining allow-all-origins with credentials is a CSRF vulnerability.
+    /// Use `with_credentials(true)` only with specific origins for secure apps.
     pub fn permissive() -> Self {
         Self {
             enabled: true,
             allowed_origins: None, // Allow all
-            allow_credentials: true,
+            allow_credentials: false, // SECURITY: Never combine wildcard origins with credentials
             max_age_secs: 3600,
         }
+    }
+
+    /// Enable credentials (cookies, auth headers).
+    ///
+    /// WARNING: Only enable credentials with specific allowed_origins, not with
+    /// wildcard origins. Combining both creates a CSRF vulnerability where any
+    /// website can make authenticated requests on behalf of users.
+    pub fn with_credentials(mut self, allow: bool) -> Self {
+        self.allow_credentials = allow;
+        self
     }
 
     /// Create a restrictive CORS config
@@ -159,6 +176,7 @@ impl Default for ServerConfig {
             db_path: None,
             rate_limit: RateLimitConfig::default(),
             max_body_size: 100 * 1024 * 1024, // 100MB
+            max_batch_size: 10_000, // 10k items max per batch
         }
     }
 }
@@ -190,6 +208,11 @@ impl ServerConfig {
         self.max_body_size = bytes;
         self
     }
+
+    pub fn with_max_batch_size(mut self, size: usize) -> Self {
+        self.max_batch_size = size;
+        self
+    }
 }
 
 /// Per-IP rate limiter type
@@ -199,6 +222,8 @@ type PerIpRateLimiter = RateLimiter<IpAddr, DashMapStateStore<IpAddr>, DefaultCl
 pub struct AppState {
     db: RwLock<Database>,
     rate_limiter: Option<Arc<PerIpRateLimiter>>,
+    /// Maximum items allowed in batch operations
+    max_batch_size: usize,
 }
 
 impl AppState {
@@ -207,6 +232,7 @@ impl AppState {
         Self {
             db: RwLock::new(db),
             rate_limiter: None,
+            max_batch_size: 10_000, // default
         }
     }
 
@@ -215,6 +241,16 @@ impl AppState {
         Self {
             db: RwLock::new(db),
             rate_limiter: create_rate_limiter(config),
+            max_batch_size: 10_000, // default
+        }
+    }
+
+    /// Create a new AppState with full configuration
+    pub fn with_config(db: Database, config: &ServerConfig) -> Self {
+        Self {
+            db: RwLock::new(db),
+            rate_limiter: create_rate_limiter(&config.rate_limit),
+            max_batch_size: config.max_batch_size,
         }
     }
 }
@@ -501,6 +537,21 @@ async fn batch_insert(
     Path(collection): Path<String>,
     Json(req): Json<BatchInsertRequest>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<ApiError>)> {
+    // Validate batch size to prevent memory exhaustion
+    if req.vectors.len() > state.max_batch_size {
+        return Err((
+            StatusCode::PAYLOAD_TOO_LARGE,
+            Json(ApiError {
+                error: format!(
+                    "Batch size {} exceeds maximum allowed {}",
+                    req.vectors.len(),
+                    state.max_batch_size
+                ),
+                code: "BATCH_TOO_LARGE".to_string(),
+            }),
+        ));
+    }
+
     let db = state.db.write().await;
     let coll = db.collection(&collection).map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
 
@@ -705,6 +756,21 @@ async fn batch_search(
     Path(collection): Path<String>,
     Json(req): Json<BatchSearchRequest>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<ApiError>)> {
+    // Validate batch size to prevent memory exhaustion
+    if req.vectors.len() > state.max_batch_size {
+        return Err((
+            StatusCode::PAYLOAD_TOO_LARGE,
+            Json(ApiError {
+                error: format!(
+                    "Batch size {} exceeds maximum allowed {}",
+                    req.vectors.len(),
+                    state.max_batch_size
+                ),
+                code: "BATCH_TOO_LARGE".to_string(),
+            }),
+        ));
+    }
+
     let db = state.db.read().await;
     let coll = db.collection(&collection).map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
 
@@ -974,12 +1040,7 @@ pub async fn serve(config: ServerConfig) -> Result<(), Box<dyn std::error::Error
         Database::in_memory()
     };
 
-    let rate_limiter = create_rate_limiter(&config.rate_limit);
-
-    let state = Arc::new(AppState {
-        db: RwLock::new(db),
-        rate_limiter,
-    });
+    let state = Arc::new(AppState::with_config(db, &config));
 
     let app = create_router_with_config(state, &config);
 
@@ -1059,9 +1120,16 @@ mod tests {
     fn test_cors_config_permissive() {
         let config = CorsConfig::permissive();
         assert!(config.enabled);
-        assert!(config.allow_credentials);
+        assert!(!config.allow_credentials); // SECURITY: credentials disabled even in permissive mode
         assert!(config.allowed_origins.is_none()); // Allow all
         assert_eq!(config.max_age_secs, 3600);
+    }
+
+    #[test]
+    fn test_cors_config_with_credentials() {
+        // Credentials should only be used with specific origins
+        let config = CorsConfig::default().with_credentials(true);
+        assert!(config.allow_credentials);
     }
 
     #[test]
