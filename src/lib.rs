@@ -73,7 +73,6 @@ pub mod backup;
 pub mod cloud_storage;
 pub mod clustering;
 pub mod collection;
-pub mod crdt;
 pub mod database;
 pub mod dedup;
 pub mod dimreduce;
@@ -88,24 +87,29 @@ pub mod graph;
 pub mod hnsw;
 pub mod ivf;
 pub mod knowledge_graph;
-pub mod langchain;
-pub mod lineage;
 pub mod metadata;
 pub mod multivec;
 pub mod namespace;
-pub mod nl_filter;
-pub mod optimizer;
-pub mod profiler;
 pub mod quantization;
 pub mod query_lang;
 pub mod raft;
-pub mod rebalance;
 pub mod rag;
 pub mod reranker;
 pub mod routing;
 pub mod security;
 pub mod shard;
 pub mod sparse;
+
+// Internal/experimental modules - not part of stable public API
+// These modules are public for testing but may change without notice
+pub mod crdt;
+pub mod optimizer;
+pub mod profiler;
+pub mod rebalance;
+// These modules are truly internal
+pub(crate) mod langchain;
+pub(crate) mod lineage;
+pub(crate) mod nl_filter;
 pub(crate) mod storage;
 #[cfg(feature = "server")]
 pub mod streaming;
@@ -189,30 +193,18 @@ pub use streaming::{
 };
 
 // Next-gen features
-pub use crdt::{CRDTVector, Delta, HLC, Operation, VectorCRDT};
 pub use diskann::{DiskAnnConfig, DiskAnnIndex, DiskAnnResult};
 pub use drift::{DriftConfig, DriftDetector, DriftReport};
 pub use encryption::{EncryptedVector, EncryptionConfig, KeyManager, VectorEncryptor};
 pub use gpu::{DataType, DistanceType, GpuAccelerator, GpuBackend, GpuConfig, GpuDevice, GpuMetrics};
 pub use knowledge_graph::{Entity, KnowledgeGraph, KnowledgeGraphConfig, Relation};
-pub use lineage::{LineageTracker, SourceInfo, Transformation, VectorLineage};
-pub use nl_filter::NLFilterParser;
-pub use optimizer::{QueryOptimizer, QueryStats};
-pub use profiler::{OptimizationHint, PlanNode, QueryProfile, QueryProfiler};
 pub use query_lang::{
     Query, QueryContext, QueryError, QueryExecutor, QueryParser, QueryPlan, QueryResponse,
     QueryResult, QueryValidator,
 };
-pub use raft::{
-    AppendEntries, Command, FileStorage as RaftFileStorage, LogEntry, MemoryStorage as RaftMemoryStorage,
-    PersistentState, RaftNode, RaftState, RaftStorage, RequestVote, Snapshot, SnapshotBuilder, SnapshotMetadata,
-};
+// Raft: Only export main types, internal protocol types stay in raft module
+pub use raft::{Command, NodeId, RaftConfig, RaftNode, RaftState, RaftStorage};
 pub use rag::{Chunk, ChunkingStrategy, RagConfig, RagPipeline};
-pub use rebalance::{
-    DryRunMigration, MigrationCheckpoint, MigrationSource, MigrationState, MigrationTarget,
-    MigrationTask, PlanState, RebalanceConfig, RebalanceCoordinator, RebalancePlan, RebalanceStats,
-    TransferBatch, VectorTransfer,
-};
 pub use telemetry::{Metric, MetricValue, Span, SpanStatus, Telemetry, TelemetryConfig, TraceContext};
 pub use temporal::{DecayFunction, TemporalConfig, TemporalIndex, VectorVersion};
 pub use tiered::{StorageTier, TierPolicy, TieredStorage, VectorMetadata as TieredVectorMetadata};
@@ -226,25 +218,17 @@ pub use reranker::{
     HuggingFaceConfig as HuggingFaceRerankerConfig, HuggingFaceReranker,
     NoOpReranker, Reranker, RerankerError, RerankerResult, RerankResult,
 };
-pub use routing::{
-    AggregatedResults, LoadBalancing, QueryRouter, ResultCollector, RouteConfig, RoutingError,
-    RoutingResult, RouterStatsSnapshot, ShardSearchResult,
-};
-pub use shard::{
-    ConsistentHashRing, RebalanceMove, ShardConfig, ShardError, ShardId, ShardInfo, ShardManager,
-    ShardResult, ShardState, ShardStats, ShardStatsSnapshot, ShardedCollection,
-};
-pub use wal::{
-    BatchEntry as WalBatchEntry, Lsn, WalApplicator, WalConfig, WalEntry, WalManager, WalRecord,
-    WalStats,
-};
+// Routing: Main types for query routing, internal details stay in module
+pub use routing::{LoadBalancing, QueryRouter, RouteConfig, RoutingError, RoutingResult};
+// Shard: Main types for sharding, internal details stay in module
+pub use shard::{ShardConfig, ShardId, ShardInfo, ShardManager, ShardState, ShardedCollection};
+// WAL: Only export main types, internal record types stay in module
+pub use wal::{Lsn, WalConfig, WalManager, WalStats};
 
-// Cloud storage
+// Cloud storage: Main backend types, internal streaming/pool details stay in module
 pub use cloud_storage::{
-    AzureBlobBackend, AzureBlobConfig, CacheConfig, CachedBackend, CacheStats,
-    ConnectionPool, GCSBackend, GCSConfig, LocalBackend, MultipartUploader,
-    PoolStats, RetryPolicy, S3Backend, S3Config, StorageBackend, StorageConfig,
-    StreamChunk, StreamingReader, StreamingWriter,
+    AzureBlobBackend, AzureBlobConfig, CacheConfig, CachedBackend, GCSBackend,
+    GCSConfig, LocalBackend, RetryPolicy, S3Backend, S3Config, StorageBackend, StorageConfig,
 };
 
 #[cfg(feature = "hybrid")]
