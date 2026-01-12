@@ -72,26 +72,46 @@ impl ScalarQuantizer {
 
     /// Quantize a f32 vector to u8
     pub fn quantize(&self, vector: &[f32]) -> Vec<u8> {
-        vector
-            .iter()
-            .enumerate()
-            .map(|(i, &v)| {
-                let normalized = (v - self.min_vals[i]) * self.scale[i];
-                normalized.clamp(0.0, 255.0) as u8
-            })
-            .collect()
+        let mut out = vec![0u8; vector.len()];
+        self.quantize_into(vector, &mut out);
+        out
+    }
+
+    /// Quantize a f32 vector into a pre-allocated buffer.
+    ///
+    /// This avoids allocation in hot paths. The output buffer must be at least
+    /// as long as the input vector.
+    ///
+    /// # Panics
+    /// Panics if `out.len() < vector.len()`.
+    pub fn quantize_into(&self, vector: &[f32], out: &mut [u8]) {
+        assert!(out.len() >= vector.len(), "output buffer too small");
+        for (i, &v) in vector.iter().enumerate() {
+            let normalized = (v - self.min_vals[i]) * self.scale[i];
+            out[i] = normalized.clamp(0.0, 255.0) as u8;
+        }
     }
 
     /// Dequantize a u8 vector back to f32
     pub fn dequantize(&self, codes: &[u8]) -> Vec<f32> {
-        codes
-            .iter()
-            .enumerate()
-            .map(|(i, &c)| {
-                let normalized = c as f32 / self.scale[i];
-                normalized + self.min_vals[i]
-            })
-            .collect()
+        let mut out = vec![0.0f32; codes.len()];
+        self.dequantize_into(codes, &mut out);
+        out
+    }
+
+    /// Dequantize a u8 vector into a pre-allocated buffer.
+    ///
+    /// This avoids allocation in hot paths. The output buffer must be at least
+    /// as long as the codes slice.
+    ///
+    /// # Panics
+    /// Panics if `out.len() < codes.len()`.
+    pub fn dequantize_into(&self, codes: &[u8], out: &mut [f32]) {
+        assert!(out.len() >= codes.len(), "output buffer too small");
+        for (i, &c) in codes.iter().enumerate() {
+            let normalized = c as f32 / self.scale[i];
+            out[i] = normalized + self.min_vals[i];
+        }
     }
 
     /// Compute squared Euclidean distance between quantized vectors
@@ -182,29 +202,53 @@ impl ProductQuantizer {
 
     /// Encode a vector to PQ codes
     pub fn encode(&self, vector: &[f32]) -> Vec<u8> {
-        let mut codes = Vec::with_capacity(self.num_subvectors);
+        let mut codes = vec![0u8; self.num_subvectors];
+        self.encode_into(vector, &mut codes);
+        codes
+    }
 
+    /// Encode a vector into a pre-allocated buffer.
+    ///
+    /// This avoids allocation in hot paths. The output buffer must be at least
+    /// `num_subvectors()` bytes long.
+    ///
+    /// # Panics
+    /// Panics if `out.len() < self.num_subvectors()`.
+    pub fn encode_into(&self, vector: &[f32], out: &mut [u8]) {
+        assert!(
+            out.len() >= self.num_subvectors,
+            "output buffer too small"
+        );
         for i in 0..self.num_subvectors {
             let start = i * self.subvector_dim;
             let end = start + self.subvector_dim;
             let subvec = &vector[start..end];
-
-            let code = self.find_nearest_centroid(i, subvec);
-            codes.push(code);
+            out[i] = self.find_nearest_centroid(i, subvec);
         }
-
-        codes
     }
 
     /// Decode PQ codes back to approximate vector
     pub fn decode(&self, codes: &[u8]) -> Vec<f32> {
-        let mut vector = Vec::with_capacity(self.num_subvectors * self.subvector_dim);
-
-        for (i, &code) in codes.iter().enumerate() {
-            vector.extend_from_slice(&self.codebooks[i][code as usize]);
-        }
-
+        let mut vector = vec![0.0f32; self.num_subvectors * self.subvector_dim];
+        self.decode_into(codes, &mut vector);
         vector
+    }
+
+    /// Decode PQ codes into a pre-allocated buffer.
+    ///
+    /// This avoids allocation in hot paths. The output buffer must be at least
+    /// `num_subvectors() * subvector_dim()` floats long.
+    ///
+    /// # Panics
+    /// Panics if `out.len() < self.num_subvectors() * self.subvector_dim()`.
+    pub fn decode_into(&self, codes: &[u8], out: &mut [f32]) {
+        let required_len = self.num_subvectors * self.subvector_dim;
+        assert!(out.len() >= required_len, "output buffer too small");
+        for (i, &code) in codes.iter().enumerate().take(self.num_subvectors) {
+            let start = i * self.subvector_dim;
+            let centroid = &self.codebooks[i][code as usize];
+            out[start..start + self.subvector_dim].copy_from_slice(centroid);
+        }
     }
 
     /// Find the nearest centroid for a subvector
