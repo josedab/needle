@@ -1,3 +1,7 @@
+// Allow dead_code for this public API module - types are exported for library users
+#![allow(dead_code)]
+#![allow(clippy::redundant_closure)]
+
 //! Raft Consensus - Distributed high-availability for vector databases.
 //!
 //! Implements the Raft consensus algorithm for leader election and log replication,

@@ -1,3 +1,7 @@
+// Allow dead_code for this public API module - types are exported for library users
+#![allow(dead_code)]
+#![allow(clippy::wrong_self_convention)]
+
 //! Data Lineage - Track the origin and transformations of vector embeddings.
 //!
 //! Provides complete provenance tracking for vectors, including their source data,

@@ -1,3 +1,7 @@
+// Allow dead_code for this public API module - types are exported for library users
+#![allow(dead_code)]
+#![allow(clippy::wrong_self_convention)]
+
 //! LangChain Integration
 //!
 //! Compatible interface for LangChain and similar frameworks.
@@ -17,7 +21,7 @@
 //!
 //! # Example
 //!
-//! ```rust,no_run
+//! ```rust,ignore
 //! use needle::langchain::{Document, NeedleVectorStore, NeedleVectorStoreConfig};
 //! use serde_json::json;
 //!

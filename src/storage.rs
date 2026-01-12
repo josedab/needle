@@ -1,3 +1,6 @@
+// Allow dead_code for this internal storage module - some methods used only in specific features
+#![allow(dead_code)]
+
 use crate::error::{NeedleError, Result};
 use memmap2::{Mmap, MmapMut};
 use serde::{Deserialize, Serialize};
