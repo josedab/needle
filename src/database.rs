@@ -48,7 +48,7 @@
 use crate::collection::{Collection, CollectionConfig, SearchResult};
 use crate::error::{NeedleError, Result};
 use crate::metadata::Filter;
-use crate::storage::{StorageEngine, HEADER_SIZE};
+use crate::storage::{crc32, StorageEngine, HEADER_SIZE};
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -133,12 +133,28 @@ impl Database {
         // Load existing state or create new
         let state = if exists {
             // Read state from file if metadata exists
-            let header = storage.header();
+            let header = storage.header().clone();
             if header.metadata_offset >= HEADER_SIZE as u64 {
-                let state_len = storage.file_size()? - header.metadata_offset;
+                // Prefer state_size from header if available, otherwise compute from file size
+                let state_len = if header.state_size > 0 {
+                    header.state_size as usize
+                } else {
+                    (storage.file_size()? - header.metadata_offset) as usize
+                };
+
                 if state_len > 0 {
-                    let state_bytes =
-                        storage.read_at(header.metadata_offset, state_len as usize)?;
+                    let state_bytes = storage.read_at(header.metadata_offset, state_len)?;
+
+                    // Verify state checksum if available (state_checksum > 0 means it was set)
+                    if header.state_checksum > 0 {
+                        let computed_checksum = crc32(&state_bytes);
+                        if computed_checksum != header.state_checksum {
+                            return Err(NeedleError::Corruption(
+                                "State data checksum mismatch. Database file may be corrupted.".into(),
+                            ));
+                        }
+                    }
+
                     serde_json::from_slice(&state_bytes).map_err(|e| {
                         NeedleError::Corruption(format!(
                             "Failed to deserialize database state: {}. Database file may be corrupted.",
@@ -244,17 +260,14 @@ impl Database {
         let state = self.state.read();
         let state_bytes = serde_json::to_vec(&*state)?;
 
-        // Write state after header
-        let offset = HEADER_SIZE as u64;
-        storage.write_at(offset, &state_bytes)?;
-
-        // Update header
-        let header = storage.header_mut();
-        header.metadata_offset = offset;
+        // Build updated header
+        let mut header = storage.header().clone();
+        header.metadata_offset = HEADER_SIZE as u64;
         header.vector_count = state.collections.values().map(|c| c.len() as u64).sum();
-        storage.write_header()?;
 
-        storage.sync()?;
+        // Use atomic save to prevent corruption on crash
+        storage.atomic_save(&header, &state_bytes)?;
+
         self.dirty.store(false, Ordering::Release);
 
         Ok(())
@@ -484,8 +497,12 @@ impl Database {
 impl Drop for Database {
     fn drop(&mut self) {
         // Auto-save on drop if dirty
+        // Note: Errors are logged rather than ignored to help diagnose issues.
+        // For reliable persistence, call save() explicitly before dropping.
         if self.is_dirty() {
-            let _ = self.save();
+            if let Err(e) = self.save() {
+                eprintln!("needle: warning: failed to save database on drop: {}", e);
+            }
         }
     }
 }

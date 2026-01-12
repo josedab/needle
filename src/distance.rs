@@ -225,9 +225,15 @@ mod simd_x86 {
     #[cfg(target_feature = "avx2")]
     use std::arch::x86_64::*;
 
+    /// Compute dot product using AVX2 SIMD instructions.
+    ///
+    /// # Safety
+    /// - Caller must ensure `a` and `b` have the same length.
+    /// - This function uses unaligned loads, so no alignment requirements.
     #[target_feature(enable = "avx2")]
     #[cfg(target_feature = "avx2")]
     pub unsafe fn dot_product_avx2(a: &[f32], b: &[f32]) -> f32 {
+        debug_assert_eq!(a.len(), b.len(), "vectors must have equal length");
         let mut sum = _mm256_setzero_ps();
         let chunks = a.len() / 8;
 
@@ -253,9 +259,15 @@ mod simd_x86 {
         result
     }
 
+    /// Compute squared Euclidean distance using AVX2 SIMD instructions.
+    ///
+    /// # Safety
+    /// - Caller must ensure `a` and `b` have the same length.
+    /// - This function uses unaligned loads, so no alignment requirements.
     #[target_feature(enable = "avx2")]
     #[cfg(target_feature = "avx2")]
     pub unsafe fn euclidean_squared_avx2(a: &[f32], b: &[f32]) -> f32 {
+        debug_assert_eq!(a.len(), b.len(), "vectors must have equal length");
         let mut sum = _mm256_setzero_ps();
         let chunks = a.len() / 8;
 
@@ -283,9 +295,15 @@ mod simd_x86 {
         result
     }
 
+    /// Compute Manhattan (L1) distance using AVX2 SIMD instructions.
+    ///
+    /// # Safety
+    /// - Caller must ensure `a` and `b` have the same length.
+    /// - This function uses unaligned loads, so no alignment requirements.
     #[target_feature(enable = "avx2")]
     #[cfg(target_feature = "avx2")]
     pub unsafe fn manhattan_avx2(a: &[f32], b: &[f32]) -> f32 {
+        debug_assert_eq!(a.len(), b.len(), "vectors must have equal length");
         let sign_mask = _mm256_set1_ps(-0.0);
         let mut sum = _mm256_setzero_ps();
         let chunks = a.len() / 8;
@@ -339,8 +357,14 @@ mod simd_x86 {
 mod simd_arm {
     use std::arch::aarch64::*;
 
+    /// Compute dot product using ARM NEON SIMD instructions.
+    ///
+    /// # Safety
+    /// - Caller must ensure `a` and `b` have the same length.
+    /// - This function uses unaligned loads, so no alignment requirements.
     #[target_feature(enable = "neon")]
     pub unsafe fn dot_product_neon(a: &[f32], b: &[f32]) -> f32 {
+        debug_assert_eq!(a.len(), b.len(), "vectors must have equal length");
         let mut sum = vdupq_n_f32(0.0);
         let chunks = a.len() / 4;
 
@@ -360,8 +384,14 @@ mod simd_arm {
         result
     }
 
+    /// Compute squared Euclidean distance using ARM NEON SIMD instructions.
+    ///
+    /// # Safety
+    /// - Caller must ensure `a` and `b` have the same length.
+    /// - This function uses unaligned loads, so no alignment requirements.
     #[target_feature(enable = "neon")]
     pub unsafe fn euclidean_squared_neon(a: &[f32], b: &[f32]) -> f32 {
+        debug_assert_eq!(a.len(), b.len(), "vectors must have equal length");
         let mut sum = vdupq_n_f32(0.0);
         let chunks = a.len() / 4;
 
@@ -383,8 +413,14 @@ mod simd_arm {
         result
     }
 
+    /// Compute Manhattan (L1) distance using ARM NEON SIMD instructions.
+    ///
+    /// # Safety
+    /// - Caller must ensure `a` and `b` have the same length.
+    /// - This function uses unaligned loads, so no alignment requirements.
     #[target_feature(enable = "neon")]
     pub unsafe fn manhattan_neon(a: &[f32], b: &[f32]) -> f32 {
+        debug_assert_eq!(a.len(), b.len(), "vectors must have equal length");
         let mut sum = vdupq_n_f32(0.0);
         let chunks = a.len() / 4;
 

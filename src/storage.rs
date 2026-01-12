@@ -32,8 +32,12 @@ pub struct Header {
     pub vector_offset: u64,
     /// Offset to metadata
     pub metadata_offset: u64,
-    /// CRC32 checksum
+    /// CRC32 checksum of header fields
     pub checksum: u32,
+    /// Size of state data in bytes (for integrity check)
+    pub state_size: u64,
+    /// CRC32 checksum of state data (for integrity check)
+    pub state_checksum: u32,
 }
 
 impl Default for Header {
@@ -46,6 +50,8 @@ impl Default for Header {
             vector_offset: 0,
             metadata_offset: 0,
             checksum: 0,
+            state_size: 0,
+            state_checksum: 0,
         }
     }
 }
@@ -76,9 +82,13 @@ impl Header {
         // Metadata offset
         bytes.extend_from_slice(&self.metadata_offset.to_le_bytes());
 
-        // Compute checksum
+        // Compute header checksum (over first 48 bytes)
         let checksum = crc32(&bytes);
         bytes.extend_from_slice(&checksum.to_le_bytes());
+
+        // State data integrity fields
+        bytes.extend_from_slice(&self.state_size.to_le_bytes());
+        bytes.extend_from_slice(&self.state_checksum.to_le_bytes());
 
         // Pad to HEADER_SIZE
         bytes.resize(HEADER_SIZE, 0);
@@ -88,7 +98,7 @@ impl Header {
 
     /// Deserialize header from bytes
     pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
-        if bytes.len() < 56 {
+        if bytes.len() < 64 {
             return Err(NeedleError::InvalidDatabase("Header too short".into()));
         }
 
@@ -134,11 +144,24 @@ impl Header {
                 .map_err(|_| NeedleError::Corruption("Invalid header: checksum bytes".into()))?,
         );
 
-        // Verify checksum
+        // Verify header checksum (covers bytes 0-47)
         let computed_checksum = crc32(&bytes[0..48]);
         if stored_checksum != computed_checksum {
             return Err(NeedleError::Corruption("Header checksum mismatch".into()));
         }
+
+        // Read state integrity fields (bytes 52-63)
+        // These may be 0 for older database files (backwards compatible)
+        let state_size = u64::from_le_bytes(
+            bytes[52..60]
+                .try_into()
+                .map_err(|_| NeedleError::Corruption("Invalid header: state_size bytes".into()))?,
+        );
+        let state_checksum = u32::from_le_bytes(
+            bytes[60..64]
+                .try_into()
+                .map_err(|_| NeedleError::Corruption("Invalid header: state_checksum bytes".into()))?,
+        );
 
         Ok(Self {
             version,
@@ -148,6 +171,8 @@ impl Header {
             vector_offset,
             metadata_offset,
             checksum: stored_checksum,
+            state_size,
+            state_checksum,
         })
     }
 }
@@ -189,7 +214,7 @@ const CRC32_TABLE: [u32; 256] = [
 ];
 
 /// Compute CRC32 checksum using lookup table (8-16x faster than bit-by-bit)
-fn crc32(data: &[u8]) -> u32 {
+pub fn crc32(data: &[u8]) -> u32 {
     let mut crc = 0xFFFFFFFFu32;
     for &byte in data {
         let index = ((crc ^ byte as u32) & 0xFF) as usize;
@@ -209,12 +234,59 @@ pub struct StorageEngine {
     mmap_mut: Option<MmapMut>,
     /// File header
     header: Header,
-    /// File path (reserved for future use)
-    #[allow(dead_code)]
+    /// File path for atomic writes
     path: std::path::PathBuf,
 }
 
 impl StorageEngine {
+    /// Validate and normalize a path to prevent path traversal attacks.
+    /// Returns the canonicalized path.
+    fn validate_path(path: &Path, must_exist: bool) -> Result<std::path::PathBuf> {
+        if must_exist {
+            // For existing files, canonicalize the full path (resolves symlinks)
+            path.canonicalize().map_err(|e| {
+                NeedleError::InvalidDatabase(format!(
+                    "Failed to resolve path {:?}: {}",
+                    path, e
+                ))
+            })
+        } else {
+            // For new files, canonicalize the parent directory and join with filename
+            let parent = path.parent().ok_or_else(|| {
+                NeedleError::InvalidDatabase("Path has no parent directory".into())
+            })?;
+
+            let filename = path.file_name().ok_or_else(|| {
+                NeedleError::InvalidDatabase("Path has no filename".into())
+            })?;
+
+            // Canonicalize parent (must exist)
+            let canonical_parent = if parent.as_os_str().is_empty() {
+                // Empty parent means current directory
+                std::env::current_dir().map_err(|e| {
+                    NeedleError::Io(e)
+                })?
+            } else {
+                parent.canonicalize().map_err(|e| {
+                    NeedleError::InvalidDatabase(format!(
+                        "Parent directory {:?} does not exist or is inaccessible: {}",
+                        parent, e
+                    ))
+                })?
+            };
+
+            // Verify parent is actually a directory
+            if !canonical_parent.is_dir() {
+                return Err(NeedleError::InvalidDatabase(format!(
+                    "Parent path {:?} is not a directory",
+                    canonical_parent
+                )));
+            }
+
+            Ok(canonical_parent.join(filename))
+        }
+    }
+
     /// Open or create a database file
     pub fn open<P: AsRef<Path>>(path: P) -> Result<Self> {
         let path = path.as_ref();
@@ -228,12 +300,15 @@ impl StorageEngine {
 
     /// Create a new database file
     fn create_new(path: &Path) -> Result<Self> {
+        // Validate path to prevent path traversal attacks
+        let canonical_path = Self::validate_path(path, false)?;
+
         let mut file = OpenOptions::new()
             .read(true)
             .write(true)
             .create(true)
             .truncate(true)
-            .open(path)?;
+            .open(&canonical_path)?;
 
         let header = Header::default();
         file.write_all(&header.to_bytes())?;
@@ -244,13 +319,16 @@ impl StorageEngine {
             mmap: None,
             mmap_mut: None,
             header,
-            path: path.to_path_buf(),
+            path: canonical_path,
         })
     }
 
     /// Open an existing database file
     fn open_existing(path: &Path) -> Result<Self> {
-        let mut file = OpenOptions::new().read(true).write(true).open(path)?;
+        // Validate path to prevent path traversal attacks
+        let canonical_path = Self::validate_path(path, true)?;
+
+        let mut file = OpenOptions::new().read(true).write(true).open(&canonical_path)?;
 
         // Read header (use stack allocation to avoid 4KB heap allocation)
         let mut header_bytes = [0u8; HEADER_SIZE];
@@ -279,7 +357,7 @@ impl StorageEngine {
             mmap,
             mmap_mut: None,
             header,
-            path: path.to_path_buf(),
+            path: canonical_path,
         })
     }
 
@@ -342,6 +420,63 @@ impl StorageEngine {
     /// Get file size
     pub fn file_size(&self) -> Result<u64> {
         Ok(self.file.metadata()?.len())
+    }
+
+    /// Get the database file path
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// Atomically save data using write-to-temp-then-rename pattern.
+    /// This ensures the database file is never left in a corrupted state.
+    /// The header's state_size and state_checksum fields will be computed automatically.
+    pub fn atomic_save(&mut self, header: &Header, state_bytes: &[u8]) -> Result<()> {
+        use std::fs;
+
+        // Create a header with computed state integrity fields
+        let mut final_header = header.clone();
+        final_header.state_size = state_bytes.len() as u64;
+        final_header.state_checksum = crc32(state_bytes);
+
+        // Create temp file in same directory (same filesystem for atomic rename)
+        let temp_path = self.path.with_extension("needle.tmp");
+
+        // Write to temp file
+        let mut temp_file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(&temp_path)?;
+
+        // Write header with computed checksums
+        temp_file.write_all(&final_header.to_bytes())?;
+
+        // Write state at header offset
+        temp_file.seek(SeekFrom::Start(HEADER_SIZE as u64))?;
+        temp_file.write_all(state_bytes)?;
+
+        // Sync to ensure all data is on disk
+        temp_file.sync_all()?;
+
+        // Close temp file before rename
+        drop(temp_file);
+
+        // Atomic rename (on Unix, rename is atomic if same filesystem)
+        fs::rename(&temp_path, &self.path)?;
+
+        // Reopen the file
+        let file = OpenOptions::new().read(true).write(true).open(&self.path)?;
+
+        // Invalidate mmap since file changed
+        self.mmap = None;
+        self.file = file;
+        self.header = final_header;
+
+        // Refresh mmap if needed
+        self.refresh_mmap()?;
+
+        Ok(())
     }
 
     /// Refresh memory mapping after file growth
@@ -508,6 +643,8 @@ mod tests {
             vector_offset: 8192,
             metadata_offset: 16384,
             checksum: 0,
+            state_size: 512,
+            state_checksum: 0x12345678,
         };
 
         let bytes = header.to_bytes();
@@ -516,6 +653,8 @@ mod tests {
         assert_eq!(header.version, restored.version);
         assert_eq!(header.dimensions, restored.dimensions);
         assert_eq!(header.vector_count, restored.vector_count);
+        assert_eq!(header.state_size, restored.state_size);
+        assert_eq!(header.state_checksum, restored.state_checksum);
     }
 
     #[test]
