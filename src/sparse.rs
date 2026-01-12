@@ -3,8 +3,10 @@
 //! Provides efficient storage and operations for sparse vectors,
 //! useful for lexical features (TF-IDF, BM25, SPLADE) and hybrid search.
 
+use ordered_float::OrderedFloat;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::cmp::Reverse;
+use std::collections::{BinaryHeap, HashMap};
 
 /// A sparse vector represented as index-value pairs
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -17,17 +19,29 @@ pub struct SparseVector {
 
 impl SparseVector {
     /// Create a new sparse vector from indices and values
+    ///
+    /// # Panics
+    /// Panics if indices and values have different lengths, or if any value is NaN or infinite.
     pub fn new(indices: Vec<u32>, values: Vec<f32>) -> Self {
         assert_eq!(
             indices.len(),
             values.len(),
             "Indices and values must have the same length"
         );
+        for (i, &v) in values.iter().enumerate() {
+            assert!(v.is_finite(), "Value at index {} is not finite: {}", i, v);
+        }
         Self { indices, values }
     }
 
     /// Create a sparse vector from a HashMap
+    ///
+    /// # Panics
+    /// Panics if any value is NaN or infinite.
     pub fn from_hashmap(map: &HashMap<u32, f32>) -> Self {
+        for (&idx, &v) in map.iter() {
+            assert!(v.is_finite(), "Value at index {} is not finite: {}", idx, v);
+        }
         let mut pairs: Vec<(u32, f32)> = map.iter().map(|(&i, &v)| (i, v)).collect();
         pairs.sort_by_key(|(i, _)| *i);
         Self {
@@ -37,11 +51,15 @@ impl SparseVector {
     }
 
     /// Create a sparse vector from a dense vector (only non-zero values)
+    ///
+    /// # Panics
+    /// Panics if any value is NaN or infinite.
     pub fn from_dense(dense: &[f32], threshold: f32) -> Self {
         let mut indices = Vec::new();
         let mut values = Vec::new();
 
         for (i, &v) in dense.iter().enumerate() {
+            assert!(v.is_finite(), "Value at index {} is not finite: {}", i, v);
             if v.abs() > threshold {
                 indices.push(i as u32);
                 values.push(v);
@@ -284,7 +302,13 @@ impl SparseIndex {
 
     /// Search for similar vectors using dot product
     /// Returns vector IDs and scores, sorted by score descending
+    ///
+    /// Uses a min-heap for O(n log k) complexity instead of O(n log n) sorting.
     pub fn search(&self, query: &SparseVector, k: usize) -> Vec<(usize, f32)> {
+        if k == 0 {
+            return Vec::new();
+        }
+
         let mut scores: HashMap<usize, f32> = HashMap::new();
 
         // Accumulate scores using inverted index
@@ -296,15 +320,38 @@ impl SparseIndex {
             }
         }
 
-        // Sort by score descending
-        let mut results: Vec<(usize, f32)> = scores.into_iter().collect();
+        // Use min-heap to efficiently find top-k results
+        // Heap contains (Reverse(score), id) so smallest score is at top
+        let mut heap: BinaryHeap<(Reverse<OrderedFloat<f32>>, usize)> = BinaryHeap::with_capacity(k + 1);
+
+        for (id, score) in scores {
+            if heap.len() < k {
+                heap.push((Reverse(OrderedFloat(score)), id));
+            } else if let Some(&(Reverse(OrderedFloat(min_score)), _)) = heap.peek() {
+                if score > min_score {
+                    heap.pop();
+                    heap.push((Reverse(OrderedFloat(score)), id));
+                }
+            }
+        }
+
+        // Extract results sorted by score descending
+        let mut results: Vec<(usize, f32)> = heap
+            .into_iter()
+            .map(|(Reverse(OrderedFloat(score)), id)| (id, score))
+            .collect();
         results.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-        results.truncate(k);
         results
     }
 
     /// Search with cosine similarity (normalizes scores)
+    ///
+    /// Uses a min-heap for O(n log k) complexity instead of O(n log n) sorting.
     pub fn search_cosine(&self, query: &SparseVector, k: usize) -> Vec<(usize, f32)> {
+        if k == 0 {
+            return Vec::new();
+        }
+
         let query_norm = query.l2_norm();
         if query_norm == 0.0 {
             return Vec::new();
@@ -321,24 +368,35 @@ impl SparseIndex {
             }
         }
 
-        // Normalize by vector norms to get cosine similarity
-        let mut results: Vec<(usize, f32)> = scores
-            .into_iter()
-            .filter_map(|(id, dot)| {
-                self.vectors.get(&id).map(|v| {
-                    let vec_norm = v.l2_norm();
-                    let similarity = if vec_norm > 0.0 {
-                        dot / (query_norm * vec_norm)
-                    } else {
-                        0.0
-                    };
-                    (id, similarity)
-                })
-            })
-            .collect();
+        // Use min-heap to efficiently find top-k results
+        let mut heap: BinaryHeap<(Reverse<OrderedFloat<f32>>, usize)> = BinaryHeap::with_capacity(k + 1);
 
+        for (id, dot) in scores {
+            if let Some(v) = self.vectors.get(&id) {
+                let vec_norm = v.l2_norm();
+                let similarity = if vec_norm > 0.0 {
+                    dot / (query_norm * vec_norm)
+                } else {
+                    0.0
+                };
+
+                if heap.len() < k {
+                    heap.push((Reverse(OrderedFloat(similarity)), id));
+                } else if let Some(&(Reverse(OrderedFloat(min_score)), _)) = heap.peek() {
+                    if similarity > min_score {
+                        heap.pop();
+                        heap.push((Reverse(OrderedFloat(similarity)), id));
+                    }
+                }
+            }
+        }
+
+        // Extract results sorted by score descending
+        let mut results: Vec<(usize, f32)> = heap
+            .into_iter()
+            .map(|(Reverse(OrderedFloat(score)), id)| (id, score))
+            .collect();
         results.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-        results.truncate(k);
         results
     }
 }
