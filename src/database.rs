@@ -54,7 +54,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
 /// Export entry type: (id, vector, metadata)
@@ -108,6 +108,12 @@ pub struct Database {
     state: Arc<RwLock<DatabaseState>>,
     /// Whether there are unsaved changes (AtomicBool for lock-free access)
     dirty: AtomicBool,
+    /// Modification generation counter for race-free dirty tracking.
+    /// Incremented on every modification. Used during save to detect
+    /// concurrent modifications and avoid clearing dirty flag prematurely.
+    modification_gen: AtomicU64,
+    /// Last saved generation. If modification_gen > saved_gen, database is dirty.
+    saved_gen: AtomicU64,
 }
 
 impl Database {
@@ -176,6 +182,8 @@ impl Database {
             storage: Some(storage),
             state: Arc::new(RwLock::new(state)),
             dirty: AtomicBool::new(false),
+            modification_gen: AtomicU64::new(0),
+            saved_gen: AtomicU64::new(0),
         })
     }
 
@@ -186,6 +194,8 @@ impl Database {
             storage: None,
             state: Arc::new(RwLock::new(DatabaseState::default())),
             dirty: AtomicBool::new(false),
+            modification_gen: AtomicU64::new(0),
+            saved_gen: AtomicU64::new(0),
         }
     }
 
@@ -214,7 +224,7 @@ impl Database {
         let collection = Collection::new(config.clone());
         state.collections.insert(config.name, collection);
 
-        self.dirty.store(true, Ordering::Release);
+        self.mark_modified();
         Ok(())
     }
 
@@ -240,7 +250,7 @@ impl Database {
         let mut state = self.state.write();
         let removed = state.collections.remove(name).is_some();
         if removed {
-            self.dirty.store(true, Ordering::Release);
+            self.mark_modified();
         }
         Ok(removed)
     }
@@ -251,11 +261,18 @@ impl Database {
     }
 
     /// Save changes to disk
+    ///
+    /// Uses generation-based tracking to avoid race conditions where
+    /// concurrent modifications could be marked as saved when they weren't.
     pub fn save(&mut self) -> Result<()> {
         let storage = match &mut self.storage {
             Some(s) => s,
             None => return Ok(()), // In-memory database, nothing to save
         };
+
+        // Capture the modification generation BEFORE serializing state.
+        // This ensures we only mark as saved up to this point.
+        let gen_at_save_start = self.modification_gen.load(Ordering::Acquire);
 
         let state = self.state.read();
         let state_bytes = serde_json::to_vec(&*state)?;
@@ -268,14 +285,46 @@ impl Database {
         // Use atomic save to prevent corruption on crash
         storage.atomic_save(&header, &state_bytes)?;
 
-        self.dirty.store(false, Ordering::Release);
+        // Only update saved_gen if no concurrent modifications happened.
+        // Use compare-and-swap loop to safely update.
+        loop {
+            let current_saved = self.saved_gen.load(Ordering::Acquire);
+            // Only update if we're moving forward
+            if gen_at_save_start <= current_saved {
+                break; // Another save already covered our changes
+            }
+            match self.saved_gen.compare_exchange_weak(
+                current_saved,
+                gen_at_save_start,
+                Ordering::Release,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => break,
+                Err(_) => continue, // Retry
+            }
+        }
+
+        // Clear dirty flag only if no modifications happened during save
+        let current_mod_gen = self.modification_gen.load(Ordering::Acquire);
+        if current_mod_gen == gen_at_save_start {
+            self.dirty.store(false, Ordering::Release);
+        }
 
         Ok(())
     }
 
     /// Check if there are unsaved changes
     pub fn is_dirty(&self) -> bool {
-        self.dirty.load(Ordering::Acquire)
+        // Use generation counters for accurate dirty tracking
+        let mod_gen = self.modification_gen.load(Ordering::Acquire);
+        let saved_gen = self.saved_gen.load(Ordering::Acquire);
+        mod_gen > saved_gen || self.dirty.load(Ordering::Acquire)
+    }
+
+    /// Mark the database as modified. Thread-safe and race-condition free.
+    fn mark_modified(&self) {
+        self.modification_gen.fetch_add(1, Ordering::Release);
+        self.dirty.store(true, Ordering::Release);
     }
 
     /// Get total number of vectors across all collections
@@ -304,7 +353,7 @@ impl Database {
             .ok_or_else(|| NeedleError::CollectionNotFound(collection.to_string()))?;
 
         coll.insert(id, vector, metadata)?;
-        self.dirty.store(true, Ordering::Release);
+        self.mark_modified();
         Ok(())
     }
 
@@ -322,7 +371,7 @@ impl Database {
             .ok_or_else(|| NeedleError::CollectionNotFound(collection.to_string()))?;
 
         coll.insert_vec(id, vector, metadata)?;
-        self.dirty.store(true, Ordering::Release);
+        self.mark_modified();
         Ok(())
     }
 
@@ -340,7 +389,7 @@ impl Database {
             .ok_or_else(|| NeedleError::CollectionNotFound(collection.to_string()))?;
 
         coll.update(id, vector, metadata)?;
-        self.dirty.store(true, Ordering::Release);
+        self.mark_modified();
         Ok(())
     }
 
@@ -391,7 +440,7 @@ impl Database {
 
         let deleted = coll.delete(id)?;
         if deleted {
-            self.dirty.store(true, Ordering::Release);
+            self.mark_modified();
         }
         Ok(deleted)
     }
@@ -445,7 +494,7 @@ impl Database {
 
         let deleted = coll.compact()?;
         if deleted > 0 {
-            self.dirty.store(true, Ordering::Release);
+            self.mark_modified();
         }
         Ok(deleted)
     }
@@ -496,13 +545,17 @@ impl Database {
 
 impl Drop for Database {
     fn drop(&mut self) {
-        // Auto-save on drop if dirty
-        // Note: Errors are logged rather than ignored to help diagnose issues.
-        // For reliable persistence, call save() explicitly before dropping.
+        // Warn about unsaved changes but do NOT perform I/O in Drop.
+        // Performing I/O in Drop is unexpected behavior and can cause issues:
+        // - Panics during Drop are hard to handle
+        // - I/O errors in Drop cannot be properly propagated
+        // - May cause deadlocks in async contexts
+        // Users should explicitly call save() before dropping.
         if self.is_dirty() {
-            if let Err(e) = self.save() {
-                eprintln!("needle: warning: failed to save database on drop: {}", e);
-            }
+            eprintln!(
+                "needle: warning: database dropped with unsaved changes. \
+                 Call save() explicitly before dropping to persist data."
+            );
         }
     }
 }
