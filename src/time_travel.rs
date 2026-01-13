@@ -1188,6 +1188,335 @@ impl<'a> TimeTravelQueryBuilder<'a> {
     }
 }
 
+// ============================================================================
+// Feature 6: Branching and Merge Capabilities
+// ============================================================================
+
+/// A branch in the version history
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Branch {
+    /// Branch ID
+    pub id: String,
+    /// Branch name
+    pub name: String,
+    /// Parent snapshot ID this branch was created from
+    pub parent_snapshot: Option<String>,
+    /// Parent branch name
+    pub parent_branch: Option<String>,
+    /// Creation timestamp
+    pub created_at: u64,
+    /// Head transaction ID
+    pub head_txn: u64,
+    /// Whether this is the default branch
+    pub is_default: bool,
+    /// Branch metadata
+    pub metadata: Option<serde_json::Value>,
+}
+
+impl Branch {
+    fn new(name: &str, parent_snapshot: Option<String>, parent_branch: Option<String>) -> Self {
+        Self {
+            id: format!("br_{}", uuid_v4()),
+            name: name.to_string(),
+            parent_snapshot,
+            parent_branch,
+            created_at: TimeTravelIndex::now(),
+            head_txn: 0,
+            is_default: false,
+            metadata: None,
+        }
+    }
+}
+
+/// Conflict during merge
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MergeConflict {
+    /// Vector ID
+    pub id: String,
+    /// Version in source branch
+    pub source_version: Option<VectorVersion>,
+    /// Version in target branch
+    pub target_version: Option<VectorVersion>,
+    /// Conflict type
+    pub conflict_type: ConflictType,
+}
+
+/// Type of merge conflict
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ConflictType {
+    /// Both branches modified the vector
+    BothModified,
+    /// Source modified, target deleted
+    ModifyDelete,
+    /// Source deleted, target modified
+    DeleteModify,
+}
+
+/// Result of a merge operation
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MergeResult {
+    /// Whether merge was successful
+    pub success: bool,
+    /// Number of vectors merged
+    pub vectors_merged: usize,
+    /// Conflicts encountered
+    pub conflicts: Vec<MergeConflict>,
+    /// Merge commit transaction ID
+    pub merge_txn: Option<u64>,
+    /// Source branch
+    pub source_branch: String,
+    /// Target branch
+    pub target_branch: String,
+}
+
+/// Conflict resolution strategy
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConflictStrategy {
+    /// Abort merge on conflict
+    Abort,
+    /// Keep source version
+    TakeSource,
+    /// Keep target version
+    TakeTarget,
+    /// Keep both (create merged version)
+    KeepBoth,
+    /// Skip conflicting vectors
+    Skip,
+}
+
+/// Branch manager for time travel index
+#[derive(Debug, Default)]
+pub struct BranchManager {
+    branches: HashMap<String, Branch>,
+    current_branch: String,
+}
+
+impl BranchManager {
+    /// Create a new branch manager with default main branch
+    pub fn new() -> Self {
+        let mut manager = Self {
+            branches: HashMap::new(),
+            current_branch: "main".to_string(),
+        };
+
+        // Create default main branch
+        let mut main = Branch::new("main", None, None);
+        main.is_default = true;
+        manager.branches.insert("main".to_string(), main);
+
+        manager
+    }
+
+    /// Create a new branch from a snapshot
+    pub fn create_branch(
+        &mut self,
+        name: &str,
+        parent_snapshot: Option<&str>,
+    ) -> Result<&Branch> {
+        if self.branches.contains_key(name) {
+            return Err(NeedleError::InvalidInput(format!(
+                "Branch '{}' already exists",
+                name
+            )));
+        }
+
+        let branch = Branch::new(
+            name,
+            parent_snapshot.map(String::from),
+            Some(self.current_branch.clone()),
+        );
+        self.branches.insert(name.to_string(), branch);
+
+        Ok(self.branches.get(name).unwrap())
+    }
+
+    /// Create a branch from the current state
+    pub fn create_branch_here(&mut self, name: &str) -> Result<&Branch> {
+        self.create_branch(name, None)
+    }
+
+    /// Switch to a branch
+    pub fn checkout(&mut self, name: &str) -> Result<()> {
+        if !self.branches.contains_key(name) {
+            return Err(NeedleError::NotFound(format!("Branch '{}' not found", name)));
+        }
+        self.current_branch = name.to_string();
+        Ok(())
+    }
+
+    /// Get current branch
+    pub fn current(&self) -> &Branch {
+        self.branches.get(&self.current_branch).unwrap()
+    }
+
+    /// Get a branch by name
+    pub fn get(&self, name: &str) -> Option<&Branch> {
+        self.branches.get(name)
+    }
+
+    /// List all branches
+    pub fn list(&self) -> Vec<&Branch> {
+        self.branches.values().collect()
+    }
+
+    /// Delete a branch
+    pub fn delete(&mut self, name: &str) -> Result<()> {
+        if name == "main" {
+            return Err(NeedleError::InvalidOperation(
+                "Cannot delete main branch".to_string(),
+            ));
+        }
+        if name == self.current_branch {
+            return Err(NeedleError::InvalidOperation(
+                "Cannot delete current branch".to_string(),
+            ));
+        }
+        self.branches.remove(name);
+        Ok(())
+    }
+
+    /// Update branch head
+    pub fn update_head(&mut self, name: &str, txn: u64) {
+        if let Some(branch) = self.branches.get_mut(name) {
+            branch.head_txn = txn;
+        }
+    }
+
+    /// Merge source branch into target branch
+    pub fn merge(
+        &self,
+        source: &str,
+        target: &str,
+        source_versions: &HashMap<String, VectorVersion>,
+        target_versions: &HashMap<String, VectorVersion>,
+        strategy: ConflictStrategy,
+    ) -> Result<MergeResult> {
+        let source_branch = self.get(source).ok_or_else(|| {
+            NeedleError::NotFound(format!("Source branch '{}' not found", source))
+        })?;
+        let _target_branch = self.get(target).ok_or_else(|| {
+            NeedleError::NotFound(format!("Target branch '{}' not found", target))
+        })?;
+
+        let mut conflicts = Vec::new();
+        let mut vectors_merged = 0;
+
+        // Find all vector IDs in both branches
+        let all_ids: std::collections::HashSet<_> = source_versions
+            .keys()
+            .chain(target_versions.keys())
+            .collect();
+
+        for id in all_ids {
+            let source_v = source_versions.get(id);
+            let target_v = target_versions.get(id);
+
+            match (source_v, target_v) {
+                (Some(sv), Some(tv)) => {
+                    // Both have version - check for conflict
+                    if sv.txn_id != tv.txn_id {
+                        conflicts.push(MergeConflict {
+                            id: id.to_string(),
+                            source_version: Some(sv.clone()),
+                            target_version: Some(tv.clone()),
+                            conflict_type: ConflictType::BothModified,
+                        });
+                    } else {
+                        vectors_merged += 1;
+                    }
+                }
+                (Some(_), None) => {
+                    // Only in source - add to target
+                    vectors_merged += 1;
+                }
+                (None, Some(_)) => {
+                    // Only in target - already present
+                    vectors_merged += 1;
+                }
+                (None, None) => {
+                    // Shouldn't happen
+                }
+            }
+        }
+
+        // Handle conflicts based on strategy
+        let success = match strategy {
+            ConflictStrategy::Abort if !conflicts.is_empty() => false,
+            ConflictStrategy::TakeSource | ConflictStrategy::TakeTarget | ConflictStrategy::Skip => true,
+            ConflictStrategy::KeepBoth => true,
+            ConflictStrategy::Abort => true,
+        };
+
+        Ok(MergeResult {
+            success,
+            vectors_merged,
+            conflicts,
+            merge_txn: if success { Some(source_branch.head_txn + 1) } else { None },
+            source_branch: source.to_string(),
+            target_branch: target.to_string(),
+        })
+    }
+}
+
+/// Time marker for referencing specific points in history
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TimeMarker {
+    /// Name of the time marker
+    pub name: String,
+    /// Timestamp
+    pub timestamp: u64,
+    /// Description
+    pub description: Option<String>,
+    /// Associated branch
+    pub branch: Option<String>,
+    /// Associated transaction
+    pub txn_id: Option<u64>,
+}
+
+impl TimeMarker {
+    /// Create a new time marker
+    pub fn new(name: &str, timestamp: u64) -> Self {
+        Self {
+            name: name.to_string(),
+            timestamp,
+            description: None,
+            branch: None,
+            txn_id: None,
+        }
+    }
+
+    /// Add description
+    #[must_use]
+    pub fn with_description(mut self, desc: &str) -> Self {
+        self.description = Some(desc.to_string());
+        self
+    }
+
+    /// Associate with branch
+    #[must_use]
+    pub fn with_branch(mut self, branch: &str) -> Self {
+        self.branch = Some(branch.to_string());
+        self
+    }
+
+    /// Associate with transaction
+    #[must_use]
+    pub fn with_txn(mut self, txn: u64) -> Self {
+        self.txn_id = Some(txn);
+        self
+    }
+}
+
+/// Generate a simple UUID-like identifier
+fn uuid_v4() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    format!("{:016x}", now)
+}
+
 #[cfg(test)]
 #[allow(clippy::field_reassign_with_default)]
 mod tests {
@@ -1336,5 +1665,221 @@ mod tests {
             .unwrap();
 
         assert!(!results.is_empty());
+    }
+
+    #[test]
+    fn test_branch_creation() {
+        let mut manager = BranchManager::new();
+
+        // Create a feature branch from main
+        let branch = manager.create_branch("feature1", Some("main")).unwrap();
+        assert_eq!(branch.name, "feature1");
+        assert_eq!(branch.parent_branch, Some("main".to_string()));
+        // Head starts at 0
+        assert_eq!(branch.head_txn, 0);
+    }
+
+    #[test]
+    fn test_branch_checkout() {
+        let mut manager = BranchManager::new();
+
+        // Create branches
+        manager.create_branch("feature1", Some("main")).unwrap();
+        manager.create_branch("feature2", Some("main")).unwrap();
+
+        // Checkout
+        manager.checkout("feature1").unwrap();
+        let branch = manager.get("feature1").unwrap();
+        assert_eq!(branch.name, "feature1");
+
+        // Checkout non-existent branch fails
+        assert!(manager.checkout("non_existent").is_err());
+    }
+
+    #[test]
+    fn test_branch_list() {
+        let mut manager = BranchManager::new();
+
+        manager.create_branch("feature1", Some("main")).unwrap();
+        manager.create_branch("feature2", Some("main")).unwrap();
+        manager.create_branch("hotfix", Some("main")).unwrap();
+
+        let branches = manager.list();
+        // Should have main + 3 new branches
+        assert_eq!(branches.len(), 4);
+
+        let names: Vec<_> = branches.iter().map(|b| b.name.as_str()).collect();
+        assert!(names.contains(&"main"));
+        assert!(names.contains(&"feature1"));
+        assert!(names.contains(&"feature2"));
+        assert!(names.contains(&"hotfix"));
+    }
+
+    #[test]
+    fn test_branch_delete() {
+        let mut manager = BranchManager::new();
+
+        manager.create_branch("feature1", Some("main")).unwrap();
+        // Branch exists
+        assert!(manager.get("feature1").is_some());
+
+        // Delete the branch (stay on main)
+        manager.delete("feature1").unwrap();
+        // Branch no longer exists
+        assert!(manager.get("feature1").is_none());
+        assert!(manager.checkout("feature1").is_err());
+
+        // Cannot delete main
+        assert!(manager.delete("main").is_err());
+    }
+
+    #[test]
+    fn test_branch_update_head() {
+        let mut manager = BranchManager::new();
+
+        manager.create_branch("feature1", Some("main")).unwrap();
+
+        // Update head
+        manager.update_head("feature1", 20);
+
+        let branch = manager.get("feature1").unwrap();
+        assert_eq!(branch.head_txn, 20);
+    }
+
+    #[test]
+    fn test_conflict_detection() {
+        let mut manager = BranchManager::new();
+
+        manager.create_branch("feature1", Some("main")).unwrap();
+        manager.create_branch("feature2", Some("main")).unwrap();
+
+        // Simulate changes to both branches
+        let feature1_changes: Vec<(&str, &str)> = vec![("doc1", "updated in feature1")];
+        let feature2_changes: Vec<(&str, &str)> = vec![("doc1", "updated in feature2"), ("doc2", "new in feature2")];
+
+        // Check for conflicts
+        let modified_in_source: Vec<_> = feature1_changes.iter().map(|(id, _)| *id).collect();
+        let modified_in_target: Vec<_> = feature2_changes.iter().map(|(id, _)| *id).collect();
+
+        // doc1 is modified in both
+        let conflicts: Vec<_> = modified_in_source
+            .iter()
+            .filter(|id| modified_in_target.contains(id))
+            .collect();
+
+        assert_eq!(conflicts.len(), 1);
+        assert_eq!(*conflicts[0], "doc1");
+    }
+
+    #[test]
+    fn test_merge_no_conflicts() {
+        let mut manager = BranchManager::new();
+
+        manager.create_branch("feature", Some("main")).unwrap();
+        manager.update_head("feature", 15);
+
+        // Empty changes means no conflicts
+        let source_versions: std::collections::HashMap<String, VectorVersion> = std::collections::HashMap::new();
+        let target_versions: std::collections::HashMap<String, VectorVersion> = std::collections::HashMap::new();
+        let result = manager.merge("feature", "main", &source_versions, &target_versions, ConflictStrategy::Abort).unwrap();
+
+        assert!(result.success);
+        assert!(result.conflicts.is_empty());
+        assert_eq!(result.vectors_merged, 0);
+    }
+
+    #[test]
+    fn test_conflict_strategy_abort() {
+        // Test that Abort strategy reports conflicts when both branches modify same vector
+        let mut manager = BranchManager::new();
+
+        manager.create_branch("feature", Some("main")).unwrap();
+        manager.update_head("feature", 15);
+
+        // Create different versions in source and target for the same vector
+        let mut source_versions: std::collections::HashMap<String, VectorVersion> = std::collections::HashMap::new();
+        source_versions.insert("doc1".to_string(), VectorVersion {
+            vector: vec![1.0, 2.0],
+            metadata: None,
+            txn_id: 10,
+            created_at: 1000,
+            is_tombstone: false,
+            deleted_at_txn: None,
+        });
+
+        let mut target_versions: std::collections::HashMap<String, VectorVersion> = std::collections::HashMap::new();
+        target_versions.insert("doc1".to_string(), VectorVersion {
+            vector: vec![3.0, 4.0],
+            metadata: None,
+            txn_id: 15,
+            created_at: 1500,
+            is_tombstone: false,
+            deleted_at_txn: None,
+        });
+
+        let result = manager.merge("feature", "main", &source_versions, &target_versions, ConflictStrategy::Abort).unwrap();
+        // With conflicts and Abort strategy, success should be false
+        assert!(!result.success);
+        assert_eq!(result.conflicts.len(), 1);
+        assert_eq!(result.conflicts[0].id, "doc1");
+    }
+
+    #[test]
+    fn test_time_marker() {
+        let marker = TimeMarker::new("release_v1", 1234567890)
+            .with_description("Version 1.0 release")
+            .with_branch("main")
+            .with_txn(100);
+
+        assert_eq!(marker.name, "release_v1");
+        assert_eq!(marker.timestamp, 1234567890);
+        assert_eq!(marker.description, Some("Version 1.0 release".to_string()));
+        assert_eq!(marker.branch, Some("main".to_string()));
+        assert_eq!(marker.txn_id, Some(100));
+    }
+
+    #[test]
+    fn test_merge_conflict_types() {
+        // Test different conflict types
+        let both_modified = MergeConflict {
+            id: "doc1".to_string(),
+            conflict_type: ConflictType::BothModified,
+            source_version: None,
+            target_version: None,
+        };
+        assert!(matches!(both_modified.conflict_type, ConflictType::BothModified));
+
+        let modify_delete = MergeConflict {
+            id: "doc2".to_string(),
+            conflict_type: ConflictType::ModifyDelete,
+            source_version: None,
+            target_version: None,
+        };
+        assert!(matches!(modify_delete.conflict_type, ConflictType::ModifyDelete));
+
+        let delete_modify = MergeConflict {
+            id: "doc3".to_string(),
+            conflict_type: ConflictType::DeleteModify,
+            source_version: None,
+            target_version: None,
+        };
+        assert!(matches!(delete_modify.conflict_type, ConflictType::DeleteModify));
+    }
+
+    #[test]
+    fn test_branch_merge_result() {
+        let result = MergeResult {
+            success: true,
+            vectors_merged: 5,
+            conflicts: vec![],
+            merge_txn: Some(100),
+            source_branch: "feature".to_string(),
+            target_branch: "main".to_string(),
+        };
+
+        assert!(result.success);
+        assert_eq!(result.vectors_merged, 5);
+        assert!(result.conflicts.is_empty());
+        assert_eq!(result.merge_txn, Some(100));
     }
 }
