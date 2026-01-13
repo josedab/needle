@@ -84,7 +84,9 @@
 //! ```
 
 use crate::hnsw::HnswConfig;
+use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 /// Performance profile for auto-tuning
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -783,5 +785,732 @@ mod tests {
         assert_eq!(format!("{}", RecommendedIndex::Hnsw), "HNSW");
         assert_eq!(format!("{}", RecommendedIndex::Ivf), "IVF");
         assert_eq!(format!("{}", RecommendedIndex::DiskAnn), "DiskANN");
+    }
+
+    #[test]
+    fn test_data_profiler() {
+        // Create sample vectors with known characteristics
+        let vectors: Vec<Vec<f32>> = (0..100)
+            .map(|i| {
+                (0..64).map(|j| (i * j) as f32 / 1000.0).collect()
+            })
+            .collect();
+        
+        let profile = DataProfiler::profile(&vectors);
+        assert_eq!(profile.dimensions, 64);
+        assert_eq!(profile.sample_size, 100);
+        assert!(profile.mean_magnitude > 0.0);
+    }
+
+    #[test]
+    fn test_smart_index_selector() {
+        let vectors: Vec<Vec<f32>> = (0..1000)
+            .map(|i| {
+                (0..128).map(|j| ((i * j) as f32).sin()).collect()
+            })
+            .collect();
+        
+        let selection = SmartIndexSelector::select(&vectors, None);
+        assert_eq!(selection.recommended, RecommendedIndex::Hnsw); // Small dataset
+        assert!(!selection.reasoning.is_empty());
+    }
+}
+
+// ============ Data Profiling and ML-Based Selection ============
+
+/// Statistics about vector data distribution
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DataProfile {
+    /// Number of dimensions
+    pub dimensions: usize,
+    /// Number of vectors sampled
+    pub sample_size: usize,
+    /// Mean vector magnitude
+    pub mean_magnitude: f32,
+    /// Standard deviation of magnitudes
+    pub std_magnitude: f32,
+    /// Mean pairwise distance in sample
+    pub mean_pairwise_distance: f32,
+    /// Estimated intrinsic dimensionality
+    pub intrinsic_dimensionality: f32,
+    /// Whether vectors appear normalized
+    pub appears_normalized: bool,
+    /// Estimated cluster count (0 if uniform)
+    pub estimated_clusters: usize,
+    /// Sparsity ratio (fraction of near-zero values)
+    pub sparsity_ratio: f32,
+}
+
+/// Data profiler for analyzing vector characteristics
+pub struct DataProfiler;
+
+impl DataProfiler {
+    /// Profile a sample of vectors
+    pub fn profile(vectors: &[Vec<f32>]) -> DataProfile {
+        if vectors.is_empty() {
+            return DataProfile {
+                dimensions: 0,
+                sample_size: 0,
+                mean_magnitude: 0.0,
+                std_magnitude: 0.0,
+                mean_pairwise_distance: 0.0,
+                intrinsic_dimensionality: 0.0,
+                appears_normalized: false,
+                estimated_clusters: 0,
+                sparsity_ratio: 0.0,
+            };
+        }
+
+        let dimensions = vectors[0].len();
+        let sample_size = vectors.len();
+
+        // Calculate magnitudes
+        let magnitudes: Vec<f32> = vectors
+            .iter()
+            .map(|v| v.iter().map(|x| x * x).sum::<f32>().sqrt())
+            .collect();
+
+        let mean_magnitude = magnitudes.iter().sum::<f32>() / sample_size as f32;
+        let variance = magnitudes
+            .iter()
+            .map(|m| (m - mean_magnitude).powi(2))
+            .sum::<f32>()
+            / sample_size as f32;
+        let std_magnitude = variance.sqrt();
+
+        // Check if normalized (magnitudes close to 1.0)
+        let appears_normalized = (mean_magnitude - 1.0).abs() < 0.1 && std_magnitude < 0.1;
+
+        // Sample pairwise distances (limit computation)
+        let max_pairs = 1000.min(sample_size * (sample_size - 1) / 2);
+        let mut distances = Vec::with_capacity(max_pairs);
+        let step = (sample_size * (sample_size - 1) / 2 / max_pairs).max(1);
+        
+        let mut pair_idx = 0;
+        'outer: for i in 0..sample_size {
+            for j in (i + 1)..sample_size {
+                if pair_idx % step == 0 {
+                    let dist: f32 = vectors[i]
+                        .iter()
+                        .zip(&vectors[j])
+                        .map(|(a, b)| (a - b).powi(2))
+                        .sum::<f32>()
+                        .sqrt();
+                    distances.push(dist);
+                    if distances.len() >= max_pairs {
+                        break 'outer;
+                    }
+                }
+                pair_idx += 1;
+            }
+        }
+
+        let mean_pairwise_distance = if distances.is_empty() {
+            0.0
+        } else {
+            distances.iter().sum::<f32>() / distances.len() as f32
+        };
+
+        // Estimate intrinsic dimensionality using MLE estimator approximation
+        let intrinsic_dimensionality = Self::estimate_intrinsic_dim(&distances, dimensions);
+
+        // Estimate cluster count using distance distribution
+        let estimated_clusters = Self::estimate_clusters(&distances);
+
+        // Calculate sparsity (fraction of values < 0.001)
+        let total_values = vectors.len() * dimensions;
+        let near_zero = vectors
+            .iter()
+            .flat_map(|v| v.iter())
+            .filter(|&&x| x.abs() < 0.001)
+            .count();
+        let sparsity_ratio = near_zero as f32 / total_values as f32;
+
+        DataProfile {
+            dimensions,
+            sample_size,
+            mean_magnitude,
+            std_magnitude,
+            mean_pairwise_distance,
+            intrinsic_dimensionality,
+            appears_normalized,
+            estimated_clusters,
+            sparsity_ratio,
+        }
+    }
+
+    /// Estimate intrinsic dimensionality
+    fn estimate_intrinsic_dim(distances: &[f32], nominal_dim: usize) -> f32 {
+        if distances.len() < 10 {
+            return nominal_dim as f32;
+        }
+
+        // Sort distances
+        let mut sorted = distances.to_vec();
+        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+
+        // Use ratio of k-th nearest neighbor distances (simplified MLE)
+        let k1 = sorted.len() / 4;
+        let k2 = sorted.len() / 2;
+
+        if k1 == 0 || sorted[k1] < 0.0001 || sorted[k2] < 0.0001 {
+            return nominal_dim as f32;
+        }
+
+        let ratio = sorted[k2] / sorted[k1];
+        if ratio <= 1.0 {
+            return nominal_dim as f32;
+        }
+
+        // Estimate dimension from ratio (simplified)
+        let estimated = (ratio.ln() / 0.693).max(1.0); // ln(2) ≈ 0.693
+        (estimated * 10.0).min(nominal_dim as f32) // Scale and cap
+    }
+
+    /// Estimate number of clusters from distance distribution
+    fn estimate_clusters(distances: &[f32]) -> usize {
+        if distances.len() < 20 {
+            return 1;
+        }
+
+        // Simple heuristic: count modes in distance histogram
+        let min_d = distances.iter().cloned().fold(f32::INFINITY, f32::min);
+        let max_d = distances.iter().cloned().fold(0.0_f32, f32::max);
+        
+        if (max_d - min_d) < 0.001 {
+            return 1;
+        }
+
+        let num_bins = 20;
+        let bin_width = (max_d - min_d) / num_bins as f32;
+        let mut histogram = vec![0usize; num_bins];
+
+        for &d in distances {
+            let bin = ((d - min_d) / bin_width) as usize;
+            let bin = bin.min(num_bins - 1);
+            histogram[bin] += 1;
+        }
+
+        // Count local maxima (modes)
+        let mut modes = 0;
+        for i in 1..(num_bins - 1) {
+            if histogram[i] > histogram[i - 1] && histogram[i] > histogram[i + 1] {
+                modes += 1;
+            }
+        }
+
+        // Estimate clusters: more modes suggest more structure
+        if modes <= 1 {
+            1 // Uniform distribution
+        } else {
+            modes + 1 // Multiple clusters
+        }
+    }
+}
+
+/// Smart index selector with ML-based heuristics
+pub struct SmartIndexSelector;
+
+/// Result of smart index selection
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SmartIndexSelection {
+    /// Recommended index type
+    pub recommended: RecommendedIndex,
+    /// Data profile used for decision
+    pub profile: DataProfile,
+    /// Confidence in the recommendation (0-1)
+    pub confidence: f32,
+    /// Reasoning for the decision
+    pub reasoning: Vec<String>,
+    /// Suggested HNSW config if HNSW is recommended
+    pub hnsw_config: Option<HnswConfig>,
+}
+
+impl SmartIndexSelector {
+    /// Select best index based on actual data sample
+    pub fn select(
+        sample_vectors: &[Vec<f32>],
+        constraints: Option<IndexSelectionConstraints>,
+    ) -> SmartIndexSelection {
+        let profile = DataProfiler::profile(sample_vectors);
+        let mut reasoning = Vec::new();
+        let mut confidence = 0.8_f32;
+
+        // Start with basic constraints-based recommendation
+        let base_constraints = constraints.unwrap_or_else(|| {
+            // Extrapolate from sample size
+            let estimated_total = sample_vectors.len() * 10; // Assume sample is 10%
+            IndexSelectionConstraints::new(estimated_total, profile.dimensions)
+        });
+
+        let base_rec = recommend_index(&base_constraints);
+        let mut recommended = base_rec.recommended;
+
+        // Adjust based on data profile
+        reasoning.push(format!(
+            "Base recommendation: {} ({})",
+            base_rec.recommended,
+            base_rec.explanation.first().unwrap_or(&String::new())
+        ));
+
+        // High intrinsic dimensionality favors HNSW
+        if profile.intrinsic_dimensionality > profile.dimensions as f32 * 0.5 {
+            reasoning.push(format!(
+                "High intrinsic dimensionality ({:.1}) suggests HNSW for better recall",
+                profile.intrinsic_dimensionality
+            ));
+            if recommended == RecommendedIndex::Ivf && base_constraints.expected_vectors < 5_000_000 {
+                recommended = RecommendedIndex::Hnsw;
+                confidence *= 0.9;
+            }
+        }
+
+        // Clustered data can benefit from IVF
+        if profile.estimated_clusters > 5 {
+            reasoning.push(format!(
+                "Data appears clustered (~{} clusters): IVF could be efficient",
+                profile.estimated_clusters
+            ));
+            if recommended == RecommendedIndex::Hnsw && base_constraints.expected_vectors > 500_000 {
+                // Don't switch, just note it's competitive
+                confidence *= 0.95;
+            }
+        }
+
+        // Sparse data might benefit from specialized handling
+        if profile.sparsity_ratio > 0.5 {
+            reasoning.push(format!(
+                "High sparsity ({:.1}%): consider sparse index for better efficiency",
+                profile.sparsity_ratio * 100.0
+            ));
+        }
+
+        // Pre-normalized data is optimal for cosine distance
+        if profile.appears_normalized {
+            reasoning.push("Vectors appear normalized: optimal for cosine distance".to_string());
+        }
+
+        // Generate HNSW config if recommended
+        let hnsw_config = if recommended == RecommendedIndex::Hnsw {
+            let tuning = TuningConstraints::new(base_constraints.expected_vectors, profile.dimensions)
+                .with_min_recall(base_constraints.target_recall);
+            Some(auto_tune(&tuning).config)
+        } else {
+            None
+        };
+
+        SmartIndexSelection {
+            recommended,
+            profile,
+            confidence,
+            reasoning,
+            hnsw_config,
+        }
+    }
+
+    /// Select with automatic sampling from a larger dataset
+    pub fn select_with_sampling<I>(
+        vectors: I,
+        total_count: usize,
+        sample_size: usize,
+        constraints: Option<IndexSelectionConstraints>,
+    ) -> SmartIndexSelection
+    where
+        I: IntoIterator<Item = Vec<f32>>,
+    {
+        // Sample vectors evenly
+        let step = (total_count / sample_size).max(1);
+        let sample: Vec<Vec<f32>> = vectors
+            .into_iter()
+            .enumerate()
+            .filter(|(i, _)| i % step == 0)
+            .take(sample_size)
+            .map(|(_, v)| v)
+            .collect();
+
+        let adjusted_constraints = constraints.map(|mut c| {
+            c.expected_vectors = total_count;
+            c
+        });
+
+        Self::select(&sample, adjusted_constraints)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Workload-Aware Adaptive Tuner (learned from runtime metrics)
+// ---------------------------------------------------------------------------
+
+/// A single observation of workload behaviour used to train the adaptive tuner.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkloadObservation {
+    /// Current vector count
+    pub vector_count: usize,
+    /// Dimensionality
+    pub dimensions: usize,
+    /// Average queries per second over the window
+    pub qps: f64,
+    /// Insert rate (vectors per second)
+    pub insert_rate: f64,
+    /// Average query latency in ms
+    pub avg_latency_ms: f64,
+    /// Measured recall against brute force (0-1)
+    pub measured_recall: f64,
+    /// Memory usage bytes
+    pub memory_bytes: u64,
+    /// Current index type
+    pub current_index: RecommendedIndex,
+    /// Current HNSW config (if HNSW)
+    pub current_config: Option<HnswConfig>,
+}
+
+/// Feature vector extracted from observations for the decision model.
+#[derive(Debug, Clone)]
+struct WorkloadFeatures {
+    log_vector_count: f64,
+    dimensions_norm: f64,
+    qps_norm: f64,
+    insert_ratio: f64,
+    latency_pressure: f64,
+    recall_gap: f64,
+    memory_pressure: f64,
+}
+
+/// A lightweight learned model that scores index configurations using
+/// a weighted linear combination of workload features. The weights are
+/// updated online via a simple gradient step whenever ground-truth
+/// feedback (actual recall / latency) becomes available.
+pub struct AdaptiveTuner {
+    observations: RwLock<Vec<WorkloadObservation>>,
+    /// Weights: [bias, log_vectors, dims, qps, insert_ratio, latency_pressure, recall_gap, memory_pressure]
+    weights_hnsw: RwLock<Vec<f64>>,
+    weights_ivf: RwLock<Vec<f64>>,
+    weights_diskann: RwLock<Vec<f64>>,
+    target_recall: f64,
+    target_latency_ms: f64,
+    memory_budget: u64,
+    learning_rate: f64,
+}
+
+impl AdaptiveTuner {
+    pub fn new(target_recall: f64, target_latency_ms: f64, memory_budget: u64) -> Self {
+        // Initial weights derived from domain heuristics
+        Self {
+            observations: RwLock::new(Vec::new()),
+            weights_hnsw: RwLock::new(vec![0.7, -0.05, 0.0, 0.1, -0.1, -0.2, 0.3, -0.2]),
+            weights_ivf: RwLock::new(vec![0.4, 0.1, 0.0, -0.05, 0.05, 0.1, 0.1, 0.1]),
+            weights_diskann: RwLock::new(vec![0.2, 0.2, 0.0, -0.1, 0.0, 0.15, 0.05, 0.3]),
+            target_recall,
+            target_latency_ms,
+            memory_budget,
+            learning_rate: 0.01,
+        }
+    }
+
+    fn extract_features(&self, obs: &WorkloadObservation) -> WorkloadFeatures {
+        let log_vc = if obs.vector_count > 0 {
+            (obs.vector_count as f64).ln()
+        } else {
+            0.0
+        };
+        WorkloadFeatures {
+            log_vector_count: log_vc / 20.0, // normalise to ~0-1
+            dimensions_norm: obs.dimensions as f64 / 4096.0,
+            qps_norm: (obs.qps / 1000.0).min(1.0),
+            insert_ratio: if obs.qps + obs.insert_rate > 0.0 {
+                obs.insert_rate / (obs.qps + obs.insert_rate)
+            } else {
+                0.0
+            },
+            latency_pressure: (obs.avg_latency_ms / self.target_latency_ms).min(2.0),
+            recall_gap: (self.target_recall - obs.measured_recall).max(0.0),
+            memory_pressure: if self.memory_budget > 0 {
+                (obs.memory_bytes as f64 / self.memory_budget as f64).min(2.0)
+            } else {
+                0.0
+            },
+        }
+    }
+
+    fn score(weights: &[f64], f: &WorkloadFeatures) -> f64 {
+        let feats = [
+            1.0, // bias
+            f.log_vector_count,
+            f.dimensions_norm,
+            f.qps_norm,
+            f.insert_ratio,
+            f.latency_pressure,
+            f.recall_gap,
+            f.memory_pressure,
+        ];
+        weights.iter().zip(feats.iter()).map(|(w, x)| w * x).sum()
+    }
+
+    /// Record a workload observation.
+    pub fn observe(&self, obs: WorkloadObservation) {
+        self.observations.write().push(obs);
+    }
+
+    /// Recommend the best index type given the most recent observation.
+    pub fn recommend(&self) -> AdaptiveRecommendation {
+        let observations = self.observations.read();
+        let obs = match observations.last() {
+            Some(o) => o,
+            None => {
+                return AdaptiveRecommendation {
+                    recommended: RecommendedIndex::Hnsw,
+                    scores: [(RecommendedIndex::Hnsw, 0.7), (RecommendedIndex::Ivf, 0.4), (RecommendedIndex::DiskAnn, 0.2)].into(),
+                    suggested_config: None,
+                    should_migrate: false,
+                    confidence: 0.5,
+                };
+            }
+        };
+
+        let features = self.extract_features(obs);
+        let s_hnsw = Self::score(&self.weights_hnsw.read(), &features);
+        let s_ivf = Self::score(&self.weights_ivf.read(), &features);
+        let s_disk = Self::score(&self.weights_diskann.read(), &features);
+
+        let mut scores = vec![
+            (RecommendedIndex::Hnsw, s_hnsw),
+            (RecommendedIndex::Ivf, s_ivf),
+            (RecommendedIndex::DiskAnn, s_disk),
+        ];
+        scores.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+        let recommended = scores[0].0;
+        let should_migrate = recommended != obs.current_index;
+        let confidence = if scores.len() >= 2 {
+            ((scores[0].1 - scores[1].1).abs() / (scores[0].1.abs() + 0.01)).min(1.0)
+        } else {
+            0.5
+        };
+
+        let suggested_config = if recommended == RecommendedIndex::Hnsw {
+            let tuning = TuningConstraints::new(obs.vector_count, obs.dimensions)
+                .with_min_recall(self.target_recall as f32)
+                .with_target_latency(self.target_latency_ms as f32);
+            Some(auto_tune(&tuning).config)
+        } else {
+            None
+        };
+
+        AdaptiveRecommendation {
+            recommended,
+            scores: scores.into_iter().collect(),
+            suggested_config,
+            should_migrate,
+            confidence,
+        }
+    }
+
+    /// Update weights with feedback from actual performance.
+    pub fn feedback(&self, obs: &WorkloadObservation, actual_recall: f64, actual_latency_ms: f64) {
+        let features = self.extract_features(obs);
+        let feats = [
+            1.0,
+            features.log_vector_count,
+            features.dimensions_norm,
+            features.qps_norm,
+            features.insert_ratio,
+            features.latency_pressure,
+            features.recall_gap,
+            features.memory_pressure,
+        ];
+
+        // Reward = how well this index performed (higher = better)
+        let recall_reward = actual_recall - self.target_recall;
+        let latency_reward = (self.target_latency_ms - actual_latency_ms) / self.target_latency_ms;
+        let reward = recall_reward * 0.6 + latency_reward * 0.4;
+
+        // Update weights for the current index type
+        let weights = match obs.current_index {
+            RecommendedIndex::Hnsw => &self.weights_hnsw,
+            RecommendedIndex::Ivf => &self.weights_ivf,
+            RecommendedIndex::DiskAnn => &self.weights_diskann,
+        };
+
+        let mut w = weights.write();
+        for (i, feat) in feats.iter().enumerate() {
+            if i < w.len() {
+                w[i] += self.learning_rate * reward * feat;
+            }
+        }
+    }
+}
+
+/// Result of adaptive index recommendation.
+#[derive(Debug, Clone)]
+pub struct AdaptiveRecommendation {
+    pub recommended: RecommendedIndex,
+    pub scores: Vec<(RecommendedIndex, f64)>,
+    pub suggested_config: Option<HnswConfig>,
+    pub should_migrate: bool,
+    pub confidence: f64,
+}
+
+// ---------------------------------------------------------------------------
+// Online Index Migration
+// ---------------------------------------------------------------------------
+
+/// Status of an ongoing index migration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum MigrationStatus {
+    /// Not started
+    Pending,
+    /// Building new index in background
+    Building,
+    /// Verifying recall of new index
+    Verifying,
+    /// Swapping old index for new
+    Switching,
+    /// Migration complete
+    Completed,
+    /// Migration rolled back
+    RolledBack,
+    /// Migration failed
+    Failed,
+}
+
+/// Tracks the progress and state of an online index migration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MigrationState {
+    pub id: String,
+    pub from_index: RecommendedIndex,
+    pub to_index: RecommendedIndex,
+    pub status: MigrationStatus,
+    pub vectors_migrated: usize,
+    pub total_vectors: usize,
+    pub started_at: u64,
+    pub completed_at: Option<u64>,
+    pub error: Option<String>,
+    pub recall_before: Option<f64>,
+    pub recall_after: Option<f64>,
+}
+
+impl MigrationState {
+    pub fn progress_pct(&self) -> f64 {
+        if self.total_vectors == 0 {
+            return 100.0;
+        }
+        (self.vectors_migrated as f64 / self.total_vectors as f64) * 100.0
+    }
+}
+
+/// Manages background index migrations with rollback capability.
+pub struct OnlineMigrationManager {
+    migrations: RwLock<HashMap<String, MigrationState>>,
+    counter: std::sync::atomic::AtomicU64,
+    min_recall_threshold: f64,
+}
+
+impl OnlineMigrationManager {
+    pub fn new(min_recall_threshold: f64) -> Self {
+        Self {
+            migrations: RwLock::new(HashMap::new()),
+            counter: std::sync::atomic::AtomicU64::new(0),
+            min_recall_threshold,
+        }
+    }
+
+    /// Start a new migration.
+    pub fn start_migration(
+        &self,
+        from: RecommendedIndex,
+        to: RecommendedIndex,
+        total_vectors: usize,
+    ) -> String {
+        let seq = self.counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let id = format!("migration_{:08x}", seq);
+
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+
+        let state = MigrationState {
+            id: id.clone(),
+            from_index: from,
+            to_index: to,
+            status: MigrationStatus::Building,
+            vectors_migrated: 0,
+            total_vectors,
+            started_at: now,
+            completed_at: None,
+            error: None,
+            recall_before: None,
+            recall_after: None,
+        };
+
+        self.migrations.write().insert(id.clone(), state);
+        id
+    }
+
+    /// Report progress on vector migration.
+    pub fn report_progress(&self, id: &str, vectors_migrated: usize) {
+        if let Some(m) = self.migrations.write().get_mut(id) {
+            m.vectors_migrated = vectors_migrated;
+        }
+    }
+
+    /// Transition to verification phase.
+    pub fn begin_verify(&self, id: &str, recall_before: f64) {
+        if let Some(m) = self.migrations.write().get_mut(id) {
+            m.status = MigrationStatus::Verifying;
+            m.recall_before = Some(recall_before);
+        }
+    }
+
+    /// Complete verification. If recall meets threshold, switch; otherwise rollback.
+    pub fn complete_verify(&self, id: &str, recall_after: f64) -> MigrationStatus {
+        let mut migrations = self.migrations.write();
+        if let Some(m) = migrations.get_mut(id) {
+            m.recall_after = Some(recall_after);
+            if recall_after >= self.min_recall_threshold {
+                m.status = MigrationStatus::Switching;
+                MigrationStatus::Switching
+            } else {
+                m.status = MigrationStatus::RolledBack;
+                m.error = Some(format!(
+                    "Recall {:.3} below threshold {:.3}",
+                    recall_after, self.min_recall_threshold
+                ));
+                MigrationStatus::RolledBack
+            }
+        } else {
+            MigrationStatus::Failed
+        }
+    }
+
+    /// Mark migration as completed.
+    pub fn complete(&self, id: &str) {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+
+        if let Some(m) = self.migrations.write().get_mut(id) {
+            m.status = MigrationStatus::Completed;
+            m.completed_at = Some(now);
+        }
+    }
+
+    /// Mark migration as failed.
+    pub fn fail(&self, id: &str, error: &str) {
+        if let Some(m) = self.migrations.write().get_mut(id) {
+            m.status = MigrationStatus::Failed;
+            m.error = Some(error.to_string());
+        }
+    }
+
+    /// Get migration status.
+    pub fn get(&self, id: &str) -> Option<MigrationState> {
+        self.migrations.read().get(id).cloned()
+    }
+
+    /// List all migrations.
+    pub fn list(&self) -> Vec<MigrationState> {
+        self.migrations.read().values().cloned().collect()
     }
 }
