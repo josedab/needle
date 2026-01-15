@@ -1,0 +1,39 @@
+name: Deploy Playground
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'website/static/playground/**'
+      - '.github/workflows/playground.yml'
+  workflow_dispatch:
+
+permissions:
+  pages: write
+  id-token: write
+
+concurrency:
+  group: playground-deploy
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    name: Deploy Playground
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}playground/
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v4
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: website/static/playground
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

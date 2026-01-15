@@ -11,7 +11,31 @@ env:
   RUSTFLAGS: -D warnings
 
 jobs:
+  # Fast gate: format + lint + unit tests (~2 min). All other jobs depend on this.
+  quick-check:
+    name: Quick Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-quick-${{ hashFiles('**/Cargo.lock') }}
+      - name: Check formatting
+        run: cargo fmt -- --check
+      - name: Clippy
+        run: cargo clippy --features full -- -D warnings
+      - name: Unit tests
+        run: cargo test --lib
+
   test:
+    needs: quick-check
     name: Test (${{ matrix.os }}, ${{ matrix.rust }})
     runs-on: ${{ matrix.os }}
     strategy:
@@ -52,6 +76,7 @@ jobs:
         run: cargo test --all-features --verbose
 
   lint:
+    needs: quick-check
     name: Lint
     runs-on: ubuntu-latest
     steps:
@@ -99,6 +124,18 @@ jobs:
       - name: Run benchmarks (compile check)
         run: cargo bench --no-run
 
+  examples:
+    name: Examples
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Compile-check all examples
+        run: cargo build --examples
+
   coverage:
     name: Code Coverage
     runs-on: ubuntu-latest
@@ -132,7 +169,7 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: "1.70"
+          toolchain: "1.85"
 
       - name: Check MSRV
         run: cargo check --all-features
