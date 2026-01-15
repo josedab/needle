@@ -293,7 +293,40 @@ impl CollectionConfig {
     }
 }
 
-/// A collection of vectors with the same dimensions
+/// A collection of vectors with the same dimensions.
+///
+/// # Thread Safety
+///
+/// **Warning**: `Collection` is **NOT** thread-safe for concurrent access.
+/// For multi-threaded use, always access collections through
+/// [`Database::collection()`] which returns a thread-safe [`CollectionRef`].
+///
+/// Direct `Collection` usage is intended for:
+/// - Single-threaded applications
+/// - Unit testing
+/// - Embedded scenarios where the caller manages synchronization
+///
+/// # Example (Thread-Safe Access)
+///
+/// ```
+/// use std::sync::Arc;
+/// use std::thread;
+/// use needle::Database;
+///
+/// let db = Arc::new(Database::in_memory());
+/// db.create_collection("embeddings", 128).unwrap();
+///
+/// // Safe concurrent access via CollectionRef
+/// let handles: Vec<_> = (0..4).map(|i| {
+///     let db = Arc::clone(&db);
+///     thread::spawn(move || {
+///         let coll = db.collection("embeddings").unwrap();
+///         // CollectionRef wraps Collection in RwLock for safe access
+///         let query = vec![0.1f32; 128];
+///         coll.search(&query, 10).unwrap()
+///     })
+/// }).collect();
+/// ```
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Collection {
     /// Collection configuration

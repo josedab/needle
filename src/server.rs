@@ -26,10 +26,16 @@ use serde_json::{json, Value};
 use std::net::SocketAddr;
 use std::num::NonZeroU32;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::RwLock;
 use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::limit::RequestBodyLimitLayer;
+use tower_http::timeout::TimeoutLayer;
 use tower_http::trace::TraceLayer;
+use tracing::{info, warn, error};
+
+#[cfg(feature = "metrics")]
+use crate::metrics::{http_metrics, metrics};
 
 /// Server configuration
 #[derive(Debug, Clone)]
@@ -47,6 +53,9 @@ pub struct ServerConfig {
     /// Maximum number of items in a batch operation (default: 10000)
     /// Prevents memory exhaustion from large batch requests
     pub max_batch_size: usize,
+    /// Request timeout in seconds (default: 30)
+    /// Requests exceeding this duration will be terminated
+    pub request_timeout_secs: u64,
 }
 
 /// CORS configuration
@@ -177,6 +186,7 @@ impl Default for ServerConfig {
             rate_limit: RateLimitConfig::default(),
             max_body_size: 100 * 1024 * 1024, // 100MB
             max_batch_size: 10_000, // 10k items max per batch
+            request_timeout_secs: 30, // 30 seconds default timeout
         }
     }
 }
@@ -211,6 +221,11 @@ impl ServerConfig {
 
     pub fn with_max_batch_size(mut self, size: usize) -> Self {
         self.max_batch_size = size;
+        self
+    }
+
+    pub fn with_request_timeout(mut self, secs: u64) -> Self {
+        self.request_timeout_secs = secs;
         self
     }
 }
@@ -921,10 +936,12 @@ fn build_cors_layer(config: &CorsConfig) -> CorsLayer {
 }
 
 /// Build the router with configuration
+#[allow(deprecated)]
 pub fn create_router_with_config(state: Arc<AppState>, config: &ServerConfig) -> Router {
     let cors_layer = build_cors_layer(&config.cors_config);
+    let timeout_layer = TimeoutLayer::new(Duration::from_secs(config.request_timeout_secs));
 
-    Router::new()
+    let mut router = Router::new()
         // Health & Info
         .route("/health", get(health))
         .route("/", get(get_info))
@@ -948,10 +965,27 @@ pub fn create_router_with_config(state: Arc<AppState>, config: &ServerConfig) ->
         .route("/collections/:collection/search", post(search))
         .route("/collections/:collection/search/batch", post(batch_search))
         // Database operations
-        .route("/save", post(save_database))
+        .route("/save", post(save_database));
+
+    // Add metrics endpoint when metrics feature is enabled
+    #[cfg(feature = "metrics")]
+    {
+        router = router.route("/metrics", get(get_metrics));
+    }
+
+    // Apply rate limiting and state
+    let router = router
         .layer(middleware::from_fn_with_state(state.clone(), rate_limit_middleware))
-        .with_state(state)
+        .with_state(state);
+
+    // Build final router with all layers
+    // Note: metrics middleware is applied here (outermost) so it captures all requests
+    #[cfg(feature = "metrics")]
+    let router = router.layer(middleware::from_fn(metrics_middleware));
+
+    router
         .layer(TraceLayer::new_for_http())
+        .layer(timeout_layer)
         .layer(RequestBodyLimitLayer::new(config.max_body_size))
         .layer(cors_layer)
 }
@@ -1020,6 +1054,10 @@ async fn rate_limit_middleware(
         match limiter.check_key(&client_ip) {
             Ok(_) => next.run(request).await,
             Err(_) => {
+                warn!(
+                    client_ip = %client_ip,
+                    "Rate limit exceeded"
+                );
                 let error = ApiError {
                     error: "Rate limit exceeded. Please slow down.".to_string(),
                     code: "RATE_LIMIT_EXCEEDED".to_string(),
@@ -1032,24 +1070,108 @@ async fn rate_limit_middleware(
     }
 }
 
+/// Metrics middleware - records HTTP request metrics (when metrics feature is enabled)
+#[cfg(feature = "metrics")]
+async fn metrics_middleware(
+    request: Request<Body>,
+    next: Next,
+) -> Response {
+    let method = request.method().to_string();
+    let path = request.uri().path().to_string();
+
+    let mut timer = http_metrics().start_request(&method, &path);
+    let response = next.run(request).await;
+    timer.set_status(response.status().as_u16());
+
+    response
+}
+
+/// Handler for /metrics endpoint - exports Prometheus metrics
+#[cfg(feature = "metrics")]
+async fn get_metrics() -> impl IntoResponse {
+    let output = metrics().export();
+    (
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, "text/plain; version=0.0.4; charset=utf-8")],
+        output,
+    )
+}
+
 /// Start the HTTP server
 pub async fn serve(config: ServerConfig) -> Result<(), Box<dyn std::error::Error>> {
+    // Initialize tracing subscriber with environment filter
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::from_default_env()
+                .add_directive(tracing::Level::INFO.into())
+        )
+        .init();
+
+    info!(
+        addr = %config.addr,
+        timeout_secs = config.request_timeout_secs,
+        rate_limit_enabled = config.rate_limit.enabled,
+        "Starting Needle server"
+    );
+
     let db = if let Some(path) = &config.db_path {
+        info!(path = %path, "Opening database file");
         Database::open(path)?
     } else {
+        info!("Using in-memory database");
         Database::in_memory()
     };
 
     let state = Arc::new(AppState::with_config(db, &config));
+    let app = create_router_with_config(state.clone(), &config);
 
-    let app = create_router_with_config(state, &config);
-
-    println!("Needle server starting on http://{}", config.addr);
-    println!("API docs: http://{}/", config.addr);
+    info!("Listening on http://{}", config.addr);
 
     let listener = tokio::net::TcpListener::bind(&config.addr).await?;
-    axum::serve(listener, app).await?;
 
+    // Graceful shutdown handling
+    let shutdown_signal = async {
+        let ctrl_c = async {
+            tokio::signal::ctrl_c()
+                .await
+                .expect("Failed to install Ctrl+C handler");
+        };
+
+        #[cfg(unix)]
+        let terminate = async {
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                .expect("Failed to install SIGTERM handler")
+                .recv()
+                .await;
+        };
+
+        #[cfg(not(unix))]
+        let terminate = std::future::pending::<()>();
+
+        tokio::select! {
+            _ = ctrl_c => {},
+            _ = terminate => {},
+        }
+
+        info!("Shutdown signal received, starting graceful shutdown");
+    };
+
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal)
+        .await?;
+
+    // Save database on shutdown
+    info!("Saving database before shutdown");
+    {
+        let mut db = state.db.write().await;
+        if let Err(e) = db.save() {
+            error!(error = %e, "Failed to save database during shutdown");
+        } else {
+            info!("Database saved successfully");
+        }
+    }
+
+    info!("Server shutdown complete");
     Ok(())
 }
 
