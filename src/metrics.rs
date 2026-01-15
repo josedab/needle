@@ -369,8 +369,8 @@ impl NeedleMetrics {
         let encoder = TextEncoder::new();
         let metric_families = prometheus::gather();
         let mut buffer = Vec::new();
-        encoder.encode(&metric_families, &mut buffer).unwrap();
-        String::from_utf8(buffer).unwrap()
+        encoder.encode(&metric_families, &mut buffer).expect("prometheus encoding");
+        String::from_utf8(buffer).expect("prometheus output is UTF-8")
     }
 }
 

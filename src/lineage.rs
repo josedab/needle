@@ -38,8 +38,10 @@
 //! ```
 
 use crate::error::{NeedleError, Result};
+use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Information about the source of a vector.
@@ -215,7 +217,7 @@ impl VectorLineage {
     fn now() -> u64 {
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or_default()
             .as_secs()
     }
 }
@@ -762,6 +764,429 @@ impl LineageBuilder {
     }
 }
 
+// --- OTel-style Observability ---
+
+static SPAN_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+fn generate_span_id() -> String {
+    let count = SPAN_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let time = now_us();
+    format!(
+        "{:08x}{:08x}",
+        (time >> 32) as u32 ^ count as u32,
+        time as u32
+    )
+}
+
+fn generate_trace_id() -> String {
+    let count = SPAN_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let time = now_us();
+    format!("{:016x}{:016x}", time, count)
+}
+
+fn now_us() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_micros() as u64
+}
+
+/// Status of a span.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum SpanStatus {
+    /// Operation completed successfully.
+    Ok,
+    /// Operation failed with an error message.
+    Error(String),
+    /// Status not set.
+    Unset,
+}
+
+/// Lightweight OpenTelemetry-compatible trace context.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SpanContext {
+    /// Trace ID (32 hex chars).
+    pub trace_id: String,
+    /// Span ID (16 hex chars).
+    pub span_id: String,
+    /// Parent span ID.
+    pub parent_span_id: Option<String>,
+    /// Operation name.
+    pub operation: String,
+    /// Start time in microseconds since epoch.
+    pub start_time_us: u64,
+    /// End time in microseconds since epoch.
+    pub end_time_us: Option<u64>,
+    /// Span attributes.
+    pub attributes: HashMap<String, String>,
+    /// Span status.
+    pub status: SpanStatus,
+}
+
+/// Records and manages spans for observability.
+pub struct TraceRecorder {
+    spans: RwLock<Vec<SpanContext>>,
+}
+
+impl TraceRecorder {
+    /// Create a new trace recorder.
+    pub fn new() -> Self {
+        Self {
+            spans: RwLock::new(Vec::new()),
+        }
+    }
+
+    /// Start a new span, returning the created context.
+    pub fn start_span(
+        &self,
+        operation: &str,
+        trace_id: Option<&str>,
+        parent: Option<&str>,
+    ) -> SpanContext {
+        let span = SpanContext {
+            trace_id: trace_id
+                .map(|s| s.to_string())
+                .unwrap_or_else(generate_trace_id),
+            span_id: generate_span_id(),
+            parent_span_id: parent.map(|s| s.to_string()),
+            operation: operation.to_string(),
+            start_time_us: now_us(),
+            end_time_us: None,
+            attributes: HashMap::new(),
+            status: SpanStatus::Unset,
+        };
+        self.spans.write().push(span.clone());
+        span
+    }
+
+    /// End a span with the given status.
+    pub fn end_span(&self, span_id: &str, status: SpanStatus) {
+        let mut spans = self.spans.write();
+        if let Some(span) = spans.iter_mut().find(|s| s.span_id == span_id) {
+            span.end_time_us = Some(now_us());
+            span.status = status;
+        }
+    }
+
+    /// Get all spans belonging to a trace.
+    pub fn get_trace(&self, trace_id: &str) -> Vec<SpanContext> {
+        self.spans
+            .read()
+            .iter()
+            .filter(|s| s.trace_id == trace_id)
+            .cloned()
+            .collect()
+    }
+
+    /// Get the most recent spans up to `limit`.
+    pub fn get_recent_spans(&self, limit: usize) -> Vec<SpanContext> {
+        let spans = self.spans.read();
+        spans.iter().rev().take(limit).cloned().collect()
+    }
+}
+
+impl Default for TraceRecorder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+// --- Lineage Graph Traversal ---
+
+/// Detailed impact report from graph traversal.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GraphImpactReport {
+    /// Source vector ID.
+    pub source_id: String,
+    /// All affected vector IDs (descendants).
+    pub affected_vectors: Vec<String>,
+    /// Number of affected vectors.
+    pub affected_count: usize,
+    /// Models used by affected vectors.
+    pub affected_models: HashSet<String>,
+    /// Maximum depth reached during traversal.
+    pub depth: usize,
+}
+
+/// Graph traversal utilities built from a [`LineageTracker`].
+pub struct LineageGraphExplorer<'a> {
+    tracker: &'a LineageTracker,
+}
+
+impl<'a> LineageGraphExplorer<'a> {
+    /// Build a graph explorer from a lineage tracker.
+    pub fn new(tracker: &'a LineageTracker) -> Self {
+        Self { tracker }
+    }
+
+    /// Find all ancestors of a vector up to `max_depth` (BFS through parents).
+    pub fn ancestors(&self, vector_id: &str, max_depth: usize) -> Vec<String> {
+        let mut result = Vec::new();
+        let mut visited = HashSet::new();
+        let mut queue: VecDeque<(String, usize)> = VecDeque::new();
+
+        if let Some(lineage) = self.tracker.get(vector_id) {
+            for parent in &lineage.parents {
+                queue.push_back((parent.clone(), 1));
+            }
+        }
+
+        while let Some((id, depth)) = queue.pop_front() {
+            if depth > max_depth || visited.contains(&id) {
+                continue;
+            }
+            visited.insert(id.clone());
+            result.push(id.clone());
+
+            if let Some(lineage) = self.tracker.get(&id) {
+                for parent in &lineage.parents {
+                    queue.push_back((parent.clone(), depth + 1));
+                }
+            }
+        }
+
+        result
+    }
+
+    /// Find all descendants of a vector up to `max_depth` (BFS through children).
+    pub fn descendants(&self, vector_id: &str, max_depth: usize) -> Vec<String> {
+        let mut result = Vec::new();
+        let mut visited = HashSet::new();
+        let mut queue: VecDeque<(String, usize)> = VecDeque::new();
+
+        if let Some(lineage) = self.tracker.get(vector_id) {
+            for child in &lineage.children {
+                queue.push_back((child.clone(), 1));
+            }
+        }
+
+        while let Some((id, depth)) = queue.pop_front() {
+            if depth > max_depth || visited.contains(&id) {
+                continue;
+            }
+            visited.insert(id.clone());
+            result.push(id.clone());
+
+            if let Some(lineage) = self.tracker.get(&id) {
+                for child in &lineage.children {
+                    queue.push_back((child.clone(), depth + 1));
+                }
+            }
+        }
+
+        result
+    }
+
+    /// Perform impact analysis: find all vectors affected by a change to `source_id`.
+    pub fn impact_analysis(&self, source_id: &str) -> GraphImpactReport {
+        let mut affected = Vec::new();
+        let mut affected_models = HashSet::new();
+        let mut visited = HashSet::new();
+        let mut max_depth: usize = 0;
+        let mut queue: VecDeque<(String, usize)> = VecDeque::new();
+
+        if let Some(lineage) = self.tracker.get(source_id) {
+            for child in &lineage.children {
+                queue.push_back((child.clone(), 1));
+            }
+        }
+
+        while let Some((id, depth)) = queue.pop_front() {
+            if visited.contains(&id) {
+                continue;
+            }
+            visited.insert(id.clone());
+            affected.push(id.clone());
+            if depth > max_depth {
+                max_depth = depth;
+            }
+
+            if let Some(lineage) = self.tracker.get(&id) {
+                if !lineage.model.is_empty() {
+                    affected_models.insert(lineage.model.clone());
+                }
+                for child in &lineage.children {
+                    queue.push_back((child.clone(), depth + 1));
+                }
+            }
+        }
+
+        let affected_count = affected.len();
+        GraphImpactReport {
+            source_id: source_id.to_string(),
+            affected_vectors: affected,
+            affected_count,
+            affected_models,
+            depth: max_depth,
+        }
+    }
+
+    /// Find the shortest path between two vectors (treating graph as undirected).
+    pub fn path_between(&self, from: &str, to: &str) -> Option<Vec<String>> {
+        if from == to {
+            return Some(vec![from.to_string()]);
+        }
+
+        let mut visited = HashSet::new();
+        let mut queue: VecDeque<Vec<String>> = VecDeque::new();
+
+        visited.insert(from.to_string());
+        queue.push_back(vec![from.to_string()]);
+
+        while let Some(path) = queue.pop_front() {
+            let current = path.last().expect("path is non-empty");
+
+            if let Some(lineage) = self.tracker.get(current) {
+                let neighbors: Vec<&String> =
+                    lineage.parents.iter().chain(lineage.children.iter()).collect();
+
+                for neighbor in neighbors {
+                    if neighbor == to {
+                        let mut result = path.clone();
+                        result.push(neighbor.clone());
+                        return Some(result);
+                    }
+                    if !visited.contains(neighbor) {
+                        visited.insert(neighbor.clone());
+                        let mut new_path = path.clone();
+                        new_path.push(neighbor.clone());
+                        queue.push_back(new_path);
+                    }
+                }
+            }
+        }
+
+        None
+    }
+}
+
+// --- Thread-safe Lineage Tracker ---
+
+/// Thread-safe wrapper around [`LineageTracker`] using `parking_lot::RwLock`.
+pub struct ThreadSafeLineageTracker {
+    inner: RwLock<LineageTracker>,
+}
+
+impl ThreadSafeLineageTracker {
+    /// Create a new thread-safe lineage tracker.
+    pub fn new() -> Self {
+        Self {
+            inner: RwLock::new(LineageTracker::new()),
+        }
+    }
+
+    /// Register a vector with its lineage.
+    pub fn register(&self, vector_id: &str, lineage: VectorLineage) -> Result<()> {
+        self.inner.write().register(vector_id, lineage)
+    }
+
+    /// Get lineage for a vector (cloned).
+    pub fn get(&self, vector_id: &str) -> Option<VectorLineage> {
+        self.inner.read().get(vector_id).cloned()
+    }
+
+    /// Add a transformation to a vector.
+    pub fn add_transformation(
+        &self,
+        vector_id: &str,
+        transformation: Transformation,
+    ) -> Result<()> {
+        self.inner.write().add_transformation(vector_id, transformation)
+    }
+
+    /// Add a transformation with details.
+    pub fn add_transformation_with_details(
+        &self,
+        vector_id: &str,
+        transformation: Transformation,
+        user: Option<&str>,
+        notes: Option<&str>,
+    ) -> Result<()> {
+        self.inner
+            .write()
+            .add_transformation_with_details(vector_id, transformation, user, notes)
+    }
+
+    /// Add a tag.
+    pub fn add_tag(&self, vector_id: &str, tag: &str) -> Result<()> {
+        self.inner.write().add_tag(vector_id, tag)
+    }
+
+    /// Remove a tag.
+    pub fn remove_tag(&self, vector_id: &str, tag: &str) -> Result<()> {
+        self.inner.write().remove_tag(vector_id, tag)
+    }
+
+    /// Set quality score.
+    pub fn set_quality_score(&self, vector_id: &str, score: f32) -> Result<()> {
+        self.inner.write().set_quality_score(vector_id, score)
+    }
+
+    /// Find vectors by source (cloned).
+    pub fn find_by_source(&self, source_id: &str) -> Vec<VectorLineage> {
+        self.inner
+            .read()
+            .find_by_source(source_id)
+            .into_iter()
+            .cloned()
+            .collect()
+    }
+
+    /// Find vectors by model (cloned).
+    pub fn find_by_model(&self, model: &str) -> Vec<VectorLineage> {
+        self.inner
+            .read()
+            .find_by_model(model)
+            .into_iter()
+            .cloned()
+            .collect()
+    }
+
+    /// Find vectors by tag (cloned).
+    pub fn find_by_tag(&self, tag: &str) -> Vec<VectorLineage> {
+        self.inner
+            .read()
+            .find_by_tag(tag)
+            .into_iter()
+            .cloned()
+            .collect()
+    }
+
+    /// Delete lineage for a vector.
+    pub fn delete(&self, vector_id: &str) -> Result<()> {
+        self.inner.write().delete(vector_id)
+    }
+
+    /// Get statistics.
+    pub fn stats(&self) -> LineageStats {
+        self.inner.read().stats()
+    }
+
+    /// Get count.
+    pub fn len(&self) -> usize {
+        self.inner.read().len()
+    }
+
+    /// Check if empty.
+    pub fn is_empty(&self) -> bool {
+        self.inner.read().is_empty()
+    }
+
+    /// Access the inner tracker with a read lock for graph exploration.
+    pub fn with_read<F, R>(&self, f: F) -> R
+    where
+        F: FnOnce(&LineageTracker) -> R,
+    {
+        f(&self.inner.read())
+    }
+}
+
+impl Default for ThreadSafeLineageTracker {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1076,5 +1501,518 @@ mod tests {
         assert!(lineage.tags.contains("validated"));
         assert_eq!(lineage.confidence, 0.95);
         assert_eq!(lineage.quality_score, Some(0.88));
+    }
+
+    // --- New tests for SpanContext, TraceRecorder, LineageGraphExplorer, ThreadSafeLineageTracker ---
+
+    #[test]
+    fn test_span_context_creation() {
+        let span = SpanContext {
+            trace_id: "abc123".to_string(),
+            span_id: "span001".to_string(),
+            parent_span_id: None,
+            operation: "insert".to_string(),
+            start_time_us: 1000,
+            end_time_us: None,
+            attributes: HashMap::new(),
+            status: SpanStatus::Unset,
+        };
+
+        assert_eq!(span.trace_id, "abc123");
+        assert_eq!(span.operation, "insert");
+        assert!(span.end_time_us.is_none());
+        assert!(matches!(span.status, SpanStatus::Unset));
+    }
+
+    #[test]
+    fn test_span_context_lifecycle() {
+        let mut span = SpanContext {
+            trace_id: "t1".to_string(),
+            span_id: "s1".to_string(),
+            parent_span_id: None,
+            operation: "search".to_string(),
+            start_time_us: 100,
+            end_time_us: None,
+            attributes: HashMap::new(),
+            status: SpanStatus::Unset,
+        };
+
+        span.attributes.insert("k".to_string(), "v".to_string());
+        span.end_time_us = Some(200);
+        span.status = SpanStatus::Ok;
+
+        assert_eq!(span.end_time_us, Some(200));
+        assert!(matches!(span.status, SpanStatus::Ok));
+        assert_eq!(span.attributes.get("k").unwrap(), "v");
+    }
+
+    #[test]
+    fn test_span_status_error() {
+        let status = SpanStatus::Error("timeout".to_string());
+        if let SpanStatus::Error(msg) = &status {
+            assert_eq!(msg, "timeout");
+        } else {
+            panic!("expected SpanStatus::Error");
+        }
+    }
+
+    #[test]
+    fn test_trace_recorder_start_span() {
+        let recorder = TraceRecorder::new();
+
+        let span = recorder.start_span("insert_vector", None, None);
+        assert_eq!(span.operation, "insert_vector");
+        assert!(!span.trace_id.is_empty());
+        assert!(!span.span_id.is_empty());
+        assert!(span.parent_span_id.is_none());
+        assert!(span.end_time_us.is_none());
+    }
+
+    #[test]
+    fn test_trace_recorder_with_trace_id() {
+        let recorder = TraceRecorder::new();
+
+        let span = recorder.start_span("op1", Some("my-trace"), None);
+        assert_eq!(span.trace_id, "my-trace");
+
+        let child = recorder.start_span("op2", Some("my-trace"), Some(&span.span_id));
+        assert_eq!(child.trace_id, "my-trace");
+        assert_eq!(child.parent_span_id.as_deref(), Some(span.span_id.as_str()));
+    }
+
+    #[test]
+    fn test_trace_recorder_end_span() {
+        let recorder = TraceRecorder::new();
+
+        let span = recorder.start_span("work", None, None);
+        recorder.end_span(&span.span_id, SpanStatus::Ok);
+
+        let traces = recorder.get_trace(&span.trace_id);
+        assert_eq!(traces.len(), 1);
+        assert!(traces[0].end_time_us.is_some());
+        assert!(matches!(traces[0].status, SpanStatus::Ok));
+    }
+
+    #[test]
+    fn test_trace_recorder_end_span_error() {
+        let recorder = TraceRecorder::new();
+
+        let span = recorder.start_span("fail_op", None, None);
+        recorder.end_span(&span.span_id, SpanStatus::Error("bad input".to_string()));
+
+        let traces = recorder.get_trace(&span.trace_id);
+        assert!(matches!(&traces[0].status, SpanStatus::Error(msg) if msg == "bad input"));
+    }
+
+    #[test]
+    fn test_trace_recorder_get_trace() {
+        let recorder = TraceRecorder::new();
+
+        let s1 = recorder.start_span("op1", Some("trace-A"), None);
+        let _s2 = recorder.start_span("op2", Some("trace-A"), Some(&s1.span_id));
+        let _s3 = recorder.start_span("op3", Some("trace-B"), None);
+
+        let trace_a = recorder.get_trace("trace-A");
+        assert_eq!(trace_a.len(), 2);
+
+        let trace_b = recorder.get_trace("trace-B");
+        assert_eq!(trace_b.len(), 1);
+    }
+
+    #[test]
+    fn test_trace_recorder_get_recent_spans() {
+        let recorder = TraceRecorder::new();
+
+        for i in 0..5 {
+            recorder.start_span(&format!("op{}", i), None, None);
+        }
+
+        let recent = recorder.get_recent_spans(3);
+        assert_eq!(recent.len(), 3);
+        assert_eq!(recent[0].operation, "op4");
+        assert_eq!(recent[2].operation, "op2");
+    }
+
+    #[test]
+    fn test_trace_recorder_unique_span_ids() {
+        let recorder = TraceRecorder::new();
+        let s1 = recorder.start_span("a", None, None);
+        let s2 = recorder.start_span("b", None, None);
+        assert_ne!(s1.span_id, s2.span_id);
+    }
+
+    // --- LineageGraphExplorer tests ---
+
+    fn build_chain_tracker() -> LineageTracker {
+        // root -> mid -> leaf
+        let mut tracker = LineageTracker::new();
+
+        let root = LineageBuilder::new("root")
+            .from_document("doc1", 0)
+            .model("model_a", "1.0")
+            .build();
+        tracker.register("root", root).unwrap();
+
+        let mid = LineageBuilder::new("mid")
+            .derived_from(vec!["root".to_string()], "transform")
+            .model("model_a", "1.0")
+            .build();
+        tracker.register("mid", mid).unwrap();
+
+        let leaf = LineageBuilder::new("leaf")
+            .derived_from(vec!["mid".to_string()], "transform")
+            .model("model_b", "2.0")
+            .build();
+        tracker.register("leaf", leaf).unwrap();
+
+        tracker
+    }
+
+    #[test]
+    fn test_graph_explorer_ancestors() {
+        let tracker = build_chain_tracker();
+        let explorer = LineageGraphExplorer::new(&tracker);
+
+        let ancestors = explorer.ancestors("leaf", 10);
+        assert_eq!(ancestors.len(), 2);
+        assert!(ancestors.contains(&"mid".to_string()));
+        assert!(ancestors.contains(&"root".to_string()));
+    }
+
+    #[test]
+    fn test_graph_explorer_ancestors_depth_limit() {
+        let tracker = build_chain_tracker();
+        let explorer = LineageGraphExplorer::new(&tracker);
+
+        let ancestors = explorer.ancestors("leaf", 1);
+        assert_eq!(ancestors.len(), 1);
+        assert!(ancestors.contains(&"mid".to_string()));
+    }
+
+    #[test]
+    fn test_graph_explorer_descendants() {
+        let tracker = build_chain_tracker();
+        let explorer = LineageGraphExplorer::new(&tracker);
+
+        let descendants = explorer.descendants("root", 10);
+        assert_eq!(descendants.len(), 2);
+        assert!(descendants.contains(&"mid".to_string()));
+        assert!(descendants.contains(&"leaf".to_string()));
+    }
+
+    #[test]
+    fn test_graph_explorer_descendants_depth_limit() {
+        let tracker = build_chain_tracker();
+        let explorer = LineageGraphExplorer::new(&tracker);
+
+        let descendants = explorer.descendants("root", 1);
+        assert_eq!(descendants.len(), 1);
+        assert!(descendants.contains(&"mid".to_string()));
+    }
+
+    #[test]
+    fn test_graph_explorer_impact_analysis() {
+        let tracker = build_chain_tracker();
+        let explorer = LineageGraphExplorer::new(&tracker);
+
+        let report = explorer.impact_analysis("root");
+        assert_eq!(report.source_id, "root");
+        assert_eq!(report.affected_count, 2);
+        assert!(report.affected_vectors.contains(&"mid".to_string()));
+        assert!(report.affected_vectors.contains(&"leaf".to_string()));
+        assert!(report.affected_models.contains("model_a"));
+        assert!(report.affected_models.contains("model_b"));
+        assert_eq!(report.depth, 2);
+    }
+
+    #[test]
+    fn test_graph_explorer_impact_analysis_leaf() {
+        let tracker = build_chain_tracker();
+        let explorer = LineageGraphExplorer::new(&tracker);
+
+        let report = explorer.impact_analysis("leaf");
+        assert_eq!(report.affected_count, 0);
+        assert_eq!(report.depth, 0);
+    }
+
+    #[test]
+    fn test_graph_explorer_impact_analysis_wide() {
+        let mut tracker = LineageTracker::new();
+
+        let root = LineageBuilder::new("root")
+            .from_document("doc1", 0)
+            .model("model_a", "1.0")
+            .build();
+        tracker.register("root", root).unwrap();
+
+        // Two children from root
+        for i in 0..2 {
+            let child = LineageBuilder::new(&format!("child{}", i))
+                .derived_from(vec!["root".to_string()], "split")
+                .model("model_a", "1.0")
+                .build();
+            tracker.register(&format!("child{}", i), child).unwrap();
+        }
+
+        // Grandchild from child0
+        let gc = LineageBuilder::new("grandchild")
+            .derived_from(vec!["child0".to_string()], "refine")
+            .model("model_b", "2.0")
+            .build();
+        tracker.register("grandchild", gc).unwrap();
+
+        let explorer = LineageGraphExplorer::new(&tracker);
+        let report = explorer.impact_analysis("root");
+
+        assert_eq!(report.affected_count, 3);
+        assert_eq!(report.depth, 2);
+        assert!(report.affected_models.contains("model_a"));
+        assert!(report.affected_models.contains("model_b"));
+    }
+
+    #[test]
+    fn test_graph_explorer_path_between_direct() {
+        let tracker = build_chain_tracker();
+        let explorer = LineageGraphExplorer::new(&tracker);
+
+        let path = explorer.path_between("root", "mid");
+        assert!(path.is_some());
+        let path = path.unwrap();
+        assert_eq!(path, vec!["root", "mid"]);
+    }
+
+    #[test]
+    fn test_graph_explorer_path_between_transitive() {
+        let tracker = build_chain_tracker();
+        let explorer = LineageGraphExplorer::new(&tracker);
+
+        let path = explorer.path_between("root", "leaf");
+        assert!(path.is_some());
+        let path = path.unwrap();
+        assert_eq!(path.len(), 3);
+        assert_eq!(path[0], "root");
+        assert_eq!(path[2], "leaf");
+    }
+
+    #[test]
+    fn test_graph_explorer_path_between_reverse() {
+        let tracker = build_chain_tracker();
+        let explorer = LineageGraphExplorer::new(&tracker);
+
+        // Should find path going child->parent direction
+        let path = explorer.path_between("leaf", "root");
+        assert!(path.is_some());
+        let path = path.unwrap();
+        assert_eq!(path.len(), 3);
+        assert_eq!(path[0], "leaf");
+        assert_eq!(path[2], "root");
+    }
+
+    #[test]
+    fn test_graph_explorer_path_between_same() {
+        let tracker = build_chain_tracker();
+        let explorer = LineageGraphExplorer::new(&tracker);
+
+        let path = explorer.path_between("root", "root");
+        assert_eq!(path, Some(vec!["root".to_string()]));
+    }
+
+    #[test]
+    fn test_graph_explorer_path_between_disconnected() {
+        let mut tracker = LineageTracker::new();
+
+        let v1 = LineageBuilder::new("a")
+            .from_document("d1", 0)
+            .model("m1", "1.0")
+            .build();
+        tracker.register("a", v1).unwrap();
+
+        let v2 = LineageBuilder::new("b")
+            .from_document("d2", 0)
+            .model("m1", "1.0")
+            .build();
+        tracker.register("b", v2).unwrap();
+
+        let explorer = LineageGraphExplorer::new(&tracker);
+        assert!(explorer.path_between("a", "b").is_none());
+    }
+
+    // --- ThreadSafeLineageTracker tests ---
+
+    #[test]
+    fn test_thread_safe_tracker_basic() {
+        let tracker = ThreadSafeLineageTracker::new();
+        assert!(tracker.is_empty());
+
+        let lineage = LineageBuilder::new("vec1")
+            .from_document("doc1", 0)
+            .model("model1", "1.0")
+            .build();
+        tracker.register("vec1", lineage).unwrap();
+
+        assert_eq!(tracker.len(), 1);
+        assert!(tracker.get("vec1").is_some());
+    }
+
+    #[test]
+    fn test_thread_safe_tracker_transformations() {
+        let tracker = ThreadSafeLineageTracker::new();
+
+        let lineage = LineageBuilder::new("vec1")
+            .from_document("doc1", 0)
+            .model("model1", "1.0")
+            .build();
+        tracker.register("vec1", lineage).unwrap();
+
+        tracker
+            .add_transformation("vec1", Transformation::Normalize)
+            .unwrap();
+
+        let l = tracker.get("vec1").unwrap();
+        assert_eq!(l.transformations.len(), 2); // Created + Normalize
+    }
+
+    #[test]
+    fn test_thread_safe_tracker_tags() {
+        let tracker = ThreadSafeLineageTracker::new();
+
+        let lineage = LineageBuilder::new("vec1")
+            .from_document("doc1", 0)
+            .model("model1", "1.0")
+            .build();
+        tracker.register("vec1", lineage).unwrap();
+
+        tracker.add_tag("vec1", "important").unwrap();
+        assert_eq!(tracker.find_by_tag("important").len(), 1);
+
+        tracker.remove_tag("vec1", "important").unwrap();
+        assert_eq!(tracker.find_by_tag("important").len(), 0);
+    }
+
+    #[test]
+    fn test_thread_safe_tracker_find_by_source_and_model() {
+        let tracker = ThreadSafeLineageTracker::new();
+
+        let l1 = LineageBuilder::new("vec1")
+            .from_document("doc1", 0)
+            .model("model_a", "1.0")
+            .build();
+        tracker.register("vec1", l1).unwrap();
+
+        let l2 = LineageBuilder::new("vec2")
+            .from_document("doc1", 1)
+            .model("model_b", "1.0")
+            .build();
+        tracker.register("vec2", l2).unwrap();
+
+        assert_eq!(tracker.find_by_source("doc1").len(), 2);
+        assert_eq!(tracker.find_by_model("model_a").len(), 1);
+    }
+
+    #[test]
+    fn test_thread_safe_tracker_delete() {
+        let tracker = ThreadSafeLineageTracker::new();
+
+        let lineage = LineageBuilder::new("vec1")
+            .from_document("doc1", 0)
+            .model("model1", "1.0")
+            .build();
+        tracker.register("vec1", lineage).unwrap();
+
+        tracker.delete("vec1").unwrap();
+        assert!(tracker.is_empty());
+    }
+
+    #[test]
+    fn test_thread_safe_tracker_stats() {
+        let tracker = ThreadSafeLineageTracker::new();
+
+        let lineage = LineageBuilder::new("vec1")
+            .from_document("doc1", 0)
+            .model("model1", "1.0")
+            .build();
+        tracker.register("vec1", lineage).unwrap();
+
+        let stats = tracker.stats();
+        assert_eq!(stats.total_vectors, 1);
+    }
+
+    #[test]
+    fn test_thread_safe_tracker_quality_score() {
+        let tracker = ThreadSafeLineageTracker::new();
+
+        let lineage = LineageBuilder::new("vec1")
+            .from_document("doc1", 0)
+            .model("model1", "1.0")
+            .build();
+        tracker.register("vec1", lineage).unwrap();
+
+        tracker.set_quality_score("vec1", 0.9).unwrap();
+        assert_eq!(tracker.get("vec1").unwrap().quality_score, Some(0.9));
+    }
+
+    #[test]
+    fn test_thread_safe_tracker_concurrent_access() {
+        use std::sync::Arc;
+        use std::thread;
+
+        let tracker = Arc::new(ThreadSafeLineageTracker::new());
+        let mut handles = vec![];
+
+        // Spawn writers
+        for i in 0..10 {
+            let t = Arc::clone(&tracker);
+            handles.push(thread::spawn(move || {
+                let lineage = LineageBuilder::new(&format!("vec{}", i))
+                    .from_document(&format!("doc{}", i), 0)
+                    .model("model1", "1.0")
+                    .build();
+                t.register(&format!("vec{}", i), lineage).unwrap();
+            }));
+        }
+
+        for h in handles {
+            h.join().unwrap();
+        }
+
+        assert_eq!(tracker.len(), 10);
+
+        // Concurrent reads
+        let mut read_handles = vec![];
+        for i in 0..10 {
+            let t = Arc::clone(&tracker);
+            read_handles.push(thread::spawn(move || {
+                assert!(t.get(&format!("vec{}", i)).is_some());
+            }));
+        }
+
+        for h in read_handles {
+            h.join().unwrap();
+        }
+    }
+
+    #[test]
+    fn test_thread_safe_tracker_with_read() {
+        let tracker = ThreadSafeLineageTracker::new();
+
+        let root = LineageBuilder::new("root")
+            .from_document("doc1", 0)
+            .model("model1", "1.0")
+            .build();
+        tracker.register("root", root).unwrap();
+
+        let child = LineageBuilder::new("child")
+            .derived_from(vec!["root".to_string()], "copy")
+            .model("model1", "1.0")
+            .build();
+        tracker.register("child", child).unwrap();
+
+        let descendants = tracker.with_read(|inner| {
+            let explorer = LineageGraphExplorer::new(inner);
+            explorer.descendants("root", 10)
+        });
+
+        assert_eq!(descendants.len(), 1);
+        assert!(descendants.contains(&"child".to_string()));
     }
 }
