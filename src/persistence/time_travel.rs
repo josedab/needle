@@ -287,7 +287,7 @@ impl TimeExpression {
     pub fn resolve(&self) -> Result<u64> {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .unwrap()
+            .expect("system time before UNIX epoch")
             .as_secs();
 
         match self {
@@ -432,7 +432,7 @@ impl TimeTravelIndex {
     fn now() -> u64 {
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .unwrap()
+            .expect("system time before UNIX epoch")
             .as_secs()
     }
 
@@ -1327,7 +1327,7 @@ impl BranchManager {
         );
         self.branches.insert(name.to_string(), branch);
 
-        Ok(self.branches.get(name).unwrap())
+        Ok(self.branches.get(name).expect("branch exists after insertion"))
     }
 
     /// Create a branch from the current state
@@ -1346,7 +1346,7 @@ impl BranchManager {
 
     /// Get current branch
     pub fn current(&self) -> &Branch {
-        self.branches.get(&self.current_branch).unwrap()
+        self.branches.get(&self.current_branch).expect("current branch exists")
     }
 
     /// Get a branch by name
@@ -1512,7 +1512,7 @@ fn uuid_v4() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .unwrap()
+        .expect("system time before UNIX epoch")
         .as_nanos();
     format!("{:016x}", now)
 }
