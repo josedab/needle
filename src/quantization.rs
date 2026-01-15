@@ -13,6 +13,9 @@ pub struct ScalarQuantizer {
     scale: Vec<f32>,
     /// Dimensions
     dimensions: usize,
+    /// Cached average scale for distance computation (precomputed for performance)
+    #[serde(default)]
+    avg_scale_cached: f32,
 }
 
 impl ScalarQuantizer {
@@ -27,6 +30,7 @@ impl ScalarQuantizer {
                 max_vals: Vec::new(),
                 scale: Vec::new(),
                 dimensions: 0,
+                avg_scale_cached: 1.0,
             };
         }
 
@@ -57,11 +61,19 @@ impl ScalarQuantizer {
             })
             .collect();
 
+        // Precompute average scale for distance computation
+        let avg_scale_cached = if scale.is_empty() {
+            1.0
+        } else {
+            scale.iter().sum::<f32>() / scale.len() as f32
+        };
+
         Self {
             min_vals,
             max_vals,
             scale,
             dimensions: dims,
+            avg_scale_cached,
         }
     }
 
@@ -115,6 +127,8 @@ impl ScalarQuantizer {
     }
 
     /// Compute squared Euclidean distance between quantized vectors
+    ///
+    /// Uses precomputed average scale for faster distance computation.
     pub fn distance_squared(&self, a: &[u8], b: &[u8]) -> f32 {
         let mut sum: u32 = 0;
         for (va, vb) in a.iter().zip(b.iter()) {
@@ -122,9 +136,8 @@ impl ScalarQuantizer {
             sum += (diff * diff) as u32;
         }
 
-        // Scale back to original space (approximate)
-        let avg_scale: f32 = self.scale.iter().sum::<f32>() / self.scale.len() as f32;
-        (sum as f32) / (avg_scale * avg_scale)
+        // Scale back to original space using cached average scale
+        (sum as f32) / (self.avg_scale_cached * self.avg_scale_cached)
     }
 
     /// Compute asymmetric distance (query is f32, db vector is u8)
