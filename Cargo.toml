@@ -42,6 +42,10 @@ parking_lot = "0.12"
 # Parallelization
 rayon = "1.10"
 
+# Logging/tracing
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"], optional = true }
+
 # CLI
 clap = { version = "4", features = ["derive"] }
 
@@ -49,7 +53,7 @@ clap = { version = "4", features = ["derive"] }
 axum = { version = "0.7", optional = true }
 tokio = { version = "1", features = ["full"], optional = true }
 tower = { version = "0.5", optional = true }
-tower-http = { version = "0.6", features = ["cors", "trace", "limit"], optional = true }
+tower-http = { version = "0.6", features = ["cors", "trace", "limit", "timeout"], optional = true }
 futures = { version = "0.3", optional = true }
 governor = { version = "0.6", optional = true }
 
@@ -118,7 +122,7 @@ harness = false
 [features]
 default = []
 simd = []
-server = ["axum", "tokio", "tower", "tower-http", "futures", "governor"]
+server = ["axum", "tokio", "tower", "tower-http", "futures", "governor", "tracing-subscriber"]
 web-ui = ["axum", "tokio"]
 metrics = ["prometheus"]
 hybrid = ["rust-stemmers"]
