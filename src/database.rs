@@ -56,6 +56,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use tracing::{debug, info, warn, instrument};
 
 /// Export entry type: (id, vector, metadata)
 pub type ExportEntry = (String, Vec<f32>, Option<Value>);
@@ -124,10 +125,13 @@ impl Database {
     }
 
     /// Open or create a database with custom configuration
+    #[instrument(skip(config), fields(path = ?config.path))]
     pub fn open_with_config(config: DatabaseConfig) -> Result<Self> {
         let exists = config.path.exists();
+        info!(exists = exists, "Opening database");
 
         if !exists && !config.create_if_missing {
+            warn!("Database not found and create_if_missing is false");
             return Err(NeedleError::InvalidDatabase(format!(
                 "Database not found: {:?}",
                 config.path
@@ -155,6 +159,11 @@ impl Database {
                     if header.state_checksum > 0 {
                         let computed_checksum = crc32(&state_bytes);
                         if computed_checksum != header.state_checksum {
+                            warn!(
+                                expected = header.state_checksum,
+                                computed = computed_checksum,
+                                "Checksum mismatch detected - database may be corrupted"
+                            );
                             return Err(NeedleError::Corruption(
                                 "State data checksum mismatch. Database file may be corrupted.".into(),
                             ));
@@ -162,6 +171,7 @@ impl Database {
                     }
 
                     serde_json::from_slice(&state_bytes).map_err(|e| {
+                        warn!(error = %e, "Failed to deserialize database state");
                         NeedleError::Corruption(format!(
                             "Failed to deserialize database state: {}. Database file may be corrupted.",
                             e
@@ -176,6 +186,14 @@ impl Database {
         } else {
             DatabaseState::default()
         };
+
+        let collection_count = state.collections.len();
+        let total_vectors: usize = state.collections.values().map(|c| c.len()).sum();
+        info!(
+            collections = collection_count,
+            vectors = total_vectors,
+            "Database opened successfully"
+        );
 
         Ok(Self {
             config,
@@ -218,9 +236,15 @@ impl Database {
         let mut state = self.state.write();
 
         if state.collections.contains_key(&config.name) {
+            debug!(collection = %config.name, "Collection already exists");
             return Err(NeedleError::CollectionAlreadyExists(config.name));
         }
 
+        info!(
+            collection = %config.name,
+            dimensions = config.dimensions,
+            "Creating collection"
+        );
         let collection = Collection::new(config.clone());
         state.collections.insert(config.name, collection);
 
@@ -250,7 +274,10 @@ impl Database {
         let mut state = self.state.write();
         let removed = state.collections.remove(name).is_some();
         if removed {
+            info!(collection = %name, "Collection dropped");
             self.mark_modified();
+        } else {
+            debug!(collection = %name, "Collection not found for drop");
         }
         Ok(removed)
     }
@@ -264,15 +291,20 @@ impl Database {
     ///
     /// Uses generation-based tracking to avoid race conditions where
     /// concurrent modifications could be marked as saved when they weren't.
+    #[instrument(skip(self))]
     pub fn save(&mut self) -> Result<()> {
         let storage = match &mut self.storage {
             Some(s) => s,
-            None => return Ok(()), // In-memory database, nothing to save
+            None => {
+                debug!("In-memory database, skipping save");
+                return Ok(());
+            }
         };
 
         // Capture the modification generation BEFORE serializing state.
         // This ensures we only mark as saved up to this point.
         let gen_at_save_start = self.modification_gen.load(Ordering::Acquire);
+        debug!(generation = gen_at_save_start, "Starting save");
 
         let state = self.state.read();
         let state_bytes = serde_json::to_vec(&*state)?;
@@ -309,6 +341,12 @@ impl Database {
         if current_mod_gen == gen_at_save_start {
             self.dirty.store(false, Ordering::Release);
         }
+
+        info!(
+            vectors = header.vector_count,
+            bytes = state_bytes.len(),
+            "Database saved successfully"
+        );
 
         Ok(())
     }
