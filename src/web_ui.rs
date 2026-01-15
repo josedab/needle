@@ -66,7 +66,7 @@ pub struct WebUiConfig {
 impl Default for WebUiConfig {
     fn default() -> Self {
         Self {
-            addr: "127.0.0.1:8081".parse().unwrap(),
+            addr: "127.0.0.1:8081".parse().expect("valid socket addr"),
             title: "Needle Dashboard".to_string(),
             enable_query_playground: true,
             refresh_interval: 30,
@@ -115,7 +115,7 @@ impl WebUiState {
     pub fn new(db: Database, config: WebUiConfig) -> Self {
         let start_time = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or_default()
             .as_secs();
         Self {
             db: RwLock::new(db),
@@ -128,7 +128,7 @@ impl WebUiState {
     pub fn uptime(&self) -> u64 {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or_default()
             .as_secs();
         now - self.start_time
     }

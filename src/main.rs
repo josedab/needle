@@ -1,7 +1,7 @@
 //! Needle CLI - Command line interface for the Needle vector database
 
 use clap::{Parser, Subcommand};
-use needle::{CollectionConfig, Database, DistanceFunction, Result};
+use needle::{CollectionConfig, Database, DistanceFunction, NeedleError, Result};
 use serde_json::json;
 use std::io::{self, BufRead};
 
@@ -9,11 +9,9 @@ use std::io::{self, BufRead};
 use needle::server::{ServerConfig, serve};
 
 // Import new features for CLI
-use needle::{
-    BackupConfig, BackupManager, BackupType,
-    DriftConfig, DriftDetector,
-    QueryAnalyzer, VisualQueryBuilder,
-};
+use needle::backup::{BackupConfig, BackupManager, BackupType};
+use needle::drift::{DriftConfig, DriftDetector};
+use needle::query_builder::{QueryAnalyzer, VisualQueryBuilder};
 
 #[derive(Parser)]
 #[command(name = "needle")]
@@ -221,6 +219,17 @@ enum Commands {
         memory_mb: Option<usize>,
     },
 
+    /// Run an interactive demo (creates an in-memory database, inserts sample vectors, and searches)
+    Demo {
+        /// Number of vectors to generate
+        #[arg(short, long, default_value = "100")]
+        count: usize,
+
+        /// Vector dimensions
+        #[arg(short, long, default_value = "128")]
+        dimensions: usize,
+    },
+
     /// Natural language query interface
     Query {
         /// Path to the database file
@@ -262,6 +271,35 @@ enum Commands {
     /// TTL (time-to-live) management for vectors
     #[command(subcommand)]
     Ttl(TtlCommands),
+
+    /// Developer tools: setup, check, generate test data
+    #[command(subcommand)]
+    Dev(DevCommands),
+}
+
+/// Developer subcommands
+#[derive(Subcommand)]
+enum DevCommands {
+    /// Run pre-commit checks (format + lint + unit tests)
+    Check,
+
+    /// Generate a test database with sample data
+    GenerateTestData {
+        /// Output database path
+        #[arg(default_value = "test.needle")]
+        output: String,
+
+        /// Number of vectors to generate
+        #[arg(short, long, default_value_t = 1000)]
+        count: usize,
+
+        /// Vector dimensions
+        #[arg(short, long, default_value_t = 128)]
+        dimensions: usize,
+    },
+
+    /// Show project info (version, features, module count)
+    Info,
 }
 
 /// Backup subcommands
@@ -514,9 +552,33 @@ enum FederateCommands {
     },
 }
 
-fn main() -> Result<()> {
+fn main() {
     let cli = Cli::parse();
 
+    if let Err(err) = run(cli) {
+        print_error(&err);
+        std::process::exit(1);
+    }
+}
+
+fn print_error(err: &NeedleError) {
+    use needle::error::Recoverable;
+
+    eprintln!("Error: {}", err);
+
+    let code = err.error_code();
+    eprintln!("  Code: {} ({})", code.code(), code.category());
+
+    let hints = err.recovery_hints();
+    if !hints.is_empty() {
+        eprintln!();
+        for hint in &hints {
+            eprintln!("  Hint: {}", hint);
+        }
+    }
+}
+
+fn run(cli: Cli) -> Result<()> {
     match cli.command {
         Commands::Info { database } => info_command(&database),
         Commands::Create { database } => create_command(&database),
@@ -580,6 +642,7 @@ fn main() -> Result<()> {
             profile,
             memory_mb,
         } => tune_command(vectors, dimensions, &profile, memory_mb),
+        Commands::Demo { count, dimensions } => demo_command(count, dimensions),
         Commands::Query {
             database,
             collection,
@@ -592,6 +655,7 @@ fn main() -> Result<()> {
         Commands::Federate(cmd) => federate_command(cmd),
         Commands::Alias(cmd) => alias_command(cmd),
         Commands::Ttl(cmd) => ttl_command(cmd),
+        Commands::Dev(cmd) => dev_command(cmd),
     }
 }
 
@@ -647,14 +711,16 @@ fn create_collection_command(
     dimensions: usize,
     distance: &str,
 ) -> Result<()> {
+    if dimensions == 0 {
+        return Err(NeedleError::InvalidConfig(
+            "Vector dimensions must be greater than 0".to_string(),
+        ));
+    }
     let mut db = Database::open(path)?;
 
-    let dist_fn = match distance.to_lowercase().as_str() {
-        "cosine" => DistanceFunction::Cosine,
-        "euclidean" | "l2" => DistanceFunction::Euclidean,
-        "dot" | "dotproduct" => DistanceFunction::DotProduct,
-        "manhattan" | "l1" => DistanceFunction::Manhattan,
-        _ => {
+    let dist_fn = match parse_distance(distance) {
+        Some(parsed) => parsed,
+        None => {
             eprintln!("Unknown distance function: {}. Using cosine.", distance);
             DistanceFunction::Cosine
         }
@@ -751,30 +817,17 @@ fn search_command(
     explain: bool,
     distance_override: Option<&str>,
 ) -> Result<()> {
-    use needle::DistanceFunction;
-
     let db = Database::open(path)?;
     let coll = db.collection(collection_name)?;
 
-    let query: Vec<f32> = query_str
-        .split(',')
-        .filter_map(|s| s.trim().parse().ok())
-        .collect();
-
-    if query.is_empty() {
-        eprintln!("Invalid query vector. Use comma-separated floats.");
-        return Ok(());
-    }
+    let query = parse_query_vector(query_str)?;
 
     // Parse distance override if provided
-    let distance_fn = distance_override.map(|d| match d.to_lowercase().as_str() {
-        "cosine" => DistanceFunction::Cosine,
-        "euclidean" => DistanceFunction::Euclidean,
-        "dot" | "dotproduct" => DistanceFunction::DotProduct,
-        "manhattan" => DistanceFunction::Manhattan,
-        _ => {
+    let distance_fn = distance_override.and_then(|d| match parse_distance(d) {
+        Some(parsed) => Some(parsed),
+        None => {
             eprintln!("Warning: Unknown distance function '{}', using collection default", d);
-            DistanceFunction::Cosine
+            None
         }
     });
 
@@ -844,6 +897,38 @@ fn search_command(
     }
 
     Ok(())
+}
+
+fn parse_distance(distance: &str) -> Option<DistanceFunction> {
+    match distance.to_lowercase().as_str() {
+        "cosine" => Some(DistanceFunction::Cosine),
+        "euclidean" | "l2" => Some(DistanceFunction::Euclidean),
+        "dot" | "dotproduct" => Some(DistanceFunction::DotProduct),
+        "manhattan" | "l1" => Some(DistanceFunction::Manhattan),
+        _ => None,
+    }
+}
+
+fn parse_query_vector(query_str: &str) -> Result<Vec<f32>> {
+    let mut values = Vec::new();
+    for part in query_str.split(',') {
+        let trimmed = part.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let value = trimmed.parse::<f32>().map_err(|_| {
+            NeedleError::InvalidVector(format!("Invalid float value '{}'", trimmed))
+        })?;
+        values.push(value);
+    }
+
+    if values.is_empty() {
+        return Err(NeedleError::InvalidVector(
+            "Query vector must contain at least one value".to_string(),
+        ));
+    }
+
+    Ok(values)
 }
 
 fn delete_command(path: &str, collection_name: &str, id: &str) -> Result<()> {
@@ -1061,6 +1146,68 @@ fn serve_command(address: &str, database: Option<String>) -> Result<()> {
     })
 }
 
+fn demo_command(count: usize, dimensions: usize) -> Result<()> {
+    use needle::{Database, Filter};
+    use rand::Rng;
+
+    println!("🧪 Needle Demo — creating in-memory database...\n");
+
+    let db = Database::in_memory();
+    db.create_collection("demo", dimensions)?;
+    let coll = db.collection("demo")?;
+
+    let categories = ["science", "technology", "engineering", "tutorial", "reference"];
+    let titles = [
+        "Quantum Computing Basics", "Neural Network Architectures", "Bridge Engineering",
+        "Getting Started with ML", "Vector Database Internals", "Distributed Systems",
+        "Signal Processing", "Compiler Design", "Fluid Dynamics", "Graph Algorithms",
+    ];
+
+    let mut rng = rand::thread_rng();
+    for i in 0..count {
+        let vector: Vec<f32> = (0..dimensions).map(|j| ((i * dimensions + j) as f32 / (count * dimensions) as f32).sin()).collect();
+        let metadata = json!({
+            "title": titles[i % titles.len()],
+            "category": categories[i % categories.len()],
+            "score": rng.gen_range(0.0..1.0_f64),
+        });
+        coll.insert(format!("doc_{}", i), &vector, Some(metadata))?;
+    }
+    println!("✓ Inserted {} vectors ({} dimensions)\n", count, dimensions);
+
+    // Run a search
+    let query: Vec<f32> = (0..dimensions).map(|j| ((42 * dimensions + j) as f32 / (count * dimensions) as f32).sin()).collect();
+    let results = coll.search(&query, 5)?;
+
+    println!("Search results (top 5 nearest to doc_42):");
+    for (i, r) in results.iter().enumerate() {
+        let title = r.metadata.as_ref()
+            .and_then(|m| m.get("title"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("?");
+        let cat = r.metadata.as_ref()
+            .and_then(|m| m.get("category"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("?");
+        println!("  #{} {} distance={:.4}  category={}  \"{}\"", i + 1, r.id, r.distance, cat, title);
+    }
+
+    // Filtered search
+    let filter = Filter::eq("category", "science");
+    let filtered = coll.search_with_filter(&query, 3, &filter)?;
+    println!("\nFiltered search (category=science, top 3):");
+    for (i, r) in filtered.iter().enumerate() {
+        println!("  #{} {} distance={:.4}", i + 1, r.id, r.distance);
+    }
+
+    println!("\n🎉 Demo complete! Try these next:");
+    println!("  cargo run --example basic_usage          — Rust API walkthrough");
+    println!("  cargo run -- demo --count 10000          — Larger demo");
+    println!("  cargo run --features server -- serve     — Start HTTP server");
+    println!("  cargo run -- --help                      — All CLI commands");
+    Ok(())
+}
+
 fn tune_command(vectors: usize, dimensions: usize, profile: &str, memory_mb: Option<usize>) -> Result<()> {
     use needle::tuning::{auto_tune, TuningConstraints, PerformanceProfile};
 
@@ -1160,10 +1307,10 @@ fn query_command(path: &str, collection_name: &str, query_str: &str, _k: usize, 
             println!("Optimization Hints:");
             for hint in &build_result.optimization_hints {
                 let severity = match hint.severity {
-                    needle::HintSeverity::Info => "INFO",
-                    needle::HintSeverity::Suggestion => "SUGG",
-                    needle::HintSeverity::Warning => "WARN",
-                    needle::HintSeverity::Critical => "CRIT",
+                    needle::query_builder::HintSeverity::Info => "INFO",
+                    needle::query_builder::HintSeverity::Suggestion => "SUGG",
+                    needle::query_builder::HintSeverity::Warning => "WARN",
+                    needle::query_builder::HintSeverity::Critical => "CRIT",
                 };
                 println!("  [{}] {:?}: {}", severity, hint.category, hint.message);
                 println!("       Suggestion: {}", hint.suggestion);
@@ -1702,7 +1849,7 @@ fn federate_search(
     routing: &str,
     merge: &str,
 ) -> Result<()> {
-    use needle::{
+    use needle::federated::{
         Federation, FederationConfig, InstanceConfig,
         RoutingStrategy, MergeStrategy,
     };
@@ -1780,7 +1927,7 @@ fn federate_search(
 }
 
 fn federate_health(instances_str: &str) -> Result<()> {
-    use needle::{Federation, FederationConfig, InstanceConfig};
+    use needle::federated::{Federation, FederationConfig, InstanceConfig};
 
     let instance_urls: Vec<&str> = instances_str.split(',').map(|s| s.trim()).collect();
 
@@ -1807,7 +1954,7 @@ fn federate_health(instances_str: &str) -> Result<()> {
 }
 
 fn federate_stats(instances_str: &str) -> Result<()> {
-    use needle::{Federation, FederationConfig, InstanceConfig};
+    use needle::federated::{Federation, FederationConfig, InstanceConfig};
 
     let instance_urls: Vec<&str> = instances_str.split(',').map(|s| s.trim()).collect();
 
@@ -1985,4 +2132,84 @@ fn ttl_stats(path: &str, collection_name: &str) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn dev_command(cmd: DevCommands) -> Result<()> {
+    match cmd {
+        DevCommands::Check => {
+            println!("Running pre-commit checks...\n");
+            let steps = [
+                ("Format check", "cargo fmt -- --check"),
+                ("Lint", "cargo clippy --features full -- -D warnings"),
+                ("Unit tests", "cargo test --lib"),
+            ];
+            for (name, command) in &steps {
+                println!("▶ {}...", name);
+                let status = std::process::Command::new("sh")
+                    .arg("-c")
+                    .arg(command)
+                    .status()
+                    .map_err(|e| NeedleError::Io(e))?;
+                if !status.success() {
+                    eprintln!("✗ {} failed", name);
+                    std::process::exit(1);
+                }
+                println!("✓ {} passed\n", name);
+            }
+            println!("All checks passed!");
+            Ok(())
+        }
+        DevCommands::GenerateTestData {
+            output,
+            count,
+            dimensions,
+        } => {
+            use rand::Rng;
+            println!(
+                "Generating {} vectors ({} dims) → {}",
+                count, dimensions, output
+            );
+            let mut db = Database::open(&output)?;
+            db.create_collection("test_data", dimensions)?;
+            let coll = db.collection("test_data")?;
+
+            let mut rng = rand::thread_rng();
+            for i in 0..count {
+                let vector: Vec<f32> = (0..dimensions).map(|_| rng.gen::<f32>()).collect();
+                let categories = ["science", "tech", "art", "history"];
+                let metadata = json!({
+                    "id": i,
+                    "category": categories[i % 4],
+                    "score": rng.gen::<f64>(),
+                });
+                coll.insert(format!("vec_{}", i), &vector, Some(metadata))?;
+            }
+            db.save()?;
+            println!("Done! Created collection 'test_data' with {} vectors.", count);
+            Ok(())
+        }
+        DevCommands::Info => {
+            println!("Needle Vector Database");
+            println!("  Version: {}", env!("CARGO_PKG_VERSION"));
+            println!("  MSRV: {}", env!("CARGO_PKG_RUST_VERSION"));
+            println!("  License: {}", env!("CARGO_PKG_LICENSE"));
+            println!("\nFeatures compiled:");
+            let features = [
+                ("server", cfg!(feature = "server")),
+                ("metrics", cfg!(feature = "metrics")),
+                ("hybrid", cfg!(feature = "hybrid")),
+                ("experimental", cfg!(feature = "experimental")),
+                ("embeddings", cfg!(feature = "embeddings")),
+                ("web-ui", cfg!(feature = "web-ui")),
+            ];
+            for (name, enabled) in &features {
+                println!(
+                    "  {} {}",
+                    if *enabled { "✓" } else { "✗" },
+                    name
+                );
+            }
+            Ok(())
+        }
+    }
 }
