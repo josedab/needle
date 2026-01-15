@@ -40,6 +40,15 @@ pub enum DistanceFunction {
     /// Cosine distance (1 - cosine similarity)
     #[default]
     Cosine,
+    /// Cosine distance for pre-normalized vectors (faster, skips normalization)
+    ///
+    /// Use this when you know your vectors are already unit-normalized.
+    /// This is ~3x faster than regular cosine distance as it only requires
+    /// a single dot product instead of computing both vector norms.
+    ///
+    /// # Warning
+    /// Using this with non-normalized vectors will produce incorrect results.
+    CosineNormalized,
     /// Euclidean (L2) distance
     Euclidean,
     /// Dot product (negative, so smaller = more similar)
@@ -54,6 +63,7 @@ impl DistanceFunction {
     pub fn compute(&self, a: &[f32], b: &[f32]) -> f32 {
         match self {
             Self::Cosine => cosine_distance(a, b),
+            Self::CosineNormalized => cosine_distance_normalized(a, b),
             Self::Euclidean => euclidean_distance(a, b),
             Self::DotProduct => dot_product_distance(a, b),
             Self::Manhattan => manhattan_distance(a, b),
@@ -77,6 +87,38 @@ pub fn cosine_distance(a: &[f32], b: &[f32]) -> f32 {
     }
 
     1.0 - (dot / (norm_a * norm_b))
+}
+
+/// Compute cosine distance for pre-normalized vectors (faster)
+///
+/// This function assumes both vectors are already unit-normalized (magnitude = 1).
+/// It computes `1 - dot_product(a, b)` which is equivalent to cosine distance
+/// for normalized vectors, but ~3x faster since it skips norm computation.
+///
+/// # Performance
+/// - Regular cosine: 3 dot products (a·b, a·a, b·b) + 1 sqrt each
+/// - Normalized cosine: 1 dot product only
+///
+/// # Warning
+/// Using this with non-normalized vectors will produce incorrect results.
+/// Use [`normalize`] or [`normalized`] to normalize vectors first.
+///
+/// # Panics
+/// Panics if `a` and `b` have different lengths.
+///
+/// # Example
+/// ```
+/// use needle::distance::{cosine_distance_normalized, normalized};
+///
+/// let a = normalized(&[1.0, 2.0, 3.0]);
+/// let b = normalized(&[4.0, 5.0, 6.0]);
+/// let dist = cosine_distance_normalized(&a, &b);
+/// assert!(dist >= 0.0 && dist <= 2.0);
+/// ```
+#[inline]
+pub fn cosine_distance_normalized(a: &[f32], b: &[f32]) -> f32 {
+    assert_eq!(a.len(), b.len(), "vectors must have equal length for cosine distance");
+    1.0 - dot_product(a, b)
 }
 
 /// Compute Euclidean (L2) distance
@@ -531,5 +573,37 @@ mod tests {
         normalize(&mut v);
         assert!((v[0] - 0.6).abs() < 1e-6);
         assert!((v[1] - 0.8).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_cosine_distance_normalized() {
+        // Test with pre-normalized vectors
+        let a = normalized(&[1.0, 0.0]);
+        let b = normalized(&[0.0, 1.0]);
+        let result = cosine_distance_normalized(&a, &b);
+        assert!((result - 1.0).abs() < 1e-6); // Orthogonal vectors
+
+        let c = normalized(&[1.0, 0.0]);
+        let d = normalized(&[1.0, 0.0]);
+        let result2 = cosine_distance_normalized(&c, &d);
+        assert!(result2.abs() < 1e-6); // Same direction
+
+        // Verify it matches regular cosine for normalized vectors
+        let v1 = normalized(&[1.0, 2.0, 3.0]);
+        let v2 = normalized(&[4.0, 5.0, 6.0]);
+        let regular = cosine_distance(&v1, &v2);
+        let fast = cosine_distance_normalized(&v1, &v2);
+        assert!((regular - fast).abs() < 1e-5, "Normalized cosine should match regular for unit vectors");
+    }
+
+    #[test]
+    fn test_distance_function_cosine_normalized() {
+        let a = normalized(&[1.0, 2.0, 3.0, 4.0]);
+        let b = normalized(&[5.0, 6.0, 7.0, 8.0]);
+
+        let regular = DistanceFunction::Cosine.compute(&a, &b);
+        let fast = DistanceFunction::CosineNormalized.compute(&a, &b);
+
+        assert!((regular - fast).abs() < 1e-5);
     }
 }
