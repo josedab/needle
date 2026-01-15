@@ -448,7 +448,7 @@ impl InstanceRegistry {
                     info.last_healthy = Some(
                         SystemTime::now()
                             .duration_since(UNIX_EPOCH)
-                            .unwrap()
+                            .unwrap_or_default()
                             .as_secs(),
                     );
                 }
@@ -750,7 +750,7 @@ impl HealthMonitor {
         let start = Instant::now();
         let timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or_default()
             .as_secs();
 
         // Simulate health check - in real implementation this would ping the instance
@@ -1099,6 +1099,312 @@ pub struct FederationStatsSnapshot {
     pub failed_queries: u64,
     pub partial_results: u64,
     pub timeouts: u64,
+}
+
+// ---------------------------------------------------------------------------
+// Auto-Discovery: instances register/deregister via heartbeat
+// ---------------------------------------------------------------------------
+
+/// Configuration for instance auto-discovery.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DiscoveryConfig {
+    /// How often instances should send heartbeats.
+    pub heartbeat_interval: Duration,
+    /// After how many missed heartbeats an instance is marked unhealthy.
+    pub missed_heartbeat_threshold: u32,
+    /// Whether to automatically remove stale instances.
+    pub auto_remove_stale: bool,
+}
+
+impl Default for DiscoveryConfig {
+    fn default() -> Self {
+        Self {
+            heartbeat_interval: Duration::from_secs(10),
+            missed_heartbeat_threshold: 3,
+            auto_remove_stale: true,
+        }
+    }
+}
+
+/// Tracks heartbeat state per instance.
+#[derive(Debug, Clone)]
+struct HeartbeatState {
+    last_seen: Instant,
+    missed_count: u32,
+    metadata: HashMap<String, String>,
+}
+
+/// Service that manages instance discovery through heartbeats.
+pub struct DiscoveryService {
+    registry: Arc<InstanceRegistry>,
+    config: DiscoveryConfig,
+    heartbeats: RwLock<HashMap<String, HeartbeatState>>,
+}
+
+impl DiscoveryService {
+    /// Create a new discovery service.
+    pub fn new(registry: Arc<InstanceRegistry>, config: DiscoveryConfig) -> Self {
+        Self {
+            registry,
+            config,
+            heartbeats: RwLock::new(HashMap::new()),
+        }
+    }
+
+    /// Record a heartbeat from an instance. Auto-registers unknown instances.
+    pub fn heartbeat(
+        &self,
+        instance_id: &str,
+        endpoint: &str,
+        metadata: HashMap<String, String>,
+    ) {
+        // Register if unknown
+        if self.registry.get(instance_id).is_none() {
+            let mut inst = InstanceConfig::new(instance_id, endpoint);
+            if let Some(region) = metadata.get("region") {
+                inst = inst.with_region(region);
+            }
+            self.registry.register(inst);
+        }
+        self.registry.update_health(instance_id, HealthStatus::Healthy);
+
+        let mut hb = self.heartbeats.write();
+        hb.insert(
+            instance_id.to_string(),
+            HeartbeatState {
+                last_seen: Instant::now(),
+                missed_count: 0,
+                metadata,
+            },
+        );
+    }
+
+    /// Check all instances for missed heartbeats.
+    pub fn check_heartbeats(&self) -> Vec<String> {
+        let threshold = self.config.heartbeat_interval * self.config.missed_heartbeat_threshold;
+        let mut stale = Vec::new();
+        let mut hb = self.heartbeats.write();
+
+        for (id, state) in hb.iter_mut() {
+            if state.last_seen.elapsed() > threshold {
+                state.missed_count += 1;
+                self.registry.update_health(id, HealthStatus::Unhealthy);
+                stale.push(id.clone());
+            }
+        }
+
+        if self.config.auto_remove_stale {
+            for id in &stale {
+                if let Some(state) = hb.get(id) {
+                    if state.missed_count > self.config.missed_heartbeat_threshold * 2 {
+                        self.registry.unregister(id);
+                        // Will be cleaned up from hb map below
+                    }
+                }
+            }
+            hb.retain(|id, state| {
+                state.missed_count <= self.config.missed_heartbeat_threshold * 2
+                    || self.registry.get(id).is_some()
+            });
+        }
+
+        stale
+    }
+
+    /// Number of tracked instances.
+    pub fn tracked_count(&self) -> usize {
+        self.heartbeats.read().len()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Cross-Instance Deduplication
+// ---------------------------------------------------------------------------
+
+/// Deduplicates search results that appear from multiple instances.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DedupStrategy {
+    /// Keep the result with the smallest distance.
+    BestDistance,
+    /// Keep the result from the first instance that returned it.
+    FirstSeen,
+    /// Average the distances across instances.
+    AverageDistance,
+}
+
+impl Default for DedupStrategy {
+    fn default() -> Self {
+        Self::BestDistance
+    }
+}
+
+/// Deduplicates and merges results from multiple instances.
+pub struct CrossInstanceDedup {
+    strategy: DedupStrategy,
+}
+
+impl CrossInstanceDedup {
+    pub fn new(strategy: DedupStrategy) -> Self {
+        Self { strategy }
+    }
+
+    /// Deduplicate results. Each inner Vec is from one instance.
+    pub fn dedup(
+        &self,
+        results: &[Vec<FederatedSearchResult>],
+        k: usize,
+    ) -> Vec<FederatedSearchResult> {
+        let mut seen: HashMap<String, (FederatedSearchResult, usize)> = HashMap::new();
+
+        for instance_results in results {
+            for r in instance_results {
+                match seen.get_mut(&r.id) {
+                    Some((existing, count)) => match self.strategy {
+                        DedupStrategy::BestDistance => {
+                            if r.distance < existing.distance {
+                                *existing = r.clone();
+                            }
+                        }
+                        DedupStrategy::FirstSeen => {
+                            // keep existing
+                        }
+                        DedupStrategy::AverageDistance => {
+                            *count += 1;
+                            existing.distance =
+                                (existing.distance * (*count - 1) as f32 + r.distance)
+                                    / *count as f32;
+                        }
+                    },
+                    None => {
+                        seen.insert(r.id.clone(), (r.clone(), 1));
+                    }
+                }
+            }
+        }
+
+        let mut merged: Vec<FederatedSearchResult> =
+            seen.into_values().map(|(r, _)| r).collect();
+        merged.sort_by(|a, b| {
+            a.distance
+                .partial_cmp(&b.distance)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        merged.truncate(k);
+        merged
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Query Consistency Controls
+// ---------------------------------------------------------------------------
+
+/// Consistency level for federated queries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ConsistencyLevel {
+    /// Return results from any single healthy instance.
+    One,
+    /// Require results from a majority of instances.
+    Quorum,
+    /// Require results from all instances.
+    All,
+    /// Best-effort: return whatever is available before timeout.
+    BestEffort,
+}
+
+impl Default for ConsistencyLevel {
+    fn default() -> Self {
+        Self::BestEffort
+    }
+}
+
+/// A federated query plan describing which instances to query and how.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QueryPlan {
+    pub target_instances: Vec<String>,
+    pub consistency: ConsistencyLevel,
+    pub dedup: DedupStrategy,
+    pub k: usize,
+    pub timeout: Duration,
+}
+
+/// Plans and validates federated queries before execution.
+pub struct QueryPlanner {
+    registry: Arc<InstanceRegistry>,
+}
+
+impl QueryPlanner {
+    pub fn new(registry: Arc<InstanceRegistry>) -> Self {
+        Self { registry }
+    }
+
+    /// Create a query plan for the given collection and consistency level.
+    pub fn plan(
+        &self,
+        collection: &str,
+        k: usize,
+        consistency: ConsistencyLevel,
+        timeout: Duration,
+    ) -> Result<QueryPlan, FederationError> {
+        let candidates = self.registry.instances_with_collection(collection);
+        let healthy: Vec<InstanceInfo> = candidates
+            .into_iter()
+            .filter(|i| i.status == HealthStatus::Healthy)
+            .collect();
+
+        if healthy.is_empty() {
+            // Fall back to all healthy instances
+            let all_healthy = self.registry.healthy_instances();
+            if all_healthy.is_empty() {
+                return Err(FederationError::NoHealthyInstances);
+            }
+            return Ok(QueryPlan {
+                target_instances: all_healthy.iter().map(|i| i.config.id.clone()).collect(),
+                consistency,
+                dedup: DedupStrategy::BestDistance,
+                k,
+                timeout,
+            });
+        }
+
+        let required = match consistency {
+            ConsistencyLevel::One => 1,
+            ConsistencyLevel::Quorum => (healthy.len() / 2) + 1,
+            ConsistencyLevel::All => healthy.len(),
+            ConsistencyLevel::BestEffort => healthy.len(),
+        };
+
+        if healthy.len() < required {
+            return Err(FederationError::QuorumNotReached {
+                required,
+                available: healthy.len(),
+            });
+        }
+
+        let targets: Vec<String> = healthy
+            .iter()
+            .take(required)
+            .map(|i| i.config.id.clone())
+            .collect();
+
+        Ok(QueryPlan {
+            target_instances: targets,
+            consistency,
+            dedup: DedupStrategy::BestDistance,
+            k,
+            timeout,
+        })
+    }
+
+    /// Validate whether a query plan is still executable.
+    pub fn validate(&self, plan: &QueryPlan) -> bool {
+        for id in &plan.target_instances {
+            match self.registry.get(id) {
+                Some(info) if info.status == HealthStatus::Healthy => {}
+                _ => return false,
+            }
+        }
+        true
+    }
 }
 
 // ============================================================================
@@ -1525,5 +1831,187 @@ mod tests {
         assert_eq!(config.routing_strategy, RoutingStrategy::PriorityBased);
         assert_eq!(config.merge_strategy, MergeStrategy::Consensus);
         assert!(!config.allow_partial);
+    }
+
+    // ---- Discovery Service tests ----
+
+    #[test]
+    fn test_discovery_heartbeat() {
+        let registry = Arc::new(InstanceRegistry::new());
+        let svc = DiscoveryService::new(registry.clone(), DiscoveryConfig::default());
+
+        svc.heartbeat("inst-1", "http://localhost:8081", HashMap::new());
+        assert_eq!(svc.tracked_count(), 1);
+        assert!(registry.get("inst-1").is_some());
+        assert_eq!(registry.get("inst-1").unwrap().status, HealthStatus::Healthy);
+    }
+
+    #[test]
+    fn test_discovery_with_region() {
+        let registry = Arc::new(InstanceRegistry::new());
+        let svc = DiscoveryService::new(registry.clone(), DiscoveryConfig::default());
+
+        let mut meta = HashMap::new();
+        meta.insert("region".to_string(), "eu-west".to_string());
+        svc.heartbeat("eu-1", "http://eu:8081", meta);
+
+        let eu = registry.instances_by_region("eu-west");
+        assert_eq!(eu.len(), 1);
+    }
+
+    #[test]
+    fn test_discovery_check_heartbeats() {
+        let registry = Arc::new(InstanceRegistry::new());
+        let config = DiscoveryConfig {
+            heartbeat_interval: Duration::from_millis(1),
+            missed_heartbeat_threshold: 1,
+            auto_remove_stale: false,
+        };
+        let svc = DiscoveryService::new(registry.clone(), config);
+
+        svc.heartbeat("inst-1", "http://localhost:8081", HashMap::new());
+        std::thread::sleep(Duration::from_millis(5));
+
+        let stale = svc.check_heartbeats();
+        assert_eq!(stale.len(), 1);
+        assert_eq!(stale[0], "inst-1");
+    }
+
+    // ---- Cross-Instance Dedup tests ----
+
+    #[test]
+    fn test_dedup_best_distance() {
+        let dedup = CrossInstanceDedup::new(DedupStrategy::BestDistance);
+        let r1 = vec![
+            FederatedSearchResult {
+                id: "v1".into(),
+                distance: 0.5,
+                metadata: None,
+                source_instance: "inst-1".into(),
+                collection: "test".into(),
+            },
+            FederatedSearchResult {
+                id: "v2".into(),
+                distance: 0.3,
+                metadata: None,
+                source_instance: "inst-1".into(),
+                collection: "test".into(),
+            },
+        ];
+        let r2 = vec![
+            FederatedSearchResult {
+                id: "v1".into(),
+                distance: 0.2,
+                metadata: None,
+                source_instance: "inst-2".into(),
+                collection: "test".into(),
+            },
+        ];
+
+        let merged = dedup.dedup(&[r1, r2], 10);
+        assert_eq!(merged.len(), 2);
+        // v1 should have distance 0.2 (best)
+        let v1 = merged.iter().find(|r| r.id == "v1").unwrap();
+        assert!((v1.distance - 0.2).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_dedup_average_distance() {
+        let dedup = CrossInstanceDedup::new(DedupStrategy::AverageDistance);
+        let r1 = vec![FederatedSearchResult {
+            id: "v1".into(),
+            distance: 0.2,
+            metadata: None,
+            source_instance: "inst-1".into(),
+            collection: "test".into(),
+        }];
+        let r2 = vec![FederatedSearchResult {
+            id: "v1".into(),
+            distance: 0.4,
+            metadata: None,
+            source_instance: "inst-2".into(),
+            collection: "test".into(),
+        }];
+
+        let merged = dedup.dedup(&[r1, r2], 10);
+        assert_eq!(merged.len(), 1);
+        assert!((merged[0].distance - 0.3).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_dedup_truncates() {
+        let dedup = CrossInstanceDedup::new(DedupStrategy::BestDistance);
+        let results: Vec<Vec<FederatedSearchResult>> = (0..20)
+            .map(|i| {
+                vec![FederatedSearchResult {
+                    id: format!("v{}", i),
+                    distance: i as f32 * 0.1,
+                    metadata: None,
+                    source_instance: "inst-1".into(),
+                    collection: "test".into(),
+                }]
+            })
+            .collect();
+
+        let merged = dedup.dedup(&results, 5);
+        assert_eq!(merged.len(), 5);
+    }
+
+    // ---- Query Planner tests ----
+
+    #[test]
+    fn test_query_planner_basic() {
+        let registry = Arc::new(InstanceRegistry::new());
+        registry.register(
+            InstanceConfig::new("i1", "http://localhost:8081").with_collection("docs"),
+        );
+        registry.register(
+            InstanceConfig::new("i2", "http://localhost:8082").with_collection("docs"),
+        );
+        registry.update_health("i1", HealthStatus::Healthy);
+        registry.update_health("i2", HealthStatus::Healthy);
+
+        let planner = QueryPlanner::new(registry);
+        let plan = planner
+            .plan("docs", 10, ConsistencyLevel::One, Duration::from_secs(5))
+            .unwrap();
+        assert_eq!(plan.target_instances.len(), 1);
+        assert_eq!(plan.k, 10);
+    }
+
+    #[test]
+    fn test_query_planner_quorum() {
+        let registry = Arc::new(InstanceRegistry::new());
+        for i in 0..5 {
+            registry.register(
+                InstanceConfig::new(format!("i{}", i), format!("http://localhost:{}", 8080 + i))
+                    .with_collection("data"),
+            );
+            registry.update_health(&format!("i{}", i), HealthStatus::Healthy);
+        }
+
+        let planner = QueryPlanner::new(registry);
+        let plan = planner
+            .plan("data", 10, ConsistencyLevel::Quorum, Duration::from_secs(5))
+            .unwrap();
+        assert_eq!(plan.target_instances.len(), 3); // 5/2 + 1 = 3
+    }
+
+    #[test]
+    fn test_query_planner_validate() {
+        let registry = Arc::new(InstanceRegistry::new());
+        registry.register(
+            InstanceConfig::new("i1", "http://localhost:8081").with_collection("docs"),
+        );
+        registry.update_health("i1", HealthStatus::Healthy);
+
+        let planner = QueryPlanner::new(registry.clone());
+        let plan = planner
+            .plan("docs", 10, ConsistencyLevel::One, Duration::from_secs(5))
+            .unwrap();
+        assert!(planner.validate(&plan));
+
+        registry.update_health("i1", HealthStatus::Unhealthy);
+        assert!(!planner.validate(&plan));
     }
 }

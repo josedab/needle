@@ -1928,7 +1928,7 @@ impl CostBasedOptimizer {
         if query.where_clause.is_none() {
             return 1.0;
         }
-        let where_clause = query.where_clause.as_ref().unwrap();
+        let where_clause = query.where_clause.as_ref().expect("where_clause is Some");
         Self::estimate_expr_selectivity(&where_clause.expression, stats)
     }
 
