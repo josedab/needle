@@ -613,7 +613,7 @@ impl<'a> HybridSearch<'a> {
         } else {
             verified_samples
                 .iter()
-                .map(|s| s.actual.unwrap())
+                .map(|s| s.actual.unwrap_or(0.0))
                 .sum::<f32>()
                 / verified_samples.len() as f32
         };
@@ -621,7 +621,7 @@ impl<'a> HybridSearch<'a> {
         let estimation_error = if !verified_samples.is_empty() {
             verified_samples
                 .iter()
-                .map(|s| (s.estimated - s.actual.unwrap()).abs())
+                .map(|s| (s.estimated - s.actual.unwrap_or(0.0)).abs())
                 .sum::<f32>()
                 / verified_samples.len() as f32
         } else {

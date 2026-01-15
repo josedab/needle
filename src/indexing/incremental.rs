@@ -190,6 +190,7 @@ impl DeltaBuffer {
         self.vectors.is_empty()
     }
 
+    #[allow(dead_code)]
     fn clear(&mut self) {
         self.vectors.clear();
         self.size_bytes = 0;
@@ -512,6 +513,16 @@ impl IncrementalIndex {
 
     /// Delete a vector by ID
     pub fn delete(&self, id: &str) -> Result<bool> {
+        // Check and remove from delta buffer first
+        {
+            let mut buffer = self.delta_buffer.write();
+            let before_len = buffer.vectors.len();
+            buffer.vectors.retain(|(vid, _, _)| vid != id);
+            if buffer.vectors.len() < before_len {
+                return Ok(true);
+            }
+        }
+
         let internal_id = {
             let id_map = self.id_map.read();
             match id_map.get(id) {
