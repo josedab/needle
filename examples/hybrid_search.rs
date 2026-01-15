@@ -9,7 +9,9 @@ use needle::{Collection, CollectionConfig, DistanceFunction};
 use serde_json::json;
 
 #[cfg(feature = "hybrid")]
-use needle::{Bm25Index, reciprocal_rank_fusion, RrfConfig};
+use needle::{Bm25Index, reciprocal_rank_fusion};
+#[cfg(feature = "hybrid")]
+use needle::hybrid::RrfConfig;
 
 fn main() -> needle::Result<()> {
     // Create a collection for semantic search

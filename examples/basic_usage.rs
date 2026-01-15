@@ -86,5 +86,11 @@ fn main() -> needle::Result<()> {
     println!("doc_50 exists after delete: {}", collection.get("doc_50").is_some());
 
     println!("\n=== Example Complete ===");
+
+    println!("\n\u{1f4a1} Next steps:");
+    println!("  cargo run --example filtered_search  \u{2014} Search with metadata filters");
+    println!("  cargo run --example persistence       \u{2014} Save to disk and reload");
+    println!("  See all examples: examples/README.md");
+
     Ok(())
 }

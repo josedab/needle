@@ -19,7 +19,7 @@ We welcome contributions to Needle! This guide will help you get started with co
 
 ### Prerequisites
 
-- Rust 1.70 or later
+- Rust 1.85 or later
 - Git
 - (Optional) Python 3.8+ for Python binding development
 - (Optional) Node.js 18+ for WASM binding development
