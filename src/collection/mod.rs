@@ -300,7 +300,11 @@ impl<'a> SearchBuilder<'a> {
         let fetch_count = self.calculate_fetch_count();
         let raw_results = self.fetch_raw_results(fetch_count);
         let non_expired = self.filter_expired(raw_results);
-        let post_filter_factor = if self.post_filter.is_some() { self.post_filter_factor } else { 1 };
+        let post_filter_factor = if self.post_filter.is_some() {
+            self.post_filter_factor
+        } else {
+            1
+        };
         let pre_filtered = self.apply_pre_filter(non_expired, self.k * post_filter_factor.max(1));
         let mut enriched = self.enrich(pre_filtered)?;
         self.apply_post_filter(&mut enriched);
@@ -320,13 +324,22 @@ impl<'a> SearchBuilder<'a> {
 
     /// Returns the override distance function if brute-force fallback is needed.
     fn brute_force_distance(&self) -> Option<DistanceFunction> {
-        self.distance_override.filter(|&d| d != self.collection.config.distance)
+        self.distance_override
+            .filter(|&d| d != self.collection.config.distance)
     }
 
     /// Calculate how many candidates to fetch from the index.
     fn calculate_fetch_count(&self) -> usize {
-        let pre_filter_factor = if self.filter.is_some() { FILTER_CANDIDATE_MULTIPLIER } else { 1 };
-        let post_filter_factor = if self.post_filter.is_some() { self.post_filter_factor } else { 1 };
+        let pre_filter_factor = if self.filter.is_some() {
+            FILTER_CANDIDATE_MULTIPLIER
+        } else {
+            1
+        };
+        let post_filter_factor = if self.post_filter.is_some() {
+            self.post_filter_factor
+        } else {
+            1
+        };
         self.k * pre_filter_factor * post_filter_factor
     }
 
@@ -361,12 +374,18 @@ impl<'a> SearchBuilder<'a> {
     }
 
     /// Apply the pre-filter (metadata filter during ANN search phase).
-    fn apply_pre_filter(&self, results: Vec<(VectorId, f32)>, limit: usize) -> Vec<(VectorId, f32)> {
+    fn apply_pre_filter(
+        &self,
+        results: Vec<(VectorId, f32)>,
+        limit: usize,
+    ) -> Vec<(VectorId, f32)> {
         if let Some(filter) = self.filter {
             results
                 .into_iter()
                 .filter(|(id, _)| {
-                    self.collection.metadata.get(*id)
+                    self.collection
+                        .metadata
+                        .get(*id)
                         .map_or(false, |entry| filter.matches(entry.data.as_ref()))
                 })
                 .take(limit)
@@ -384,11 +403,10 @@ impl<'a> SearchBuilder<'a> {
             pre_filtered
                 .into_iter()
                 .map(|(id, distance)| {
-                    let entry = self
-                        .collection
-                        .metadata
-                        .get(id)
-                        .ok_or_else(|| NeedleError::Index("Missing metadata for vector".into()))?;
+                    let entry =
+                        self.collection.metadata.get(id).ok_or_else(|| {
+                            NeedleError::Index("Missing metadata for vector".into())
+                        })?;
                     Ok(SearchResult {
                         id: entry.external_id.clone(),
                         distance,
@@ -759,9 +777,9 @@ impl Collection {
     /// assert_eq!(stats.misses, 1);
     /// ```
     pub fn query_cache_stats(&self) -> Option<QueryCacheStats> {
-        self.query_cache.as_ref().map(|cache| {
-            cache.lock().stats(self.config.query_cache.capacity)
-        })
+        self.query_cache
+            .as_ref()
+            .map(|cache| cache.lock().stats(self.config.query_cache.capacity))
     }
 
     /// Helper to invalidate the query cache.
@@ -794,9 +812,12 @@ impl Collection {
             // Store in cache
             {
                 let mut cache_guard = cache.lock();
-                cache_guard.put(cache_key, CachedSearchResult {
-                    results: results.clone(),
-                });
+                cache_guard.put(
+                    cache_key,
+                    CachedSearchResult {
+                        results: results.clone(),
+                    },
+                );
             }
 
             Ok(results)
@@ -989,7 +1010,9 @@ impl Collection {
         self.metadata.insert(internal_id, id, metadata)?;
 
         // Add to index - get vector reference from store
-        let vector_ref = self.vectors.get(internal_id)
+        let vector_ref = self
+            .vectors
+            .get(internal_id)
             .ok_or_else(|| NeedleError::Index("Vector not found after insert".into()))?;
         self.index
             .insert(internal_id, vector_ref, self.vectors.as_slice())?;
@@ -1155,10 +1178,7 @@ impl Collection {
     /// function differs from the index's configured function.
     ///
     /// **Warning:** This is O(n) complexity and may be slow on large collections.
-    fn brute_force_search(
-        &self,
-        params: &BruteForceSearchParams<'_>,
-    ) -> Result<Vec<SearchResult>> {
+    fn brute_force_search(&self, params: &BruteForceSearchParams<'_>) -> Result<Vec<SearchResult>> {
         use std::cmp::Reverse;
         use std::collections::BinaryHeap;
 
@@ -1168,7 +1188,8 @@ impl Collection {
         }
 
         // Use a max-heap (via Reverse) to track top-k by smallest distance
-        let mut heap: BinaryHeap<(Reverse<OrderedFloat<f32>>, usize)> = BinaryHeap::with_capacity(k + 1);
+        let mut heap: BinaryHeap<(Reverse<OrderedFloat<f32>>, usize)> =
+            BinaryHeap::with_capacity(k + 1);
 
         // Linear scan over all non-deleted vectors
         for (internal_id, vector) in self.vectors.as_slice().iter().enumerate() {
@@ -1306,11 +1327,9 @@ impl Collection {
 
         // HNSW index search with stats
         let index_start = Instant::now();
-        let (raw_results, hnsw_stats) = self.index.search_with_stats(
-            query,
-            effective_k,
-            self.vectors.as_slice(),
-        );
+        let (raw_results, hnsw_stats) =
+            self.index
+                .search_with_stats(query, effective_k, self.vectors.as_slice());
         let index_time = index_start.elapsed();
 
         let candidates_before_filter = raw_results.len();
@@ -1579,7 +1598,11 @@ impl Collection {
         let results: Vec<Result<Vec<SearchResult>>> = queries
             .par_iter()
             .map(|query| {
-                let candidates = self.index.search(query, k * FILTER_CANDIDATE_MULTIPLIER, self.vectors.as_slice());
+                let candidates = self.index.search(
+                    query,
+                    k * FILTER_CANDIDATE_MULTIPLIER,
+                    self.vectors.as_slice(),
+                );
                 let filtered: Vec<(VectorId, f32)> = candidates
                     .into_iter()
                     .filter(|(id, _)| {
@@ -1672,7 +1695,11 @@ impl Collection {
         }
 
         // For filtered search, we need to retrieve more candidates and filter
-        let candidates = self.index.search(query, k * FILTER_CANDIDATE_MULTIPLIER, self.vectors.as_slice());
+        let candidates = self.index.search(
+            query,
+            k * FILTER_CANDIDATE_MULTIPLIER,
+            self.vectors.as_slice(),
+        );
 
         let filtered: Vec<(VectorId, f32)> = candidates
             .into_iter()
@@ -1849,7 +1876,9 @@ impl Collection {
 
         // Over-fetch to compensate for filtering
         let fetch_count = limit * FILTER_CANDIDATE_MULTIPLIER;
-        let candidates = self.index.search(query, fetch_count, self.vectors.as_slice());
+        let candidates = self
+            .index
+            .search(query, fetch_count, self.vectors.as_slice());
 
         // Filter by distance first (can stop early), then by metadata
         let within_range: Vec<(VectorId, f32)> = candidates
@@ -2045,12 +2074,7 @@ impl Collection {
     /// assert_eq!(vec, &[0.0, 1.0, 0.0, 0.0]);
     /// # Ok::<(), needle::NeedleError>(())
     /// ```
-    pub fn update(
-        &mut self,
-        id: &str,
-        vector: &[f32],
-        metadata: Option<Value>,
-    ) -> Result<()> {
+    pub fn update(&mut self, id: &str, vector: &[f32], metadata: Option<Value>) -> Result<()> {
         // Check dimensions
         if vector.len() != self.config.dimensions {
             return Err(NeedleError::DimensionMismatch {
@@ -2060,7 +2084,9 @@ impl Collection {
         }
 
         // Get internal ID
-        let internal_id = self.metadata.get_internal_id(id)
+        let internal_id = self
+            .metadata
+            .get_internal_id(id)
             .ok_or_else(|| NeedleError::VectorNotFound(id.to_string()))?;
 
         // Update vector in storage
@@ -2071,7 +2097,8 @@ impl Collection {
 
         // Re-index the vector (delete and re-insert in index)
         self.index.delete(internal_id)?;
-        self.index.insert(internal_id, vector, self.vectors.as_slice())?;
+        self.index
+            .insert(internal_id, vector, self.vectors.as_slice())?;
 
         // Invalidate cache since collection changed
         self.invalidate_cache();
@@ -2082,7 +2109,9 @@ impl Collection {
     /// Update only the metadata for an existing vector
     /// Returns error if the vector doesn't exist
     pub fn update_metadata(&mut self, id: &str, metadata: Option<Value>) -> Result<()> {
-        let internal_id = self.metadata.get_internal_id(id)
+        let internal_id = self
+            .metadata
+            .get_internal_id(id)
             .ok_or_else(|| NeedleError::VectorNotFound(id.to_string()))?;
 
         self.metadata.update_data(internal_id, metadata)?;
@@ -2156,18 +2185,20 @@ impl Collection {
     /// Iterate over all vectors in the collection
     /// Returns an iterator of (external_id, vector, metadata)
     pub fn iter(&self) -> impl Iterator<Item = (&str, &[f32], Option<&Value>)> {
-        self.metadata.iter().filter_map(move |(internal_id, entry)| {
-            // Skip deleted vectors
-            if self.index.is_deleted(internal_id) {
-                return None;
-            }
-            let vector = self.vectors.get(internal_id)?;
-            Some((
-                entry.external_id.as_str(),
-                vector.as_slice(),
-                entry.data.as_ref(),
-            ))
-        })
+        self.metadata
+            .iter()
+            .filter_map(move |(internal_id, entry)| {
+                // Skip deleted vectors
+                if self.index.is_deleted(internal_id) {
+                    return None;
+                }
+                let vector = self.vectors.get(internal_id)?;
+                Some((
+                    entry.external_id.as_str(),
+                    vector.as_slice(),
+                    entry.data.as_ref(),
+                ))
+            })
     }
 
     /// Get all vector IDs in the collection
@@ -2390,7 +2421,8 @@ impl Collection {
     ///
     /// Returns an error if the vector doesn't exist.
     pub fn set_ttl(&mut self, id: &str, ttl_seconds: Option<u64>) -> Result<()> {
-        let internal_id = self.metadata
+        let internal_id = self
+            .metadata
             .get_internal_id(id)
             .ok_or_else(|| NeedleError::VectorNotFound(id.to_string()))?;
 
@@ -2421,8 +2453,12 @@ impl Collection {
     ///
     /// Returns an iterator yielding (id, vector, metadata) tuples
     /// that match the given filter
-    pub fn iter_filtered<'a>(&'a self, filter: &'a Filter) -> impl Iterator<Item = (&'a str, &'a [f32], Option<&'a Value>)> + 'a {
-        self.iter().filter(move |(_, _, meta)| filter.matches(*meta))
+    pub fn iter_filtered<'a>(
+        &'a self,
+        filter: &'a Filter,
+    ) -> impl Iterator<Item = (&'a str, &'a [f32], Option<&'a Value>)> + 'a {
+        self.iter()
+            .filter(move |(_, _, meta)| filter.matches(*meta))
     }
 
     /// Get all vector IDs as a collected Vec
@@ -2431,7 +2467,11 @@ impl Collection {
     }
 
     /// Estimate if a dataset of given size would fit in memory
-    pub fn estimate_memory(vector_count: usize, dimensions: usize, avg_metadata_bytes: usize) -> usize {
+    pub fn estimate_memory(
+        vector_count: usize,
+        dimensions: usize,
+        avg_metadata_bytes: usize,
+    ) -> usize {
         let vector_bytes = vector_count * dimensions * std::mem::size_of::<f32>();
         let metadata_bytes = vector_count * avg_metadata_bytes;
         let index_overhead = vector_count * 200; // ~200 bytes per vector for HNSW
@@ -2469,11 +2509,7 @@ impl<'a> Iterator for CollectionIter<'a> {
             self.index += 1;
 
             if let Some((vector, metadata)) = self.collection.get(id) {
-                return Some((
-                    id.clone(),
-                    vector.to_vec(),
-                    metadata.cloned(),
-                ));
+                return Some((id.clone(), vector.to_vec(), metadata.cloned()));
             }
         }
         None
@@ -2713,7 +2749,9 @@ mod tests {
                 .insert(
                     format!("doc{}", i),
                     &vec,
-                    Some(json!({"score": i, "type": if i % 3 == 0 { "special" } else { "normal" }})),
+                    Some(
+                        json!({"score": i, "type": if i % 3 == 0 { "special" } else { "normal" }}),
+                    ),
                 )
                 .unwrap();
         }
@@ -2799,11 +2837,7 @@ mod tests {
         for i in 0..50 {
             let vec = random_vector(32);
             collection
-                .insert(
-                    format!("doc{}", i),
-                    &vec,
-                    Some(json!({"keep": i < 25})),
-                )
+                .insert(format!("doc{}", i), &vec, Some(json!({"keep": i < 25})))
                 .unwrap();
         }
 
@@ -2830,15 +2864,22 @@ mod tests {
         use crate::DistanceFunction;
 
         // Use Euclidean distance for predictable distance values
-        let config = CollectionConfig::new("test", 4)
-            .with_distance(DistanceFunction::Euclidean);
+        let config = CollectionConfig::new("test", 4).with_distance(DistanceFunction::Euclidean);
         let mut collection = Collection::new(config);
 
         // Insert vectors at known positions
-        collection.insert("origin", &[0.0, 0.0, 0.0, 0.0], None).unwrap();
-        collection.insert("close", &[0.1, 0.0, 0.0, 0.0], None).unwrap();  // dist = 0.1
-        collection.insert("medium", &[0.5, 0.0, 0.0, 0.0], None).unwrap(); // dist = 0.5
-        collection.insert("far", &[2.0, 0.0, 0.0, 0.0], None).unwrap();    // dist = 2.0
+        collection
+            .insert("origin", &[0.0, 0.0, 0.0, 0.0], None)
+            .unwrap();
+        collection
+            .insert("close", &[0.1, 0.0, 0.0, 0.0], None)
+            .unwrap(); // dist = 0.1
+        collection
+            .insert("medium", &[0.5, 0.0, 0.0, 0.0], None)
+            .unwrap(); // dist = 0.5
+        collection
+            .insert("far", &[2.0, 0.0, 0.0, 0.0], None)
+            .unwrap(); // dist = 2.0
 
         // Query at origin
         let query = [0.0, 0.0, 0.0, 0.0];
@@ -2847,7 +2888,11 @@ mod tests {
         let results = collection.search_radius(&query, 0.15, 100).unwrap();
         assert!(!results.is_empty() && results.len() <= 2);
         for r in &results {
-            assert!(r.distance <= 0.15, "Distance {} exceeds max 0.15", r.distance);
+            assert!(
+                r.distance <= 0.15,
+                "Distance {} exceeds max 0.15",
+                r.distance
+            );
         }
 
         // Search within radius 0.6 - should find origin, close, and medium
@@ -2877,21 +2922,30 @@ mod tests {
     fn test_search_radius_with_filter() {
         use crate::DistanceFunction;
 
-        let config = CollectionConfig::new("test", 4)
-            .with_distance(DistanceFunction::Euclidean);
+        let config = CollectionConfig::new("test", 4).with_distance(DistanceFunction::Euclidean);
         let mut collection = Collection::new(config);
 
         // Insert vectors with category
-        collection.insert("a1", &[0.1, 0.0, 0.0, 0.0], Some(json!({"type": "A"}))).unwrap();
-        collection.insert("a2", &[0.2, 0.0, 0.0, 0.0], Some(json!({"type": "A"}))).unwrap();
-        collection.insert("b1", &[0.15, 0.0, 0.0, 0.0], Some(json!({"type": "B"}))).unwrap();
-        collection.insert("far", &[5.0, 0.0, 0.0, 0.0], Some(json!({"type": "A"}))).unwrap();
+        collection
+            .insert("a1", &[0.1, 0.0, 0.0, 0.0], Some(json!({"type": "A"})))
+            .unwrap();
+        collection
+            .insert("a2", &[0.2, 0.0, 0.0, 0.0], Some(json!({"type": "A"})))
+            .unwrap();
+        collection
+            .insert("b1", &[0.15, 0.0, 0.0, 0.0], Some(json!({"type": "B"})))
+            .unwrap();
+        collection
+            .insert("far", &[5.0, 0.0, 0.0, 0.0], Some(json!({"type": "A"})))
+            .unwrap();
 
         let query = [0.0, 0.0, 0.0, 0.0];
         let filter = Filter::eq("type", "A");
 
         // Search within radius 0.3 for type A only
-        let results = collection.search_radius_with_filter(&query, 0.3, 100, &filter).unwrap();
+        let results = collection
+            .search_radius_with_filter(&query, 0.3, 100, &filter)
+            .unwrap();
 
         // Should find a1 and a2 (type A, within 0.3), but not b1 (type B) or far (beyond 0.3)
         assert!(!results.is_empty() && results.len() <= 2);
@@ -2905,8 +2959,7 @@ mod tests {
     #[test]
     fn test_slow_query_threshold_config() {
         // Test configuration via CollectionConfig builder
-        let config = CollectionConfig::new("test", 64)
-            .with_slow_query_threshold_us(100_000); // 100ms threshold
+        let config = CollectionConfig::new("test", 64).with_slow_query_threshold_us(100_000); // 100ms threshold
 
         assert_eq!(config.slow_query_threshold_us, Some(100_000));
 
@@ -2936,13 +2989,14 @@ mod tests {
 
     #[test]
     fn test_slow_query_threshold_serialization() {
-        let config = CollectionConfig::new("test", 64)
-            .with_slow_query_threshold_us(75_000);
+        let config = CollectionConfig::new("test", 64).with_slow_query_threshold_us(75_000);
         let mut collection = Collection::new(config);
 
         // Insert some data
         for i in 0..10 {
-            collection.insert(format!("v{}", i), &random_vector(64), None).unwrap();
+            collection
+                .insert(format!("v{}", i), &random_vector(64), None)
+                .unwrap();
         }
 
         // Serialize and deserialize
@@ -2956,8 +3010,7 @@ mod tests {
     #[test]
     fn test_query_cache_config() {
         // Test configuration via CollectionConfig builder
-        let config = CollectionConfig::new("test", 64)
-            .with_query_cache_capacity(100);
+        let config = CollectionConfig::new("test", 64).with_query_cache_capacity(100);
 
         assert!(config.query_cache.is_enabled());
         assert_eq!(config.query_cache.capacity, 100);
@@ -2975,13 +3028,14 @@ mod tests {
 
     #[test]
     fn test_query_cache_hit_miss() {
-        let config = CollectionConfig::new("test", 32)
-            .with_query_cache_capacity(100);
+        let config = CollectionConfig::new("test", 32).with_query_cache_capacity(100);
         let mut collection = Collection::new(config);
 
         // Insert some vectors
         for i in 0..10 {
-            collection.insert(format!("v{}", i), &random_vector(32), None).unwrap();
+            collection
+                .insert(format!("v{}", i), &random_vector(32), None)
+                .unwrap();
         }
 
         let query = random_vector(32);
@@ -3011,13 +3065,14 @@ mod tests {
 
     #[test]
     fn test_query_cache_different_k() {
-        let config = CollectionConfig::new("test", 32)
-            .with_query_cache_capacity(100);
+        let config = CollectionConfig::new("test", 32).with_query_cache_capacity(100);
         let mut collection = Collection::new(config);
 
         // Insert some vectors
         for i in 0..10 {
-            collection.insert(format!("v{}", i), &random_vector(32), None).unwrap();
+            collection
+                .insert(format!("v{}", i), &random_vector(32), None)
+                .unwrap();
         }
 
         let query = random_vector(32);
@@ -3035,13 +3090,14 @@ mod tests {
 
     #[test]
     fn test_query_cache_invalidation_on_insert() {
-        let config = CollectionConfig::new("test", 32)
-            .with_query_cache_capacity(100);
+        let config = CollectionConfig::new("test", 32).with_query_cache_capacity(100);
         let mut collection = Collection::new(config);
 
         // Insert initial vectors
         for i in 0..5 {
-            collection.insert(format!("v{}", i), &random_vector(32), None).unwrap();
+            collection
+                .insert(format!("v{}", i), &random_vector(32), None)
+                .unwrap();
         }
 
         let query = random_vector(32);
@@ -3057,13 +3113,14 @@ mod tests {
 
     #[test]
     fn test_query_cache_invalidation_on_delete() {
-        let config = CollectionConfig::new("test", 32)
-            .with_query_cache_capacity(100);
+        let config = CollectionConfig::new("test", 32).with_query_cache_capacity(100);
         let mut collection = Collection::new(config);
 
         // Insert vectors
         for i in 0..5 {
-            collection.insert(format!("v{}", i), &random_vector(32), None).unwrap();
+            collection
+                .insert(format!("v{}", i), &random_vector(32), None)
+                .unwrap();
         }
 
         let query = random_vector(32);
@@ -3079,13 +3136,14 @@ mod tests {
 
     #[test]
     fn test_query_cache_invalidation_on_update() {
-        let config = CollectionConfig::new("test", 32)
-            .with_query_cache_capacity(100);
+        let config = CollectionConfig::new("test", 32).with_query_cache_capacity(100);
         let mut collection = Collection::new(config);
 
         // Insert vectors
         for i in 0..5 {
-            collection.insert(format!("v{}", i), &random_vector(32), None).unwrap();
+            collection
+                .insert(format!("v{}", i), &random_vector(32), None)
+                .unwrap();
         }
 
         let query = random_vector(32);
@@ -3112,7 +3170,9 @@ mod tests {
 
         // Insert and search
         for i in 0..5 {
-            collection.insert(format!("v{}", i), &random_vector(32), None).unwrap();
+            collection
+                .insert(format!("v{}", i), &random_vector(32), None)
+                .unwrap();
         }
         let query = random_vector(32);
         let _ = collection.search(&query, 5).unwrap();
@@ -3128,13 +3188,14 @@ mod tests {
 
     #[test]
     fn test_query_cache_clear() {
-        let config = CollectionConfig::new("test", 32)
-            .with_query_cache_capacity(100);
+        let config = CollectionConfig::new("test", 32).with_query_cache_capacity(100);
         let mut collection = Collection::new(config);
 
         // Insert vectors
         for i in 0..5 {
-            collection.insert(format!("v{}", i), &random_vector(32), None).unwrap();
+            collection
+                .insert(format!("v{}", i), &random_vector(32), None)
+                .unwrap();
         }
 
         // Cache some queries
@@ -3155,13 +3216,14 @@ mod tests {
 
     #[test]
     fn test_query_cache_hit_ratio() {
-        let config = CollectionConfig::new("test", 32)
-            .with_query_cache_capacity(100);
+        let config = CollectionConfig::new("test", 32).with_query_cache_capacity(100);
         let mut collection = Collection::new(config);
 
         // Insert vectors
         for i in 0..5 {
-            collection.insert(format!("v{}", i), &random_vector(32), None).unwrap();
+            collection
+                .insert(format!("v{}", i), &random_vector(32), None)
+                .unwrap();
         }
 
         let query = random_vector(32);
@@ -3187,7 +3249,9 @@ mod tests {
         let mut collection = Collection::new(CollectionConfig::new("test", 32));
 
         let vec = random_vector(32);
-        collection.insert_with_ttl("doc1", &vec, None, Some(3600)).unwrap();
+        collection
+            .insert_with_ttl("doc1", &vec, None, Some(3600))
+            .unwrap();
 
         // Vector should exist
         assert!(collection.get("doc1").is_some());
@@ -3223,7 +3287,9 @@ mod tests {
 
         // Insert with TTL of 0 (immediately expires)
         let vec = random_vector(32);
-        collection.insert_with_ttl("doc1", &vec, None, Some(0)).unwrap();
+        collection
+            .insert_with_ttl("doc1", &vec, None, Some(0))
+            .unwrap();
 
         // Wait a tiny bit for expiration to kick in
         std::thread::sleep(std::time::Duration::from_millis(10));
@@ -3242,7 +3308,9 @@ mod tests {
         // Insert many vectors with TTL
         for i in 0..100 {
             let vec = random_vector(32);
-            collection.insert_with_ttl(format!("doc{}", i), &vec, None, Some(0)).unwrap();
+            collection
+                .insert_with_ttl(format!("doc{}", i), &vec, None, Some(0))
+                .unwrap();
         }
 
         // Should need sweep since many have TTL
@@ -3256,7 +3324,9 @@ mod tests {
 
         // Insert expired vector
         let vec1 = random_vector(32);
-        collection.insert_with_ttl("expired", &vec1, None, Some(0)).unwrap();
+        collection
+            .insert_with_ttl("expired", &vec1, None, Some(0))
+            .unwrap();
 
         // Insert valid vector
         let vec2 = random_vector(32);
@@ -3276,7 +3346,9 @@ mod tests {
         // Insert some vectors with TTL
         for i in 0..10 {
             let vec = random_vector(32);
-            collection.insert_with_ttl(format!("doc{}", i), &vec, None, Some(3600)).unwrap();
+            collection
+                .insert_with_ttl(format!("doc{}", i), &vec, None, Some(3600))
+                .unwrap();
         }
 
         // Delete some vectors
@@ -3323,13 +3395,14 @@ mod tests {
         use crate::DistanceFunction;
 
         // Create collection with cosine distance
-        let config = CollectionConfig::new("test", 3)
-            .with_distance(DistanceFunction::Cosine);
+        let config = CollectionConfig::new("test", 3).with_distance(DistanceFunction::Cosine);
         let mut collection = Collection::new(config);
 
         // Vectors that have different results for cosine vs euclidean
         collection.insert("unit_x", &[1.0, 0.0, 0.0], None).unwrap();
-        collection.insert("scaled_x", &[5.0, 0.0, 0.0], None).unwrap();
+        collection
+            .insert("scaled_x", &[5.0, 0.0, 0.0], None)
+            .unwrap();
         collection.insert("unit_y", &[0.0, 1.0, 0.0], None).unwrap();
 
         let query = vec![2.0, 0.0, 0.0];
@@ -3359,12 +3432,13 @@ mod tests {
         use crate::DistanceFunction;
 
         // Create with euclidean
-        let config = CollectionConfig::new("test", 32)
-            .with_distance(DistanceFunction::Euclidean);
+        let config = CollectionConfig::new("test", 32).with_distance(DistanceFunction::Euclidean);
         let mut collection = Collection::new(config);
 
         for i in 0..50 {
-            collection.insert(format!("v{}", i), &random_vector(32), None).unwrap();
+            collection
+                .insert(format!("v{}", i), &random_vector(32), None)
+                .unwrap();
         }
 
         let query = random_vector(32);
@@ -3382,17 +3456,22 @@ mod tests {
 
     #[test]
     fn test_brute_force_with_filter() {
-        use crate::DistanceFunction;
         use crate::metadata::Filter;
+        use crate::DistanceFunction;
         use serde_json::json;
 
-        let config = CollectionConfig::new("test", 4)
-            .with_distance(DistanceFunction::Cosine);
+        let config = CollectionConfig::new("test", 4).with_distance(DistanceFunction::Cosine);
         let mut collection = Collection::new(config);
 
-        collection.insert("a", &[1.0, 0.0, 0.0, 0.0], Some(json!({"type": "x"}))).unwrap();
-        collection.insert("b", &[0.0, 1.0, 0.0, 0.0], Some(json!({"type": "y"}))).unwrap();
-        collection.insert("c", &[0.5, 0.5, 0.0, 0.0], Some(json!({"type": "x"}))).unwrap();
+        collection
+            .insert("a", &[1.0, 0.0, 0.0, 0.0], Some(json!({"type": "x"})))
+            .unwrap();
+        collection
+            .insert("b", &[0.0, 1.0, 0.0, 0.0], Some(json!({"type": "y"})))
+            .unwrap();
+        collection
+            .insert("c", &[0.5, 0.5, 0.0, 0.0], Some(json!({"type": "x"})))
+            .unwrap();
 
         let query = vec![1.0, 0.0, 0.0, 0.0];
         let filter = Filter::eq("type", "x");

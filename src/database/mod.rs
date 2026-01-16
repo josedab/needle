@@ -49,7 +49,7 @@ use crate::collection::{Collection, CollectionConfig, SearchResult};
 use crate::error::{NeedleError, Result};
 use crate::metadata::Filter;
 use crate::storage::{crc32, StorageEngine, HEADER_SIZE};
-use crate::tuning::{AdaptiveTuner, WorkloadObservation, RecommendedIndex};
+use crate::tuning::{AdaptiveTuner, RecommendedIndex, WorkloadObservation};
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -57,7 +57,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
-use tracing::{debug, info, warn, instrument};
+use tracing::{debug, info, instrument, warn};
 
 /// Export entry type: (id, vector, metadata)
 pub type ExportEntry = (String, Vec<f32>, Option<Value>);
@@ -246,7 +246,8 @@ impl Database {
                                 "Checksum mismatch detected - database may be corrupted"
                             );
                             return Err(NeedleError::Corruption(
-                                "State data checksum mismatch. Database file may be corrupted.".into(),
+                                "State data checksum mismatch. Database file may be corrupted."
+                                    .into(),
                             ));
                         }
                     }
@@ -695,7 +696,9 @@ impl Database {
         }
 
         info!(alias = %alias, collection = %collection, "Creating alias");
-        state.aliases.insert(alias.to_string(), collection.to_string());
+        state
+            .aliases
+            .insert(alias.to_string(), collection.to_string());
         self.mark_modified();
         Ok(())
     }
@@ -872,7 +875,9 @@ impl Database {
         }
 
         info!(alias = %alias, collection = %collection, "Updating alias");
-        state.aliases.insert(alias.to_string(), collection.to_string());
+        state
+            .aliases
+            .insert(alias.to_string(), collection.to_string());
         self.mark_modified();
         Ok(())
     }
@@ -1208,7 +1213,9 @@ impl Database {
         }
 
         if let Some(pf) = post_filter {
-            builder = builder.post_filter(pf).post_filter_factor(post_filter_factor);
+            builder = builder
+                .post_filter(pf)
+                .post_filter_factor(post_filter_factor);
         }
 
         builder.execute()
@@ -1260,7 +1267,8 @@ impl Database {
             .get(collection)
             .ok_or_else(|| NeedleError::CollectionNotFound(collection.to_string()))?;
 
-        let mut builder = coll.search_builder(query)
+        let mut builder = coll
+            .search_builder(query)
             .k(k)
             .post_filter(post_filter)
             .post_filter_factor(post_filter_factor);
@@ -1759,7 +1767,8 @@ mod tests {
 
         // Insert with TTL
         let vec = random_vector(32);
-        coll.insert_with_ttl("doc1", &vec, None, Some(3600)).unwrap();
+        coll.insert_with_ttl("doc1", &vec, None, Some(3600))
+            .unwrap();
 
         // Insert without TTL
         let vec2 = random_vector(32);
@@ -1829,7 +1838,8 @@ mod tests {
 
         // Insert expired vector
         let vec1 = random_vector(32);
-        coll.insert_with_ttl("expired", &vec1, None, Some(0)).unwrap();
+        coll.insert_with_ttl("expired", &vec1, None, Some(0))
+            .unwrap();
 
         // Insert non-expired vector
         let vec2 = random_vector(32);
@@ -1883,8 +1893,8 @@ mod tests {
         let db = Database::in_memory();
 
         // Create collection with cosine distance
-        let config = crate::CollectionConfig::new("test", 3)
-            .with_distance(DistanceFunction::Cosine);
+        let config =
+            crate::CollectionConfig::new("test", 3).with_distance(DistanceFunction::Cosine);
         db.create_collection_with_config(config).unwrap();
 
         let coll = db.collection("test").unwrap();
@@ -1899,7 +1909,10 @@ mod tests {
         let cosine_results = coll.search(&query, 2).unwrap();
         let d1 = cosine_results[0].distance;
         let d2 = cosine_results[1].distance;
-        assert!((d1 - d2).abs() < 0.001, "Cosine distances should be equal for same direction");
+        assert!(
+            (d1 - d2).abs() < 0.001,
+            "Cosine distances should be equal for same direction"
+        );
 
         // With euclidean override, magnitude matters
         let euclidean_results = coll
@@ -1919,8 +1932,8 @@ mod tests {
         let db = Database::in_memory();
 
         // Create collection with euclidean distance
-        let config = crate::CollectionConfig::new("test", 32)
-            .with_distance(DistanceFunction::Euclidean);
+        let config =
+            crate::CollectionConfig::new("test", 32).with_distance(DistanceFunction::Euclidean);
         db.create_collection_with_config(config).unwrap();
 
         let coll = db.collection("test").unwrap();
