@@ -279,7 +279,9 @@ impl BitSet {
     pub fn contains(&self, id: &usize) -> bool {
         let word_idx = *id / 64;
         let bit_idx = *id % 64;
-        self.bits.get(word_idx).is_some_and(|word| (word >> bit_idx) & 1 == 1)
+        self.bits
+            .get(word_idx)
+            .is_some_and(|word| (word >> bit_idx) & 1 == 1)
     }
 
     /// Insert an ID into the set, returns true if it was newly inserted
@@ -448,7 +450,9 @@ impl HnswIndex {
         }
 
         // Safety: entry_point is Some because we just checked is_none() above
-        let entry_point = self.entry_point.expect("entry_point should be Some after is_none check");
+        let entry_point = self
+            .entry_point
+            .expect("entry_point should be Some after is_none check");
         let mut current = entry_point;
 
         // Traverse from top layer to one above insert level
@@ -477,7 +481,8 @@ impl HnswIndex {
                 let max_conn = self.max_connections(l);
                 if self.layers[l].connection_count(*neighbor_id) > max_conn {
                     // Only allocate when pruning is actually needed
-                    let neighbor_connections = self.layers[l].get_connections(*neighbor_id).to_vec();
+                    let neighbor_connections =
+                        self.layers[l].get_connections(*neighbor_id).to_vec();
                     let neighbor_vec = &vectors[*neighbor_id];
                     let scored: Vec<(VectorId, f32)> = neighbor_connections
                         .iter()
@@ -545,7 +550,9 @@ impl HnswIndex {
         }
 
         // Safety: entry_point is Some because we just checked is_none() above
-        let mut current = self.entry_point.expect("entry_point should be Some after is_none check");
+        let mut current = self
+            .entry_point
+            .expect("entry_point should be Some after is_none check");
 
         // Traverse from top layer down to layer 1
         let layers_to_traverse = self.entry_level;
@@ -558,7 +565,8 @@ impl HnswIndex {
         }
 
         // Search layer 0 with custom ef_search
-        let (candidates, visited) = self.search_layer_with_stats(query, current, ef_search, 0, vectors);
+        let (candidates, visited) =
+            self.search_layer_with_stats(query, current, ef_search, 0, vectors);
         stats.visited_nodes += visited;
 
         // Total layers traversed = upper layers + layer 0
@@ -624,7 +632,8 @@ impl HnswIndex {
         max_distance: f32,
         vectors: &[Vec<f32>],
     ) -> Vec<(VectorId, f32)> {
-        self.search_radius_with_stats(query, max_distance, vectors).0
+        self.search_radius_with_stats(query, max_distance, vectors)
+            .0
     }
 
     /// Search for all vectors within a given distance radius and return statistics.
@@ -640,7 +649,8 @@ impl HnswIndex {
         // The over-fetch factor helps ensure we find most/all vectors within radius
         let ef_search = self.config.ef_search.max(200);
 
-        let (candidates, stats) = self.search_with_ef_stats(query, vectors.len().min(ef_search * 10), ef_search, vectors);
+        let (candidates, stats) =
+            self.search_with_ef_stats(query, vectors.len().min(ef_search * 10), ef_search, vectors);
 
         // Filter to only include vectors within the radius
         let results: Vec<_> = candidates
@@ -733,7 +743,8 @@ impl HnswIndex {
 
         // Convert to sorted vector (closest first)
         let mut result_vec: Vec<_> = results.into_iter().map(|(d, id)| (id, d.0)).collect();
-        result_vec.sort_unstable_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+        result_vec
+            .sort_unstable_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
         (result_vec, visited_count)
     }
 
@@ -852,7 +863,9 @@ impl HnswIndex {
     /// Get index statistics
     pub fn stats(&self) -> HnswStats {
         let num_layers = self.layers.len();
-        let total_edges: usize = self.layers.iter()
+        let total_edges: usize = self
+            .layers
+            .iter()
             .map(|l| l.connections.iter().map(|c| c.len()).sum::<usize>())
             .sum();
         let active_count = self.count;
@@ -881,12 +894,18 @@ impl HnswIndex {
         let base_size = std::mem::size_of::<Self>();
 
         // Layers memory
-        let layer_memory: usize = self.layers.iter()
+        let layer_memory: usize = self
+            .layers
+            .iter()
             .map(|l| {
-                std::mem::size_of::<Layer>() +
-                l.connections.iter()
-                    .map(|c| std::mem::size_of::<Vec<VectorId>>() + c.len() * std::mem::size_of::<VectorId>())
-                    .sum::<usize>()
+                std::mem::size_of::<Layer>()
+                    + l.connections
+                        .iter()
+                        .map(|c| {
+                            std::mem::size_of::<Vec<VectorId>>()
+                                + c.len() * std::mem::size_of::<VectorId>()
+                        })
+                        .sum::<usize>()
             })
             .sum();
 

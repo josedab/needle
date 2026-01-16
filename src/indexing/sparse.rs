@@ -310,10 +310,7 @@ impl SparseIndex {
         // Add to inverted index (skip zero values)
         for (&idx, &val) in vector.indices.iter().zip(vector.values.iter()) {
             if val != 0.0 {
-                self.inverted_index
-                    .entry(idx)
-                    .or_default()
-                    .push((id, val));
+                self.inverted_index.entry(idx).or_default().push((id, val));
             }
         }
 
@@ -329,10 +326,7 @@ impl SparseIndex {
         // Add to inverted index (skip zero values)
         for (&idx, &val) in vector.indices.iter().zip(vector.values.iter()) {
             if val != 0.0 {
-                self.inverted_index
-                    .entry(idx)
-                    .or_default()
-                    .push((id, val));
+                self.inverted_index.entry(idx).or_default().push((id, val));
             }
         }
 
@@ -392,7 +386,8 @@ impl SparseIndex {
 
         // Use min-heap to efficiently find top-k results
         // Heap contains (Reverse(score), id) so smallest score is at top
-        let mut heap: BinaryHeap<(Reverse<OrderedFloat<f32>>, usize)> = BinaryHeap::with_capacity(k + 1);
+        let mut heap: BinaryHeap<(Reverse<OrderedFloat<f32>>, usize)> =
+            BinaryHeap::with_capacity(k + 1);
 
         for (id, score) in scores {
             if heap.len() < k {
@@ -439,7 +434,8 @@ impl SparseIndex {
         }
 
         // Use min-heap to efficiently find top-k results
-        let mut heap: BinaryHeap<(Reverse<OrderedFloat<f32>>, usize)> = BinaryHeap::with_capacity(k + 1);
+        let mut heap: BinaryHeap<(Reverse<OrderedFloat<f32>>, usize)> =
+            BinaryHeap::with_capacity(k + 1);
 
         for (id, dot) in scores {
             if let Some(v) = self.vectors.get(&id) {

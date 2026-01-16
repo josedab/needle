@@ -354,7 +354,9 @@ impl GraphVectorIndex {
             return Err(NeedleError::DuplicateId(id));
         }
 
-        let internal_id = self.next_id.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let internal_id = self
+            .next_id
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
 
         // Add vector to storage
         {
@@ -391,13 +393,7 @@ impl GraphVectorIndex {
     }
 
     /// Add an edge between two entities
-    pub fn add_edge(
-        &self,
-        from: &str,
-        to: &str,
-        edge_type: EdgeType,
-        weight: f32,
-    ) -> Result<()> {
+    pub fn add_edge(&self, from: &str, to: &str, edge_type: EdgeType, weight: f32) -> Result<()> {
         self.add_edge_with_properties(from, to, edge_type, weight, None)
     }
 
@@ -435,7 +431,11 @@ impl GraphVectorIndex {
                     .edges
                     .iter()
                     .enumerate()
-                    .min_by(|(_, a), (_, b)| a.weight.partial_cmp(&b.weight).unwrap_or(std::cmp::Ordering::Equal))
+                    .min_by(|(_, a), (_, b)| {
+                        a.weight
+                            .partial_cmp(&b.weight)
+                            .unwrap_or(std::cmp::Ordering::Equal)
+                    })
                     .map(|(i, _)| i)
                 {
                     if from_entity.edges[min_idx].weight < weight {
@@ -630,8 +630,7 @@ impl GraphVectorIndex {
         if let Some(anchors) = anchor_ids {
             for anchor_id in anchors {
                 if let Some(_entity) = entities.get(*anchor_id) {
-                    let reachable =
-                        self.bfs_reachable(*anchor_id, self.config.max_hops, &entities);
+                    let reachable = self.bfs_reachable(*anchor_id, self.config.max_hops, &entities);
                     for (reachable_id, hops) in reachable {
                         let decay = self.config.distance_decay.powi(hops as i32);
                         let score = graph_scores.entry(reachable_id).or_insert(0.0);
@@ -823,9 +822,9 @@ impl GraphVectorIndex {
     /// Get entity by ID
     pub fn get_entity(&self, id: &str) -> Option<(Vec<f32>, Option<Value>, Vec<GraphEdge>)> {
         let entities = self.entities.read();
-        entities.get(id).map(|e| {
-            (e.vector.clone(), e.metadata.clone(), e.edges.clone())
-        })
+        entities
+            .get(id)
+            .map(|e| (e.vector.clone(), e.metadata.clone(), e.edges.clone()))
     }
 
     /// Get statistics
@@ -967,9 +966,15 @@ mod tests {
         index.add_entity("e4", &v4, None).unwrap();
 
         // Add edges: e1 -> e2 -> e3 -> e4
-        index.add_edge("e1", "e2", EdgeType::RelatedTo, 1.0).unwrap();
-        index.add_edge("e2", "e3", EdgeType::RelatedTo, 1.0).unwrap();
-        index.add_edge("e3", "e4", EdgeType::RelatedTo, 1.0).unwrap();
+        index
+            .add_edge("e1", "e2", EdgeType::RelatedTo, 1.0)
+            .unwrap();
+        index
+            .add_edge("e2", "e3", EdgeType::RelatedTo, 1.0)
+            .unwrap();
+        index
+            .add_edge("e3", "e4", EdgeType::RelatedTo, 1.0)
+            .unwrap();
 
         // Search with graph context should boost connected entities
         let results = index.search_with_graph(&v1, 4).unwrap();
@@ -992,10 +997,18 @@ mod tests {
         }
 
         // Create chain: n0 -> n1 -> n2 -> n3 -> n4
-        index.add_edge("n0", "n1", EdgeType::RelatedTo, 1.0).unwrap();
-        index.add_edge("n1", "n2", EdgeType::RelatedTo, 1.0).unwrap();
-        index.add_edge("n2", "n3", EdgeType::RelatedTo, 1.0).unwrap();
-        index.add_edge("n3", "n4", EdgeType::RelatedTo, 1.0).unwrap();
+        index
+            .add_edge("n0", "n1", EdgeType::RelatedTo, 1.0)
+            .unwrap();
+        index
+            .add_edge("n1", "n2", EdgeType::RelatedTo, 1.0)
+            .unwrap();
+        index
+            .add_edge("n2", "n3", EdgeType::RelatedTo, 1.0)
+            .unwrap();
+        index
+            .add_edge("n3", "n4", EdgeType::RelatedTo, 1.0)
+            .unwrap();
 
         // Find path
         let path = index.find_path("n0", "n4").unwrap();
@@ -1030,14 +1043,24 @@ mod tests {
         let index = GraphVectorIndex::new(4, config);
 
         for i in 0..10 {
-            index.add_entity(format!("e{}", i), &[i as f32; 4], None).unwrap();
+            index
+                .add_entity(format!("e{}", i), &[i as f32; 4], None)
+                .unwrap();
         }
 
         // Create two components
-        index.add_edge("e0", "e1", EdgeType::RelatedTo, 1.0).unwrap();
-        index.add_edge("e1", "e2", EdgeType::RelatedTo, 1.0).unwrap();
-        index.add_edge("e5", "e6", EdgeType::RelatedTo, 1.0).unwrap();
-        index.add_edge("e6", "e7", EdgeType::RelatedTo, 1.0).unwrap();
+        index
+            .add_edge("e0", "e1", EdgeType::RelatedTo, 1.0)
+            .unwrap();
+        index
+            .add_edge("e1", "e2", EdgeType::RelatedTo, 1.0)
+            .unwrap();
+        index
+            .add_edge("e5", "e6", EdgeType::RelatedTo, 1.0)
+            .unwrap();
+        index
+            .add_edge("e6", "e7", EdgeType::RelatedTo, 1.0)
+            .unwrap();
 
         let stats = index.stats();
         assert_eq!(stats.entity_count, 10);

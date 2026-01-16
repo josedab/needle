@@ -72,11 +72,11 @@
 
 use crate::error::{NeedleError, Result};
 use serde::{Deserialize, Serialize};
+use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashMap, HashSet};
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
-use std::cmp::Ordering;
 
 /// Configuration for DiskANN index.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -179,7 +179,10 @@ impl PartialOrd for SearchCandidate {
 impl Ord for SearchCandidate {
     fn cmp(&self, other: &Self) -> Ordering {
         // Reverse order for min-heap behavior
-        other.distance.partial_cmp(&self.distance).unwrap_or(Ordering::Equal)
+        other
+            .distance
+            .partial_cmp(&self.distance)
+            .unwrap_or(Ordering::Equal)
     }
 }
 
@@ -342,10 +345,7 @@ impl DiskAnnIndex {
             let offset = file.seek(SeekFrom::End(0))?;
 
             // Write vector data
-            let bytes: Vec<u8> = vector
-                .iter()
-                .flat_map(|f| f.to_le_bytes())
-                .collect();
+            let bytes: Vec<u8> = vector.iter().flat_map(|f| f.to_le_bytes()).collect();
             file.write_all(&bytes)?;
 
             // Create graph node
@@ -389,10 +389,7 @@ impl DiskAnnIndex {
         // Initialize random neighbors
         let max_degree = self.metadata.config.max_degree;
         for i in 0..n {
-            let mut neighbors: Vec<usize> = (0..n)
-                .filter(|&j| j != i)
-                .take(max_degree)
-                .collect();
+            let mut neighbors: Vec<usize> = (0..n).filter(|&j| j != i).take(max_degree).collect();
             neighbors.truncate(max_degree);
             self.nodes[i].neighbors = neighbors;
         }
@@ -405,12 +402,8 @@ impl DiskAnnIndex {
             let query = &all_vectors[i];
 
             // Greedy search from entry point
-            let candidates = self.greedy_search_internal(
-                query,
-                &all_vectors,
-                build_list_size,
-                Some(i),
-            );
+            let candidates =
+                self.greedy_search_internal(query, &all_vectors, build_list_size, Some(i));
 
             // Robust prune
             let new_neighbors = self.robust_prune(&candidates, query, &all_vectors, alpha);
@@ -543,7 +536,8 @@ impl DiskAnnIndex {
             // Check if candidate is alpha-dominated by existing neighbors
             let mut dominated = false;
             for &neighbor in &result {
-                let neighbor_to_candidate = self.distance(&all_vectors[neighbor], &all_vectors[candidate]);
+                let neighbor_to_candidate =
+                    self.distance(&all_vectors[neighbor], &all_vectors[candidate]);
                 if neighbor_to_candidate * alpha < candidate_dist {
                     dominated = true;
                     break;
@@ -601,7 +595,9 @@ impl DiskAnnIndex {
         let node = &self.nodes[index];
         let dim = self.metadata.dimensions;
 
-        let file = self.data_file.as_mut()
+        let file = self
+            .data_file
+            .as_mut()
             .ok_or_else(|| NeedleError::InvalidInput("Data file not open".to_string()))?;
 
         file.seek(SeekFrom::Start(node.data_offset))?;
@@ -849,9 +845,7 @@ mod tests {
     fn create_test_vectors(n: usize, dim: usize) -> Vec<(String, Vec<f32>)> {
         (0..n)
             .map(|i| {
-                let vector: Vec<f32> = (0..dim)
-                    .map(|j| ((i * dim + j) as f32).sin())
-                    .collect();
+                let vector: Vec<f32> = (0..dim).map(|j| ((i * dim + j) as f32).sin()).collect();
                 (format!("vec_{}", i), vector)
             })
             .collect()
@@ -1023,7 +1017,7 @@ mod tests {
         assert_eq!(results.len(), 5);
         // Results should be sorted by distance
         for i in 1..results.len() {
-            assert!(results[i].distance >= results[i-1].distance);
+            assert!(results[i].distance >= results[i - 1].distance);
         }
     }
 
