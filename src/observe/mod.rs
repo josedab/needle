@@ -1,8 +1,8 @@
 //! Observability: telemetry, drift detection, anomaly detection, profiling.
 
-pub mod telemetry;
-pub mod observability;
 pub mod anomaly;
 pub mod drift;
-pub mod profiler;
+pub mod observability;
 pub mod otel_service;
+pub mod profiler;
+pub mod telemetry;
