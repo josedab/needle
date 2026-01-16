@@ -33,7 +33,7 @@
 
 use crate::error::{NeedleError, Result};
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet, BTreeMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Unique replica identifier.
@@ -43,8 +43,8 @@ pub struct ReplicaId(pub u64);
 impl ReplicaId {
     /// Generate a new replica ID.
     pub fn new() -> Self {
-        use std::hash::{Hash, Hasher};
         use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
 
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -137,10 +137,7 @@ pub enum Operation {
         metadata: HashMap<String, String>,
     },
     /// Update a vector.
-    Update {
-        id: String,
-        vector: Vec<f32>,
-    },
+    Update { id: String, vector: Vec<f32> },
     /// Update metadata.
     UpdateMetadata {
         id: String,
@@ -148,9 +145,7 @@ pub enum Operation {
         value: Option<String>,
     },
     /// Delete a vector.
-    Delete {
-        id: String,
-    },
+    Delete { id: String },
 }
 
 /// An operation with its timestamp.
@@ -167,7 +162,11 @@ pub struct TimestampedOp {
 impl TimestampedOp {
     /// Create new timestamped operation.
     pub fn new(op: Operation, timestamp: HLC, origin: ReplicaId) -> Self {
-        Self { op, timestamp, origin }
+        Self {
+            op,
+            timestamp,
+            origin,
+        }
     }
 }
 
@@ -190,7 +189,12 @@ pub struct CRDTVector {
 
 impl CRDTVector {
     /// Create new vector entry.
-    pub fn new(id: &str, vector: Vec<f32>, metadata: HashMap<String, String>, timestamp: HLC) -> Self {
+    pub fn new(
+        id: &str,
+        vector: Vec<f32>,
+        metadata: HashMap<String, String>,
+        timestamp: HLC,
+    ) -> Self {
         let meta_with_ts: HashMap<String, (String, HLC)> = metadata
             .into_iter()
             .map(|(k, v)| (k, (v, timestamp)))
@@ -213,7 +217,8 @@ impl CRDTVector {
 
     /// Get all metadata.
     pub fn get_all_metadata(&self) -> HashMap<String, String> {
-        self.metadata.iter()
+        self.metadata
+            .iter()
             .map(|(k, (v, _))| (k.clone(), v.clone()))
             .collect()
     }
@@ -367,9 +372,7 @@ impl VectorCRDT {
 
         let timestamp = self.clock.tick();
 
-        let op = Operation::Delete {
-            id: id.to_string(),
-        };
+        let op = Operation::Delete { id: id.to_string() };
 
         self.apply_operation(op.clone(), timestamp)?;
 
@@ -382,7 +385,11 @@ impl VectorCRDT {
     /// Apply an operation.
     fn apply_operation(&mut self, op: Operation, timestamp: HLC) -> Result<()> {
         match op {
-            Operation::Add { id, vector, metadata } => {
+            Operation::Add {
+                id,
+                vector,
+                metadata,
+            } => {
                 if let Some(existing) = self.vectors.get(&id) {
                     // LWW: only apply if newer
                     if timestamp > existing.updated_at {
@@ -405,7 +412,8 @@ impl VectorCRDT {
             Operation::UpdateMetadata { id, key, value } => {
                 if let Some(entry) = self.vectors.get_mut(&id) {
                     if entry.deleted.is_none() {
-                        let should_update = entry.metadata
+                        let should_update = entry
+                            .metadata
                             .get(&key)
                             .map(|(_, ts)| timestamp > *ts)
                             .unwrap_or(true);
@@ -448,7 +456,8 @@ impl VectorCRDT {
     /// Get delta since a timestamp.
     pub fn delta_since(&self, since: Option<HLC>) -> Delta {
         let operations: Vec<TimestampedOp> = match since {
-            Some(ts) => self.operation_log
+            Some(ts) => self
+                .operation_log
                 .range(ts..)
                 .filter(|(t, _)| **t > ts)
                 .map(|(_, op)| op.clone())
@@ -523,7 +532,8 @@ impl VectorCRDT {
 
             // Apply operation
             self.apply_operation(timestamped.op.clone(), timestamped.timestamp)?;
-            self.operation_log.insert(timestamped.timestamp, timestamped);
+            self.operation_log
+                .insert(timestamped.timestamp, timestamped);
             applied += 1;
         }
 
@@ -806,7 +816,9 @@ mod tests {
         assert_eq!(delta.len(), 1);
 
         // Simulate sync complete
-        crdt1.peer_sync_state.insert(replica2, crdt1.current_clock());
+        crdt1
+            .peer_sync_state
+            .insert(replica2, crdt1.current_clock());
 
         crdt1.add("vec2", &[2.0], HashMap::new()).unwrap();
 

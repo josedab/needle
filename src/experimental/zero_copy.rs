@@ -82,7 +82,10 @@ pub enum MemoryLayout {
     /// Column-major (Fortran-style): dimensions are contiguous
     ColumnMajor,
     /// Strided: custom stride between elements
-    Strided { row_stride: usize, col_stride: usize },
+    Strided {
+        row_stride: usize,
+        col_stride: usize,
+    },
 }
 
 impl Default for MemoryLayout {
@@ -117,7 +120,7 @@ impl ZeroCopyBuffer {
         let len = data.len() * 4;
         let ptr = data.as_ptr() as *mut u8;
         std::mem::forget(data); // Transfer ownership
-        
+
         Self {
             ptr: NonNull::new(ptr).expect("alloc returned non-null"),
             len,
@@ -128,9 +131,9 @@ impl ZeroCopyBuffer {
     }
 
     /// Create from raw pointer (borrowed, caller must ensure lifetime)
-    /// 
+    ///
     /// # Safety
-    /// 
+    ///
     /// The caller must ensure:
     /// - The pointer is valid for the duration of this buffer's lifetime
     /// - The memory is properly aligned for the data type
@@ -149,9 +152,7 @@ impl ZeroCopyBuffer {
     pub fn as_f32_slice(&self) -> &[f32] {
         assert_eq!(self.dtype, DataType::Float32);
         let count = self.len / 4;
-        unsafe {
-            std::slice::from_raw_parts(self.ptr.as_ptr() as *const f32, count)
-        }
+        unsafe { std::slice::from_raw_parts(self.ptr.as_ptr() as *const f32, count) }
     }
 
     /// Get raw pointer
@@ -201,11 +202,7 @@ impl Drop for ZeroCopyBuffer {
                         );
                     }
                     _ => {
-                        let _ = Vec::from_raw_parts(
-                            self.ptr.as_ptr(),
-                            self.len,
-                            self.len,
-                        );
+                        let _ = Vec::from_raw_parts(self.ptr.as_ptr(), self.len, self.len);
                     }
                 }
             }
@@ -232,16 +229,14 @@ pub struct VectorBatch {
 
 impl VectorBatch {
     /// Create from separate components
-    pub fn new(
-        ids: Vec<String>,
-        data: Vec<f32>,
-        dimensions: usize,
-    ) -> Result<Self> {
+    pub fn new(ids: Vec<String>, data: Vec<f32>, dimensions: usize) -> Result<Self> {
         let count = ids.len();
         if data.len() != count * dimensions {
             return Err(NeedleError::InvalidInput(format!(
                 "Data length {} doesn't match {} vectors × {} dimensions",
-                data.len(), count, dimensions
+                data.len(),
+                count,
+                dimensions
             )));
         }
 
@@ -269,11 +264,7 @@ impl VectorBatch {
         let len = count * dimensions * 4;
         Self {
             ids,
-            data: ZeroCopyBuffer::from_raw_parts(
-                data_ptr as *const u8,
-                len,
-                DataType::Float32,
-            ),
+            data: ZeroCopyBuffer::from_raw_parts(data_ptr as *const u8, len, DataType::Float32),
             dimensions,
             count,
             layout: MemoryLayout::RowMajor,
@@ -418,7 +409,10 @@ pub enum ArrowDataType {
     /// Float64
     Float64,
     /// Fixed-size list of Float32
-    FixedSizeList { size: usize, item_type: Box<ArrowDataType> },
+    FixedSizeList {
+        size: usize,
+        item_type: Box<ArrowDataType>,
+    },
     /// JSON
     LargeUtf8,
 }
@@ -467,7 +461,8 @@ impl ArrowBatch {
         let schema = Self::vector_schema(batch.dimensions);
 
         // Serialize IDs
-        let id_data: Vec<u8> = batch.ids
+        let id_data: Vec<u8> = batch
+            .ids
             .iter()
             .flat_map(|s| {
                 let bytes = s.as_bytes();
@@ -477,14 +472,16 @@ impl ArrowBatch {
             .collect();
 
         // Serialize vectors
-        let vector_data: Vec<u8> = batch.data_slice()
+        let vector_data: Vec<u8> = batch
+            .data_slice()
             .iter()
             .flat_map(|f| f.to_le_bytes())
             .collect();
 
         // Serialize metadata
         let (metadata_data, metadata_validity) = if let Some(ref meta) = batch.metadata {
-            let data: Vec<u8> = meta.iter()
+            let data: Vec<u8> = meta
+                .iter()
                 .flat_map(|m| {
                     let s = m.as_deref().unwrap_or("");
                     let bytes = s.as_bytes();
@@ -492,16 +489,17 @@ impl ArrowBatch {
                     len.into_iter().chain(bytes.iter().copied())
                 })
                 .collect();
-            
-            let validity: Vec<u8> = meta.iter()
-                .enumerate()
-                .fold(vec![0u8; (meta.len() + 7) / 8], |mut acc, (i, m)| {
-                    if m.is_some() {
-                        acc[i / 8] |= 1 << (i % 8);
-                    }
-                    acc
-                });
-            
+
+            let validity: Vec<u8> =
+                meta.iter()
+                    .enumerate()
+                    .fold(vec![0u8; (meta.len() + 7) / 8], |mut acc, (i, m)| {
+                        if m.is_some() {
+                            acc[i / 8] |= 1 << (i % 8);
+                        }
+                        acc
+                    });
+
             (data, Some(validity))
         } else {
             (Vec::new(), None)
@@ -537,27 +535,27 @@ impl ArrowBatch {
         let schema_len = (schema_json.len() as u32).to_le_bytes();
 
         let mut bytes = Vec::new();
-        
+
         // Magic + version
         bytes.extend_from_slice(b"ARROW1");
-        
+
         // Schema
         bytes.extend_from_slice(&schema_len);
         bytes.extend_from_slice(&schema_json);
-        
+
         // Row count
         bytes.extend_from_slice(&(self.num_rows as u64).to_le_bytes());
-        
+
         // Columns
         bytes.extend_from_slice(&(self.columns.len() as u32).to_le_bytes());
         for col in &self.columns {
             let name_bytes = col.name.as_bytes();
             bytes.extend_from_slice(&(name_bytes.len() as u32).to_le_bytes());
             bytes.extend_from_slice(name_bytes);
-            
+
             bytes.extend_from_slice(&(col.data.len() as u64).to_le_bytes());
             bytes.extend_from_slice(&col.data);
-            
+
             if let Some(ref validity) = col.validity {
                 bytes.push(1);
                 bytes.extend_from_slice(&(validity.len() as u32).to_le_bytes());
@@ -623,7 +621,10 @@ impl SharedMemoryHandle {
         if self.length != self.expected_length() {
             return Err(NeedleError::InvalidInput(format!(
                 "Length {} doesn't match expected {} for {} vectors × {} dims",
-                self.length, self.expected_length(), self.count, self.dimensions
+                self.length,
+                self.expected_length(),
+                self.count,
+                self.dimensions
             )));
         }
         Ok(())
@@ -692,15 +693,15 @@ mod tests {
     fn test_vector_batch() {
         let ids = vec!["v1".to_string(), "v2".to_string(), "v3".to_string()];
         let data = random_vectors(3, 128);
-        
+
         let batch = VectorBatch::new(ids, data, 128).unwrap();
-        
+
         assert_eq!(batch.len(), 3);
         assert_eq!(batch.dimensions(), 128);
-        
+
         let v1 = batch.get_vector(0).unwrap();
         assert_eq!(v1.len(), 128);
-        
+
         assert_eq!(batch.get_id(1), Some("v2"));
     }
 
@@ -708,9 +709,9 @@ mod tests {
     fn test_vector_batch_iter() {
         let ids = vec!["a".to_string(), "b".to_string()];
         let data = vec![1.0, 2.0, 3.0, 4.0]; // 2 vectors × 2 dims
-        
+
         let batch = VectorBatch::new(ids, data, 2).unwrap();
-        
+
         let collected: Vec<_> = batch.iter().collect();
         assert_eq!(collected.len(), 2);
         assert_eq!(collected[0].0, "a");
@@ -724,7 +725,7 @@ mod tests {
         let batch = VectorBatch::new(ids, data, 64).unwrap();
 
         let arrow = ArrowBatch::from_vector_batch(&batch);
-        
+
         assert_eq!(arrow.num_rows, 2);
         assert_eq!(arrow.columns.len(), 3);
         assert_eq!(arrow.schema.fields.len(), 3);
@@ -770,10 +771,10 @@ mod tests {
     #[test]
     fn test_stats() {
         let mut stats = ZeroCopyStats::default();
-        
+
         stats.record(1024 * 1024); // 1MB
         stats.record(2 * 1024 * 1024); // 2MB
-        
+
         assert_eq!(stats.zero_copy_ops, 2);
         assert_eq!(stats.zero_copy_bytes, 3 * 1024 * 1024);
     }

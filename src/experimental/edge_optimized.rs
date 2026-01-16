@@ -21,10 +21,9 @@
 //! ```
 
 use std::collections::{HashMap, VecDeque};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use ordered_float::OrderedFloat;
-use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 
 use crate::distance::DistanceFunction;
@@ -151,7 +150,12 @@ impl CompactIndex {
     }
 
     /// Insert a vector with scalar quantisation.
-    pub fn insert(&mut self, id: &str, vector: &[f32], metadata: Option<serde_json::Value>) -> Result<()> {
+    pub fn insert(
+        &mut self,
+        id: &str,
+        vector: &[f32],
+        metadata: Option<serde_json::Value>,
+    ) -> Result<()> {
         if vector.len() != self.dimension {
             return Err(NeedleError::DimensionMismatch {
                 expected: self.dimension,
@@ -173,7 +177,8 @@ impl CompactIndex {
         // Build graph connections (simplified greedy)
         let mut neighbors = Vec::new();
         if !self.graph.is_empty() {
-            let mut distances: Vec<(u32, f32)> = self.graph
+            let mut distances: Vec<(u32, f32)> = self
+                .graph
                 .iter()
                 .enumerate()
                 .map(|(i, _)| {
@@ -271,7 +276,14 @@ impl CompactIndex {
     fn quantized_distance(&self, a: usize, b: usize) -> f32 {
         let va = &self.vectors[a];
         let vb = &self.vectors[b];
-        quantized_cosine_distance(&va.quantized, va.min_val, va.max_val, &vb.quantized, vb.min_val, vb.max_val)
+        quantized_cosine_distance(
+            &va.quantized,
+            va.min_val,
+            va.max_val,
+            &vb.quantized,
+            vb.min_val,
+            vb.max_val,
+        )
     }
 
     fn quantized_distance_raw(&self, q: &[u8], q_min: f32, q_max: f32, b: usize) -> f32 {
@@ -325,8 +337,12 @@ fn scalar_quantize(vector: &[f32]) -> (Vec<u8>, f32, f32) {
 
 /// Approximate cosine distance between two quantised vectors.
 fn quantized_cosine_distance(
-    a: &[u8], a_min: f32, a_max: f32,
-    b: &[u8], b_min: f32, b_max: f32,
+    a: &[u8],
+    a_min: f32,
+    a_max: f32,
+    b: &[u8],
+    b_min: f32,
+    b_max: f32,
 ) -> f32 {
     let a_range = (a_max - a_min).max(1e-10);
     let b_range = (b_max - b_min).max(1e-10);
@@ -652,8 +668,9 @@ impl CompactIndex {
 
     /// Deserialize an index from bytes.
     pub fn from_bytes(data: &[u8]) -> Result<Self> {
-        let snap: CompactIndexSnapshot = serde_json::from_slice(data)
-            .map_err(|e| NeedleError::InvalidInput(format!("Failed to deserialize index: {}", e)))?;
+        let snap: CompactIndexSnapshot = serde_json::from_slice(data).map_err(|e| {
+            NeedleError::InvalidInput(format!("Failed to deserialize index: {}", e))
+        })?;
         Ok(snap.into_index())
     }
 
@@ -750,7 +767,11 @@ mod tests {
         let v = vec![1.0, 2.0, 3.0];
         let (q, min, max) = scalar_quantize(&v);
         let dist = quantized_cosine_distance(&q, min, max, &q, min, max);
-        assert!(dist < 0.01, "Same vector should have ~0 distance, got {}", dist);
+        assert!(
+            dist < 0.01,
+            "Same vector should have ~0 distance, got {}",
+            dist
+        );
     }
 
     #[test]
@@ -801,7 +822,9 @@ mod tests {
     fn test_compact_index_memory_usage() {
         let mut index = CompactIndex::new(128, DistanceFunction::Cosine, 8, 50);
         for i in 0..100 {
-            index.insert(&format!("v{}", i), &random_vector(128), None).unwrap();
+            index
+                .insert(&format!("v{}", i), &random_vector(128), None)
+                .unwrap();
         }
         let mem = index.memory_usage();
         assert!(mem > 0);
@@ -924,14 +947,20 @@ mod tests {
     fn test_compact_index_persistence_roundtrip() {
         let store = InMemoryPersistence::new();
         let mut index = CompactIndex::new(3, DistanceFunction::Cosine, 4, 20);
-        index.insert("a", &[1.0, 0.0, 0.0], Some(json!({"tag": "x"}))).unwrap();
+        index
+            .insert("a", &[1.0, 0.0, 0.0], Some(json!({"tag": "x"})))
+            .unwrap();
 
         index.save_to(&store, "my_index").unwrap();
 
-        let loaded = CompactIndex::load_from(&store, "my_index").unwrap().unwrap();
+        let loaded = CompactIndex::load_from(&store, "my_index")
+            .unwrap()
+            .unwrap();
         assert_eq!(loaded.len(), 1);
 
-        assert!(CompactIndex::load_from(&store, "nonexistent").unwrap().is_none());
+        assert!(CompactIndex::load_from(&store, "nonexistent")
+            .unwrap()
+            .is_none());
     }
 
     #[test]

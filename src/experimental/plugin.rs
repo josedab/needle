@@ -390,7 +390,10 @@ impl<'a> PluginRef<'a> {
     /// Access the underlying [`Plugin`] trait object.
     pub fn plugin(&self) -> &dyn Plugin {
         // Safety: we verified the key exists before constructing PluginRef.
-        self.guard.get(&self.name).expect("plugin was registered").as_ref()
+        self.guard
+            .get(&self.name)
+            .expect("plugin was registered")
+            .as_ref()
     }
 }
 
@@ -468,11 +471,7 @@ mod tests {
 
     impl DistancePlugin for WeightedEuclidean {
         fn compute_distance(&self, a: &[f32], b: &[f32]) -> f32 {
-            let sum: f32 = a
-                .iter()
-                .zip(b.iter())
-                .map(|(x, y)| (x - y).powi(2))
-                .sum();
+            let sum: f32 = a.iter().zip(b.iter()).map(|(x, y)| (x - y).powi(2)).sum();
             (sum * self.weight).sqrt()
         }
 
@@ -679,9 +678,7 @@ mod tests {
 
     #[test]
     fn test_post_search_hook() {
-        let hook = DistanceThresholdHook {
-            max_distance: 0.5,
-        };
+        let hook = DistanceThresholdHook { max_distance: 0.5 };
 
         let results = vec![
             SearchHookResult {
@@ -722,14 +719,24 @@ mod tests {
     fn test_lifecycle_on_load_failure() {
         struct FailOnLoad;
         impl Plugin for FailOnLoad {
-            fn name(&self) -> &str { "fail-load" }
-            fn version(&self) -> &str { "0.0.1" }
-            fn description(&self) -> &str { "Always fails to load" }
-            fn plugin_type(&self) -> PluginType { PluginType::Custom }
+            fn name(&self) -> &str {
+                "fail-load"
+            }
+            fn version(&self) -> &str {
+                "0.0.1"
+            }
+            fn description(&self) -> &str {
+                "Always fails to load"
+            }
+            fn plugin_type(&self) -> PluginType {
+                PluginType::Custom
+            }
             fn on_load(&mut self) -> HookResult<()> {
                 Err(PluginError::LifecycleError("boom".into()))
             }
-            fn on_unload(&mut self) -> HookResult<()> { Ok(()) }
+            fn on_unload(&mut self) -> HookResult<()> {
+                Ok(())
+            }
         }
 
         let manager = PluginManager::new();
@@ -777,12 +784,24 @@ mod tests {
             let name = format!("temp-{}", i);
             struct Temp(String);
             impl Plugin for Temp {
-                fn name(&self) -> &str { &self.0 }
-                fn version(&self) -> &str { "0.0.1" }
-                fn description(&self) -> &str { "temporary" }
-                fn plugin_type(&self) -> PluginType { PluginType::Custom }
-                fn on_load(&mut self) -> HookResult<()> { Ok(()) }
-                fn on_unload(&mut self) -> HookResult<()> { Ok(()) }
+                fn name(&self) -> &str {
+                    &self.0
+                }
+                fn version(&self) -> &str {
+                    "0.0.1"
+                }
+                fn description(&self) -> &str {
+                    "temporary"
+                }
+                fn plugin_type(&self) -> PluginType {
+                    PluginType::Custom
+                }
+                fn on_load(&mut self) -> HookResult<()> {
+                    Ok(())
+                }
+                fn on_unload(&mut self) -> HookResult<()> {
+                    Ok(())
+                }
             }
 
             manager.register(Box::new(Temp(name.clone()))).unwrap();

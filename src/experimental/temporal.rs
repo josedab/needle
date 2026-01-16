@@ -161,7 +161,10 @@ impl TemporalIndex {
         // Add timestamp to metadata
         let mut meta = metadata.unwrap_or(serde_json::json!({}));
         if let serde_json::Value::Object(ref mut map) = meta {
-            map.insert(self.config.timestamp_field.clone(), serde_json::json!(timestamp));
+            map.insert(
+                self.config.timestamp_field.clone(),
+                serde_json::json!(timestamp),
+            );
         }
 
         // Insert into collection
@@ -217,7 +220,10 @@ impl TemporalIndex {
         // Add timestamp to metadata
         let mut meta = metadata.unwrap_or(serde_json::json!({}));
         if let serde_json::Value::Object(ref mut map) = meta {
-            map.insert(self.config.timestamp_field.clone(), serde_json::json!(timestamp));
+            map.insert(
+                self.config.timestamp_field.clone(),
+                serde_json::json!(timestamp),
+            );
         }
 
         // Update in collection (delete and re-insert)
@@ -234,7 +240,10 @@ impl TemporalIndex {
             change_type: ChangeType::Update,
         };
 
-        self.versions.get_mut(id).expect("version history exists after contains_key check").push(version);
+        self.versions
+            .get_mut(id)
+            .expect("version history exists after contains_key check")
+            .push(version);
 
         // Prune old versions
         if let Some(versions) = self.versions.get_mut(id) {
@@ -253,11 +262,7 @@ impl TemporalIndex {
     }
 
     /// Search with time decay
-    pub fn search_with_decay(
-        &self,
-        query: &[f32],
-        k: usize,
-    ) -> Result<Vec<TemporalSearchResult>> {
+    pub fn search_with_decay(&self, query: &[f32], k: usize) -> Result<Vec<TemporalSearchResult>> {
         self.search_with_decay_and_filter(query, k, None)
     }
 
@@ -337,9 +342,9 @@ impl TemporalIndex {
             .iter()
             .filter_map(|(id, versions)| {
                 // Find the version that was current at as_of_timestamp
-                let valid_version = versions
-                    .iter()
-                    .rfind(|v| v.timestamp <= as_of_timestamp && v.change_type != ChangeType::Delete);
+                let valid_version = versions.iter().rfind(|v| {
+                    v.timestamp <= as_of_timestamp && v.change_type != ChangeType::Delete
+                });
 
                 valid_version.map(|_| id)
             })
@@ -352,7 +357,10 @@ impl TemporalIndex {
         // Create filter for valid ids
         let id_filter = Filter::is_in(
             "id".to_string(),
-            valid_ids.iter().map(|id| serde_json::json!(id.as_str())).collect(),
+            valid_ids
+                .iter()
+                .map(|id| serde_json::json!(id.as_str()))
+                .collect(),
         );
 
         let collection = self.db.collection(&self.collection_name)?;
@@ -371,8 +379,14 @@ impl TemporalIndex {
     ) -> Result<Vec<TemporalSearchResult>> {
         // Create temporal filter
         let filter = Filter::And(vec![
-            Filter::gte(self.config.timestamp_field.clone(), serde_json::json!(start_timestamp)),
-            Filter::lte(self.config.timestamp_field.clone(), serde_json::json!(end_timestamp)),
+            Filter::gte(
+                self.config.timestamp_field.clone(),
+                serde_json::json!(start_timestamp),
+            ),
+            Filter::lte(
+                self.config.timestamp_field.clone(),
+                serde_json::json!(end_timestamp),
+            ),
         ]);
 
         self.search_with_decay_and_filter(query, k, Some(&filter))
@@ -385,10 +399,7 @@ impl TemporalIndex {
 
     /// Get vector at specific version
     pub fn get_at_version(&self, id: &str, version: u64) -> Option<&VectorVersion> {
-        self.versions
-            .get(id)?
-            .iter()
-            .find(|v| v.version == version)
+        self.versions.get(id)?.iter().find(|v| v.version == version)
     }
 
     /// Get latest version of a vector
@@ -418,11 +429,7 @@ impl TemporalIndex {
     }
 
     /// Get vectors added/updated in time range
-    pub fn get_changes_in_range(
-        &self,
-        start: u64,
-        end: u64,
-    ) -> Vec<(String, &VectorVersion)> {
+    pub fn get_changes_in_range(&self, start: u64, end: u64) -> Vec<(String, &VectorVersion)> {
         let mut changes = Vec::new();
 
         for (id, versions) in &self.versions {
@@ -632,7 +639,8 @@ impl<'a> TemporalQueryBuilder<'a> {
             return self.index.search_in_range(&self.query, self.k, start, end);
         }
 
-        self.index.search_with_decay_and_filter(&self.query, self.k, self.filter.as_ref())
+        self.index
+            .search_with_decay_and_filter(&self.query, self.k, self.filter.as_ref())
     }
 }
 
@@ -690,7 +698,9 @@ mod tests {
         db.create_collection("test", 8).unwrap();
 
         let config = TemporalConfig {
-            decay: DecayFunction::Linear { max_age_seconds: 100 },
+            decay: DecayFunction::Linear {
+                max_age_seconds: 100,
+            },
             ..Default::default()
         };
 
@@ -722,7 +732,9 @@ mod tests {
 
         for i in 0..10 {
             let vector = vec![i as f32; 8];
-            index.insert(&format!("doc{}", i), &vector, 1000 + i * 100, None).unwrap();
+            index
+                .insert(&format!("doc{}", i), &vector, 1000 + i * 100, None)
+                .unwrap();
         }
 
         let stats = index.stats();
