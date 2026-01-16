@@ -26,9 +26,9 @@
 //! println!("Quality: {:.2}", result.quality_score);
 //! ```
 
-use crate::nl_filter::{NLFilterParser, ParsedQuery, TemporalConstraint};
-use crate::query_lang::{Query, QueryParser, Expression};
 use crate::metadata::Filter;
+use crate::nl_filter::{NLFilterParser, ParsedQuery, TemporalConstraint};
+use crate::query_lang::{Expression, Query, QueryParser};
 use serde::{Deserialize, Serialize};
 
 // ============================================================================
@@ -249,11 +249,34 @@ impl QueryAnalyzer {
                 pattern_type: PatternType::FilterClause,
             },
             AnalyzerPattern {
-                keywords: vec!["today", "yesterday", "last week", "last month", "recent", "latest", "from", "since", "before", "after"],
+                keywords: vec![
+                    "today",
+                    "yesterday",
+                    "last week",
+                    "last month",
+                    "recent",
+                    "latest",
+                    "from",
+                    "since",
+                    "before",
+                    "after",
+                ],
                 pattern_type: PatternType::TemporalExpression,
             },
             AnalyzerPattern {
-                keywords: vec!["greater than", "less than", "more than", "at least", "at most", "above", "below", ">", "<", ">=", "<="],
+                keywords: vec![
+                    "greater than",
+                    "less than",
+                    "more than",
+                    "at least",
+                    "at most",
+                    "above",
+                    "below",
+                    ">",
+                    "<",
+                    ">=",
+                    "<=",
+                ],
                 pattern_type: PatternType::Comparison,
             },
             AnalyzerPattern {
@@ -273,7 +296,9 @@ impl QueryAnalyzer {
                 pattern_type: PatternType::Aggregation,
             },
             AnalyzerPattern {
-                keywords: vec!["sort by", "order by", "sorted", "ranked", "top", "best", "highest", "lowest"],
+                keywords: vec![
+                    "sort by", "order by", "sorted", "ranked", "top", "best", "highest", "lowest",
+                ],
                 pattern_type: PatternType::SortOrder,
             },
         ];
@@ -339,7 +364,9 @@ impl QueryAnalyzer {
         let has_search = !parsed.search_text.trim().is_empty();
         let has_filter = parsed.filter.is_some();
         let has_temporal = parsed.temporal.is_some();
-        let has_aggregation = patterns.iter().any(|p| p.pattern_type == PatternType::Aggregation);
+        let has_aggregation = patterns
+            .iter()
+            .any(|p| p.pattern_type == PatternType::Aggregation);
 
         if has_aggregation {
             return QueryClass::Aggregation;
@@ -363,7 +390,11 @@ impl QueryAnalyzer {
         }
     }
 
-    fn assess_complexity(&self, parsed: &ParsedQuery, patterns: &[DetectedPattern]) -> QueryComplexity {
+    fn assess_complexity(
+        &self,
+        parsed: &ParsedQuery,
+        patterns: &[DetectedPattern],
+    ) -> QueryComplexity {
         let mut score = 0;
 
         // Count filter conditions
@@ -380,12 +411,18 @@ impl QueryAnalyzer {
         }
 
         // Check for aggregation
-        if patterns.iter().any(|p| p.pattern_type == PatternType::Aggregation) {
+        if patterns
+            .iter()
+            .any(|p| p.pattern_type == PatternType::Aggregation)
+        {
             score += 3;
         }
 
         // Check for negation
-        if patterns.iter().any(|p| p.pattern_type == PatternType::Negation) {
+        if patterns
+            .iter()
+            .any(|p| p.pattern_type == PatternType::Negation)
+        {
             score += 1;
         }
 
@@ -399,7 +436,10 @@ impl QueryAnalyzer {
     fn count_filter_depth(&self, filter: &Filter) -> usize {
         match filter {
             Filter::And(filters) | Filter::Or(filters) => {
-                1 + filters.iter().map(|f| self.count_filter_depth(f)).sum::<usize>()
+                1 + filters
+                    .iter()
+                    .map(|f| self.count_filter_depth(f))
+                    .sum::<usize>()
             }
             Filter::Not(inner) => 1 + self.count_filter_depth(inner),
             Filter::Condition(_) => 1,
@@ -509,8 +549,14 @@ impl HintGenerator {
                     hints.push(OptimizationHint {
                         category: HintCategory::IndexUsage,
                         severity: HintSeverity::Warning,
-                        message: format!("Field '{}' is not indexed but has high cardinality ({})", field, field_profile.cardinality),
-                        suggestion: format!("Consider adding an index on '{}' for faster filtering", field),
+                        message: format!(
+                            "Field '{}' is not indexed but has high cardinality ({})",
+                            field, field_profile.cardinality
+                        ),
+                        suggestion: format!(
+                            "Consider adding an index on '{}' for faster filtering",
+                            field
+                        ),
                         impact: HintImpact {
                             latency_change_percent: -30.0,
                             memory_change_percent: 5.0,
@@ -527,7 +573,8 @@ impl HintGenerator {
                 category: HintCategory::QueryStructure,
                 severity: HintSeverity::Suggestion,
                 message: "Query has high complexity which may impact performance".to_string(),
-                suggestion: "Consider breaking into multiple simpler queries or pre-filtering".to_string(),
+                suggestion: "Consider breaking into multiple simpler queries or pre-filtering"
+                    .to_string(),
                 impact: HintImpact {
                     latency_change_percent: -20.0,
                     memory_change_percent: -10.0,
@@ -556,7 +603,8 @@ impl HintGenerator {
             hints.push(OptimizationHint {
                 category: HintCategory::Quantization,
                 severity: HintSeverity::Suggestion,
-                message: "Large collection without quantization uses significant memory".to_string(),
+                message: "Large collection without quantization uses significant memory"
+                    .to_string(),
                 suggestion: "Consider enabling scalar or product quantization".to_string(),
                 impact: HintImpact {
                     latency_change_percent: 5.0,
@@ -571,7 +619,10 @@ impl HintGenerator {
             hints.push(OptimizationHint {
                 category: HintCategory::SearchParameters,
                 severity: HintSeverity::Info,
-                message: format!("ef_search={} may trade recall for speed", profile.index_config.ef_search),
+                message: format!(
+                    "ef_search={} may trade recall for speed",
+                    profile.index_config.ef_search
+                ),
                 suggestion: "Increase ef_search to 100-200 for higher recall".to_string(),
                 impact: HintImpact {
                     latency_change_percent: 30.0,
@@ -737,7 +788,12 @@ impl VisualQueryBuilder {
 
         // Add filter conditions from analysis
         for field in &analysis.filter_fields {
-            if let Some(field_profile) = self.profile.metadata_fields.iter().find(|f| &f.name == field) {
+            if let Some(field_profile) = self
+                .profile
+                .metadata_fields
+                .iter()
+                .find(|f| &f.name == field)
+            {
                 let filter_str = match field_profile.field_type {
                     FieldType::String => format!("{} = ${}Filter", field, field),
                     FieldType::Number => format!("{} >= ${}_min", field, field),
@@ -844,14 +900,23 @@ impl VisualQueryBuilder {
             && self.profile.vector_count > 10_000
             && !self.profile.metadata_fields.is_empty()
         {
-            let fields: Vec<_> = self.profile.metadata_fields.iter()
+            let fields: Vec<_> = self
+                .profile
+                .metadata_fields
+                .iter()
                 .take(3)
                 .map(|f| f.name.as_str())
                 .collect();
             suggestions.push(QuerySuggestion {
                 suggestion_type: SuggestionType::AddFilter,
-                message: format!("Consider filtering by {} to narrow results", fields.join(", ")),
-                example: Some(format!("...with {} = 'value'", fields.first().unwrap_or(&"field"))),
+                message: format!(
+                    "Consider filtering by {} to narrow results",
+                    fields.join(", ")
+                ),
+                example: Some(format!(
+                    "...with {} = 'value'",
+                    fields.first().unwrap_or(&"field")
+                )),
             });
         }
 
@@ -859,13 +924,22 @@ impl VisualQueryBuilder {
         if analysis.class == QueryClass::Semantic && analysis.search_terms.len() > 3 {
             suggestions.push(QuerySuggestion {
                 suggestion_type: SuggestionType::UseHybrid,
-                message: "Multiple search terms detected - hybrid search may improve results".to_string(),
-                example: Some("Enable hybrid search to combine vector similarity with BM25".to_string()),
+                message: "Multiple search terms detected - hybrid search may improve results"
+                    .to_string(),
+                example: Some(
+                    "Enable hybrid search to combine vector similarity with BM25".to_string(),
+                ),
             });
         }
 
         // Suggest temporal filter
-        if analysis.temporal.is_none() && self.profile.metadata_fields.iter().any(|f| f.field_type == FieldType::DateTime) {
+        if analysis.temporal.is_none()
+            && self
+                .profile
+                .metadata_fields
+                .iter()
+                .any(|f| f.field_type == FieldType::DateTime)
+        {
             suggestions.push(QuerySuggestion {
                 suggestion_type: SuggestionType::AddTemporal,
                 message: "Add a time range to find more relevant recent results".to_string(),
@@ -886,7 +960,11 @@ impl VisualQueryBuilder {
     }
 
     /// Generate alternative query formulations
-    fn generate_alternatives(&self, _query: &str, analysis: &QueryAnalysis) -> Vec<AlternativeQuery> {
+    fn generate_alternatives(
+        &self,
+        _query: &str,
+        analysis: &QueryAnalysis,
+    ) -> Vec<AlternativeQuery> {
         let mut alternatives = Vec::new();
 
         // More specific alternative
@@ -894,14 +972,17 @@ impl VisualQueryBuilder {
             let filter_only = format!(
                 "SELECT * FROM {} WHERE {} LIMIT 100",
                 self.profile.name,
-                analysis.filter_fields.iter()
+                analysis
+                    .filter_fields
+                    .iter()
                     .map(|f| format!("{} = ${}", f, f))
                     .collect::<Vec<_>>()
                     .join(" AND ")
             );
             alternatives.push(AlternativeQuery {
                 needleql: filter_only,
-                description: "Filter-first approach: apply metadata filters before vector search".to_string(),
+                description: "Filter-first approach: apply metadata filters before vector search"
+                    .to_string(),
                 estimated_quality: 0.7,
             });
         }
@@ -927,7 +1008,8 @@ impl VisualQueryBuilder {
             );
             alternatives.push(AlternativeQuery {
                 needleql: rag,
-                description: "RAG-optimized: uses reranking for better context retrieval".to_string(),
+                description: "RAG-optimized: uses reranking for better context retrieval"
+                    .to_string(),
                 estimated_quality: 0.85,
             });
         }
@@ -939,7 +1021,9 @@ impl VisualQueryBuilder {
     pub fn suggest_fields(&self, partial: &str) -> Vec<FieldSuggestion> {
         let partial_lower = partial.to_lowercase();
 
-        self.profile.metadata_fields.iter()
+        self.profile
+            .metadata_fields
+            .iter()
             .filter(|f| f.name.to_lowercase().starts_with(&partial_lower))
             .map(|f| FieldSuggestion {
                 name: f.name.clone(),
@@ -952,7 +1036,9 @@ impl VisualQueryBuilder {
 
     /// Get value suggestions for a field
     pub fn suggest_values(&self, field: &str) -> Vec<String> {
-        self.profile.metadata_fields.iter()
+        self.profile
+            .metadata_fields
+            .iter()
             .find(|f| f.name == field)
             .map(|f| f.sample_values.clone())
             .unwrap_or_default()
@@ -1010,7 +1096,10 @@ impl VisualQueryBuilder {
         steps.push(ExplanationStep {
             step_number: 1,
             operation: "Access Collection".to_string(),
-            description: format!("Open collection '{}' with {} vectors", query.from.collection, self.profile.vector_count),
+            description: format!(
+                "Open collection '{}' with {} vectors",
+                query.from.collection, self.profile.vector_count
+            ),
             estimated_rows: Some(self.profile.vector_count),
         });
 
@@ -1031,8 +1120,7 @@ impl VisualQueryBuilder {
                 operation: "HNSW Search".to_string(),
                 description: format!(
                     "Approximate nearest neighbor search (M={}, ef={})",
-                    self.profile.index_config.hnsw_m,
-                    self.profile.index_config.ef_search
+                    self.profile.index_config.hnsw_m, self.profile.index_config.ef_search
                 ),
                 estimated_rows: query.limit.map(|l| l as usize),
             });
@@ -1059,12 +1147,22 @@ impl VisualQueryBuilder {
             _ => 50.0,
         };
 
-        let filter_overhead = if query.where_clause.is_some() { 1.2 } else { 1.0 };
+        let filter_overhead = if query.where_clause.is_some() {
+            1.2
+        } else {
+            1.0
+        };
 
         Some(CostEstimate {
             estimated_latency_ms: base_latency * filter_overhead,
-            estimated_memory_mb: (self.profile.vector_count * self.profile.dimensions * 4) as f64 / 1_000_000.0,
-            scan_type: if self.has_similar_to(query) { "HNSW Index" } else { "Full Scan" }.to_string(),
+            estimated_memory_mb: (self.profile.vector_count * self.profile.dimensions * 4) as f64
+                / 1_000_000.0,
+            scan_type: if self.has_similar_to(query) {
+                "HNSW Index"
+            } else {
+                "Full Scan"
+            }
+            .to_string(),
         })
     }
 }
@@ -1120,7 +1218,11 @@ mod tests {
                 field_type: FieldType::String,
                 cardinality: 20,
                 indexed: true,
-                sample_values: vec!["science".to_string(), "technology".to_string(), "business".to_string()],
+                sample_values: vec![
+                    "science".to_string(),
+                    "technology".to_string(),
+                    "business".to_string(),
+                ],
             })
             .with_field(FieldProfile {
                 name: "score".to_string(),
@@ -1151,7 +1253,8 @@ mod tests {
     #[test]
     fn test_query_analyzer_with_filter() {
         let analyzer = QueryAnalyzer::new();
-        let analysis = analyzer.analyze("show documents category technology with score greater than 0.8");
+        let analysis =
+            analyzer.analyze("show documents category technology with score greater than 0.8");
 
         assert_eq!(analysis.class, QueryClass::Hybrid);
         assert!(!analysis.filter_fields.is_empty());
@@ -1163,7 +1266,10 @@ mod tests {
         let analysis = analyzer.analyze("articles from last week");
 
         assert!(analysis.temporal.is_some());
-        assert!(analysis.patterns.iter().any(|p| p.pattern_type == PatternType::TemporalExpression));
+        assert!(analysis
+            .patterns
+            .iter()
+            .any(|p| p.pattern_type == PatternType::TemporalExpression));
     }
 
     #[test]
@@ -1208,21 +1314,24 @@ mod tests {
         let hints = HintGenerator::generate(&analysis, &profile);
 
         // Should suggest quantization for large collection
-        assert!(hints.iter().any(|h| h.category == HintCategory::Quantization));
+        assert!(hints
+            .iter()
+            .any(|h| h.category == HintCategory::Quantization));
         // Should suggest filters for large collection
-        assert!(hints.iter().any(|h| h.category == HintCategory::FilterOrder));
+        assert!(hints
+            .iter()
+            .any(|h| h.category == HintCategory::FilterOrder));
     }
 
     #[test]
     fn test_hint_for_unindexed_field() {
-        let profile = CollectionProfile::new("test", 384, 10_000)
-            .with_field(FieldProfile {
-                name: "status".to_string(),
-                field_type: FieldType::String,
-                cardinality: 500,
-                indexed: false,
-                sample_values: vec![],
-            });
+        let profile = CollectionProfile::new("test", 384, 10_000).with_field(FieldProfile {
+            name: "status".to_string(),
+            field_type: FieldType::String,
+            cardinality: 500,
+            indexed: false,
+            sample_values: vec![],
+        });
 
         let analysis = QueryAnalysis {
             class: QueryClass::Hybrid,
@@ -1267,7 +1376,8 @@ mod tests {
         let profile = test_profile();
         let builder = VisualQueryBuilder::new(profile);
 
-        let explanation = builder.explain("SELECT * FROM documents WHERE vector SIMILAR TO $query LIMIT 10");
+        let explanation =
+            builder.explain("SELECT * FROM documents WHERE vector SIMILAR TO $query LIMIT 10");
 
         assert!(explanation.valid);
         assert!(!explanation.summary.is_empty());
@@ -1297,7 +1407,10 @@ mod tests {
         assert!(!result.alternatives.is_empty());
 
         // RAG alternative should be present
-        assert!(result.alternatives.iter().any(|a| a.needleql.contains("RAG")));
+        assert!(result
+            .alternatives
+            .iter()
+            .any(|a| a.needleql.contains("RAG")));
     }
 
     #[test]
@@ -1318,11 +1431,21 @@ mod tests {
     fn test_pattern_detection() {
         let analyzer = QueryAnalyzer::new();
 
-        let analysis = analyzer.analyze("find documents with score greater than 0.8 from last week");
+        let analysis =
+            analyzer.analyze("find documents with score greater than 0.8 from last week");
 
-        assert!(analysis.patterns.iter().any(|p| p.pattern_type == PatternType::SearchKeyword));
-        assert!(analysis.patterns.iter().any(|p| p.pattern_type == PatternType::Comparison));
-        assert!(analysis.patterns.iter().any(|p| p.pattern_type == PatternType::TemporalExpression));
+        assert!(analysis
+            .patterns
+            .iter()
+            .any(|p| p.pattern_type == PatternType::SearchKeyword));
+        assert!(analysis
+            .patterns
+            .iter()
+            .any(|p| p.pattern_type == PatternType::Comparison));
+        assert!(analysis
+            .patterns
+            .iter()
+            .any(|p| p.pattern_type == PatternType::TemporalExpression));
     }
 
     #[test]
@@ -1341,20 +1464,22 @@ mod tests {
 
     #[test]
     fn test_suggestion_generation() {
-        let profile = CollectionProfile::new("large", 384, 100_000)
-            .with_field(FieldProfile {
-                name: "category".to_string(),
-                field_type: FieldType::String,
-                cardinality: 10,
-                indexed: true,
-                sample_values: vec![],
-            });
+        let profile = CollectionProfile::new("large", 384, 100_000).with_field(FieldProfile {
+            name: "category".to_string(),
+            field_type: FieldType::String,
+            cardinality: 10,
+            indexed: true,
+            sample_values: vec![],
+        });
 
         let builder = VisualQueryBuilder::new(profile);
         let result = builder.build("find something");
 
         // Should suggest adding filters for large collection
-        assert!(result.suggestions.iter().any(|s| s.suggestion_type == SuggestionType::AddFilter));
+        assert!(result
+            .suggestions
+            .iter()
+            .any(|s| s.suggestion_type == SuggestionType::AddFilter));
     }
 
     #[test]

@@ -353,8 +353,11 @@ impl CrossCollectionSearch {
         }
 
         // Sort by score (lower is better for distance-based)
-        all_results
-            .sort_by(|a, b| a.score.partial_cmp(&b.score).unwrap_or(std::cmp::Ordering::Equal));
+        all_results.sort_by(|a, b| {
+            a.score
+                .partial_cmp(&b.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
 
         // Apply minimum score filter
         if let Some(min) = self.config.min_score {
@@ -392,18 +395,23 @@ impl CrossCollectionSearch {
         // Convert to CrossCollectionResult
         let mut results: Vec<CrossCollectionResult> = rrf_scores
             .into_iter()
-            .map(|(id, (score, collection, metadata))| CrossCollectionResult {
-                id,
-                score: 1.0 - score, // Invert so lower is better
-                collection,
-                metadata,
-                rank_in_collection: 0, // Not meaningful for RRF
-            })
+            .map(
+                |(id, (score, collection, metadata))| CrossCollectionResult {
+                    id,
+                    score: 1.0 - score, // Invert so lower is better
+                    collection,
+                    metadata,
+                    rank_in_collection: 0, // Not meaningful for RRF
+                },
+            )
             .collect();
 
         // Sort by score (lower is better)
-        results
-            .sort_by(|a, b| a.score.partial_cmp(&b.score).unwrap_or(std::cmp::Ordering::Equal));
+        results.sort_by(|a, b| {
+            a.score
+                .partial_cmp(&b.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
 
         results.truncate(k.min(self.config.total_max_results));
         Ok(results)
@@ -432,17 +440,22 @@ impl CrossCollectionSearch {
 
         let mut results: Vec<CrossCollectionResult> = scores
             .into_iter()
-            .map(|(id, (sum, count, collection, metadata))| CrossCollectionResult {
-                id,
-                score: sum / count as f32,
-                collection,
-                metadata,
-                rank_in_collection: 0,
-            })
+            .map(
+                |(id, (sum, count, collection, metadata))| CrossCollectionResult {
+                    id,
+                    score: sum / count as f32,
+                    collection,
+                    metadata,
+                    rank_in_collection: 0,
+                },
+            )
             .collect();
 
-        results
-            .sort_by(|a, b| a.score.partial_cmp(&b.score).unwrap_or(std::cmp::Ordering::Equal));
+        results.sort_by(|a, b| {
+            a.score
+                .partial_cmp(&b.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         results.truncate(k.min(self.config.total_max_results));
         Ok(results)
     }
@@ -498,8 +511,11 @@ impl CrossCollectionSearch {
             )
             .collect();
 
-        results
-            .sort_by(|a, b| a.score.partial_cmp(&b.score).unwrap_or(std::cmp::Ordering::Equal));
+        results.sort_by(|a, b| {
+            a.score
+                .partial_cmp(&b.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         results.truncate(k.min(self.config.total_max_results));
         Ok(results)
     }
@@ -528,17 +544,22 @@ impl CrossCollectionSearch {
 
         let mut results: Vec<CrossCollectionResult> = max_scores
             .into_iter()
-            .map(|(id, (score, collection, metadata))| CrossCollectionResult {
-                id,
-                score,
-                collection,
-                metadata,
-                rank_in_collection: 0,
-            })
+            .map(
+                |(id, (score, collection, metadata))| CrossCollectionResult {
+                    id,
+                    score,
+                    collection,
+                    metadata,
+                    rank_in_collection: 0,
+                },
+            )
             .collect();
 
-        results
-            .sort_by(|a, b| a.score.partial_cmp(&b.score).unwrap_or(std::cmp::Ordering::Equal));
+        results.sort_by(|a, b| {
+            a.score
+                .partial_cmp(&b.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         results.truncate(k.min(self.config.total_max_results));
         Ok(results)
     }
@@ -770,8 +791,7 @@ mod tests {
             .into_iter()
             .collect();
 
-        let collections =
-            search.get_matching_collections(&CollectionFilter::Include(include), 8);
+        let collections = search.get_matching_collections(&CollectionFilter::Include(include), 8);
 
         assert_eq!(collections.len(), 2);
         assert!(collections.contains(&"col1".to_string()));
@@ -980,8 +1000,7 @@ mod tests {
         let search = CrossCollectionSearch::with_defaults(db);
         let exclude = vec!["col2".to_string()].into_iter().collect();
 
-        let collections =
-            search.get_matching_collections(&CollectionFilter::Exclude(exclude), 8);
+        let collections = search.get_matching_collections(&CollectionFilter::Exclude(exclude), 8);
 
         assert_eq!(collections.len(), 2);
         assert!(!collections.contains(&"col2".to_string()));
