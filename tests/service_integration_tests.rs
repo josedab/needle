@@ -142,9 +142,7 @@ fn test_pitr_recover_to_named_restore_point() {
             .unwrap();
     }
 
-    let config = PitrServiceConfig::builder()
-        .enable_checksums(true)
-        .build();
+    let config = PitrServiceConfig::builder().enable_checksums(true).build();
 
     let service = PitrService::new(&db, config).unwrap();
     service.create_snapshot("checkpoint-1").unwrap();
@@ -228,10 +226,7 @@ fn test_tiered_service_maintenance() {
     let stats = service.stats();
     assert_eq!(stats.total_inserts, 5);
     // Maintenance should run without error; totals should sum correctly
-    assert_eq!(
-        report.total_hot + report.total_warm + report.total_cold,
-        5
-    );
+    assert_eq!(report.total_hot + report.total_warm + report.total_cold, 5);
 }
 
 // ============================================================================

@@ -4,11 +4,13 @@
 //! - Drift Detection
 //! - Backup/Restore
 
-use needle::Database;
-use needle::query_builder::{CollectionProfile, QueryAnalyzer, QueryClass, VisualQueryBuilder};
-use needle::federated::{Federation, FederationConfig, InstanceConfig, MergeStrategy, RoutingStrategy};
-use needle::drift::{DriftConfig, DriftDetector};
 use needle::backup::{BackupConfig, BackupManager, BackupType};
+use needle::drift::{DriftConfig, DriftDetector};
+use needle::federated::{
+    Federation, FederationConfig, InstanceConfig, MergeStrategy, RoutingStrategy,
+};
+use needle::query_builder::{CollectionProfile, QueryAnalyzer, QueryClass, VisualQueryBuilder};
+use needle::Database;
 use tempfile::TempDir;
 
 fn random_vector(dim: usize) -> Vec<f32> {
@@ -74,8 +76,10 @@ fn test_visual_query_builder_with_filter() {
     let result = builder.build("find products where price < 100");
 
     assert!(!result.needleql.is_empty());
-    assert!(result.analysis.class == QueryClass::MetadataOnly ||
-            result.analysis.class == QueryClass::Hybrid);
+    assert!(
+        result.analysis.class == QueryClass::MetadataOnly
+            || result.analysis.class == QueryClass::Hybrid
+    );
 }
 
 #[test]
@@ -250,9 +254,7 @@ fn test_drift_detector_detects_drift() {
 
     // Create baseline centered at 0
     let baseline: Vec<Vec<f32>> = (0..50)
-        .map(|_| {
-            (0..64).map(|_| rand::random::<f32>() * 0.1).collect()
-        })
+        .map(|_| (0..64).map(|_| rand::random::<f32>() * 0.1).collect())
         .collect();
     detector.add_baseline(&baseline).unwrap();
 
@@ -268,7 +270,10 @@ fn test_drift_detector_detects_drift() {
     }
 
     // Should eventually detect drift
-    assert!(detected_drift, "Expected drift to be detected for significantly different distribution");
+    assert!(
+        detected_drift,
+        "Expected drift to be detected for significantly different distribution"
+    );
 }
 
 #[test]
@@ -303,7 +308,8 @@ fn test_backup_create_and_list() {
     let coll = db.collection("test").unwrap();
 
     for i in 0..100 {
-        coll.insert(format!("vec_{}", i), &random_vector(64), None).unwrap();
+        coll.insert(format!("vec_{}", i), &random_vector(64), None)
+            .unwrap();
     }
 
     // Create backup
@@ -333,7 +339,10 @@ fn test_backup_verify() {
     let coll = db.collection("verify_test").unwrap();
     coll.insert("v1", &random_vector(32), None).unwrap();
 
-    let config = BackupConfig { verify: true, ..Default::default() };
+    let config = BackupConfig {
+        verify: true,
+        ..Default::default()
+    };
     let manager = BackupManager::new(&backup_dir, config);
     let metadata = manager.create_backup(&db).unwrap();
 
@@ -354,7 +363,8 @@ fn test_backup_restore() {
 
     for i in 0..50 {
         let meta = serde_json::json!({"index": i});
-        coll.insert(format!("item_{}", i), &random_vector(48), Some(meta)).unwrap();
+        coll.insert(format!("item_{}", i), &random_vector(48), Some(meta))
+            .unwrap();
     }
 
     // Create backup
@@ -367,7 +377,9 @@ fn test_backup_restore() {
 
     // Verify restored data
     assert_eq!(restored_db.list_collections().len(), 1);
-    assert!(restored_db.list_collections().contains(&"restore_test".to_string()));
+    assert!(restored_db
+        .list_collections()
+        .contains(&"restore_test".to_string()));
 
     let restored_coll = restored_db.collection("restore_test").unwrap();
     assert_eq!(restored_coll.len(), 50);
@@ -383,7 +395,8 @@ fn test_backup_with_compression() {
     let coll = db.collection("compress_test").unwrap();
 
     for i in 0..200 {
-        coll.insert(format!("vec_{}", i), &random_vector(128), None).unwrap();
+        coll.insert(format!("vec_{}", i), &random_vector(128), None)
+            .unwrap();
     }
 
     let config = BackupConfig {
@@ -407,7 +420,8 @@ fn test_incremental_backup() {
 
     // Initial data
     for i in 0..50 {
-        coll.insert(format!("vec_{}", i), &random_vector(64), None).unwrap();
+        coll.insert(format!("vec_{}", i), &random_vector(64), None)
+            .unwrap();
     }
 
     // Create full backup
@@ -418,7 +432,8 @@ fn test_incremental_backup() {
 
     // Add more data
     for i in 50..100 {
-        coll.insert(format!("vec_{}", i), &random_vector(64), None).unwrap();
+        coll.insert(format!("vec_{}", i), &random_vector(64), None)
+            .unwrap();
     }
 
     // Create incremental backup
@@ -440,7 +455,8 @@ fn test_query_with_drift_monitoring() {
 
     // Insert initial data
     for i in 0..100 {
-        coll.insert(format!("initial_{}", i), &random_vector(64), None).unwrap();
+        coll.insert(format!("initial_{}", i), &random_vector(64), None)
+            .unwrap();
     }
 
     // Set up drift detector
@@ -475,7 +491,8 @@ fn test_backup_with_query_builder() {
             "category": if i % 2 == 0 { "electronics" } else { "books" },
             "price": i as f64 * 10.0
         });
-        coll.insert(format!("product_{}", i), &random_vector(128), Some(meta)).unwrap();
+        coll.insert(format!("product_{}", i), &random_vector(128), Some(meta))
+            .unwrap();
     }
 
     // Backup
