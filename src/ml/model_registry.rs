@@ -31,11 +31,11 @@
 //! let model_path = registry.ensure_model(ModelId::AllMiniLmL6V2).await?;
 //! ```
 
+use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use parking_lot::RwLock;
 use thiserror::Error;
 
 /// Errors from model registry operations
@@ -266,9 +266,7 @@ impl Default for RegistryConfig {
         // Get cache directory without external crate
         let cache_dir = std::env::var_os("XDG_CACHE_HOME")
             .map(PathBuf::from)
-            .or_else(|| {
-                std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache"))
-            })
+            .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache")))
             .unwrap_or_else(|| PathBuf::from(".cache"))
             .join("needle")
             .join("models");
@@ -315,181 +313,214 @@ impl ModelRegistry {
         let mut models = HashMap::new();
 
         // Register all built-in models
-        models.insert(ModelId::AllMiniLmL6V2, ModelInfo {
-            id: ModelId::AllMiniLmL6V2,
-            name: "all-MiniLM-L6-v2".to_string(),
-            description: "Fast and efficient sentence embeddings".to_string(),
-            dimensions: 384,
-            max_sequence_length: 256,
-            size_bytes: 90_000_000,
-            quality_tier: QualityTier::Fast,
-            hf_repo_id: "sentence-transformers/all-MiniLM-L6-v2".to_string(),
-            onnx_filename: "model.onnx".to_string(),
-            tokenizer_filename: "tokenizer.json".to_string(),
-            normalize: true,
-            pooling: PoolingStrategy::Mean,
-            license: "Apache-2.0".to_string(),
-        });
+        models.insert(
+            ModelId::AllMiniLmL6V2,
+            ModelInfo {
+                id: ModelId::AllMiniLmL6V2,
+                name: "all-MiniLM-L6-v2".to_string(),
+                description: "Fast and efficient sentence embeddings".to_string(),
+                dimensions: 384,
+                max_sequence_length: 256,
+                size_bytes: 90_000_000,
+                quality_tier: QualityTier::Fast,
+                hf_repo_id: "sentence-transformers/all-MiniLM-L6-v2".to_string(),
+                onnx_filename: "model.onnx".to_string(),
+                tokenizer_filename: "tokenizer.json".to_string(),
+                normalize: true,
+                pooling: PoolingStrategy::Mean,
+                license: "Apache-2.0".to_string(),
+            },
+        );
 
-        models.insert(ModelId::AllMiniLmL12V2, ModelInfo {
-            id: ModelId::AllMiniLmL12V2,
-            name: "all-MiniLM-L12-v2".to_string(),
-            description: "Balanced sentence embeddings with 12 layers".to_string(),
-            dimensions: 384,
-            max_sequence_length: 256,
-            size_bytes: 120_000_000,
-            quality_tier: QualityTier::Balanced,
-            hf_repo_id: "sentence-transformers/all-MiniLM-L12-v2".to_string(),
-            onnx_filename: "model.onnx".to_string(),
-            tokenizer_filename: "tokenizer.json".to_string(),
-            normalize: true,
-            pooling: PoolingStrategy::Mean,
-            license: "Apache-2.0".to_string(),
-        });
+        models.insert(
+            ModelId::AllMiniLmL12V2,
+            ModelInfo {
+                id: ModelId::AllMiniLmL12V2,
+                name: "all-MiniLM-L12-v2".to_string(),
+                description: "Balanced sentence embeddings with 12 layers".to_string(),
+                dimensions: 384,
+                max_sequence_length: 256,
+                size_bytes: 120_000_000,
+                quality_tier: QualityTier::Balanced,
+                hf_repo_id: "sentence-transformers/all-MiniLM-L12-v2".to_string(),
+                onnx_filename: "model.onnx".to_string(),
+                tokenizer_filename: "tokenizer.json".to_string(),
+                normalize: true,
+                pooling: PoolingStrategy::Mean,
+                license: "Apache-2.0".to_string(),
+            },
+        );
 
-        models.insert(ModelId::BgeSmallEnV15, ModelInfo {
-            id: ModelId::BgeSmallEnV15,
-            name: "bge-small-en-v1.5".to_string(),
-            description: "BAAI General Embedding - Small English".to_string(),
-            dimensions: 384,
-            max_sequence_length: 512,
-            size_bytes: 130_000_000,
-            quality_tier: QualityTier::Fast,
-            hf_repo_id: "BAAI/bge-small-en-v1.5".to_string(),
-            onnx_filename: "model.onnx".to_string(),
-            tokenizer_filename: "tokenizer.json".to_string(),
-            normalize: true,
-            pooling: PoolingStrategy::Cls,
-            license: "MIT".to_string(),
-        });
+        models.insert(
+            ModelId::BgeSmallEnV15,
+            ModelInfo {
+                id: ModelId::BgeSmallEnV15,
+                name: "bge-small-en-v1.5".to_string(),
+                description: "BAAI General Embedding - Small English".to_string(),
+                dimensions: 384,
+                max_sequence_length: 512,
+                size_bytes: 130_000_000,
+                quality_tier: QualityTier::Fast,
+                hf_repo_id: "BAAI/bge-small-en-v1.5".to_string(),
+                onnx_filename: "model.onnx".to_string(),
+                tokenizer_filename: "tokenizer.json".to_string(),
+                normalize: true,
+                pooling: PoolingStrategy::Cls,
+                license: "MIT".to_string(),
+            },
+        );
 
-        models.insert(ModelId::BgeBaseEnV15, ModelInfo {
-            id: ModelId::BgeBaseEnV15,
-            name: "bge-base-en-v1.5".to_string(),
-            description: "BAAI General Embedding - Base English".to_string(),
-            dimensions: 768,
-            max_sequence_length: 512,
-            size_bytes: 440_000_000,
-            quality_tier: QualityTier::Balanced,
-            hf_repo_id: "BAAI/bge-base-en-v1.5".to_string(),
-            onnx_filename: "model.onnx".to_string(),
-            tokenizer_filename: "tokenizer.json".to_string(),
-            normalize: true,
-            pooling: PoolingStrategy::Cls,
-            license: "MIT".to_string(),
-        });
+        models.insert(
+            ModelId::BgeBaseEnV15,
+            ModelInfo {
+                id: ModelId::BgeBaseEnV15,
+                name: "bge-base-en-v1.5".to_string(),
+                description: "BAAI General Embedding - Base English".to_string(),
+                dimensions: 768,
+                max_sequence_length: 512,
+                size_bytes: 440_000_000,
+                quality_tier: QualityTier::Balanced,
+                hf_repo_id: "BAAI/bge-base-en-v1.5".to_string(),
+                onnx_filename: "model.onnx".to_string(),
+                tokenizer_filename: "tokenizer.json".to_string(),
+                normalize: true,
+                pooling: PoolingStrategy::Cls,
+                license: "MIT".to_string(),
+            },
+        );
 
-        models.insert(ModelId::BgeLargeEnV15, ModelInfo {
-            id: ModelId::BgeLargeEnV15,
-            name: "bge-large-en-v1.5".to_string(),
-            description: "BAAI General Embedding - Large English".to_string(),
-            dimensions: 1024,
-            max_sequence_length: 512,
-            size_bytes: 1_300_000_000,
-            quality_tier: QualityTier::HighQuality,
-            hf_repo_id: "BAAI/bge-large-en-v1.5".to_string(),
-            onnx_filename: "model.onnx".to_string(),
-            tokenizer_filename: "tokenizer.json".to_string(),
-            normalize: true,
-            pooling: PoolingStrategy::Cls,
-            license: "MIT".to_string(),
-        });
+        models.insert(
+            ModelId::BgeLargeEnV15,
+            ModelInfo {
+                id: ModelId::BgeLargeEnV15,
+                name: "bge-large-en-v1.5".to_string(),
+                description: "BAAI General Embedding - Large English".to_string(),
+                dimensions: 1024,
+                max_sequence_length: 512,
+                size_bytes: 1_300_000_000,
+                quality_tier: QualityTier::HighQuality,
+                hf_repo_id: "BAAI/bge-large-en-v1.5".to_string(),
+                onnx_filename: "model.onnx".to_string(),
+                tokenizer_filename: "tokenizer.json".to_string(),
+                normalize: true,
+                pooling: PoolingStrategy::Cls,
+                license: "MIT".to_string(),
+            },
+        );
 
-        models.insert(ModelId::E5SmallV2, ModelInfo {
-            id: ModelId::E5SmallV2,
-            name: "e5-small-v2".to_string(),
-            description: "Microsoft E5 Small - Fast retrieval".to_string(),
-            dimensions: 384,
-            max_sequence_length: 512,
-            size_bytes: 130_000_000,
-            quality_tier: QualityTier::Fast,
-            hf_repo_id: "intfloat/e5-small-v2".to_string(),
-            onnx_filename: "model.onnx".to_string(),
-            tokenizer_filename: "tokenizer.json".to_string(),
-            normalize: true,
-            pooling: PoolingStrategy::Mean,
-            license: "MIT".to_string(),
-        });
+        models.insert(
+            ModelId::E5SmallV2,
+            ModelInfo {
+                id: ModelId::E5SmallV2,
+                name: "e5-small-v2".to_string(),
+                description: "Microsoft E5 Small - Fast retrieval".to_string(),
+                dimensions: 384,
+                max_sequence_length: 512,
+                size_bytes: 130_000_000,
+                quality_tier: QualityTier::Fast,
+                hf_repo_id: "intfloat/e5-small-v2".to_string(),
+                onnx_filename: "model.onnx".to_string(),
+                tokenizer_filename: "tokenizer.json".to_string(),
+                normalize: true,
+                pooling: PoolingStrategy::Mean,
+                license: "MIT".to_string(),
+            },
+        );
 
-        models.insert(ModelId::E5BaseV2, ModelInfo {
-            id: ModelId::E5BaseV2,
-            name: "e5-base-v2".to_string(),
-            description: "Microsoft E5 Base - Balanced retrieval".to_string(),
-            dimensions: 768,
-            max_sequence_length: 512,
-            size_bytes: 440_000_000,
-            quality_tier: QualityTier::Balanced,
-            hf_repo_id: "intfloat/e5-base-v2".to_string(),
-            onnx_filename: "model.onnx".to_string(),
-            tokenizer_filename: "tokenizer.json".to_string(),
-            normalize: true,
-            pooling: PoolingStrategy::Mean,
-            license: "MIT".to_string(),
-        });
+        models.insert(
+            ModelId::E5BaseV2,
+            ModelInfo {
+                id: ModelId::E5BaseV2,
+                name: "e5-base-v2".to_string(),
+                description: "Microsoft E5 Base - Balanced retrieval".to_string(),
+                dimensions: 768,
+                max_sequence_length: 512,
+                size_bytes: 440_000_000,
+                quality_tier: QualityTier::Balanced,
+                hf_repo_id: "intfloat/e5-base-v2".to_string(),
+                onnx_filename: "model.onnx".to_string(),
+                tokenizer_filename: "tokenizer.json".to_string(),
+                normalize: true,
+                pooling: PoolingStrategy::Mean,
+                license: "MIT".to_string(),
+            },
+        );
 
-        models.insert(ModelId::E5LargeV2, ModelInfo {
-            id: ModelId::E5LargeV2,
-            name: "e5-large-v2".to_string(),
-            description: "Microsoft E5 Large - High quality retrieval".to_string(),
-            dimensions: 1024,
-            max_sequence_length: 512,
-            size_bytes: 1_300_000_000,
-            quality_tier: QualityTier::HighQuality,
-            hf_repo_id: "intfloat/e5-large-v2".to_string(),
-            onnx_filename: "model.onnx".to_string(),
-            tokenizer_filename: "tokenizer.json".to_string(),
-            normalize: true,
-            pooling: PoolingStrategy::Mean,
-            license: "MIT".to_string(),
-        });
+        models.insert(
+            ModelId::E5LargeV2,
+            ModelInfo {
+                id: ModelId::E5LargeV2,
+                name: "e5-large-v2".to_string(),
+                description: "Microsoft E5 Large - High quality retrieval".to_string(),
+                dimensions: 1024,
+                max_sequence_length: 512,
+                size_bytes: 1_300_000_000,
+                quality_tier: QualityTier::HighQuality,
+                hf_repo_id: "intfloat/e5-large-v2".to_string(),
+                onnx_filename: "model.onnx".to_string(),
+                tokenizer_filename: "tokenizer.json".to_string(),
+                normalize: true,
+                pooling: PoolingStrategy::Mean,
+                license: "MIT".to_string(),
+            },
+        );
 
-        models.insert(ModelId::NomicEmbedTextV1, ModelInfo {
-            id: ModelId::NomicEmbedTextV1,
-            name: "nomic-embed-text-v1".to_string(),
-            description: "Nomic AI text embeddings".to_string(),
-            dimensions: 768,
-            max_sequence_length: 8192,
-            size_bytes: 550_000_000,
-            quality_tier: QualityTier::Balanced,
-            hf_repo_id: "nomic-ai/nomic-embed-text-v1".to_string(),
-            onnx_filename: "model.onnx".to_string(),
-            tokenizer_filename: "tokenizer.json".to_string(),
-            normalize: true,
-            pooling: PoolingStrategy::Mean,
-            license: "Apache-2.0".to_string(),
-        });
+        models.insert(
+            ModelId::NomicEmbedTextV1,
+            ModelInfo {
+                id: ModelId::NomicEmbedTextV1,
+                name: "nomic-embed-text-v1".to_string(),
+                description: "Nomic AI text embeddings".to_string(),
+                dimensions: 768,
+                max_sequence_length: 8192,
+                size_bytes: 550_000_000,
+                quality_tier: QualityTier::Balanced,
+                hf_repo_id: "nomic-ai/nomic-embed-text-v1".to_string(),
+                onnx_filename: "model.onnx".to_string(),
+                tokenizer_filename: "tokenizer.json".to_string(),
+                normalize: true,
+                pooling: PoolingStrategy::Mean,
+                license: "Apache-2.0".to_string(),
+            },
+        );
 
-        models.insert(ModelId::GteSmall, ModelInfo {
-            id: ModelId::GteSmall,
-            name: "gte-small".to_string(),
-            description: "Alibaba General Text Embeddings - Small".to_string(),
-            dimensions: 384,
-            max_sequence_length: 512,
-            size_bytes: 70_000_000,
-            quality_tier: QualityTier::Fast,
-            hf_repo_id: "thenlper/gte-small".to_string(),
-            onnx_filename: "model.onnx".to_string(),
-            tokenizer_filename: "tokenizer.json".to_string(),
-            normalize: true,
-            pooling: PoolingStrategy::Mean,
-            license: "MIT".to_string(),
-        });
+        models.insert(
+            ModelId::GteSmall,
+            ModelInfo {
+                id: ModelId::GteSmall,
+                name: "gte-small".to_string(),
+                description: "Alibaba General Text Embeddings - Small".to_string(),
+                dimensions: 384,
+                max_sequence_length: 512,
+                size_bytes: 70_000_000,
+                quality_tier: QualityTier::Fast,
+                hf_repo_id: "thenlper/gte-small".to_string(),
+                onnx_filename: "model.onnx".to_string(),
+                tokenizer_filename: "tokenizer.json".to_string(),
+                normalize: true,
+                pooling: PoolingStrategy::Mean,
+                license: "MIT".to_string(),
+            },
+        );
 
-        models.insert(ModelId::GteBase, ModelInfo {
-            id: ModelId::GteBase,
-            name: "gte-base".to_string(),
-            description: "Alibaba General Text Embeddings - Base".to_string(),
-            dimensions: 768,
-            max_sequence_length: 512,
-            size_bytes: 220_000_000,
-            quality_tier: QualityTier::Balanced,
-            hf_repo_id: "thenlper/gte-base".to_string(),
-            onnx_filename: "model.onnx".to_string(),
-            tokenizer_filename: "tokenizer.json".to_string(),
-            normalize: true,
-            pooling: PoolingStrategy::Mean,
-            license: "MIT".to_string(),
-        });
+        models.insert(
+            ModelId::GteBase,
+            ModelInfo {
+                id: ModelId::GteBase,
+                name: "gte-base".to_string(),
+                description: "Alibaba General Text Embeddings - Base".to_string(),
+                dimensions: 768,
+                max_sequence_length: 512,
+                size_bytes: 220_000_000,
+                quality_tier: QualityTier::Balanced,
+                hf_repo_id: "thenlper/gte-base".to_string(),
+                onnx_filename: "model.onnx".to_string(),
+                tokenizer_filename: "tokenizer.json".to_string(),
+                normalize: true,
+                pooling: PoolingStrategy::Mean,
+                license: "MIT".to_string(),
+            },
+        );
 
         Self {
             config,
@@ -571,7 +602,7 @@ impl ModelRegistry {
     /// Note: This is a synchronous stub - actual download would be async
     pub fn ensure_model_sync(&self, id: ModelId) -> Result<(PathBuf, PathBuf)> {
         let info = self.get_model_info(id)?;
-        
+
         // Create model directory
         let model_dir = info.model_dir(&self.config.cache_dir);
         std::fs::create_dir_all(&model_dir)?;
@@ -702,7 +733,10 @@ impl<'a> ModelSelector<'a> {
 
     /// Select the best matching model
     pub fn select(&self) -> Option<&ModelInfo> {
-        let mut candidates: Vec<_> = self.registry.models.values()
+        let mut candidates: Vec<_> = self
+            .registry
+            .models
+            .values()
             .filter(|m| self.target_dimensions.is_none_or(|d| m.dimensions == d))
             .filter(|m| self.max_size_bytes.is_none_or(|s| m.size_bytes <= s))
             .filter(|m| self.quality_tier.is_none_or(|t| m.quality_tier == t))
@@ -826,8 +860,7 @@ impl AutoEmbedHub {
         dimensions: Option<usize>,
         quality: Option<QualityTier>,
     ) -> Option<ModelId> {
-        let selector = ModelSelector::new(&self.registry)
-            .prefer_cached(true);
+        let selector = ModelSelector::new(&self.registry).prefer_cached(true);
 
         let selector = match dimensions {
             Some(d) => selector.with_dimensions(d),
@@ -947,7 +980,9 @@ impl AutoEmbedHub {
                 if self.config.enable_fallback {
                     self.try_fallback(texts)
                 } else {
-                    Err(ModelRegistryError::ValidationFailed("Embedding failed".into()))
+                    Err(ModelRegistryError::ValidationFailed(
+                        "Embedding failed".into(),
+                    ))
                 }
             }
         }
@@ -1184,14 +1219,20 @@ impl LocalModelInference {
 
     /// Get model dimensions for the active model.
     pub fn dimensions(&self) -> Result<usize> {
-        let id = self.active_model.read()
+        let id = self
+            .active_model
+            .read()
             .ok_or_else(|| ModelRegistryError::ModelNotFound("No active model".into()))?;
         Ok(self.registry.get_model_info(id)?.dimensions)
     }
 
     /// Check status of a model.
     pub fn model_status(&self, id: ModelId) -> ModelStatus {
-        self.model_statuses.read().get(&id).cloned().unwrap_or(ModelStatus::NotDownloaded)
+        self.model_statuses
+            .read()
+            .get(&id)
+            .cloned()
+            .unwrap_or(ModelStatus::NotDownloaded)
     }
 
     /// Prepare model for inference (check cache, mark ready).
@@ -1200,7 +1241,9 @@ impl LocalModelInference {
         if info.is_cached(&self.registry.cache_dir()) {
             self.model_statuses.write().insert(id, ModelStatus::Ready);
         } else {
-            self.model_statuses.write().insert(id, ModelStatus::NotDownloaded);
+            self.model_statuses
+                .write()
+                .insert(id, ModelStatus::NotDownloaded);
         }
         Ok(())
     }
@@ -1211,20 +1254,25 @@ impl LocalModelInference {
     /// cached, this runs real ONNX inference. Otherwise it produces
     /// deterministic hash-based mock embeddings suitable for testing.
     pub fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>> {
-        let id = self.active_model.read()
+        let id = self
+            .active_model
+            .read()
             .ok_or_else(|| ModelRegistryError::ModelNotFound("No active model set".into()))?;
         let info = self.registry.get_model_info(id)?;
 
         let start = std::time::Instant::now();
         let results: Vec<Vec<f32>> = texts
             .iter()
-            .map(|text| Self::generate_deterministic_embedding(text, info.dimensions, info.normalize))
+            .map(|text| {
+                Self::generate_deterministic_embedding(text, info.dimensions, info.normalize)
+            })
             .collect();
         let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
 
         // Track per-text latency
         if !texts.is_empty() {
-            self.tracker.record_latency(id, elapsed_ms / texts.len() as f64);
+            self.tracker
+                .record_latency(id, elapsed_ms / texts.len() as f64);
         }
         Ok(results)
     }
@@ -1232,7 +1280,9 @@ impl LocalModelInference {
     /// Generate a single embedding.
     pub fn embed(&self, text: &str) -> Result<Vec<f32>> {
         let mut batch = self.embed_batch(&[text])?;
-        batch.pop().ok_or_else(|| ModelRegistryError::ValidationFailed("Empty result".into()))
+        batch
+            .pop()
+            .ok_or_else(|| ModelRegistryError::ValidationFailed("Empty result".into()))
     }
 
     /// Get performance statistics for the active model.
@@ -1250,7 +1300,11 @@ impl LocalModelInference {
         &self.registry
     }
 
-    fn generate_deterministic_embedding(text: &str, dimensions: usize, normalize: bool) -> Vec<f32> {
+    fn generate_deterministic_embedding(
+        text: &str,
+        dimensions: usize,
+        normalize: bool,
+    ) -> Vec<f32> {
         use std::hash::{Hash, Hasher};
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         text.hash(&mut hasher);
@@ -1287,7 +1341,10 @@ mod tests {
     #[test]
     fn test_model_id_from_name() {
         assert_eq!(ModelId::from_name("minilm"), Some(ModelId::AllMiniLmL6V2));
-        assert_eq!(ModelId::from_name("bge-small"), Some(ModelId::BgeSmallEnV15));
+        assert_eq!(
+            ModelId::from_name("bge-small"),
+            Some(ModelId::BgeSmallEnV15)
+        );
         assert_eq!(ModelId::from_name("e5-base-v2"), Some(ModelId::E5BaseV2));
         assert_eq!(ModelId::from_name("unknown"), None);
     }
@@ -1331,13 +1388,13 @@ mod tests {
     #[test]
     fn test_model_selector() {
         let registry = ModelRegistry::new();
-        
+
         // Select fast 384-dim model
         let selector = ModelSelector::new(&registry)
             .with_dimensions(384)
             .with_quality(QualityTier::Fast);
         let selected = selector.select();
-        
+
         assert!(selected.is_some());
         let model = selected.unwrap();
         assert_eq!(model.dimensions, 384);
@@ -1347,7 +1404,7 @@ mod tests {
     #[test]
     fn test_recommend_model() {
         let registry = ModelRegistry::new();
-        
+
         // Recommend smallest 384-dim model
         let recommended = registry.recommend_model(Some(384), None, None);
         assert!(recommended.is_some());

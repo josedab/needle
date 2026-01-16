@@ -37,10 +37,7 @@ use std::time::{Duration, Instant};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ChunkingStrategy {
     /// Fixed-size chunks with overlap
-    FixedSize {
-        chunk_size: usize,
-        overlap: usize,
-    },
+    FixedSize { chunk_size: usize, overlap: usize },
     /// Sliding window with token count
     SlidingWindow {
         window_size: usize,
@@ -56,9 +53,7 @@ pub enum ChunkingStrategy {
         levels: Vec<usize>, // chunk sizes for each level
     },
     /// Paragraph-based chunking
-    Paragraph {
-        max_paragraphs: usize,
-    },
+    Paragraph { max_paragraphs: usize },
 }
 
 impl Default for ChunkingStrategy {
@@ -145,7 +140,7 @@ impl Default for RagConfig {
             dedup_threshold: 0.95,
             cache_enabled: true,
             cache_size: 1000,
-            cache_ttl_seconds: 300, // 5 minutes default
+            cache_ttl_seconds: 300,   // 5 minutes default
             max_context_tokens: 4096, // ~16K chars default
             context_strategy: ContextStrategy::default(),
         }
@@ -212,7 +207,8 @@ pub struct RagCacheStats {
 impl RagCache {
     /// Create a new RAG cache
     pub fn new(capacity: usize, ttl_seconds: u64) -> Self {
-        let capacity = NonZeroUsize::new(capacity).unwrap_or(NonZeroUsize::new(1).expect("1 is non-zero"));
+        let capacity =
+            NonZeroUsize::new(capacity).unwrap_or(NonZeroUsize::new(1).expect("1 is non-zero"));
         Self {
             cache: Mutex::new(LruCache::new(capacity)),
             ttl: Duration::from_secs(ttl_seconds),
@@ -271,7 +267,11 @@ impl RagCache {
         let keys_to_remove: Vec<CacheKey> = cache
             .iter()
             .filter(|(_, entry)| {
-                entry.response.chunks.iter().any(|c| c.chunk.document_id == doc_id)
+                entry
+                    .response
+                    .chunks
+                    .iter()
+                    .any(|c| c.chunk.document_id == doc_id)
             })
             .map(|(k, _)| k.clone())
             .collect();
@@ -424,7 +424,10 @@ impl RagPipeline {
 
         // Create cache if enabled
         let cache = if config.cache_enabled {
-            Some(Arc::new(RagCache::new(config.cache_size, config.cache_ttl_seconds)))
+            Some(Arc::new(RagCache::new(
+                config.cache_size,
+                config.cache_ttl_seconds,
+            )))
         } else {
             None
         };
@@ -463,7 +466,13 @@ impl RagPipeline {
         metadata: Option<serde_json::Value>,
         embedder: &dyn Embedder,
     ) -> Result<Document> {
-        self.ingest_with_strategy(doc_id, text, metadata, &self.config.chunking.clone(), embedder)
+        self.ingest_with_strategy(
+            doc_id,
+            text,
+            metadata,
+            &self.config.chunking.clone(),
+            embedder,
+        )
     }
 
     /// Ingest with specific chunking strategy
@@ -540,11 +549,7 @@ impl RagPipeline {
     }
 
     /// Query the RAG pipeline
-    pub fn query(
-        &self,
-        query: &str,
-        embedder: &dyn Embedder,
-    ) -> Result<RagResponse> {
+    pub fn query(&self, query: &str, embedder: &dyn Embedder) -> Result<RagResponse> {
         self.query_with_filter(query, None, embedder)
     }
 
@@ -663,25 +668,31 @@ impl RagPipeline {
     /// Chunk text according to strategy
     fn chunk_text(&self, text: &str, strategy: &ChunkingStrategy) -> Vec<(String, usize, usize)> {
         match strategy {
-            ChunkingStrategy::FixedSize { chunk_size, overlap } => {
-                self.chunk_fixed_size(text, *chunk_size, *overlap)
-            }
-            ChunkingStrategy::SlidingWindow { window_size, step_size } => {
-                self.chunk_sliding_window(text, *window_size, *step_size)
-            }
-            ChunkingStrategy::Semantic { max_chunk_size, min_chunk_size } => {
-                self.chunk_semantic(text, *max_chunk_size, *min_chunk_size)
-            }
-            ChunkingStrategy::Hierarchical { levels } => {
-                self.chunk_hierarchical(text, levels)
-            }
+            ChunkingStrategy::FixedSize {
+                chunk_size,
+                overlap,
+            } => self.chunk_fixed_size(text, *chunk_size, *overlap),
+            ChunkingStrategy::SlidingWindow {
+                window_size,
+                step_size,
+            } => self.chunk_sliding_window(text, *window_size, *step_size),
+            ChunkingStrategy::Semantic {
+                max_chunk_size,
+                min_chunk_size,
+            } => self.chunk_semantic(text, *max_chunk_size, *min_chunk_size),
+            ChunkingStrategy::Hierarchical { levels } => self.chunk_hierarchical(text, levels),
             ChunkingStrategy::Paragraph { max_paragraphs } => {
                 self.chunk_paragraphs(text, *max_paragraphs)
             }
         }
     }
 
-    fn chunk_fixed_size(&self, text: &str, chunk_size: usize, overlap: usize) -> Vec<(String, usize, usize)> {
+    fn chunk_fixed_size(
+        &self,
+        text: &str,
+        chunk_size: usize,
+        overlap: usize,
+    ) -> Vec<(String, usize, usize)> {
         let chars: Vec<char> = text.chars().collect();
         let mut chunks = Vec::new();
         let mut start = 0;
@@ -705,7 +716,12 @@ impl RagPipeline {
         chunks
     }
 
-    fn chunk_sliding_window(&self, text: &str, window_size: usize, step_size: usize) -> Vec<(String, usize, usize)> {
+    fn chunk_sliding_window(
+        &self,
+        text: &str,
+        window_size: usize,
+        step_size: usize,
+    ) -> Vec<(String, usize, usize)> {
         let words: Vec<&str> = text.split_whitespace().collect();
         let mut chunks = Vec::new();
         let mut word_start = 0;
@@ -715,7 +731,10 @@ impl RagPipeline {
             let chunk = words[word_start..word_end].join(" ");
 
             // Calculate character positions (approximate)
-            let char_start = words[..word_start].iter().map(|w| w.len() + 1).sum::<usize>();
+            let char_start = words[..word_start]
+                .iter()
+                .map(|w| w.len() + 1)
+                .sum::<usize>();
             let char_end = char_start + chunk.len();
 
             chunks.push((chunk, char_start, char_end));
@@ -730,7 +749,12 @@ impl RagPipeline {
         chunks
     }
 
-    fn chunk_semantic(&self, text: &str, max_size: usize, min_size: usize) -> Vec<(String, usize, usize)> {
+    fn chunk_semantic(
+        &self,
+        text: &str,
+        max_size: usize,
+        min_size: usize,
+    ) -> Vec<(String, usize, usize)> {
         let mut chunks = Vec::new();
         let sentences = self.split_sentences(text);
 
@@ -796,11 +820,10 @@ impl RagPipeline {
 
         for c in text.chars() {
             current.push(c);
-            if (c == '.' || c == '!' || c == '?')
-                && current.len() > 1 {
-                    sentences.push(current.trim().to_string());
-                    current = String::new();
-                }
+            if (c == '.' || c == '!' || c == '?') && current.len() > 1 {
+                sentences.push(current.trim().to_string());
+                current = String::new();
+            }
         }
 
         if !current.trim().is_empty() {
@@ -864,7 +887,8 @@ impl RagPipeline {
 
         for chunk in chunks {
             let is_duplicate = result.iter().any(|existing: &RetrievedChunk| {
-                self.text_similarity(&existing.chunk.text, &chunk.chunk.text) > self.config.dedup_threshold
+                self.text_similarity(&existing.chunk.text, &chunk.chunk.text)
+                    > self.config.dedup_threshold
             });
 
             if !is_duplicate {
@@ -922,7 +946,9 @@ impl RagPipeline {
                 // Balance relevance and coverage
                 self.assemble_balanced(chunks, max_chars, *diversity_weight)
             }
-            ContextStrategy::Compress { redundancy_threshold } => {
+            ContextStrategy::Compress {
+                redundancy_threshold,
+            } => {
                 // Remove redundant content
                 self.assemble_compressed(chunks, max_chars, *redundancy_threshold)
             }
@@ -1396,14 +1422,21 @@ mod tests {
 
         // Ingest document
         let doc = pipeline
-            .ingest_document("doc1", "Machine learning is a subset of artificial intelligence.", None, &embedder)
+            .ingest_document(
+                "doc1",
+                "Machine learning is a subset of artificial intelligence.",
+                None,
+                &embedder,
+            )
             .unwrap();
 
         assert_eq!(doc.id, "doc1");
         assert!(!doc.chunk_ids.is_empty());
 
         // Query
-        let response = pipeline.query("What is machine learning?", &embedder).unwrap();
+        let response = pipeline
+            .query("What is machine learning?", &embedder)
+            .unwrap();
 
         assert!(!response.chunks.is_empty());
         assert!(!response.context.is_empty());
@@ -1487,16 +1520,22 @@ mod tests {
         let key1 = CacheKey::new("query1", None);
         let key2 = CacheKey::new("query2", None);
 
-        cache.put(key1.clone(), CachedRagResponse {
-            chunks: vec![],
-            context: "1".to_string(),
-            citations: vec![],
-        });
-        cache.put(key2.clone(), CachedRagResponse {
-            chunks: vec![],
-            context: "2".to_string(),
-            citations: vec![],
-        });
+        cache.put(
+            key1.clone(),
+            CachedRagResponse {
+                chunks: vec![],
+                context: "1".to_string(),
+                citations: vec![],
+            },
+        );
+        cache.put(
+            key2.clone(),
+            CachedRagResponse {
+                chunks: vec![],
+                context: "2".to_string(),
+                citations: vec![],
+            },
+        );
 
         assert_eq!(cache.len(), 2);
         cache.invalidate_all();
@@ -1543,7 +1582,12 @@ mod tests {
 
         // Ingest a document
         pipeline
-            .ingest_document("doc1", "Machine learning and AI are related fields.", None, &embedder)
+            .ingest_document(
+                "doc1",
+                "Machine learning and AI are related fields.",
+                None,
+                &embedder,
+            )
             .unwrap();
 
         // First query - cache miss
@@ -1561,7 +1605,9 @@ mod tests {
         assert_eq!(response1.context, response2.context);
 
         // Different query - cache miss
-        pipeline.query("artificial intelligence", &embedder).unwrap();
+        pipeline
+            .query("artificial intelligence", &embedder)
+            .unwrap();
         let stats3 = pipeline.cache_stats().unwrap();
         assert_eq!(stats3.misses, 2);
     }
@@ -1695,13 +1741,28 @@ mod tests {
 
         // Ingest documents with varying similarity
         pipeline
-            .ingest_document("doc1", "Machine learning is a subset of artificial intelligence.", None, &embedder)
+            .ingest_document(
+                "doc1",
+                "Machine learning is a subset of artificial intelligence.",
+                None,
+                &embedder,
+            )
             .unwrap();
         pipeline
-            .ingest_document("doc2", "Machine learning uses algorithms to learn from data.", None, &embedder)
+            .ingest_document(
+                "doc2",
+                "Machine learning uses algorithms to learn from data.",
+                None,
+                &embedder,
+            )
             .unwrap();
         pipeline
-            .ingest_document("doc3", "Natural language processing handles text analysis.", None, &embedder)
+            .ingest_document(
+                "doc3",
+                "Natural language processing handles text analysis.",
+                None,
+                &embedder,
+            )
             .unwrap();
 
         let result = pipeline.query("machine learning", &embedder).unwrap();
@@ -1727,13 +1788,28 @@ mod tests {
 
         // Ingest very similar documents
         pipeline
-            .ingest_document("doc1", "The quick brown fox jumps over the lazy dog.", None, &embedder)
+            .ingest_document(
+                "doc1",
+                "The quick brown fox jumps over the lazy dog.",
+                None,
+                &embedder,
+            )
             .unwrap();
         pipeline
-            .ingest_document("doc2", "The quick brown fox leaps over the lazy dog.", None, &embedder)
+            .ingest_document(
+                "doc2",
+                "The quick brown fox leaps over the lazy dog.",
+                None,
+                &embedder,
+            )
             .unwrap();
         pipeline
-            .ingest_document("doc3", "A fast red cat runs under the sleepy cat.", None, &embedder)
+            .ingest_document(
+                "doc3",
+                "A fast red cat runs under the sleepy cat.",
+                None,
+                &embedder,
+            )
             .unwrap();
 
         let result = pipeline.query("quick fox", &embedder).unwrap();
@@ -1765,10 +1841,7 @@ mod tests {
     #[test]
     fn test_pipeline_builder_defaults() {
         let db = Arc::new(Database::in_memory());
-        let pipeline = RagPipelineBuilder::new()
-            .dimensions(64)
-            .build(db)
-            .unwrap();
+        let pipeline = RagPipelineBuilder::new().dimensions(64).build(db).unwrap();
         let stats = pipeline.stats();
         assert_eq!(stats.total_documents, 0);
     }
@@ -1779,7 +1852,10 @@ mod tests {
         let mut pipeline = RagPipelineBuilder::new()
             .collection("my_rag")
             .dimensions(64)
-            .chunker(ChunkingStrategy::FixedSize { chunk_size: 100, overlap: 20 })
+            .chunker(ChunkingStrategy::FixedSize {
+                chunk_size: 100,
+                overlap: 20,
+            })
             .context_strategy(ContextStrategy::ScorePriority)
             .top_k(5)
             .max_context_tokens(200)
@@ -1789,7 +1865,12 @@ mod tests {
 
         let embedder = MockEmbedder::new(64);
         pipeline
-            .ingest_document("doc1", "Builder pattern makes it easy to configure.", None, &embedder)
+            .ingest_document(
+                "doc1",
+                "Builder pattern makes it easy to configure.",
+                None,
+                &embedder,
+            )
             .unwrap();
 
         let result = pipeline.query("builder", &embedder).unwrap();
