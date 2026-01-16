@@ -178,17 +178,11 @@ impl ManagedBackupManager {
     ///
     /// Computes file size from disk (if the path exists) and a SHA-256
     /// checksum of the path string as a mock checksum.
-    pub fn create_backup(
-        &self,
-        db_path: &Path,
-        collections: &[String],
-    ) -> Result<BackupManifest> {
+    pub fn create_backup(&self, db_path: &Path, collections: &[String]) -> Result<BackupManifest> {
         let mut inner = self.inner.write();
         inner.status = BackupStatus::InProgress { progress_pct: 0.0 };
 
-        let size_bytes = std::fs::metadata(db_path)
-            .map(|m| m.len())
-            .unwrap_or(0);
+        let size_bytes = std::fs::metadata(db_path).map(|m| m.len()).unwrap_or(0);
 
         let checksum = if inner.config.enable_checksums {
             let mut hasher = Sha256::new();
@@ -259,7 +253,9 @@ impl ManagedBackupManager {
         let keep_last_n = inner.config.retention.keep_last_n.unwrap_or(usize::MAX);
 
         // Sort by created_at ascending so newest are at the end.
-        inner.manifests.sort_by(|a, b| a.created_at.cmp(&b.created_at));
+        inner
+            .manifests
+            .sort_by(|a, b| a.created_at.cmp(&b.created_at));
 
         let total = inner.manifests.len();
         if total <= keep_last_n {
@@ -433,7 +429,11 @@ impl BackupChainManager {
         let inner = self.backups.read();
         let leaf_ids: Vec<String> = inner
             .values()
-            .filter(|m| !inner.values().any(|other| other.parent_id.as_deref() == Some(&m.id)))
+            .filter(|m| {
+                !inner
+                    .values()
+                    .any(|other| other.parent_id.as_deref() == Some(&m.id))
+            })
             .map(|m| m.id.clone())
             .collect();
         drop(inner);
@@ -513,9 +513,10 @@ impl PitrManager {
         match target {
             RestoreTarget::BackupId(id) => {
                 drop(inner);
-                let chain = self.chain_mgr.build_chain(id).ok_or_else(|| {
-                    NeedleError::NotFound(format!("Backup not found: {}", id))
-                })?;
+                let chain = self
+                    .chain_mgr
+                    .build_chain(id)
+                    .ok_or_else(|| NeedleError::NotFound(format!("Backup not found: {}", id)))?;
                 Ok(PitrResult {
                     chain,
                     target_time: None,
@@ -549,19 +550,17 @@ impl PitrManager {
                     .iter()
                     .max_by(|a, b| a.created_at.cmp(&b.created_at))
                     .ok_or_else(|| {
-                        NeedleError::NotFound(format!(
-                            "No backup found at or before {}",
-                            ts
-                        ))
+                        NeedleError::NotFound(format!("No backup found at or before {}", ts))
                     })?;
 
                 let exact = best.created_at == *ts;
                 let id = best.id.clone();
                 drop(inner);
 
-                let chain = self.chain_mgr.build_chain(&id).ok_or_else(|| {
-                    NeedleError::NotFound("Cannot build chain for PITR".into())
-                })?;
+                let chain = self
+                    .chain_mgr
+                    .build_chain(&id)
+                    .ok_or_else(|| NeedleError::NotFound("Cannot build chain for PITR".into()))?;
 
                 Ok(PitrResult {
                     chain,
@@ -667,9 +666,7 @@ mod tests {
     #[test]
     fn test_verify_backup() {
         let mgr = default_manager();
-        let manifest = mgr
-            .create_backup(Path::new("test.needle"), &[])
-            .unwrap();
+        let manifest = mgr.create_backup(Path::new("test.needle"), &[]).unwrap();
         let valid = mgr.verify_backup(&manifest).unwrap();
         assert!(valid);
     }
@@ -695,15 +692,11 @@ mod tests {
     #[test]
     fn test_incremental_backup() {
         let mgr = default_manager();
-        let first = mgr
-            .create_backup(Path::new("test.needle"), &[])
-            .unwrap();
+        let first = mgr.create_backup(Path::new("test.needle"), &[]).unwrap();
         assert!(!first.is_incremental);
         assert!(first.parent_id.is_none());
 
-        let second = mgr
-            .create_backup(Path::new("test.needle"), &[])
-            .unwrap();
+        let second = mgr.create_backup(Path::new("test.needle"), &[]).unwrap();
         assert!(second.is_incremental);
         assert_eq!(second.parent_id, Some(first.id.clone()));
     }
@@ -724,26 +717,15 @@ mod tests {
         assert!(config.compression_enabled);
         assert!(config.incremental);
         assert!(matches!(config.schedule, BackupSchedule::Manual));
-        assert!(matches!(
-            config.target,
-            BackupTarget::LocalDirectory(_)
-        ));
-        assert_eq!(
-            config.retention.keep_last_n,
-            Some(10)
-        );
-        assert_eq!(
-            config.retention.keep_daily_for_days,
-            Some(30)
-        );
+        assert!(matches!(config.target, BackupTarget::LocalDirectory(_)));
+        assert_eq!(config.retention.keep_last_n, Some(10));
+        assert_eq!(config.retention.keep_daily_for_days, Some(30));
     }
 
     #[test]
     fn test_restore_backup_valid() {
         let mgr = default_manager();
-        let manifest = mgr
-            .create_backup(Path::new("test.needle"), &[])
-            .unwrap();
+        let manifest = mgr.create_backup(Path::new("test.needle"), &[]).unwrap();
         let opts = RestoreOptions::default();
         // checksum present, so restore should succeed
         assert!(mgr.restore_backup(&manifest, &opts).is_ok());
@@ -769,7 +751,12 @@ mod tests {
 
     // ---- BackupChainManager tests ----
 
-    fn make_manifest(id: &str, incremental: bool, parent: Option<&str>, ts: &str) -> BackupManifest {
+    fn make_manifest(
+        id: &str,
+        incremental: bool,
+        parent: Option<&str>,
+        ts: &str,
+    ) -> BackupManifest {
         BackupManifest {
             id: id.into(),
             created_at: ts.into(),
@@ -798,8 +785,18 @@ mod tests {
     fn test_backup_chain_incremental() {
         let mgr = BackupChainManager::new();
         mgr.register(make_manifest("full-1", false, None, "2024-01-01T00:00:00Z"));
-        mgr.register(make_manifest("inc-1", true, Some("full-1"), "2024-01-02T00:00:00Z"));
-        mgr.register(make_manifest("inc-2", true, Some("inc-1"), "2024-01-03T00:00:00Z"));
+        mgr.register(make_manifest(
+            "inc-1",
+            true,
+            Some("full-1"),
+            "2024-01-02T00:00:00Z",
+        ));
+        mgr.register(make_manifest(
+            "inc-2",
+            true,
+            Some("inc-1"),
+            "2024-01-03T00:00:00Z",
+        ));
 
         let chain = mgr.build_chain("inc-2").unwrap();
         assert_eq!(chain.base_id, "full-1");
@@ -811,7 +808,12 @@ mod tests {
     fn test_backup_chain_incomplete() {
         let mgr = BackupChainManager::new();
         // Missing parent "full-1"
-        mgr.register(make_manifest("inc-1", true, Some("full-1"), "2024-01-02T00:00:00Z"));
+        mgr.register(make_manifest(
+            "inc-1",
+            true,
+            Some("full-1"),
+            "2024-01-02T00:00:00Z",
+        ));
 
         let chain = mgr.build_chain("inc-1").unwrap();
         assert!(!chain.is_complete);
@@ -821,9 +823,19 @@ mod tests {
     fn test_complete_chains() {
         let mgr = BackupChainManager::new();
         mgr.register(make_manifest("full-1", false, None, "2024-01-01T00:00:00Z"));
-        mgr.register(make_manifest("inc-1", true, Some("full-1"), "2024-01-02T00:00:00Z"));
+        mgr.register(make_manifest(
+            "inc-1",
+            true,
+            Some("full-1"),
+            "2024-01-02T00:00:00Z",
+        ));
         // Orphan incremental (missing parent)
-        mgr.register(make_manifest("orphan", true, Some("missing"), "2024-01-03T00:00:00Z"));
+        mgr.register(make_manifest(
+            "orphan",
+            true,
+            Some("missing"),
+            "2024-01-03T00:00:00Z",
+        ));
 
         let chains = mgr.complete_chains();
         // Should include chain ending at inc-1, but not orphan
@@ -838,7 +850,9 @@ mod tests {
         let pitr = PitrManager::new();
         pitr.register_backup(make_manifest("full-1", false, None, "2024-01-01T00:00:00Z"));
 
-        let result = pitr.resolve(&RestoreTarget::BackupId("full-1".into())).unwrap();
+        let result = pitr
+            .resolve(&RestoreTarget::BackupId("full-1".into()))
+            .unwrap();
         assert!(result.exact_match);
         assert_eq!(result.chain.base_id, "full-1");
     }
@@ -847,7 +861,12 @@ mod tests {
     fn test_pitr_resolve_latest() {
         let pitr = PitrManager::new();
         pitr.register_backup(make_manifest("full-1", false, None, "2024-01-01T00:00:00Z"));
-        pitr.register_backup(make_manifest("inc-1", true, Some("full-1"), "2024-01-02T00:00:00Z"));
+        pitr.register_backup(make_manifest(
+            "inc-1",
+            true,
+            Some("full-1"),
+            "2024-01-02T00:00:00Z",
+        ));
 
         let result = pitr.resolve(&RestoreTarget::Latest).unwrap();
         assert!(result.exact_match);
@@ -858,11 +877,23 @@ mod tests {
     fn test_pitr_resolve_point_in_time() {
         let pitr = PitrManager::new();
         pitr.register_backup(make_manifest("full-1", false, None, "2024-01-01T00:00:00Z"));
-        pitr.register_backup(make_manifest("inc-1", true, Some("full-1"), "2024-01-02T00:00:00Z"));
-        pitr.register_backup(make_manifest("inc-2", true, Some("inc-1"), "2024-01-04T00:00:00Z"));
+        pitr.register_backup(make_manifest(
+            "inc-1",
+            true,
+            Some("full-1"),
+            "2024-01-02T00:00:00Z",
+        ));
+        pitr.register_backup(make_manifest(
+            "inc-2",
+            true,
+            Some("inc-1"),
+            "2024-01-04T00:00:00Z",
+        ));
 
         // Restore to Jan 3 should pick inc-1 (the latest before Jan 3)
-        let result = pitr.resolve(&RestoreTarget::PointInTime("2024-01-03T00:00:00Z".into())).unwrap();
+        let result = pitr
+            .resolve(&RestoreTarget::PointInTime("2024-01-03T00:00:00Z".into()))
+            .unwrap();
         assert!(!result.exact_match);
         assert_eq!(result.chain.base_id, "full-1");
         assert_eq!(result.chain.incremental_ids, vec!["inc-1"]);
