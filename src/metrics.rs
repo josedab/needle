@@ -32,8 +32,8 @@
 //! at the `/metrics` endpoint for Prometheus scraping.
 
 use prometheus::{
-    register_counter_vec, register_gauge_vec, register_histogram_vec,
-    CounterVec, GaugeVec, HistogramVec, Encoder, TextEncoder,
+    register_counter_vec, register_gauge_vec, register_histogram_vec, CounterVec, Encoder,
+    GaugeVec, HistogramVec, TextEncoder,
 };
 use std::sync::OnceLock;
 use std::time::Instant;
@@ -94,9 +94,7 @@ impl HttpMetrics {
 
     /// Start timing an HTTP request, returns a guard that records metrics on drop
     pub fn start_request(&self, method: &str, path: &str) -> HttpRequestTimer<'_> {
-        self.requests_in_flight
-            .with_label_values(&[method])
-            .inc();
+        self.requests_in_flight.with_label_values(&[method]).inc();
 
         HttpRequestTimer {
             method: method.to_string(),
@@ -115,7 +113,8 @@ fn normalize_path(path: &str) -> String {
     let mut normalized = Vec::with_capacity(parts.len());
 
     // Known static segments that should not be replaced
-    const STATIC_SEGMENTS: &[&str] = &["batch", "search", "upsert", "metadata", "compact", "export"];
+    const STATIC_SEGMENTS: &[&str] =
+        &["batch", "search", "upsert", "metadata", "compact", "export"];
 
     for (i, part) in parts.iter().enumerate() {
         if part.is_empty() {
@@ -125,7 +124,10 @@ fn normalize_path(path: &str) -> String {
         let prev = if i > 0 { parts.get(i - 1) } else { None };
         if prev == Some(&"collections") && !part.starts_with(':') {
             normalized.push(":name");
-        } else if prev == Some(&"vectors") && !part.starts_with(':') && !STATIC_SEGMENTS.contains(part) {
+        } else if prev == Some(&"vectors")
+            && !part.starts_with(':')
+            && !STATIC_SEGMENTS.contains(part)
+        {
             normalized.push(":id");
         } else {
             normalized.push(part);
@@ -157,17 +159,20 @@ impl<'a> Drop for HttpRequestTimer<'a> {
         let status = self.status.unwrap_or(0).to_string();
 
         // Record request count
-        self.metrics.requests_total
+        self.metrics
+            .requests_total
             .with_label_values(&[&self.method, &self.path, &status])
             .inc();
 
         // Record duration
-        self.metrics.request_duration_seconds
+        self.metrics
+            .request_duration_seconds
             .with_label_values(&[&self.method, &self.path])
             .observe(duration);
 
         // Decrement in-flight counter
-        self.metrics.requests_in_flight
+        self.metrics
+            .requests_in_flight
             .with_label_values(&[&self.method])
             .dec();
     }
@@ -322,7 +327,12 @@ impl NeedleMetrics {
     }
 
     /// Record HNSW search metrics
-    pub fn record_hnsw_search(&self, collection: &str, visited_nodes: usize, layers_traversed: usize) {
+    pub fn record_hnsw_search(
+        &self,
+        collection: &str,
+        visited_nodes: usize,
+        layers_traversed: usize,
+    ) {
         self.hnsw_visited_nodes
             .with_label_values(&[collection])
             .observe(visited_nodes as f64);
@@ -369,7 +379,9 @@ impl NeedleMetrics {
         let encoder = TextEncoder::new();
         let metric_families = prometheus::gather();
         let mut buffer = Vec::new();
-        encoder.encode(&metric_families, &mut buffer).expect("prometheus encoding");
+        encoder
+            .encode(&metric_families, &mut buffer)
+            .expect("prometheus encoding");
         String::from_utf8(buffer).expect("prometheus output is UTF-8")
     }
 }
@@ -640,7 +652,13 @@ struct GridPos {
     h: u8,
 }
 
-fn grafana_panel(id: u8, title: &str, expr: &str, panel_type: &str, grid: GridPos) -> serde_json::Value {
+fn grafana_panel(
+    id: u8,
+    title: &str,
+    expr: &str,
+    panel_type: &str,
+    grid: GridPos,
+) -> serde_json::Value {
     serde_json::json!({
         "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
         "fieldConfig": {
@@ -713,7 +731,8 @@ pub fn generate_alerting_rules(config: AlertingConfig) -> String {
             for_duration: "5m".to_string(),
             severity: "warning".to_string(),
             summary: "High error rate in Needle operations".to_string(),
-            description: "Error rate is above {{ $value | printf \"%.2f\" }}% of operations".to_string(),
+            description: "Error rate is above {{ $value | printf \"%.2f\" }}% of operations"
+                .to_string(),
         },
         AlertRule {
             name: "NeedleHighLatency".to_string(),
@@ -751,7 +770,8 @@ pub fn generate_alerting_rules(config: AlertingConfig) -> String {
             for_duration: "5m".to_string(),
             severity: "critical".to_string(),
             summary: "Needle index is unhealthy".to_string(),
-            description: "Index health check is failing for collection {{ $labels.collection }}".to_string(),
+            description: "Index health check is failing for collection {{ $labels.collection }}"
+                .to_string(),
         },
     ];
 
@@ -785,8 +805,8 @@ pub struct AlertingConfig {
 impl Default for AlertingConfig {
     fn default() -> Self {
         Self {
-            error_rate_threshold: 0.05, // 5% error rate
-            latency_threshold_ms: 100.0, // 100ms p95 latency
+            error_rate_threshold: 0.05,                     // 5% error rate
+            latency_threshold_ms: 100.0,                    // 100ms p95 latency
             memory_threshold_bytes: 8 * 1024 * 1024 * 1024, // 8GB
         }
     }
@@ -855,8 +875,8 @@ impl AnomalyDetector {
         }
 
         let mean = self.window.iter().sum::<f64>() / self.window.len() as f64;
-        let variance = self.window.iter().map(|x| (x - mean).powi(2)).sum::<f64>()
-            / self.window.len() as f64;
+        let variance =
+            self.window.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / self.window.len() as f64;
         let std_dev = variance.sqrt();
 
         let z_score = if std_dev > 0.0 {
@@ -909,7 +929,7 @@ mod dashboard_tests {
     fn test_grafana_dashboard_generation() {
         let config = GrafanaDashboardConfig::default();
         let dashboard = generate_grafana_dashboard(config);
-        
+
         assert!(dashboard.contains("Needle Vector Database"));
         assert!(dashboard.contains("needle_operations_total"));
         assert!(dashboard.contains("timeseries"));
@@ -919,7 +939,7 @@ mod dashboard_tests {
     fn test_alerting_rules_generation() {
         let config = AlertingConfig::default();
         let rules = generate_alerting_rules(config);
-        
+
         assert!(rules.contains("NeedleHighErrorRate"));
         assert!(rules.contains("NeedleHighLatency"));
         assert!(rules.contains("severity: warning"));
@@ -928,7 +948,7 @@ mod dashboard_tests {
     #[test]
     fn test_anomaly_detector() {
         let mut detector = AnomalyDetector::new(10, 2.0);
-        
+
         // Add normal values
         for i in 0..15 {
             let result = detector.check(100.0 + (i as f64 % 5.0));
@@ -936,7 +956,7 @@ mod dashboard_tests {
                 assert!(!result.is_anomaly);
             }
         }
-        
+
         // Add anomalous value
         let result = detector.check(200.0);
         assert!(result.is_anomaly);

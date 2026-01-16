@@ -126,10 +126,10 @@ impl Bm25Index {
 
     fn default_stop_words() -> HashSet<String> {
         [
-            "a", "an", "and", "are", "as", "at", "be", "by", "for", "from",
-            "has", "he", "in", "is", "it", "its", "of", "on", "that", "the",
-            "to", "was", "were", "will", "with", "the", "this", "but", "they",
-            "have", "had", "what", "when", "where", "who", "which", "why", "how",
+            "a", "an", "and", "are", "as", "at", "be", "by", "for", "from", "has", "he", "in",
+            "is", "it", "its", "of", "on", "that", "the", "to", "was", "were", "will", "with",
+            "the", "this", "but", "they", "have", "had", "what", "when", "where", "who", "which",
+            "why", "how",
         ]
         .iter()
         .map(|s| s.to_string())
@@ -351,14 +351,17 @@ pub fn reciprocal_rank_fusion(
 
     // Sort by combined score
     let mut results: Vec<HybridSearchResult> = scores.into_values().collect();
-    results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    results.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     results.truncate(limit);
     results
 }
 
 /// Hybrid search configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct HybridConfig {
     pub bm25: Bm25Config,
     pub rrf: RrfConfig,
@@ -411,15 +414,16 @@ impl QueryFeatures {
         };
 
         let stopwords: HashSet<&str> = [
-            "a", "an", "the", "is", "are", "was", "were", "be", "been", "being",
-            "have", "has", "had", "do", "does", "did", "will", "would", "could",
-            "should", "may", "might", "must", "shall", "can", "need", "dare",
-            "ought", "used", "to", "of", "in", "for", "on", "with", "at", "by",
-            "from", "as", "into", "through", "during", "before", "after",
-            "above", "below", "between", "under", "again", "further", "then",
-            "once", "and", "but", "or", "nor", "so", "yet", "both", "either",
-            "neither", "not", "only", "own", "same", "than", "too", "very",
-        ].into_iter().collect();
+            "a", "an", "the", "is", "are", "was", "were", "be", "been", "being", "have", "has",
+            "had", "do", "does", "did", "will", "would", "could", "should", "may", "might", "must",
+            "shall", "can", "need", "dare", "ought", "used", "to", "of", "in", "for", "on", "with",
+            "at", "by", "from", "as", "into", "through", "during", "before", "after", "above",
+            "below", "between", "under", "again", "further", "then", "once", "and", "but", "or",
+            "nor", "so", "yet", "both", "either", "neither", "not", "only", "own", "same", "than",
+            "too", "very",
+        ]
+        .into_iter()
+        .collect();
 
         let stopword_count = words
             .iter()
@@ -432,10 +436,11 @@ impl QueryFeatures {
         };
 
         let question_words: HashSet<&str> = [
-            "who", "what", "where", "when", "why", "how", "which", "whom",
-            "whose", "whether", "can", "could", "would", "should", "is", "are",
-            "do", "does", "did", "will",
-        ].into_iter().collect();
+            "who", "what", "where", "when", "why", "how", "which", "whom", "whose", "whether",
+            "can", "could", "would", "should", "is", "are", "do", "does", "did", "will",
+        ]
+        .into_iter()
+        .collect();
 
         let is_question = words
             .first()
@@ -451,10 +456,7 @@ impl QueryFeatures {
 
         let capitalized_count = words
             .iter()
-            .filter(|w| {
-                w.chars().next().map(|c| c.is_uppercase()).unwrap_or(false)
-                    && w.len() > 1
-            })
+            .filter(|w| w.chars().next().map(|c| c.is_uppercase()).unwrap_or(false) && w.len() > 1)
             .count();
 
         Self {
@@ -634,14 +636,17 @@ impl AdaptiveFusion {
 
         // Check for learned weights
         let query_type_key = format!("{:?}", query_type);
-        let (vector_weight, bm25_weight) = if let Some(learned) = self.learned_weights.get(&query_type_key) {
+        let (vector_weight, bm25_weight) = if let Some(learned) =
+            self.learned_weights.get(&query_type_key)
+        {
             if learned.samples >= self.min_samples {
                 // Use learned weights
                 let avg_vector = learned.vector_weight_sum / learned.samples as f32;
                 let avg_bm25 = learned.bm25_weight_sum / learned.samples as f32;
 
                 // Blend learned with base weights
-                let blend_factor = (learned.samples as f32 / (learned.samples + self.min_samples) as f32).min(0.8);
+                let blend_factor =
+                    (learned.samples as f32 / (learned.samples + self.min_samples) as f32).min(0.8);
                 (
                     base_vector * (1.0 - blend_factor) + avg_vector * blend_factor,
                     base_bm25 * (1.0 - blend_factor) + avg_bm25 * blend_factor,
@@ -866,7 +871,8 @@ mod tests {
         assert_eq!(features.word_count, 2);
 
         // Test semantic-style query
-        let features = QueryFeatures::extract("How do I implement authentication in my application?");
+        let features =
+            QueryFeatures::extract("How do I implement authentication in my application?");
         assert!(features.is_question);
         assert!(features.word_count > 5);
         assert!(features.stopword_ratio > 0.2); // "How", "do", "I", "in", "my" are stopwords
@@ -920,15 +926,9 @@ mod tests {
     fn test_adaptive_fusion_search() {
         let fusion = AdaptiveFusion::default();
 
-        let vector_results = vec![
-            ("doc1".to_string(), 0.1),
-            ("doc2".to_string(), 0.2),
-        ];
+        let vector_results = vec![("doc1".to_string(), 0.1), ("doc2".to_string(), 0.2)];
 
-        let bm25_results = vec![
-            ("doc2".to_string(), 5.0),
-            ("doc1".to_string(), 3.0),
-        ];
+        let bm25_results = vec![("doc2".to_string(), 5.0), ("doc1".to_string(), 3.0)];
 
         let (results, config) = fusion.search(
             "How to configure settings?",
@@ -943,8 +943,7 @@ mod tests {
 
     #[test]
     fn test_adaptive_fusion_feedback_learning() {
-        let mut fusion = AdaptiveFusion::default()
-            .with_learning_params(0.1, 5); // Lower min_samples for testing
+        let mut fusion = AdaptiveFusion::default().with_learning_params(0.1, 5); // Lower min_samples for testing
 
         // Record positive feedback for keyword queries
         for i in 0..10 {
@@ -987,7 +986,10 @@ mod tests {
         let mut new_fusion = AdaptiveFusion::default();
         new_fusion.import_weights(&exported).unwrap();
 
-        assert_eq!(fusion.stats().total_feedback, new_fusion.stats().total_feedback);
+        assert_eq!(
+            fusion.stats().total_feedback,
+            new_fusion.stats().total_feedback
+        );
     }
 
     #[test]
@@ -1005,8 +1007,7 @@ mod tests {
 
     #[test]
     fn test_adaptive_fusion_negative_feedback() {
-        let mut fusion = AdaptiveFusion::default()
-            .with_learning_params(0.2, 3);
+        let mut fusion = AdaptiveFusion::default().with_learning_params(0.2, 3);
 
         // First add positive feedback
         for _ in 0..5 {
