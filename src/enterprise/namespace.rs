@@ -332,11 +332,7 @@ impl<'a> NamespaceCollection<'a> {
     }
 
     /// Search vectors
-    pub fn search(
-        &self,
-        query: &[f32],
-        k: usize,
-    ) -> Result<Vec<crate::collection::SearchResult>> {
+    pub fn search(&self, query: &[f32], k: usize) -> Result<Vec<crate::collection::SearchResult>> {
         self.stats.operations.fetch_add(1, Ordering::Relaxed);
         self.stats.searches.fetch_add(1, Ordering::Relaxed);
 
@@ -441,11 +437,7 @@ impl NamespaceManager {
             )));
         }
 
-        let namespace = Arc::new(Namespace::new(
-            id.to_string(),
-            config,
-            Arc::clone(&self.db),
-        ));
+        let namespace = Arc::new(Namespace::new(id.to_string(), config, Arc::clone(&self.db)));
 
         namespaces.insert(id.to_string(), Arc::clone(&namespace));
 

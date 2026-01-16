@@ -126,7 +126,7 @@ impl KeyManager {
     pub fn new(master_key_bytes: &[u8]) -> Result<Self> {
         if master_key_bytes.len() < 32 {
             return Err(NeedleError::InvalidInput(
-                "Master key must be at least 32 bytes".to_string()
+                "Master key must be at least 32 bytes".to_string(),
             ));
         }
 
@@ -156,8 +156,8 @@ impl KeyManager {
 
     /// Initialize random projection matrix.
     pub fn init_projection(&mut self, input_dims: usize, output_dims: usize) {
-        use std::hash::{Hash, Hasher};
         use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
 
         let mut matrix = Vec::with_capacity(output_dims);
 
@@ -221,7 +221,10 @@ pub struct VectorEncryptor {
 impl VectorEncryptor {
     /// Create a new encryptor.
     pub fn new(config: EncryptionConfig, key_manager: KeyManager) -> Self {
-        Self { config, key_manager }
+        Self {
+            config,
+            key_manager,
+        }
     }
 
     /// Encrypt a vector.
@@ -240,9 +243,7 @@ impl VectorEncryptor {
         let key_bytes = key.bytes().to_vec();
 
         // Encrypt vector data
-        let plaintext: Vec<u8> = vector.iter()
-            .flat_map(|f| f.to_le_bytes())
-            .collect();
+        let plaintext: Vec<u8> = vector.iter().flat_map(|f| f.to_le_bytes()).collect();
 
         let (ciphertext, auth_tag) = self.encrypt_data(&plaintext, &nonce, &key_bytes)?;
 
@@ -266,7 +267,11 @@ impl VectorEncryptor {
 
     /// Decrypt a vector.
     pub fn decrypt(&mut self, encrypted: &EncryptedVector) -> Result<Vec<f32>> {
-        let key_bytes = self.key_manager.derive_key(&encrypted.key_id)?.bytes().to_vec();
+        let key_bytes = self
+            .key_manager
+            .derive_key(&encrypted.key_id)?
+            .bytes()
+            .to_vec();
 
         let plaintext = self.decrypt_data(
             &encrypted.ciphertext,
@@ -276,7 +281,8 @@ impl VectorEncryptor {
         )?;
 
         // Convert bytes back to floats
-        let vector: Vec<f32> = plaintext.chunks_exact(4)
+        let vector: Vec<f32> = plaintext
+            .chunks_exact(4)
             .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
             .collect();
 
@@ -292,7 +298,7 @@ impl VectorEncryptor {
     ) -> Result<Vec<EncryptedSearchResult>> {
         if !self.config.searchable {
             return Err(NeedleError::InvalidInput(
-                "Searchable encryption not enabled".to_string()
+                "Searchable encryption not enabled".to_string(),
             ));
         }
 
@@ -300,7 +306,8 @@ impl VectorEncryptor {
         let query_embedding = self.transform_for_search(query)?;
 
         // Search on embeddings
-        let mut results: Vec<EncryptedSearchResult> = encrypted_vectors.iter()
+        let mut results: Vec<EncryptedSearchResult> = encrypted_vectors
+            .iter()
             .filter_map(|ev| {
                 ev.search_embedding.as_ref().map(|emb| {
                     let distance = self.compute_distance(&query_embedding, emb);
@@ -332,19 +339,26 @@ impl VectorEncryptor {
 
     /// Encrypt data using ChaCha20Poly1305 AEAD.
     /// Returns (ciphertext, auth_tag) where auth_tag is the 16-byte Poly1305 tag.
-    fn encrypt_data(&self, plaintext: &[u8], nonce: &[u8], key: &[u8]) -> Result<(Vec<u8>, Vec<u8>)> {
+    fn encrypt_data(
+        &self,
+        plaintext: &[u8],
+        nonce: &[u8],
+        key: &[u8],
+    ) -> Result<(Vec<u8>, Vec<u8>)> {
         // Ensure key is exactly 32 bytes for ChaCha20Poly1305
         if key.len() != 32 {
-            return Err(NeedleError::InvalidInput(
-                format!("Encryption key must be 32 bytes, got {}", key.len())
-            ));
+            return Err(NeedleError::InvalidInput(format!(
+                "Encryption key must be 32 bytes, got {}",
+                key.len()
+            )));
         }
 
         // Ensure nonce is exactly 12 bytes
         if nonce.len() != 12 {
-            return Err(NeedleError::InvalidInput(
-                format!("Nonce must be 12 bytes, got {}", nonce.len())
-            ));
+            return Err(NeedleError::InvalidInput(format!(
+                "Nonce must be 12 bytes, got {}",
+                nonce.len()
+            )));
         }
 
         let cipher = ChaCha20Poly1305::new_from_slice(key)
@@ -376,16 +390,18 @@ impl VectorEncryptor {
     ) -> Result<Vec<u8>> {
         // Ensure key is exactly 32 bytes
         if key.len() != 32 {
-            return Err(NeedleError::InvalidInput(
-                format!("Decryption key must be 32 bytes, got {}", key.len())
-            ));
+            return Err(NeedleError::InvalidInput(format!(
+                "Decryption key must be 32 bytes, got {}",
+                key.len()
+            )));
         }
 
         // Ensure nonce is exactly 12 bytes
         if nonce.len() != 12 {
-            return Err(NeedleError::InvalidInput(
-                format!("Nonce must be 12 bytes, got {}", nonce.len())
-            ));
+            return Err(NeedleError::InvalidInput(format!(
+                "Nonce must be 12 bytes, got {}",
+                nonce.len()
+            )));
         }
 
         let cipher = ChaCha20Poly1305::new_from_slice(key)
@@ -400,9 +416,11 @@ impl VectorEncryptor {
         // Decrypt and verify auth tag
         let plaintext = cipher
             .decrypt(nonce_arr, ciphertext_with_tag.as_ref())
-            .map_err(|_| NeedleError::InvalidInput(
-                "Decryption failed: authentication tag mismatch".to_string()
-            ))?;
+            .map_err(|_| {
+                NeedleError::InvalidInput(
+                    "Decryption failed: authentication tag mismatch".to_string(),
+                )
+            })?;
 
         Ok(plaintext)
     }
@@ -425,10 +443,7 @@ impl VectorEncryptor {
             // Random projection
             let mut projected = Vec::with_capacity(matrix.len());
             for row in matrix {
-                let dot: f32 = row.iter()
-                    .zip(vector.iter())
-                    .map(|(a, b)| a * b)
-                    .sum();
+                let dot: f32 = row.iter().zip(vector.iter()).map(|(a, b)| a * b).sum();
                 projected.push(dot);
             }
             Ok(projected)
@@ -445,8 +460,8 @@ impl VectorEncryptor {
 
     /// Add noise for differential privacy.
     fn add_noise(&self, vector: &mut [f32]) {
-        use std::hash::{Hash, Hasher};
         use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
 
         for (i, val) in vector.iter_mut().enumerate() {
             let mut hasher = DefaultHasher::new();
@@ -456,7 +471,8 @@ impl VectorEncryptor {
 
             // Laplacian noise approximation
             let uniform = (hash as f64 / u64::MAX as f64) - 0.5;
-            let noise = self.config.noise_level * uniform.signum() as f32
+            let noise = self.config.noise_level
+                * uniform.signum() as f32
                 * (1.0 - 2.0 * uniform.abs() as f32).ln();
 
             *val += noise;
@@ -474,7 +490,8 @@ impl VectorEncryptor {
 
     /// Initialize for a given vector dimension.
     pub fn initialize(&mut self, input_dims: usize) {
-        self.key_manager.init_projection(input_dims, self.config.projection_dims);
+        self.key_manager
+            .init_projection(input_dims, self.config.projection_dims);
     }
 }
 
@@ -517,23 +534,29 @@ impl EncryptedMetadataStore {
 
     /// Store encrypted metadata.
     pub fn put(&mut self, key: &str, value: &str) -> Result<()> {
-        let enc_key_bytes = self.encryptor.key_manager.derive_key("metadata")?.bytes().to_vec();
+        let enc_key_bytes = self
+            .encryptor
+            .key_manager
+            .derive_key("metadata")?
+            .bytes()
+            .to_vec();
 
         // Generate proper 12-byte random nonce for ChaCha20Poly1305
         let mut nonce = vec![0u8; 12];
         rand::thread_rng().fill_bytes(&mut nonce);
 
-        let (ciphertext, auth_tag) = self.encryptor.encrypt_data(
-            value.as_bytes(),
-            &nonce,
-            &enc_key_bytes,
-        )?;
+        let (ciphertext, auth_tag) =
+            self.encryptor
+                .encrypt_data(value.as_bytes(), &nonce, &enc_key_bytes)?;
 
-        self.data.insert(key.to_string(), EncryptedMetadata {
-            ciphertext,
-            nonce,
-            auth_tag,
-        });
+        self.data.insert(
+            key.to_string(),
+            EncryptedMetadata {
+                ciphertext,
+                nonce,
+                auth_tag,
+            },
+        );
 
         Ok(())
     }
@@ -545,7 +568,12 @@ impl EncryptedMetadataStore {
             None => return Ok(None),
         };
 
-        let enc_key_bytes = self.encryptor.key_manager.derive_key("metadata")?.bytes().to_vec();
+        let enc_key_bytes = self
+            .encryptor
+            .key_manager
+            .derive_key("metadata")?
+            .bytes()
+            .to_vec();
 
         let plaintext = self.encryptor.decrypt_data(
             &encrypted.ciphertext,
@@ -600,7 +628,9 @@ impl LocalKekProvider {
     /// Create from raw bytes. The key must be >= 32 bytes.
     pub fn new(kek_bytes: &[u8], kek_id: impl Into<String>) -> Result<Self> {
         if kek_bytes.len() < 32 {
-            return Err(NeedleError::InvalidInput("KEK must be at least 32 bytes".into()));
+            return Err(NeedleError::InvalidInput(
+                "KEK must be at least 32 bytes".into(),
+            ));
         }
         Ok(Self {
             kek: kek_bytes.to_vec(),
@@ -611,12 +641,14 @@ impl LocalKekProvider {
 
 impl KekProvider for LocalKekProvider {
     fn wrap(&self, plaintext: &[u8], _kek_id: &str) -> std::result::Result<Vec<u8>, String> {
-        use chacha20poly1305::{aead::Aead, ChaCha20Poly1305, KeyInit};
         use chacha20poly1305::aead::generic_array::GenericArray;
+        use chacha20poly1305::{aead::Aead, ChaCha20Poly1305, KeyInit};
         let cipher = ChaCha20Poly1305::new(GenericArray::from_slice(&self.kek[..32]));
         let nonce_bytes = [0u8; 12]; // DEK wrapping uses fixed nonce (single-use per wrap)
         let nonce = GenericArray::from_slice(&nonce_bytes);
-        let ciphertext = cipher.encrypt(nonce, plaintext).map_err(|e| format!("{}", e))?;
+        let ciphertext = cipher
+            .encrypt(nonce, plaintext)
+            .map_err(|e| format!("{}", e))?;
         // Return nonce ∥ ciphertext
         let mut out = nonce_bytes.to_vec();
         out.extend_from_slice(&ciphertext);
@@ -624,14 +656,16 @@ impl KekProvider for LocalKekProvider {
     }
 
     fn unwrap(&self, wrapped: &[u8], _kek_id: &str) -> std::result::Result<Vec<u8>, String> {
-        use chacha20poly1305::{aead::Aead, ChaCha20Poly1305, KeyInit};
         use chacha20poly1305::aead::generic_array::GenericArray;
+        use chacha20poly1305::{aead::Aead, ChaCha20Poly1305, KeyInit};
         if wrapped.len() < 12 {
             return Err("Invalid wrapped key".into());
         }
         let cipher = ChaCha20Poly1305::new(GenericArray::from_slice(&self.kek[..32]));
         let nonce = GenericArray::from_slice(&wrapped[..12]);
-        cipher.decrypt(nonce, &wrapped[12..]).map_err(|e| format!("{}", e))
+        cipher
+            .decrypt(nonce, &wrapped[12..])
+            .map_err(|e| format!("{}", e))
     }
 
     fn current_kek_id(&self) -> String {
@@ -667,13 +701,16 @@ impl KeyRotationManager {
         rng.fill(&mut dek[..]);
 
         let kek_id = self.provider.current_kek_id();
-        let wrapped = self.provider.wrap(&dek, &kek_id)
+        let wrapped = self
+            .provider
+            .wrap(&dek, &kek_id)
             .map_err(|e| NeedleError::EncryptionError(e))?;
 
         let key_id = format!(
             "dek-{}-{}",
             chrono::Utc::now().timestamp_millis(),
-            self.key_counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            self.key_counter
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
         );
 
         let entry = WrappedKey {
@@ -697,10 +734,13 @@ impl KeyRotationManager {
     /// Unwrap a DEK by its key ID.
     pub fn unwrap_dek(&self, key_id: &str) -> Result<Vec<u8>> {
         let keys = self.wrapped_keys.read();
-        let wrapped = keys.iter().find(|k| k.key_id == key_id)
+        let wrapped = keys
+            .iter()
+            .find(|k| k.key_id == key_id)
             .ok_or_else(|| NeedleError::NotFound(format!("Key {}", key_id)))?;
 
-        self.provider.unwrap(&wrapped.wrapped_dek, &wrapped.kek_id)
+        self.provider
+            .unwrap(&wrapped.wrapped_dek, &wrapped.kek_id)
             .map_err(|e| NeedleError::EncryptionError(e))
     }
 
@@ -708,7 +748,8 @@ impl KeyRotationManager {
     /// The old DEK remains available for decryption of existing data.
     pub fn rotate(&self) -> Result<String> {
         let (key_id, _dek) = self.generate_dek()?;
-        self.rotation_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.rotation_count
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         Ok(key_id)
     }
 
@@ -718,11 +759,14 @@ impl KeyRotationManager {
         let mut count = 0;
 
         for wrapped_key in keys.iter_mut() {
-            let dek_plaintext = self.provider.unwrap(&wrapped_key.wrapped_dek, &wrapped_key.kek_id)
+            let dek_plaintext = self
+                .provider
+                .unwrap(&wrapped_key.wrapped_dek, &wrapped_key.kek_id)
                 .map_err(|e| NeedleError::EncryptionError(e))?;
 
             let new_kek_id = new_provider.current_kek_id();
-            let re_wrapped = new_provider.wrap(&dek_plaintext, &new_kek_id)
+            let re_wrapped = new_provider
+                .wrap(&dek_plaintext, &new_kek_id)
                 .map_err(|e| NeedleError::EncryptionError(e))?;
 
             wrapped_key.wrapped_dek = re_wrapped;
@@ -735,7 +779,11 @@ impl KeyRotationManager {
 
     /// Get the currently active key ID.
     pub fn active_key_id(&self) -> Option<String> {
-        self.wrapped_keys.read().iter().find(|k| k.active).map(|k| k.key_id.clone())
+        self.wrapped_keys
+            .read()
+            .iter()
+            .find(|k| k.active)
+            .map(|k| k.key_id.clone())
     }
 
     /// List all managed keys.
@@ -745,7 +793,8 @@ impl KeyRotationManager {
 
     /// Number of key rotations performed.
     pub fn rotation_count(&self) -> u64 {
-        self.rotation_count.load(std::sync::atomic::Ordering::Relaxed)
+        self.rotation_count
+            .load(std::sync::atomic::Ordering::Relaxed)
     }
 }
 
@@ -801,7 +850,9 @@ mod tests {
     fn test_encrypted_vector_has_id() {
         let mut encryptor = create_encryptor();
 
-        let encrypted = encryptor.encrypt("test_id", &[1.0], HashMap::new()).unwrap();
+        let encrypted = encryptor
+            .encrypt("test_id", &[1.0], HashMap::new())
+            .unwrap();
 
         assert_eq!(encrypted.id, "test_id");
     }
@@ -811,7 +862,9 @@ mod tests {
         let mut encryptor = create_encryptor();
         encryptor.initialize(4);
 
-        let encrypted = encryptor.encrypt("vec1", &[1.0, 2.0, 3.0, 4.0], HashMap::new()).unwrap();
+        let encrypted = encryptor
+            .encrypt("vec1", &[1.0, 2.0, 3.0, 4.0], HashMap::new())
+            .unwrap();
 
         assert!(encrypted.search_embedding.is_some());
     }
@@ -821,11 +874,14 @@ mod tests {
         let mut encryptor = create_encryptor();
         encryptor.initialize(4);
 
-        let vectors = [([1.0, 0.0, 0.0, 0.0], "a"),
+        let vectors = [
+            ([1.0, 0.0, 0.0, 0.0], "a"),
             ([0.0, 1.0, 0.0, 0.0], "b"),
-            ([0.0, 0.0, 1.0, 0.0], "c")];
+            ([0.0, 0.0, 1.0, 0.0], "c"),
+        ];
 
-        let encrypted: Vec<EncryptedVector> = vectors.iter()
+        let encrypted: Vec<EncryptedVector> = vectors
+            .iter()
             .map(|(v, id)| encryptor.encrypt(id, v, HashMap::new()).unwrap())
             .collect();
 
@@ -864,14 +920,10 @@ mod tests {
         let key1 = vec![1u8; 32];
         let key2 = vec![2u8; 32];
 
-        let mut enc1 = VectorEncryptor::new(
-            EncryptionConfig::default(),
-            KeyManager::new(&key1).unwrap(),
-        );
-        let mut enc2 = VectorEncryptor::new(
-            EncryptionConfig::default(),
-            KeyManager::new(&key2).unwrap(),
-        );
+        let mut enc1 =
+            VectorEncryptor::new(EncryptionConfig::default(), KeyManager::new(&key1).unwrap());
+        let mut enc2 =
+            VectorEncryptor::new(EncryptionConfig::default(), KeyManager::new(&key2).unwrap());
 
         let vector = vec![1.0, 2.0, 3.0, 4.0];
 
@@ -892,7 +944,9 @@ mod tests {
         };
 
         let mut encryptor = VectorEncryptor::new(config, manager);
-        let encrypted = encryptor.encrypt("vec1", &[1.0, 2.0], HashMap::new()).unwrap();
+        let encrypted = encryptor
+            .encrypt("vec1", &[1.0, 2.0], HashMap::new())
+            .unwrap();
 
         assert!(encrypted.search_embedding.is_none());
     }
@@ -915,8 +969,12 @@ mod tests {
         encryptor.initialize(4);
 
         // Encrypt same vector twice - search embeddings should differ slightly
-        let encrypted1 = encryptor.encrypt("v1", &[1.0, 2.0, 3.0, 4.0], HashMap::new()).unwrap();
-        let encrypted2 = encryptor.encrypt("v2", &[1.0, 2.0, 3.0, 4.0], HashMap::new()).unwrap();
+        let encrypted1 = encryptor
+            .encrypt("v1", &[1.0, 2.0, 3.0, 4.0], HashMap::new())
+            .unwrap();
+        let encrypted2 = encryptor
+            .encrypt("v2", &[1.0, 2.0, 3.0, 4.0], HashMap::new())
+            .unwrap();
 
         // Due to deterministic noise in our simplified implementation, they might be same
         // In real implementation, this would add random noise
