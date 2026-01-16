@@ -259,10 +259,7 @@ impl NeedleVectorStore {
             config.distance_function,
         );
 
-        Ok(Self {
-            collection,
-            config,
-        })
+        Ok(Self { collection, config })
     }
 
     /// Create a vector store from an existing collection
@@ -435,7 +432,10 @@ impl NeedleVectorStore {
         let results = self.similarity_search_with_score(query_embedding, k)?;
 
         if let Some(threshold) = score_threshold {
-            Ok(results.into_iter().filter(|(_, score)| *score >= threshold).collect())
+            Ok(results
+                .into_iter()
+                .filter(|(_, score)| *score >= threshold)
+                .collect())
         } else {
             Ok(results)
         }
@@ -501,17 +501,14 @@ impl NeedleVectorStore {
         let candidate_embeddings: Vec<(SearchResult, Vec<f32>)> = candidates
             .into_iter()
             .filter_map(|result| {
-                collection.get(&result.id).map(|(vec, _): (&[f32], _)| (result, vec.to_vec()))
+                collection
+                    .get(&result.id)
+                    .map(|(vec, _): (&[f32], _)| (result, vec.to_vec()))
             })
             .collect();
 
         // Apply MMR
-        let selected = self.mmr_select(
-            query_embedding,
-            &candidate_embeddings,
-            k,
-            lambda_mult,
-        );
+        let selected = self.mmr_select(query_embedding, &candidate_embeddings, k, lambda_mult);
 
         // Convert to documents
         selected
@@ -566,7 +563,9 @@ impl NeedleVectorStore {
         Some(Document {
             id: id.to_string(),
             page_content,
-            metadata: metadata.cloned().unwrap_or(Value::Object(serde_json::Map::new())),
+            metadata: metadata
+                .cloned()
+                .unwrap_or(Value::Object(serde_json::Map::new())),
         })
     }
 
@@ -782,13 +781,18 @@ impl NeedleVectorStore {
             })
             .unwrap_or_default();
 
-        let score = self.config.relevance_score_fn.to_relevance_score(result.distance);
+        let score = self
+            .config
+            .relevance_score_fn
+            .to_relevance_score(result.distance);
 
         Ok((
             Document {
                 id: result.id,
                 page_content,
-                metadata: result.metadata.unwrap_or(Value::Object(serde_json::Map::new())),
+                metadata: result
+                    .metadata
+                    .unwrap_or(Value::Object(serde_json::Map::new())),
             },
             score,
         ))
@@ -939,7 +943,12 @@ impl FilterBuilder {
     pub fn build(self) -> Option<Filter> {
         match self.conditions.len() {
             0 => None,
-            1 => Some(self.conditions.into_iter().next().expect("length checked above")),
+            1 => Some(
+                self.conditions
+                    .into_iter()
+                    .next()
+                    .expect("length checked above"),
+            ),
             _ => Some(Filter::and(self.conditions)),
         }
     }
@@ -948,7 +957,12 @@ impl FilterBuilder {
     pub fn build_or(self) -> Option<Filter> {
         match self.conditions.len() {
             0 => None,
-            1 => Some(self.conditions.into_iter().next().expect("length checked above")),
+            1 => Some(
+                self.conditions
+                    .into_iter()
+                    .next()
+                    .expect("length checked above"),
+            ),
             _ => Some(Filter::or(self.conditions)),
         }
     }
@@ -1014,10 +1028,7 @@ mod tests {
         let config = NeedleVectorStoreConfig::new("test", 32);
         let store = NeedleVectorStore::new(config).unwrap();
 
-        let texts = vec![
-            "First document".to_string(),
-            "Second document".to_string(),
-        ];
+        let texts = vec!["First document".to_string(), "Second document".to_string()];
         let embeddings = vec![random_vector(32), random_vector(32)];
         let metadatas = vec![json!({"index": 0}), json!({"index": 1})];
 
@@ -1196,7 +1207,9 @@ mod tests {
             .with_id("test-id")
             .with_metadata(json!({"key": "value"}));
 
-        store.add_documents(std::slice::from_ref(&doc), &[embedding]).unwrap();
+        store
+            .add_documents(std::slice::from_ref(&doc), &[embedding])
+            .unwrap();
 
         let retrieved = store.get("test-id").unwrap();
         assert_eq!(retrieved.id, "test-id");
@@ -1309,7 +1322,9 @@ mod tests {
             .unwrap();
 
         // Delete some documents
-        store.delete(&["id0".to_string(), "id1".to_string(), "id2".to_string()]).unwrap();
+        store
+            .delete(&["id0".to_string(), "id1".to_string(), "id2".to_string()])
+            .unwrap();
 
         // Compact
         let removed = store.compact().unwrap();
@@ -1346,7 +1361,10 @@ mod tests {
         let texts: Vec<String> = (0..10).map(|i| format!("Document {}", i)).collect();
 
         // Async add
-        let ids = store.aadd_texts(&texts, &embeddings, None, None).await.unwrap();
+        let ids = store
+            .aadd_texts(&texts, &embeddings, None, None)
+            .await
+            .unwrap();
         assert_eq!(ids.len(), 10);
 
         // Async search

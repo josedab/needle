@@ -1,14 +1,5 @@
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
-use std::time::Duration;
-
-use tokio::sync::RwLock;
-
-use super::{
-    CdcConfig, CdcConnector, CdcConnectorStats, CdcPosition,
-};
 use super::debezium::DebeziumParser;
-use crate::streaming::core::{ChangeEvent, StreamError, StreamResult};
+use super::CdcConfig;
 
 // ============================================================================
 // Pulsar Connector Config
