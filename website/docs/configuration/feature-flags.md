@@ -80,7 +80,7 @@ Enables SIMD (Single Instruction, Multiple Data) optimizations for distance calc
 
 ```rust
 // No code changes needed - automatically uses SIMD when available
-let results = collection.search(&query, 10, None)?;
+let results = collection.search(&query, 10)?;
 ```
 
 **Performance impact:**
@@ -240,7 +240,7 @@ Approximate compile times (release, cold cache):
 use needle::{Bm25Index, reciprocal_rank_fusion};
 
 fn search(query: &str, query_embedding: &[f32]) -> Vec<SearchResult> {
-    let vector_results = collection.search(query_embedding, 10, None)?;
+    let vector_results = collection.search(query_embedding, 10)?;
 
     #[cfg(feature = "hybrid")]
     {
