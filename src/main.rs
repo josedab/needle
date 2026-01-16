@@ -6,7 +6,7 @@ use serde_json::json;
 use std::io::{self, BufRead};
 
 #[cfg(feature = "server")]
-use needle::server::{ServerConfig, serve};
+use needle::server::{serve, ServerConfig};
 
 // Import new features for CLI
 use needle::backup::{BackupConfig, BackupManager, BackupType};
@@ -604,7 +604,14 @@ fn run(cli: Cli) -> Result<()> {
             k,
             explain,
             distance,
-        } => search_command(&database, &collection, &query, k, explain, distance.as_deref()),
+        } => search_command(
+            &database,
+            &collection,
+            &query,
+            k,
+            explain,
+            distance.as_deref(),
+        ),
         Commands::Delete {
             database,
             collection,
@@ -789,7 +796,10 @@ fn insert_command(path: &str, collection_name: &str) -> Result<()> {
 
         let id = value["id"].as_str().unwrap_or("").to_string();
         let vector: Vec<f32> = match value["vector"].as_array() {
-            Some(arr) => arr.iter().filter_map(|v| v.as_f64().map(|f| f as f32)).collect(),
+            Some(arr) => arr
+                .iter()
+                .filter_map(|v| v.as_f64().map(|f| f as f32))
+                .collect(),
             None => {
                 eprintln!("Missing 'vector' field");
                 continue;
@@ -826,7 +836,10 @@ fn search_command(
     let distance_fn = distance_override.and_then(|d| match parse_distance(d) {
         Some(parsed) => Some(parsed),
         None => {
-            eprintln!("Warning: Unknown distance function '{}', using collection default", d);
+            eprintln!(
+                "Warning: Unknown distance function '{}', using collection default",
+                d
+            );
             None
         }
     });
@@ -861,9 +874,18 @@ fn search_command(
         println!();
         println!("HNSW Statistics:");
         println!("  Visited nodes: {}", explain_data.hnsw_stats.visited_nodes);
-        println!("  Layers traversed: {}", explain_data.hnsw_stats.layers_traversed);
-        println!("  Distance computations: {}", explain_data.hnsw_stats.distance_computations);
-        println!("  Traversal time: {}μs", explain_data.hnsw_stats.traversal_time_us);
+        println!(
+            "  Layers traversed: {}",
+            explain_data.hnsw_stats.layers_traversed
+        );
+        println!(
+            "  Distance computations: {}",
+            explain_data.hnsw_stats.distance_computations
+        );
+        println!(
+            "  Traversal time: {}μs",
+            explain_data.hnsw_stats.traversal_time_us
+        );
         println!();
         println!("Query Parameters:");
         println!("  Dimensions: {}", explain_data.dimensions);
@@ -984,7 +1006,10 @@ fn compact_command(path: &str) -> Result<()> {
     db.save()?;
 
     if total_deleted > 0 {
-        println!("Compaction complete: removed {} total deleted vectors", total_deleted);
+        println!(
+            "Compaction complete: removed {} total deleted vectors",
+            total_deleted
+        );
     } else {
         println!("No deleted vectors to compact");
     }
@@ -1140,9 +1165,9 @@ fn serve_command(address: &str, database: Option<String>) -> Result<()> {
             config = config.with_db_path(db_path);
         }
 
-        serve(config).await.map_err(|e| {
-            needle::NeedleError::InvalidConfig(e.to_string())
-        })
+        serve(config)
+            .await
+            .map_err(|e| needle::NeedleError::InvalidConfig(e.to_string()))
     })
 }
 
@@ -1156,16 +1181,31 @@ fn demo_command(count: usize, dimensions: usize) -> Result<()> {
     db.create_collection("demo", dimensions)?;
     let coll = db.collection("demo")?;
 
-    let categories = ["science", "technology", "engineering", "tutorial", "reference"];
+    let categories = [
+        "science",
+        "technology",
+        "engineering",
+        "tutorial",
+        "reference",
+    ];
     let titles = [
-        "Quantum Computing Basics", "Neural Network Architectures", "Bridge Engineering",
-        "Getting Started with ML", "Vector Database Internals", "Distributed Systems",
-        "Signal Processing", "Compiler Design", "Fluid Dynamics", "Graph Algorithms",
+        "Quantum Computing Basics",
+        "Neural Network Architectures",
+        "Bridge Engineering",
+        "Getting Started with ML",
+        "Vector Database Internals",
+        "Distributed Systems",
+        "Signal Processing",
+        "Compiler Design",
+        "Fluid Dynamics",
+        "Graph Algorithms",
     ];
 
     let mut rng = rand::thread_rng();
     for i in 0..count {
-        let vector: Vec<f32> = (0..dimensions).map(|j| ((i * dimensions + j) as f32 / (count * dimensions) as f32).sin()).collect();
+        let vector: Vec<f32> = (0..dimensions)
+            .map(|j| ((i * dimensions + j) as f32 / (count * dimensions) as f32).sin())
+            .collect();
         let metadata = json!({
             "title": titles[i % titles.len()],
             "category": categories[i % categories.len()],
@@ -1176,20 +1216,33 @@ fn demo_command(count: usize, dimensions: usize) -> Result<()> {
     println!("✓ Inserted {} vectors ({} dimensions)\n", count, dimensions);
 
     // Run a search
-    let query: Vec<f32> = (0..dimensions).map(|j| ((42 * dimensions + j) as f32 / (count * dimensions) as f32).sin()).collect();
+    let query: Vec<f32> = (0..dimensions)
+        .map(|j| ((42 * dimensions + j) as f32 / (count * dimensions) as f32).sin())
+        .collect();
     let results = coll.search(&query, 5)?;
 
     println!("Search results (top 5 nearest to doc_42):");
     for (i, r) in results.iter().enumerate() {
-        let title = r.metadata.as_ref()
+        let title = r
+            .metadata
+            .as_ref()
             .and_then(|m| m.get("title"))
             .and_then(|v| v.as_str())
             .unwrap_or("?");
-        let cat = r.metadata.as_ref()
+        let cat = r
+            .metadata
+            .as_ref()
             .and_then(|m| m.get("category"))
             .and_then(|v| v.as_str())
             .unwrap_or("?");
-        println!("  #{} {} distance={:.4}  category={}  \"{}\"", i + 1, r.id, r.distance, cat, title);
+        println!(
+            "  #{} {} distance={:.4}  category={}  \"{}\"",
+            i + 1,
+            r.id,
+            r.distance,
+            cat,
+            title
+        );
     }
 
     // Filtered search
@@ -1208,8 +1261,13 @@ fn demo_command(count: usize, dimensions: usize) -> Result<()> {
     Ok(())
 }
 
-fn tune_command(vectors: usize, dimensions: usize, profile: &str, memory_mb: Option<usize>) -> Result<()> {
-    use needle::tuning::{auto_tune, TuningConstraints, PerformanceProfile};
+fn tune_command(
+    vectors: usize,
+    dimensions: usize,
+    profile: &str,
+    memory_mb: Option<usize>,
+) -> Result<()> {
+    use needle::tuning::{auto_tune, PerformanceProfile, TuningConstraints};
 
     let perf_profile = match profile.to_lowercase().as_str() {
         "low-latency" | "lowlatency" | "fast" => PerformanceProfile::LowLatency,
@@ -1218,8 +1276,7 @@ fn tune_command(vectors: usize, dimensions: usize, profile: &str, memory_mb: Opt
         _ => PerformanceProfile::Balanced,
     };
 
-    let mut constraints = TuningConstraints::new(vectors, dimensions)
-        .with_profile(perf_profile);
+    let mut constraints = TuningConstraints::new(vectors, dimensions).with_profile(perf_profile);
 
     if let Some(mb) = memory_mb {
         constraints = constraints.with_memory_budget(mb * 1024 * 1024);
@@ -1244,8 +1301,14 @@ fn tune_command(vectors: usize, dimensions: usize, profile: &str, memory_mb: Opt
     println!("  ef_search: {}", result.ef_search);
     println!();
     println!("Estimates:");
-    println!("  Memory per vector: {} bytes", result.estimated_memory_per_vector);
-    println!("  Total memory: {:.1} MB", result.estimated_total_memory as f64 / 1024.0 / 1024.0);
+    println!(
+        "  Memory per vector: {} bytes",
+        result.estimated_memory_per_vector
+    );
+    println!(
+        "  Total memory: {:.1} MB",
+        result.estimated_total_memory as f64 / 1024.0 / 1024.0
+    );
     println!("  Expected recall: {:.1}%", result.estimated_recall * 100.0);
     println!("  Expected latency: {:.2} ms", result.estimated_latency_ms);
     println!();
@@ -1265,7 +1328,13 @@ fn tune_command(vectors: usize, dimensions: usize, profile: &str, memory_mb: Opt
 // Natural Language Query Command
 // ============================================================================
 
-fn query_command(path: &str, collection_name: &str, query_str: &str, _k: usize, analyze: bool) -> Result<()> {
+fn query_command(
+    path: &str,
+    collection_name: &str,
+    query_str: &str,
+    _k: usize,
+    analyze: bool,
+) -> Result<()> {
     use needle::query_builder::CollectionProfile;
 
     let db = Database::open(path)?;
@@ -1292,13 +1361,19 @@ fn query_command(path: &str, collection_name: &str, query_str: &str, _k: usize, 
     // Show the translated query
     println!("Translated Query:");
     println!("  NeedleQL: {}", build_result.needleql);
-    println!("  Quality Score: {:.1}%", build_result.quality_score * 100.0);
+    println!(
+        "  Quality Score: {:.1}%",
+        build_result.quality_score * 100.0
+    );
     println!();
 
     println!("Query Analysis:");
     println!("  Class: {:?}", build_result.analysis.class);
     println!("  Complexity: {:?}", build_result.analysis.complexity);
-    println!("  Confidence: {:.1}%", build_result.analysis.confidence * 100.0);
+    println!(
+        "  Confidence: {:.1}%",
+        build_result.analysis.confidence * 100.0
+    );
     println!();
 
     if analyze {
@@ -1323,7 +1398,10 @@ fn query_command(path: &str, collection_name: &str, query_str: &str, _k: usize, 
         if !further_analysis.patterns.is_empty() {
             println!("Detected Patterns:");
             for pattern in &further_analysis.patterns {
-                println!("  - {:?}: \"{}\"", pattern.pattern_type, pattern.matched_text);
+                println!(
+                    "  - {:?}: \"{}\"",
+                    pattern.pattern_type, pattern.matched_text
+                );
             }
             println!();
         }
@@ -1332,7 +1410,10 @@ fn query_command(path: &str, collection_name: &str, query_str: &str, _k: usize, 
     if !build_result.suggestions.is_empty() {
         println!("Suggestions:");
         for suggestion in &build_result.suggestions {
-            println!("  - {:?}: {}", suggestion.suggestion_type, suggestion.message);
+            println!(
+                "  - {:?}: {}",
+                suggestion.suggestion_type, suggestion.message
+            );
         }
         println!();
     }
@@ -1451,7 +1532,10 @@ fn backup_list(path: &str) -> Result<()> {
 
 fn backup_restore(backup_path: &str, output: &str, force: bool) -> Result<()> {
     if std::path::Path::new(output).exists() && !force {
-        eprintln!("Error: Destination '{}' already exists. Use --force to overwrite.", output);
+        eprintln!(
+            "Error: Destination '{}' already exists. Use --force to overwrite.",
+            output
+        );
         return Ok(());
     }
 
@@ -1470,7 +1554,10 @@ fn backup_restore(backup_path: &str, output: &str, force: bool) -> Result<()> {
     println!("  Collections: {}", db.list_collections().len());
     println!("  Total vectors: {}", db.total_vectors());
     println!();
-    println!("Note: To save to '{}', use the database normally and call save().", output);
+    println!(
+        "Note: To save to '{}', use the database normally and call save().",
+        output
+    );
 
     Ok(())
 }
@@ -1503,13 +1590,23 @@ fn backup_cleanup(path: &str, keep: usize) -> Result<()> {
     let backups = manager.list_backups()?;
 
     if backups.len() <= keep {
-        println!("No backups to clean up (have {}, keeping {}).", backups.len(), keep);
+        println!(
+            "No backups to clean up (have {}, keeping {}).",
+            backups.len(),
+            keep
+        );
         return Ok(());
     }
 
     let to_remove = backups.len() - keep;
-    println!("Would remove {} old backup(s), keeping last {}.", to_remove, keep);
-    println!("Note: Manual cleanup - delete old backup files from: {}", path);
+    println!(
+        "Would remove {} old backup(s), keeping last {}.",
+        to_remove, keep
+    );
+    println!(
+        "Note: Manual cleanup - delete old backup files from: {}",
+        path
+    );
 
     Ok(())
 }
@@ -1541,7 +1638,12 @@ fn drift_command(cmd: DriftCommands) -> Result<()> {
     }
 }
 
-fn drift_baseline(database: &str, collection_name: &str, output: &str, sample_size: usize) -> Result<()> {
+fn drift_baseline(
+    database: &str,
+    collection_name: &str,
+    output: &str,
+    sample_size: usize,
+) -> Result<()> {
     let db = Database::open(database)?;
     let coll = db.collection(collection_name)?;
 
@@ -1606,7 +1708,12 @@ fn drift_baseline(database: &str, collection_name: &str, output: &str, sample_si
     Ok(())
 }
 
-fn drift_detect(database: &str, collection_name: &str, baseline_path: &str, threshold: f64) -> Result<()> {
+fn drift_detect(
+    database: &str,
+    collection_name: &str,
+    baseline_path: &str,
+    threshold: f64,
+) -> Result<()> {
     let db = Database::open(database)?;
     let coll = db.collection(collection_name)?;
 
@@ -1614,14 +1721,15 @@ fn drift_detect(database: &str, collection_name: &str, baseline_path: &str, thre
     let baseline_content = std::fs::read_to_string(baseline_path)?;
     let baseline_data: serde_json::Value = serde_json::from_str(&baseline_content)?;
 
-    let dimensions = baseline_data["dimensions"]
-        .as_u64()
-        .ok_or_else(|| needle::NeedleError::InvalidInput("Invalid baseline: missing dimensions".to_string()))?
-        as usize;
+    let dimensions = baseline_data["dimensions"].as_u64().ok_or_else(|| {
+        needle::NeedleError::InvalidInput("Invalid baseline: missing dimensions".to_string())
+    })? as usize;
 
     let baseline_centroid: Vec<f32> = baseline_data["centroid"]
         .as_array()
-        .ok_or_else(|| needle::NeedleError::InvalidInput("Invalid baseline: missing centroid".to_string()))?
+        .ok_or_else(|| {
+            needle::NeedleError::InvalidInput("Invalid baseline: missing centroid".to_string())
+        })?
         .iter()
         .filter_map(|v| v.as_f64().map(|f| f as f32))
         .collect();
@@ -1637,7 +1745,11 @@ fn drift_detect(database: &str, collection_name: &str, baseline_path: &str, thre
     // We create synthetic baseline vectors around the saved centroid
     let baseline_variance: Vec<f32> = baseline_data["variance"]
         .as_array()
-        .map(|arr| arr.iter().filter_map(|v| v.as_f64().map(|f| f as f32)).collect())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_f64().map(|f| f as f32))
+                .collect()
+        })
         .unwrap_or_else(|| vec![0.1; dimensions]);
 
     // Create baseline vectors around centroid
@@ -1677,7 +1789,10 @@ fn drift_detect(database: &str, collection_name: &str, baseline_path: &str, thre
     println!("=======================");
     println!();
     println!("Threshold: {:.2}", threshold);
-    println!("Drift detected: {}", if drift_detected { "YES" } else { "NO" });
+    println!(
+        "Drift detected: {}",
+        if drift_detected { "YES" } else { "NO" }
+    );
     println!();
     println!("Metrics:");
     println!("  Samples checked: {}", samples_checked);
@@ -1692,7 +1807,12 @@ fn drift_detect(database: &str, collection_name: &str, baseline_path: &str, thre
     Ok(())
 }
 
-fn drift_report(database: &str, collection_name: &str, baseline_path: &str, format: &str) -> Result<()> {
+fn drift_report(
+    database: &str,
+    collection_name: &str,
+    baseline_path: &str,
+    format: &str,
+) -> Result<()> {
     let db = Database::open(database)?;
     let coll = db.collection(collection_name)?;
 
@@ -1700,21 +1820,26 @@ fn drift_report(database: &str, collection_name: &str, baseline_path: &str, form
     let baseline_content = std::fs::read_to_string(baseline_path)?;
     let baseline_data: serde_json::Value = serde_json::from_str(&baseline_content)?;
 
-    let dimensions = baseline_data["dimensions"]
-        .as_u64()
-        .ok_or_else(|| needle::NeedleError::InvalidInput("Invalid baseline: missing dimensions".to_string()))?
-        as usize;
+    let dimensions = baseline_data["dimensions"].as_u64().ok_or_else(|| {
+        needle::NeedleError::InvalidInput("Invalid baseline: missing dimensions".to_string())
+    })? as usize;
 
     let baseline_centroid: Vec<f32> = baseline_data["centroid"]
         .as_array()
-        .ok_or_else(|| needle::NeedleError::InvalidInput("Invalid baseline: missing centroid".to_string()))?
+        .ok_or_else(|| {
+            needle::NeedleError::InvalidInput("Invalid baseline: missing centroid".to_string())
+        })?
         .iter()
         .filter_map(|v| v.as_f64().map(|f| f as f32))
         .collect();
 
     let baseline_variance: Vec<f32> = baseline_data["variance"]
         .as_array()
-        .map(|arr| arr.iter().filter_map(|v| v.as_f64().map(|f| f as f32)).collect())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_f64().map(|f| f as f32))
+                .collect()
+        })
         .unwrap_or_else(|| vec![0.1; dimensions]);
 
     // Get current vectors
@@ -1729,7 +1854,11 @@ fn drift_report(database: &str, collection_name: &str, baseline_path: &str, form
     let current_variance: Vec<f32> = (0..dimensions)
         .map(|d| {
             let mean = current_centroid[d];
-            current_vecs.iter().map(|v| (v[d] - mean).powi(2)).sum::<f32>() / current_vecs.len().max(1) as f32
+            current_vecs
+                .iter()
+                .map(|v| (v[d] - mean).powi(2))
+                .sum::<f32>()
+                / current_vecs.len().max(1) as f32
         })
         .collect();
 
@@ -1794,7 +1923,10 @@ fn drift_report(database: &str, collection_name: &str, baseline_path: &str, form
         println!("Collection: {}", collection_name);
         println!("Baseline: {}", baseline_path);
         println!("Current vectors: {}", current_vecs.len());
-        println!("Analysis time: {}", chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC"));
+        println!(
+            "Analysis time: {}",
+            chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC")
+        );
         println!();
         println!("Overall Assessment:");
         println!("  Drift detected: {}", if has_drift { "YES" } else { "NO" });
@@ -1850,8 +1982,7 @@ fn federate_search(
     merge: &str,
 ) -> Result<()> {
     use needle::federated::{
-        Federation, FederationConfig, InstanceConfig,
-        RoutingStrategy, MergeStrategy,
+        Federation, FederationConfig, InstanceConfig, MergeStrategy, RoutingStrategy,
     };
 
     // Parse query vector
@@ -1945,7 +2076,10 @@ fn federate_health(instances_str: &str) -> Result<()> {
     println!("========================");
     println!();
     println!("Overall: {:?}", health.status);
-    println!("Healthy instances: {}/{}", health.healthy_instances, health.total_instances);
+    println!(
+        "Healthy instances: {}/{}",
+        health.healthy_instances, health.total_instances
+    );
     println!("Degraded instances: {}", health.degraded_instances);
     println!("Unhealthy instances: {}", health.unhealthy_instances);
     println!("Average latency: {:.2} ms", health.avg_latency_ms);
@@ -2185,7 +2319,10 @@ fn dev_command(cmd: DevCommands) -> Result<()> {
                 coll.insert(format!("vec_{}", i), &vector, Some(metadata))?;
             }
             db.save()?;
-            println!("Done! Created collection 'test_data' with {} vectors.", count);
+            println!(
+                "Done! Created collection 'test_data' with {} vectors.",
+                count
+            );
             Ok(())
         }
         DevCommands::Info => {
@@ -2203,11 +2340,7 @@ fn dev_command(cmd: DevCommands) -> Result<()> {
                 ("web-ui", cfg!(feature = "web-ui")),
             ];
             for (name, enabled) in &features {
-                println!(
-                    "  {} {}",
-                    if *enabled { "✓" } else { "✗" },
-                    name
-                );
+                println!("  {} {}", if *enabled { "✓" } else { "✗" }, name);
             }
             Ok(())
         }
