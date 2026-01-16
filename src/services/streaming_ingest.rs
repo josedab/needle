@@ -358,9 +358,11 @@ pub fn parse_json_payload(
             NeedleError::InvalidArgument(format!("missing vector field '{field}'"))
         })?)?
     } else {
-        extract_vector(payload.get("vector").ok_or_else(|| {
-            NeedleError::InvalidArgument("missing 'vector' field".into())
-        })?)?
+        extract_vector(
+            payload
+                .get("vector")
+                .ok_or_else(|| NeedleError::InvalidArgument("missing 'vector' field".into()))?,
+        )?
     };
 
     let metadata = if let Some(field) = metadata_field {
@@ -377,9 +379,9 @@ fn extract_vector(val: &Value) -> Result<Vec<f32>> {
         .ok_or_else(|| NeedleError::InvalidArgument("vector field must be an array".into()))?
         .iter()
         .map(|v| {
-            v.as_f64()
-                .map(|f| f as f32)
-                .ok_or_else(|| NeedleError::InvalidArgument("vector elements must be numbers".into()))
+            v.as_f64().map(|f| f as f32).ok_or_else(|| {
+                NeedleError::InvalidArgument("vector elements must be numbers".into())
+            })
         })
         .collect()
 }
@@ -639,7 +641,8 @@ impl<'a> StreamingIngestPipeline<'a> {
     /// Flush if the configured interval has elapsed.
     pub fn tick(&mut self) -> Result<Option<IngestStats>> {
         let elapsed = self.last_flush.elapsed();
-        if elapsed >= Duration::from_millis(self.config.flush_interval_ms) && !self.buffer.is_empty()
+        if elapsed >= Duration::from_millis(self.config.flush_interval_ms)
+            && !self.buffer.is_empty()
         {
             Ok(Some(self.flush()?))
         } else {
@@ -747,9 +750,13 @@ mod tests {
 
         let mut pipeline = StreamingIngestPipeline::new(&db, config).unwrap();
 
-        pipeline.push(IngestRecord::new("v1", vec![1.0; 4])).unwrap();
+        pipeline
+            .push(IngestRecord::new("v1", vec![1.0; 4]))
+            .unwrap();
         // Second push triggers auto-flush
-        pipeline.push(IngestRecord::new("v2", vec![2.0; 4])).unwrap();
+        pipeline
+            .push(IngestRecord::new("v2", vec![2.0; 4]))
+            .unwrap();
 
         assert_eq!(pipeline.stats().records_flushed, 2);
     }
@@ -765,9 +772,15 @@ mod tests {
 
         let mut pipeline = StreamingIngestPipeline::new(&db, config).unwrap();
 
-        pipeline.push(IngestRecord::new("v1", vec![1.0; 4])).unwrap();
-        pipeline.push(IngestRecord::new("v1", vec![1.0; 4])).unwrap();
-        pipeline.push(IngestRecord::new("v2", vec![2.0; 4])).unwrap();
+        pipeline
+            .push(IngestRecord::new("v1", vec![1.0; 4]))
+            .unwrap();
+        pipeline
+            .push(IngestRecord::new("v1", vec![1.0; 4]))
+            .unwrap();
+        pipeline
+            .push(IngestRecord::new("v2", vec![2.0; 4]))
+            .unwrap();
 
         assert_eq!(pipeline.stats().records_received, 2);
         assert_eq!(pipeline.stats().records_deduped, 1);
@@ -807,11 +820,19 @@ mod tests {
 
         let mut pipeline = StreamingIngestPipeline::new(&db, config).unwrap();
 
-        pipeline.push(IngestRecord::new("v1", vec![1.0; 4])).unwrap();
-        pipeline.push(IngestRecord::new("v2", vec![2.0; 4])).unwrap();
-        pipeline.push(IngestRecord::new("v3", vec![3.0; 4])).unwrap();
+        pipeline
+            .push(IngestRecord::new("v1", vec![1.0; 4]))
+            .unwrap();
+        pipeline
+            .push(IngestRecord::new("v2", vec![2.0; 4]))
+            .unwrap();
+        pipeline
+            .push(IngestRecord::new("v3", vec![3.0; 4]))
+            .unwrap();
 
-        let signal = pipeline.push(IngestRecord::new("v4", vec![4.0; 4])).unwrap();
+        let signal = pipeline
+            .push(IngestRecord::new("v4", vec![4.0; 4]))
+            .unwrap();
         assert_eq!(signal, BackpressureSignal::Pause);
     }
 
@@ -845,12 +866,17 @@ mod tests {
         });
 
         let record =
-            parse_json_payload(&payload, Some("doc_id"), Some("embedding"), Some("props"))
-                .unwrap();
+            parse_json_payload(&payload, Some("doc_id"), Some("embedding"), Some("props")).unwrap();
         assert_eq!(record.id, "abc");
         assert_eq!(record.vector.len(), 4);
         assert_eq!(
-            record.metadata.unwrap().get("color").unwrap().as_str().unwrap(),
+            record
+                .metadata
+                .unwrap()
+                .get("color")
+                .unwrap()
+                .as_str()
+                .unwrap(),
             "red"
         );
     }
@@ -870,9 +896,7 @@ mod tests {
     #[test]
     fn test_pipeline_requires_collection() {
         let db = Database::in_memory();
-        let config = StreamingIngestConfig::builder()
-            .collection("")
-            .build();
+        let config = StreamingIngestConfig::builder().collection("").build();
         assert!(StreamingIngestPipeline::new(&db, config).is_err());
     }
 

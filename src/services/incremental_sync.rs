@@ -32,7 +32,6 @@
 //! assert_eq!(applied, 2);
 //! ```
 
-use std::collections::HashMap;
 use std::time::SystemTime;
 
 use serde::{Deserialize, Serialize};
@@ -238,7 +237,11 @@ impl<'a> SyncManager<'a> {
     }
 
     /// Create with a specific node ID.
-    pub fn with_node_id(db: &'a Database, config: SyncConfig, node_id: impl Into<String>) -> Result<Self> {
+    pub fn with_node_id(
+        db: &'a Database,
+        config: SyncConfig,
+        node_id: impl Into<String>,
+    ) -> Result<Self> {
         Ok(Self {
             db,
             config,
@@ -486,7 +489,9 @@ mod tests {
         let source_db = test_db();
         let mut source = SyncManager::new(&source_db, SyncConfig::default()).unwrap();
 
-        source.record_insert("test", "v1", &[1.0; 4], Some(serde_json::json!({"a": 1}))).unwrap();
+        source
+            .record_insert("test", "v1", &[1.0; 4], Some(serde_json::json!({"a": 1})))
+            .unwrap();
         source.record_insert("test", "v2", &[2.0; 4], None).unwrap();
         let delta = source.generate_delta().unwrap();
 

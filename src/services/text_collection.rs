@@ -202,10 +202,7 @@ impl<'a> TextCollection<'a> {
     }
 
     /// Insert multiple text documents in a batch.
-    pub fn insert_texts(
-        &self,
-        documents: &[(String, String, Option<Value>)],
-    ) -> Result<usize> {
+    pub fn insert_texts(&self, documents: &[(String, String, Option<Value>)]) -> Result<usize> {
         let texts: Vec<&str> = documents.iter().map(|(_, t, _)| t.as_str()).collect();
         let embeddings = self.engine.embed_batch(&texts)?;
         let coll = self.db.collection(&self.collection_name)?;

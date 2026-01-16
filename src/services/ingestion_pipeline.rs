@@ -1297,12 +1297,7 @@ mod tests {
 
     #[test]
     fn test_retry_policy_exponential_backoff() {
-        let policy = RetryPolicy::new(
-            5,
-            Duration::from_millis(100),
-            Duration::from_secs(30),
-            2.0,
-        );
+        let policy = RetryPolicy::new(5, Duration::from_millis(100), Duration::from_secs(30), 2.0);
 
         let d0 = policy.compute_delay(0);
         let d1 = policy.compute_delay(1);

@@ -349,12 +349,7 @@ impl<'a> EmbeddingPipeline<'a> {
     }
 
     /// Submit a text document for embedding and insertion.
-    pub fn insert_text(
-        &mut self,
-        id: &str,
-        text: &str,
-        metadata: Option<Value>,
-    ) -> Result<()> {
+    pub fn insert_text(&mut self, id: &str, text: &str, metadata: Option<Value>) -> Result<()> {
         if self.pending.len() >= self.config.max_pending {
             return Err(NeedleError::InvalidArgument(
                 "pipeline backpressure: too many pending items".into(),
@@ -437,7 +432,10 @@ impl<'a> EmbeddingPipeline<'a> {
                 continue;
             }
 
-            let mut meta = pending.metadata.clone().unwrap_or(Value::Object(Default::default()));
+            let mut meta = pending
+                .metadata
+                .clone()
+                .unwrap_or(Value::Object(Default::default()));
             if self.config.store_original_text {
                 if let Value::Object(ref mut map) = meta {
                     map.insert(
@@ -471,7 +469,11 @@ impl<'a> EmbeddingPipeline<'a> {
     }
 
     /// Search using text query (embeds the query, then searches).
-    pub fn search_text(&self, query: &str, k: usize) -> Result<Vec<crate::collection::SearchResult>> {
+    pub fn search_text(
+        &self,
+        query: &str,
+        k: usize,
+    ) -> Result<Vec<crate::collection::SearchResult>> {
         let embedding = self.embed_single(query)?;
         let coll = self.db.collection(&self.config.collection)?;
         coll.search(&embedding, k)
@@ -479,9 +481,7 @@ impl<'a> EmbeddingPipeline<'a> {
 
     fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>> {
         match &self.config.provider.provider {
-            EmbeddingProvider::LocalMock { dimensions } => {
-                Ok(mock_embed_batch(texts, *dimensions))
-            }
+            EmbeddingProvider::LocalMock { dimensions } => Ok(mock_embed_batch(texts, *dimensions)),
             EmbeddingProvider::OpenAI { .. }
             | EmbeddingProvider::Cohere { .. }
             | EmbeddingProvider::Ollama { .. } => {
@@ -556,7 +556,9 @@ mod tests {
         let mut pipeline = EmbeddingPipeline::new(&db, config).unwrap();
 
         pipeline.insert_text("d1", "First", None).unwrap();
-        pipeline.insert_text("d2", "Second triggers flush", None).unwrap();
+        pipeline
+            .insert_text("d2", "Second triggers flush", None)
+            .unwrap();
 
         assert_eq!(pipeline.stats().texts_embedded, 2);
     }
@@ -591,7 +593,9 @@ mod tests {
             .build();
 
         let mut pipeline = EmbeddingPipeline::new(&db, config).unwrap();
-        pipeline.insert_text("doc1", "Machine learning", None).unwrap();
+        pipeline
+            .insert_text("doc1", "Machine learning", None)
+            .unwrap();
         pipeline.flush().unwrap();
 
         let results = pipeline.search_text("Machine learning", 5).unwrap();
@@ -608,9 +612,7 @@ mod tests {
             .build();
 
         let mut pipeline = EmbeddingPipeline::new(&db, config).unwrap();
-        pipeline
-            .insert_vector("v1", &vec![0.1; 384], None)
-            .unwrap();
+        pipeline.insert_vector("v1", &vec![0.1; 384], None).unwrap();
         assert_eq!(pipeline.stats().vectors_inserted, 1);
     }
 
@@ -680,7 +682,11 @@ mod tests {
 
         let mut pipeline = EmbeddingPipeline::new(&db, config).unwrap();
         pipeline
-            .insert_text("d1", "This is a very long text that exceeds the limit", None)
+            .insert_text(
+                "d1",
+                "This is a very long text that exceeds the limit",
+                None,
+            )
             .unwrap();
         pipeline.flush().unwrap();
         assert_eq!(pipeline.stats().texts_embedded, 1);

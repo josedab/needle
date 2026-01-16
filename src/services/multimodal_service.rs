@@ -38,8 +38,8 @@ use serde_json::Value;
 use crate::database::Database;
 use crate::error::Result;
 use crate::multimodal_index::{
-    FusionStrategy, Modality, ModalityConfig, MultiModalDocBuilder,
-    MultiModalIndexConfig, MultiModalStats, MultiModalUnifiedIndex,
+    FusionStrategy, Modality, ModalityConfig, MultiModalDocBuilder, MultiModalIndexConfig,
+    MultiModalStats, MultiModalUnifiedIndex,
 };
 
 /// Configuration for the multi-modal service.
@@ -306,11 +306,7 @@ impl<'a> MultiModalService<'a> {
     }
 
     /// Search across all modalities using a single query.
-    pub fn search(
-        &mut self,
-        input: ModalInput,
-        k: usize,
-    ) -> Result<Vec<MultiModalResult>> {
+    pub fn search(&mut self, input: ModalInput, k: usize) -> Result<Vec<MultiModalResult>> {
         let modality = input.modality();
         let results = self.index.search(input.vector(), modality, k)?;
         self.search_count += 1;
@@ -321,7 +317,11 @@ impl<'a> MultiModalService<'a> {
                 id: r.id.clone(),
                 distance: 1.0 - r.combined_score.min(1.0),
                 score: r.combined_score,
-                modality: r.matching_modalities.first().map(|m| format!("{:?}", m)).unwrap_or_default(),
+                modality: r
+                    .matching_modalities
+                    .first()
+                    .map(|m| format!("{:?}", m))
+                    .unwrap_or_default(),
                 metadata: r.metadata.clone(),
             })
             .collect())
@@ -334,12 +334,9 @@ impl<'a> MultiModalService<'a> {
         target_modality: Modality,
         k: usize,
     ) -> Result<Vec<MultiModalResult>> {
-        let results = self.index.cross_modal_search(
-            input.vector(),
-            input.modality(),
-            target_modality,
-            k,
-        )?;
+        let results =
+            self.index
+                .cross_modal_search(input.vector(), input.modality(), target_modality, k)?;
         self.search_count += 1;
 
         Ok(results
@@ -348,7 +345,11 @@ impl<'a> MultiModalService<'a> {
                 id: r.id.clone(),
                 distance: 1.0 - r.combined_score.min(1.0),
                 score: r.combined_score,
-                modality: r.matching_modalities.first().map(|m| format!("{:?}", m)).unwrap_or_default(),
+                modality: r
+                    .matching_modalities
+                    .first()
+                    .map(|m| format!("{:?}", m))
+                    .unwrap_or_default(),
                 metadata: r.metadata.clone(),
             })
             .collect())
@@ -443,9 +444,7 @@ mod tests {
         embeddings.insert(Modality::Text, vec![0.1, 0.2, 0.3, 0.4]);
         embeddings.insert(Modality::Image, vec![0.5, 0.6, 0.7, 0.8]);
 
-        service
-            .insert_multimodal("doc1", embeddings, None)
-            .unwrap();
+        service.insert_multimodal("doc1", embeddings, None).unwrap();
         assert_eq!(service.len(), 1);
     }
 
