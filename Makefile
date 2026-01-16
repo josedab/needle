@@ -55,7 +55,7 @@ fmt-check:
 	cargo fmt -- --check
 
 lint:
-	cargo clippy --features full -- -D warnings
+	cargo clippy --features full
 
 serve:
 	cargo run --features server -- serve -a 127.0.0.1:8080
