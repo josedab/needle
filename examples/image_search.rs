@@ -5,10 +5,7 @@
 //!
 //! Run with: cargo run --example image_search
 
-use needle::{
-    Database, Filter, CollectionConfig, DistanceFunction,
-    ScalarQuantizer, SearchResult,
-};
+use needle::{CollectionConfig, Database, DistanceFunction, Filter, ScalarQuantizer, SearchResult};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
@@ -152,7 +149,8 @@ impl ImageSearchEngine {
         // Filter by tag (stored as comma-separated string, use $contains operator)
         let filter = Filter::parse(&serde_json::json!({
             "tags": { "$contains": tag }
-        })).map_err(needle::NeedleError::InvalidInput)?;
+        }))
+        .map_err(needle::NeedleError::InvalidInput)?;
 
         // Get all matching images (we'll need a dummy embedding for filter-only search)
         // In practice, you'd use a dedicated metadata search or hybrid approach
@@ -164,7 +162,11 @@ impl ImageSearchEngine {
 
     /// Find duplicate/similar images by checking known image IDs
     /// Note: This is a simplified implementation that works with known IDs
-    fn find_duplicates(&self, threshold: f32, image_ids: &[String]) -> needle::Result<Vec<DuplicateGroup>> {
+    fn find_duplicates(
+        &self,
+        threshold: f32,
+        image_ids: &[String],
+    ) -> needle::Result<Vec<DuplicateGroup>> {
         let collection = self.db.collection(&self.collection_name)?;
 
         let mut duplicates: Vec<DuplicateGroup> = Vec::new();
@@ -318,7 +320,12 @@ fn main() -> needle::Result<()> {
                 width: 1920,
                 height: 1080,
                 format: "jpeg".to_string(),
-                tags: vec!["sunset".to_string(), "beach".to_string(), "nature".to_string(), "ocean".to_string()],
+                tags: vec![
+                    "sunset".to_string(),
+                    "beach".to_string(),
+                    "nature".to_string(),
+                    "ocean".to_string(),
+                ],
                 description: "Beautiful sunset at the beach with orange sky".to_string(),
                 upload_date: "2024-01-15".to_string(),
                 album: Some("Vacation 2024".to_string()),
@@ -332,7 +339,11 @@ fn main() -> needle::Result<()> {
                 width: 2560,
                 height: 1440,
                 format: "jpeg".to_string(),
-                tags: vec!["mountain".to_string(), "nature".to_string(), "landscape".to_string()],
+                tags: vec![
+                    "mountain".to_string(),
+                    "nature".to_string(),
+                    "landscape".to_string(),
+                ],
                 description: "Snow-capped mountains with clear blue sky".to_string(),
                 upload_date: "2024-01-20".to_string(),
                 album: Some("Vacation 2024".to_string()),
@@ -346,7 +357,12 @@ fn main() -> needle::Result<()> {
                 width: 1920,
                 height: 1080,
                 format: "png".to_string(),
-                tags: vec!["city".to_string(), "night".to_string(), "lights".to_string(), "urban".to_string()],
+                tags: vec![
+                    "city".to_string(),
+                    "night".to_string(),
+                    "lights".to_string(),
+                    "urban".to_string(),
+                ],
                 description: "City skyline at night with illuminated buildings".to_string(),
                 upload_date: "2024-02-01".to_string(),
                 album: Some("Urban Photography".to_string()),
@@ -360,7 +376,12 @@ fn main() -> needle::Result<()> {
                 width: 1280,
                 height: 1280,
                 format: "jpeg".to_string(),
-                tags: vec!["cat".to_string(), "pet".to_string(), "animal".to_string(), "portrait".to_string()],
+                tags: vec![
+                    "cat".to_string(),
+                    "pet".to_string(),
+                    "animal".to_string(),
+                    "portrait".to_string(),
+                ],
                 description: "Close-up portrait of a tabby cat".to_string(),
                 upload_date: "2024-02-10".to_string(),
                 album: Some("Pets".to_string()),
@@ -374,7 +395,12 @@ fn main() -> needle::Result<()> {
                 width: 1920,
                 height: 1080,
                 format: "jpeg".to_string(),
-                tags: vec!["sunset".to_string(), "city".to_string(), "urban".to_string(), "skyline".to_string()],
+                tags: vec![
+                    "sunset".to_string(),
+                    "city".to_string(),
+                    "urban".to_string(),
+                    "skyline".to_string(),
+                ],
                 description: "Sunset over the city skyline".to_string(),
                 upload_date: "2024-02-15".to_string(),
                 album: Some("Urban Photography".to_string()),
@@ -453,7 +479,10 @@ fn main() -> needle::Result<()> {
 
     // Find duplicates
     println!("=== Duplicate Detection ===");
-    let image_ids: Vec<String> = sample_images.iter().map(|(_, info)| info.id.clone()).collect();
+    let image_ids: Vec<String> = sample_images
+        .iter()
+        .map(|(_, info)| info.id.clone())
+        .collect();
     let duplicates = engine.find_duplicates(0.1, &image_ids)?; // Very high similarity threshold
 
     if duplicates.is_empty() {
@@ -462,7 +491,10 @@ fn main() -> needle::Result<()> {
         for group in &duplicates {
             println!("  Primary: {}", group.primary_id);
             for dup in &group.duplicates {
-                println!("    Duplicate: {} (similarity: {:.3})", dup.id, dup.similarity);
+                println!(
+                    "    Duplicate: {} (similarity: {:.3})",
+                    dup.id, dup.similarity
+                );
             }
         }
     }
@@ -470,26 +502,20 @@ fn main() -> needle::Result<()> {
 
     // Demonstrate quantization (memory savings)
     println!("=== Quantization Demo ===");
-    let sample_embeddings: Vec<Vec<f32>> = sample_images
-        .iter()
-        .map(|(e, _)| e.clone())
-        .collect();
+    let sample_embeddings: Vec<Vec<f32>> = sample_images.iter().map(|(e, _)| e.clone()).collect();
 
     let _quantizer = ScalarQuantizer::train(
-        &sample_embeddings.iter().map(|v| v.as_slice()).collect::<Vec<_>>()
+        &sample_embeddings
+            .iter()
+            .map(|v| v.as_slice())
+            .collect::<Vec<_>>(),
     );
 
     let original_size = embedding_dim * 4; // f32 = 4 bytes
     let quantized_size = embedding_dim; // u8 = 1 byte per element
 
-    println!(
-        "  Original embedding size: {} bytes",
-        original_size
-    );
-    println!(
-        "  Quantized embedding size: {} bytes",
-        quantized_size
-    );
+    println!("  Original embedding size: {} bytes", original_size);
+    println!("  Quantized embedding size: {} bytes", quantized_size);
     println!(
         "  Memory reduction: {:.1}x",
         original_size as f32 / quantized_size as f32

@@ -5,9 +5,7 @@
 //!
 //! Run with: cargo run --example rag_chatbot
 
-use needle::{
-    Database, Filter, CollectionConfig, DistanceFunction,
-};
+use needle::{CollectionConfig, Database, DistanceFunction, Filter};
 use serde_json::json;
 
 /// Document to be indexed
@@ -68,7 +66,9 @@ impl KnowledgeBase {
     ) -> needle::Result<()> {
         let collection = self.db.collection(&self.collection_name)?;
 
-        for (i, ((chunk_text, start, end), embedding)) in chunks.iter().zip(embeddings.iter()).enumerate() {
+        for (i, ((chunk_text, start, end), embedding)) in
+            chunks.iter().zip(embeddings.iter()).enumerate()
+        {
             let chunk_id = format!("{}_{}", doc.id, i);
 
             let metadata = json!({
@@ -159,17 +159,11 @@ impl RagChatbot {
     }
 
     /// Generate a response (simulated - in real use, you'd call an LLM)
-    fn respond(
-        &self,
-        query: &str,
-        query_embedding: &[f32],
-    ) -> needle::Result<ChatResponse> {
+    fn respond(&self, query: &str, query_embedding: &[f32]) -> needle::Result<ChatResponse> {
         // Retrieve relevant context
-        let retrieved = self.knowledge_base.retrieve(
-            query_embedding,
-            self.context_window_size,
-            None,
-        )?;
+        let retrieved =
+            self.knowledge_base
+                .retrieve(query_embedding, self.context_window_size, None)?;
 
         // Build context from retrieved documents
         let context: Vec<String> = retrieved
@@ -196,7 +190,10 @@ impl RagChatbot {
                 The most relevant information comes from '{}' (score: {:.2}). \
                 [In a real implementation, an LLM would generate a natural response here]",
                 retrieved.len(),
-                retrieved.first().map(|r| r.title.as_str()).unwrap_or("unknown"),
+                retrieved
+                    .first()
+                    .map(|r| r.title.as_str())
+                    .unwrap_or("unknown"),
                 retrieved.first().map(|r| r.score).unwrap_or(0.0)
             ),
             sources: retrieved.iter().map(|r| r.source.clone()).collect(),
