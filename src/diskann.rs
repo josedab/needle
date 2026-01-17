@@ -28,6 +28,47 @@
 //! // Search
 //! let results = index.search(&query, 10)?;
 //! ```
+//!
+//! # When to Use DiskANN
+//!
+//! DiskANN is designed for billion-scale datasets that exceed available RAM:
+//!
+//! | Use Case | DiskANN Suitability |
+//! |----------|---------------------|
+//! | > 100M vectors | ✅ Excellent - purpose-built for scale |
+//! | Exceeds RAM | ✅ Excellent - disk-based with efficient I/O |
+//! | SSD storage | ✅ Excellent - optimized for SSD access patterns |
+//! | Cost-effective scaling | ✅ Good - use cheap disk instead of expensive RAM |
+//! | Real-time search | ⚠️ Higher latency than in-memory (5-20ms) |
+//! | Frequent updates | ⚠️ Incremental updates possible but slower |
+//! | Small datasets (<1M) | ⚠️ HNSW is simpler and faster |
+//!
+//! ## DiskANN vs HNSW
+//!
+//! - **DiskANN** scales to billions of vectors with SSD storage
+//! - **HNSW** is faster but limited by available RAM
+//! - Choose DiskANN when data exceeds memory (typically >10-100M vectors)
+//! - Choose HNSW when data fits in memory and latency is critical
+//!
+//! ## DiskANN vs IVF
+//!
+//! - **DiskANN** has lower latency for disk-based search
+//! - **IVF** is simpler but less optimized for disk access
+//! - Choose DiskANN for large-scale SSD-based deployments
+//! - Choose IVF for moderate-scale memory-constrained scenarios
+//!
+//! ## Configuration Guidelines
+//!
+//! - **max_degree** (R): 64-128 for high recall, 32-64 for faster queries
+//! - **search_list_size** (L): Higher = better recall, slower search
+//! - **alpha**: 1.0-1.2, higher values improve graph connectivity
+//! - **cache_size**: Set based on available RAM for frequently accessed vectors
+//!
+//! ## Hardware Recommendations
+//!
+//! - NVMe SSD strongly recommended for production workloads
+//! - Index size ≈ vectors * (dimensions * 4 + max_degree * 8) bytes
+//! - With PQ: Index size ≈ vectors * (pq_subvectors + max_degree * 8) bytes
 
 use crate::error::{NeedleError, Result};
 use serde::{Deserialize, Serialize};
