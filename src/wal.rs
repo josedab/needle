@@ -23,6 +23,101 @@
 //! └─────────────────────────────────────────────────────────────┘
 //! ```
 //!
+//! # Crash Recovery Procedures
+//!
+//! ## Overview
+//!
+//! Needle uses the WAL to ensure durability. Every write operation is logged
+//! before being applied to the in-memory index. This allows recovery after:
+//! - Process crashes
+//! - Power failures
+//! - System panics
+//!
+//! ## Recovery Flow
+//!
+//! ```text
+//! ┌─────────────┐     ┌─────────────────────┐     ┌────────────────┐
+//! │  WAL Files  │────►│ Find last checkpoint│────►│ Replay entries │
+//! └─────────────┘     └─────────────────────┘     └────────────────┘
+//!                                                         │
+//!                     ┌─────────────────────┐             ▼
+//!                     │  Database restored  │◄────────────┘
+//!                     └─────────────────────┘
+//! ```
+//!
+//! ## Step-by-Step Recovery
+//!
+//! 1. **Open the WAL directory**: The WAL manager scans for segment files
+//! 2. **Find the last checkpoint**: Checkpoints mark points where data was
+//!    safely persisted to the main database file
+//! 3. **Replay from checkpoint**: All entries after the checkpoint LSN are
+//!    replayed to reconstruct uncommitted changes
+//! 4. **Verify integrity**: Checksums are validated during replay (if enabled)
+//!
+//! ## Recovery Example
+//!
+//! ```rust,ignore
+//! use needle::wal::{WalManager, WalConfig};
+//! use needle::Database;
+//!
+//! // Step 1: Open WAL and find checkpoint
+//! let wal = WalManager::open("/path/to/wal", WalConfig::default())?;
+//! let checkpoint_lsn = wal.checkpoint_lsn();
+//!
+//! // Step 2: Open database (will be at checkpoint state)
+//! let mut db = Database::open("vectors.needle")?;
+//!
+//! // Step 3: Replay operations since checkpoint
+//! wal.replay(checkpoint_lsn, |record| {
+//!     match record.entry {
+//!         WalEntry::Insert { collection, id, vector, metadata } => {
+//!             let coll = db.collection(&collection)?;
+//!             coll.insert(&id, &vector, metadata)?;
+//!         }
+//!         WalEntry::Delete { collection, id } => {
+//!             let coll = db.collection(&collection)?;
+//!             coll.delete(&id)?;
+//!         }
+//!         // Handle other entry types...
+//!         _ => {}
+//!     }
+//!     Ok(())
+//! })?;
+//!
+//! // Step 4: Create new checkpoint after recovery
+//! wal.checkpoint()?;
+//! db.save()?;
+//! ```
+//!
+//! ## Handling Corruption
+//!
+//! If a WAL file is corrupted (checksum mismatch), recovery stops at the
+//! last valid entry. To handle this:
+//!
+//! 1. The database state reflects all operations up to the corruption point
+//! 2. Corrupted segments are preserved (not deleted) for forensic analysis
+//! 3. A warning is logged indicating the corruption location
+//!
+//! ## Configuration for Durability
+//!
+//! | Setting | Value | Effect |
+//! |---------|-------|--------|
+//! | `sync_on_write` | `true` | Every write is fsync'd (safest, slowest) |
+//! | `sync_on_write` | `false` | Writes are batched, periodic sync (faster) |
+//! | `enable_checksums` | `true` | CRC32 validation on recovery |
+//! | `checkpoint_interval` | `1000` | Checkpoint after N operations |
+//!
+//! ## Best Practices
+//!
+//! 1. **Regular checkpoints**: Call `checkpoint()` periodically to reduce
+//!    recovery time and WAL size
+//! 2. **Sync before critical operations**: Call `sync()` before operations
+//!    where data loss is unacceptable
+//! 3. **Monitor WAL size**: Large WALs increase recovery time; adjust
+//!    checkpoint frequency accordingly
+//! 4. **Backup WAL files**: Include WAL directory in backups for point-in-time
+//!    recovery capability
+//!
 //! # Usage
 //!
 //! ```rust,ignore
@@ -62,6 +157,27 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 pub type Lsn = u64;
 
 /// WAL entry representing a single operation.
+///
+/// # Example
+///
+/// ```
+/// use needle::wal::WalEntry;
+/// use serde_json::json;
+///
+/// // Create an insert entry
+/// let insert = WalEntry::Insert {
+///     collection: "documents".to_string(),
+///     id: "doc1".to_string(),
+///     vector: vec![0.1, 0.2, 0.3, 0.4],
+///     metadata: Some(json!({"title": "Hello World"})),
+/// };
+///
+/// // Create a delete entry
+/// let delete = WalEntry::Delete {
+///     collection: "documents".to_string(),
+///     id: "doc1".to_string(),
+/// };
+/// ```
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum WalEntry {
     /// Insert a new vector.
@@ -139,6 +255,25 @@ pub struct WalRecord {
 }
 
 /// WAL configuration options.
+///
+/// # Example
+///
+/// ```
+/// use needle::WalConfig;
+/// use std::time::Duration;
+///
+/// // Configure WAL for high durability
+/// let config = WalConfig::new()
+///     .sync_on_write(true)           // Sync after every write
+///     .segment_size(32 * 1024 * 1024) // 32MB segments
+///     .max_segments(20);              // Keep more segments
+///
+/// assert!(config.sync_on_write);
+/// assert_eq!(config.max_segments, 20);
+///
+/// // Checksums are enabled by default
+/// assert!(config.enable_checksums);
+/// ```
 #[derive(Debug, Clone)]
 pub struct WalConfig {
     /// Maximum size of a single segment file in bytes.
