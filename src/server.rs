@@ -69,6 +69,18 @@ use tracing::{error, info, warn};
 #[cfg(feature = "metrics")]
 use crate::metrics::{http_metrics, metrics};
 
+// ── Server defaults ──────────────────────────────────────────────────────────
+/// Default maximum request body size (100 MB).
+const DEFAULT_MAX_BODY_SIZE: usize = 100 * 1024 * 1024;
+/// Default maximum items per batch operation.
+const DEFAULT_MAX_BATCH_SIZE: usize = 10_000;
+/// Default request timeout in seconds.
+const DEFAULT_REQUEST_TIMEOUT_SECS: u64 = 30;
+/// Default CORS preflight cache duration in seconds.
+const DEFAULT_CORS_MAX_AGE_SECS: u64 = 3600;
+/// Default server listen port.
+const DEFAULT_PORT: u16 = 8080;
+
 // ============ Authentication Types ============
 
 /// API key configuration for authentication.
@@ -467,7 +479,7 @@ impl Default for CorsConfig {
                 "http://127.0.0.1:8080".to_string(),
             ]),
             allow_credentials: false,
-            max_age_secs: 3600,
+            max_age_secs: DEFAULT_CORS_MAX_AGE_SECS,
         }
     }
 }
@@ -483,7 +495,7 @@ impl CorsConfig {
             enabled: true,
             allowed_origins: None,    // Allow all
             allow_credentials: false, // SECURITY: Never combine wildcard origins with credentials
-            max_age_secs: 3600,
+            max_age_secs: DEFAULT_CORS_MAX_AGE_SECS,
         }
     }
 
@@ -569,16 +581,14 @@ fn default_trusted_proxies() -> Vec<IpAddr> {
 impl Default for ServerConfig {
     fn default() -> Self {
         Self {
-            addr: "127.0.0.1:8080"
-                .parse()
-                .unwrap_or_else(|_| SocketAddr::from(([127, 0, 0, 1], 8080))),
+            addr: SocketAddr::from(([127, 0, 0, 1], DEFAULT_PORT)),
             cors_config: CorsConfig::default(),
             db_path: None,
             rate_limit: RateLimitConfig::default(),
             auth: AuthConfig::default(),
-            max_body_size: 100 * 1024 * 1024, // 100MB
-            max_batch_size: 10_000,           // 10k items max per batch
-            request_timeout_secs: 30,         // 30 seconds default timeout
+            max_body_size: DEFAULT_MAX_BODY_SIZE,
+            max_batch_size: DEFAULT_MAX_BATCH_SIZE,
+            request_timeout_secs: DEFAULT_REQUEST_TIMEOUT_SECS,
             trusted_proxies: default_trusted_proxies(),
         }
     }
@@ -663,7 +673,7 @@ impl AppState {
             db: RwLock::new(db),
             rate_limiter: None,
             auth: AuthConfig::default(),
-            max_batch_size: 10_000, // default
+            max_batch_size: DEFAULT_MAX_BATCH_SIZE,
             trusted_proxies: default_trusted_proxies(),
         }
     }
@@ -674,7 +684,7 @@ impl AppState {
             db: RwLock::new(db),
             rate_limiter: create_rate_limiter(config),
             auth: AuthConfig::default(),
-            max_batch_size: 10_000, // default
+            max_batch_size: DEFAULT_MAX_BATCH_SIZE,
             trusted_proxies: default_trusted_proxies(),
         }
     }
