@@ -50,10 +50,17 @@ git clone https://github.com/anthropics/needle.git && cd needle
 make demo
 ```
 
+## Verify Your Setup
+
+```bash
+./scripts/doctor.sh  # Checks Rust version, tools, and suggests fixes
+```
+
 ## What Next?
 
 | Goal | Command |
 |------|---------|
+| Verify environment | `./scripts/doctor.sh` |
 | Run all examples | `cargo run --example basic_usage` |
 | Interactive HTTP walkthrough | `make playground` |
 | Full API docs | `cargo doc --open` |
