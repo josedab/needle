@@ -18,19 +18,45 @@
 //! - **ef_search**: Search depth during queries (default: 50). Higher values improve
 //!   recall but slow queries.
 //!
-//! # Example
+//! # Example: Configuring HNSW Parameters
 //!
-//! ```ignore
-//! use needle::hnsw::{HnswConfig, HnswIndex};
-//! use needle::DistanceFunction;
+//! ```
+//! use needle::{HnswConfig, HnswIndex, DistanceFunction};
 //!
-//! // Create index with custom configuration
+//! // Create index with custom configuration for high-recall search
 //! let config = HnswConfig::builder()
-//!     .m(32)
-//!     .ef_construction(400)
-//!     .ef_search(100);
+//!     .m(32)                 // More connections = better recall
+//!     .ef_construction(400)  // Higher = better index quality
+//!     .ef_search(100);       // Higher = better search recall
 //!
-//! let mut index = HnswIndex::new(config, DistanceFunction::Cosine);
+//! let index = HnswIndex::new(config, DistanceFunction::Cosine);
+//! assert_eq!(index.len(), 0);
+//! ```
+//!
+//! # Example: Using HNSW via Collection (Recommended)
+//!
+//! For most use cases, use the high-level [`Collection`](crate::Collection) API
+//! which handles vector storage and HNSW indexing together:
+//!
+//! ```
+//! use needle::{Database, CollectionConfig, DistanceFunction};
+//!
+//! let db = Database::in_memory();
+//!
+//! // Create collection with custom HNSW parameters
+//! let config = CollectionConfig::new("vectors", 4)
+//!     .with_m(24)                 // Custom M parameter
+//!     .with_ef_construction(300); // Custom ef_construction
+//!
+//! db.create_collection_with_config(config).unwrap();
+//!
+//! let collection = db.collection("vectors").unwrap();
+//! collection.insert("v1", &[0.1, 0.2, 0.3, 0.4], None).unwrap();
+//! collection.insert("v2", &[0.5, 0.6, 0.7, 0.8], None).unwrap();
+//!
+//! // Search returns results with IDs and distances
+//! let results = collection.search(&[0.2, 0.3, 0.4, 0.5], 1).unwrap();
+//! assert_eq!(results[0].id, "v1");
 //! ```
 //!
 //! # Performance Characteristics
@@ -43,6 +69,33 @@
 //!
 //! The HNSW index is not thread-safe by itself. Thread safety is provided at the
 //! `Collection` and `Database` levels using `parking_lot::RwLock`.
+//!
+//! # When to Use HNSW
+//!
+//! HNSW is the **default index** and best choice for most use cases:
+//!
+//! | Use Case | HNSW Suitability |
+//! |----------|------------------|
+//! | < 10M vectors | ✅ Excellent - fits entirely in memory |
+//! | Real-time search | ✅ Excellent - sub-millisecond queries |
+//! | High recall requirements | ✅ Excellent - easily achieves 95%+ recall |
+//! | Frequent updates | ✅ Good - O(log n) insert/delete |
+//! | Memory constrained | ⚠️ Consider IVF or DiskANN instead |
+//! | > 100M vectors | ⚠️ Consider DiskANN for disk-based search |
+//!
+//! ## HNSW vs IVF
+//!
+//! - **HNSW** is faster for search but uses more memory
+//! - **IVF** uses less memory but requires training on data distribution
+//! - Choose HNSW when query latency is critical
+//! - Choose IVF when memory is constrained and you can accept slower queries
+//!
+//! ## HNSW vs DiskANN
+//!
+//! - **HNSW** stores the entire index in memory for fast search
+//! - **DiskANN** stores vectors on disk with memory-efficient navigation
+//! - Choose HNSW for datasets that fit in memory
+//! - Choose DiskANN for datasets exceeding available RAM
 
 use crate::distance::DistanceFunction;
 use crate::error::Result;
@@ -63,6 +116,10 @@ pub struct SearchStats {
     pub visited_nodes: usize,
     /// Number of layers traversed (including layer 0)
     pub layers_traversed: usize,
+    /// Number of distance computations performed
+    pub distance_computations: usize,
+    /// Time spent in HNSW traversal (microseconds)
+    pub traversal_time_us: u64,
 }
 
 /// HNSW configuration parameters
@@ -501,6 +558,89 @@ impl HnswIndex {
 
         // Return top k
         (candidates.into_iter().take(k).collect(), stats)
+    }
+
+    /// Search for all vectors within a given distance radius.
+    ///
+    /// Unlike `search()` which returns the top-k nearest neighbors, this method
+    /// returns all vectors whose distance to the query is less than or equal to
+    /// `max_distance`. This is useful for applications that need all similar items
+    /// above a certain similarity threshold.
+    ///
+    /// # Arguments
+    ///
+    /// * `query` - The query vector
+    /// * `max_distance` - Maximum distance threshold (inclusive)
+    /// * `vectors` - The vector storage
+    ///
+    /// # Returns
+    ///
+    /// A vector of (id, distance) pairs for all vectors within the radius,
+    /// sorted by distance (closest first).
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use needle::{HnswConfig, HnswIndex, DistanceFunction};
+    ///
+    /// let config = HnswConfig::default();
+    /// let mut index = HnswIndex::new(config, DistanceFunction::Cosine);
+    /// let mut vectors = Vec::new();
+    ///
+    /// // Insert some vectors
+    /// let v1 = vec![1.0, 0.0, 0.0];
+    /// let v2 = vec![0.9, 0.1, 0.0];
+    /// let v3 = vec![0.0, 1.0, 0.0];
+    ///
+    /// index.insert(0, &v1, &vectors);
+    /// vectors.push(v1.clone());
+    /// index.insert(1, &v2, &vectors);
+    /// vectors.push(v2.clone());
+    /// index.insert(2, &v3, &vectors);
+    /// vectors.push(v3.clone());
+    ///
+    /// // Find all vectors within distance 0.2 of v1
+    /// let results = index.search_radius(&v1, 0.2, &vectors);
+    /// assert!(results.iter().any(|(id, _)| *id == 0)); // v1 itself
+    /// assert!(results.iter().any(|(id, _)| *id == 1)); // v2 is close
+    /// ```
+    ///
+    /// # Notes
+    ///
+    /// - Uses an over-fetching strategy: searches with high ef_search, then filters
+    /// - Results may be incomplete for very large radii (approximate algorithm)
+    /// - For exact range queries on small datasets, consider brute-force search
+    pub fn search_radius(
+        &self,
+        query: &[f32],
+        max_distance: f32,
+        vectors: &[Vec<f32>],
+    ) -> Vec<(VectorId, f32)> {
+        self.search_radius_with_stats(query, max_distance, vectors).0
+    }
+
+    /// Search for all vectors within a given distance radius and return statistics.
+    ///
+    /// See [`search_radius`](Self::search_radius) for details.
+    pub fn search_radius_with_stats(
+        &self,
+        query: &[f32],
+        max_distance: f32,
+        vectors: &[Vec<f32>],
+    ) -> (Vec<(VectorId, f32)>, SearchStats) {
+        // Use a large ef_search for better coverage, then filter by distance
+        // The over-fetch factor helps ensure we find most/all vectors within radius
+        let ef_search = self.config.ef_search.max(200);
+
+        let (candidates, stats) = self.search_with_ef_stats(query, vectors.len().min(ef_search * 10), ef_search, vectors);
+
+        // Filter to only include vectors within the radius
+        let results: Vec<_> = candidates
+            .into_iter()
+            .filter(|(_, dist)| *dist <= max_distance)
+            .collect();
+
+        (results, stats)
     }
 
     /// Search a single layer using beam search
