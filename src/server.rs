@@ -2,10 +2,43 @@
 //!
 //! Provides a REST API for vector database operations, making Needle
 //! accessible from any language or tool that can make HTTP requests.
+//!
+//! # Authentication
+//!
+//! The server supports multiple authentication methods:
+//!
+//! ## API Key Authentication
+//!
+//! ```rust,ignore
+//! use needle::server::{ServerConfig, AuthConfig, ApiKey};
+//!
+//! let auth_config = AuthConfig::new()
+//!     .with_api_key(ApiKey::new("my-api-key").with_role("admin"))
+//!     .require_auth(true);
+//!
+//! let config = ServerConfig::default()
+//!     .with_auth(auth_config);
+//! ```
+//!
+//! API keys are passed via the `X-API-Key` header:
+//! ```bash
+//! curl -H "X-API-Key: my-api-key" http://localhost:8080/collections
+//! ```
+//!
+//! ## JWT Authentication
+//!
+//! ```rust,ignore
+//! let auth_config = AuthConfig::new()
+//!     .with_jwt_secret("your-secret-key")
+//!     .require_auth(true);
+//! ```
+//!
+//! JWT tokens are passed via the `Authorization: Bearer <token>` header.
 
 use crate::database::Database;
 use crate::error::NeedleError;
 use crate::metadata::Filter;
+use crate::security::{Role, User};
 use axum::{
     body::Body,
     extract::{Path, Query, State},
@@ -27,15 +60,364 @@ use std::net::SocketAddr;
 use std::num::NonZeroU32;
 use std::sync::Arc;
 use std::time::Duration;
+use std::collections::HashMap;
 use tokio::sync::RwLock;
 use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::timeout::TimeoutLayer;
 use tower_http::trace::TraceLayer;
 use tracing::{info, warn, error};
+use hmac::{Hmac, Mac};
+use sha2::Sha256;
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 
 #[cfg(feature = "metrics")]
 use crate::metrics::{http_metrics, metrics};
+
+// ============ Authentication Types ============
+
+/// API key configuration for authentication.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApiKey {
+    /// The API key value (should be kept secret)
+    pub key: String,
+    /// Optional name/description for the key
+    pub name: Option<String>,
+    /// Roles assigned to this API key
+    pub roles: Vec<String>,
+    /// Whether the key is active
+    pub active: bool,
+    /// Optional expiration timestamp (Unix epoch seconds)
+    pub expires_at: Option<u64>,
+}
+
+impl ApiKey {
+    /// Create a new API key with default reader role.
+    pub fn new(key: impl Into<String>) -> Self {
+        Self {
+            key: key.into(),
+            name: None,
+            roles: vec!["reader".to_string()],
+            active: true,
+            expires_at: None,
+        }
+    }
+
+    /// Set a name/description for this key.
+    pub fn with_name(mut self, name: impl Into<String>) -> Self {
+        self.name = Some(name.into());
+        self
+    }
+
+    /// Set the roles for this API key.
+    pub fn with_role(mut self, role: impl Into<String>) -> Self {
+        self.roles = vec![role.into()];
+        self
+    }
+
+    /// Add multiple roles to this API key.
+    pub fn with_roles(mut self, roles: Vec<String>) -> Self {
+        self.roles = roles;
+        self
+    }
+
+    /// Set an expiration time for this key (Unix epoch seconds).
+    pub fn expires_at(mut self, timestamp: u64) -> Self {
+        self.expires_at = Some(timestamp);
+        self
+    }
+
+    /// Check if the key is expired.
+    pub fn is_expired(&self) -> bool {
+        if let Some(exp) = self.expires_at {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+            exp < now
+        } else {
+            false
+        }
+    }
+
+    /// Check if the key is valid (active and not expired).
+    pub fn is_valid(&self) -> bool {
+        self.active && !self.is_expired()
+    }
+
+    /// Convert this API key to a User for RBAC checks.
+    pub fn to_user(&self) -> User {
+        let mut user = User::new(format!("apikey:{}", self.key.chars().take(8).collect::<String>()));
+        if let Some(name) = &self.name {
+            user = user.with_name(name.clone());
+        }
+        for role_name in &self.roles {
+            let role = match role_name.as_str() {
+                "admin" => Role::admin(),
+                "writer" => Role::writer(),
+                _ => Role::reader(),
+            };
+            user = user.with_role(role);
+        }
+        user
+    }
+}
+
+/// JWT claims for token validation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct JwtClaims {
+    /// Subject (user ID)
+    pub sub: String,
+    /// Expiration time (Unix timestamp)
+    pub exp: u64,
+    /// Issued at (Unix timestamp)
+    pub iat: u64,
+    /// Roles assigned to this token
+    #[serde(default)]
+    pub roles: Vec<String>,
+    /// Additional custom claims
+    #[serde(flatten)]
+    pub extra: HashMap<String, Value>,
+}
+
+impl JwtClaims {
+    /// Create new claims for a user.
+    pub fn new(subject: impl Into<String>, expires_in_secs: u64) -> Self {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        Self {
+            sub: subject.into(),
+            exp: now + expires_in_secs,
+            iat: now,
+            roles: vec!["reader".to_string()],
+            extra: HashMap::new(),
+        }
+    }
+
+    /// Set roles for this token.
+    pub fn with_roles(mut self, roles: Vec<String>) -> Self {
+        self.roles = roles;
+        self
+    }
+
+    /// Check if the token is expired.
+    pub fn is_expired(&self) -> bool {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        self.exp < now
+    }
+
+    /// Convert claims to a User for RBAC checks.
+    pub fn to_user(&self) -> User {
+        let mut user = User::new(&self.sub);
+        for role_name in &self.roles {
+            let role = match role_name.as_str() {
+                "admin" => Role::admin(),
+                "writer" => Role::writer(),
+                _ => Role::reader(),
+            };
+            user = user.with_role(role);
+        }
+        user
+    }
+}
+
+/// Authentication configuration for the server.
+#[derive(Debug, Clone, Default)]
+pub struct AuthConfig {
+    /// Whether authentication is required for all endpoints
+    pub require_auth: bool,
+    /// API keys for authentication
+    pub api_keys: Vec<ApiKey>,
+    /// JWT secret for token validation (HS256)
+    pub jwt_secret: Option<String>,
+    /// Endpoints that don't require authentication (e.g., "/health")
+    pub public_endpoints: Vec<String>,
+}
+
+impl AuthConfig {
+    /// Create a new authentication configuration.
+    pub fn new() -> Self {
+        Self {
+            require_auth: false,
+            api_keys: Vec::new(),
+            jwt_secret: None,
+            public_endpoints: vec![
+                "/health".to_string(),
+                "/".to_string(),
+            ],
+        }
+    }
+
+    /// Require authentication for all endpoints except public ones.
+    pub fn require_auth(mut self, require: bool) -> Self {
+        self.require_auth = require;
+        self
+    }
+
+    /// Add an API key for authentication.
+    pub fn with_api_key(mut self, key: ApiKey) -> Self {
+        self.api_keys.push(key);
+        self
+    }
+
+    /// Add multiple API keys.
+    pub fn with_api_keys(mut self, keys: Vec<ApiKey>) -> Self {
+        self.api_keys.extend(keys);
+        self
+    }
+
+    /// Set the JWT secret for token validation.
+    pub fn with_jwt_secret(mut self, secret: impl Into<String>) -> Self {
+        self.jwt_secret = Some(secret.into());
+        self
+    }
+
+    /// Add a public endpoint that doesn't require authentication.
+    pub fn with_public_endpoint(mut self, endpoint: impl Into<String>) -> Self {
+        self.public_endpoints.push(endpoint.into());
+        self
+    }
+
+    /// Check if an endpoint is public (doesn't require auth).
+    pub fn is_public_endpoint(&self, path: &str) -> bool {
+        self.public_endpoints.iter().any(|e| {
+            // Exact match or path starts with endpoint followed by / or ?
+            path == e || (e != "/" && path.starts_with(e))
+        })
+    }
+
+    /// Validate an API key and return the associated user.
+    pub fn validate_api_key(&self, key: &str) -> Option<User> {
+        self.api_keys
+            .iter()
+            .find(|k| k.key == key && k.is_valid())
+            .map(|k| k.to_user())
+    }
+
+    /// Validate a JWT token and return the claims.
+    pub fn validate_jwt(&self, token: &str) -> Result<JwtClaims, AuthError> {
+        let secret = self.jwt_secret.as_ref().ok_or(AuthError::NoJwtSecret)?;
+
+        // Split token into parts
+        let parts: Vec<&str> = token.split('.').collect();
+        if parts.len() != 3 {
+            return Err(AuthError::InvalidToken("Invalid token format".into()));
+        }
+
+        let header = parts[0];
+        let payload = parts[1];
+        let signature = parts[2];
+
+        // Verify signature (HS256)
+        type HmacSha256 = Hmac<Sha256>;
+        let mut mac = HmacSha256::new_from_slice(secret.as_bytes())
+            .map_err(|_| AuthError::InvalidToken("Invalid secret".into()))?;
+        mac.update(format!("{}.{}", header, payload).as_bytes());
+
+        let sig_bytes = URL_SAFE_NO_PAD.decode(signature)
+            .map_err(|_| AuthError::InvalidToken("Invalid signature encoding".into()))?;
+
+        mac.verify_slice(&sig_bytes)
+            .map_err(|_| AuthError::InvalidSignature)?;
+
+        // Decode payload
+        let payload_bytes = URL_SAFE_NO_PAD.decode(payload)
+            .map_err(|_| AuthError::InvalidToken("Invalid payload encoding".into()))?;
+        let claims: JwtClaims = serde_json::from_slice(&payload_bytes)
+            .map_err(|e| AuthError::InvalidToken(format!("Invalid claims: {}", e)))?;
+
+        // Check expiration
+        if claims.is_expired() {
+            return Err(AuthError::TokenExpired);
+        }
+
+        Ok(claims)
+    }
+
+    /// Generate a JWT token for the given claims.
+    pub fn generate_jwt(&self, claims: &JwtClaims) -> Result<String, AuthError> {
+        let secret = self.jwt_secret.as_ref().ok_or(AuthError::NoJwtSecret)?;
+
+        // Header (always HS256)
+        let header = r#"{"alg":"HS256","typ":"JWT"}"#;
+        let header_b64 = URL_SAFE_NO_PAD.encode(header.as_bytes());
+
+        // Payload
+        let payload = serde_json::to_string(claims)
+            .map_err(|e| AuthError::InvalidToken(format!("Failed to serialize claims: {}", e)))?;
+        let payload_b64 = URL_SAFE_NO_PAD.encode(payload.as_bytes());
+
+        // Signature
+        type HmacSha256 = Hmac<Sha256>;
+        let mut mac = HmacSha256::new_from_slice(secret.as_bytes())
+            .map_err(|_| AuthError::InvalidToken("Invalid secret".into()))?;
+        mac.update(format!("{}.{}", header_b64, payload_b64).as_bytes());
+        let sig = mac.finalize().into_bytes();
+        let sig_b64 = URL_SAFE_NO_PAD.encode(&sig);
+
+        Ok(format!("{}.{}.{}", header_b64, payload_b64, sig_b64))
+    }
+}
+
+/// Authentication errors.
+#[derive(Debug, Clone)]
+pub enum AuthError {
+    /// No authentication credentials provided
+    MissingCredentials,
+    /// Invalid API key
+    InvalidApiKey,
+    /// Invalid JWT token
+    InvalidToken(String),
+    /// JWT signature verification failed
+    InvalidSignature,
+    /// JWT token has expired
+    TokenExpired,
+    /// No JWT secret configured
+    NoJwtSecret,
+    /// Insufficient permissions
+    Forbidden(String),
+}
+
+impl std::fmt::Display for AuthError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AuthError::MissingCredentials => write!(f, "Authentication required"),
+            AuthError::InvalidApiKey => write!(f, "Invalid API key"),
+            AuthError::InvalidToken(msg) => write!(f, "Invalid token: {}", msg),
+            AuthError::InvalidSignature => write!(f, "Invalid token signature"),
+            AuthError::TokenExpired => write!(f, "Token has expired"),
+            AuthError::NoJwtSecret => write!(f, "JWT authentication not configured"),
+            AuthError::Forbidden(msg) => write!(f, "Access denied: {}", msg),
+        }
+    }
+}
+
+impl std::error::Error for AuthError {}
+
+/// Authenticated user context available in request extensions.
+#[derive(Debug, Clone)]
+pub struct AuthContext {
+    /// The authenticated user
+    pub user: User,
+    /// The authentication method used
+    pub method: AuthMethod,
+}
+
+/// How the user was authenticated.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AuthMethod {
+    /// API key authentication
+    ApiKey,
+    /// JWT bearer token
+    Jwt,
+    /// No authentication (public endpoint or auth not required)
+    None,
+}
 
 /// Server configuration
 #[derive(Debug, Clone)]
@@ -48,6 +430,8 @@ pub struct ServerConfig {
     pub db_path: Option<String>,
     /// Rate limiting configuration
     pub rate_limit: RateLimitConfig,
+    /// Authentication configuration
+    pub auth: AuthConfig,
     /// Maximum request body size in bytes (default: 100MB)
     pub max_body_size: usize,
     /// Maximum number of items in a batch operation (default: 10000)
@@ -184,6 +568,7 @@ impl Default for ServerConfig {
             cors_config: CorsConfig::default(),
             db_path: None,
             rate_limit: RateLimitConfig::default(),
+            auth: AuthConfig::default(),
             max_body_size: 100 * 1024 * 1024, // 100MB
             max_batch_size: 10_000, // 10k items max per batch
             request_timeout_secs: 30, // 30 seconds default timeout
@@ -228,6 +613,12 @@ impl ServerConfig {
         self.request_timeout_secs = secs;
         self
     }
+
+    /// Set authentication configuration.
+    pub fn with_auth(mut self, config: AuthConfig) -> Self {
+        self.auth = config;
+        self
+    }
 }
 
 /// Per-IP rate limiter type
@@ -237,6 +628,8 @@ type PerIpRateLimiter = RateLimiter<IpAddr, DashMapStateStore<IpAddr>, DefaultCl
 pub struct AppState {
     db: RwLock<Database>,
     rate_limiter: Option<Arc<PerIpRateLimiter>>,
+    /// Authentication configuration
+    auth: AuthConfig,
     /// Maximum items allowed in batch operations
     max_batch_size: usize,
 }
@@ -247,6 +640,7 @@ impl AppState {
         Self {
             db: RwLock::new(db),
             rate_limiter: None,
+            auth: AuthConfig::default(),
             max_batch_size: 10_000, // default
         }
     }
@@ -256,6 +650,7 @@ impl AppState {
         Self {
             db: RwLock::new(db),
             rate_limiter: create_rate_limiter(config),
+            auth: AuthConfig::default(),
             max_batch_size: 10_000, // default
         }
     }
@@ -265,6 +660,7 @@ impl AppState {
         Self {
             db: RwLock::new(db),
             rate_limiter: create_rate_limiter(&config.rate_limit),
+            auth: config.auth.clone(),
             max_batch_size: config.max_batch_size,
         }
     }
@@ -348,8 +744,16 @@ struct SearchRequest {
     vector: Vec<f32>,
     #[serde(default = "default_k")]
     k: usize,
+    /// Pre-filter: applied during ANN search (efficient, reduces candidates)
     #[serde(default)]
     filter: Option<Value>,
+    /// Post-filter: applied after ANN search (guarantees k candidates before filtering)
+    #[serde(default)]
+    post_filter: Option<Value>,
+    /// Over-fetch factor for post-filtering (default: 3)
+    /// Search fetches k * post_filter_factor candidates before post-filtering
+    #[serde(default = "default_post_filter_factor")]
+    post_filter_factor: usize,
     #[serde(default)]
     include_vectors: bool,
     #[serde(default)]
@@ -358,6 +762,10 @@ struct SearchRequest {
 
 fn default_k() -> usize {
     10
+}
+
+fn default_post_filter_factor() -> usize {
+    3
 }
 
 #[derive(Debug, Serialize)]
@@ -383,6 +791,51 @@ struct SearchExplanation {
     query_norm: f32,
     distance_metric: String,
     top_dimensions: Vec<DimensionContribution>,
+    /// Detailed profiling data (when available)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    profiling: Option<ProfilingData>,
+}
+
+#[derive(Debug, Serialize)]
+struct ProfilingData {
+    /// Total search time in microseconds
+    total_time_us: u64,
+    /// Time spent in HNSW index traversal (microseconds)
+    index_time_us: u64,
+    /// Time spent evaluating metadata filters (microseconds)
+    filter_time_us: u64,
+    /// Time spent enriching results with metadata (microseconds)
+    enrich_time_us: u64,
+    /// Number of candidates before filtering
+    candidates_before_filter: usize,
+    /// Number of candidates after filtering
+    candidates_after_filter: usize,
+    /// HNSW index statistics
+    hnsw_stats: HnswStatsResponse,
+    /// Collection dimensions
+    dimensions: usize,
+    /// Collection vector count
+    collection_size: usize,
+    /// Requested k value
+    requested_k: usize,
+    /// Effective k (clamped to collection size)
+    effective_k: usize,
+    /// ef_search parameter used
+    ef_search: usize,
+    /// Whether a filter was applied
+    filter_applied: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct HnswStatsResponse {
+    /// Number of nodes visited during the search
+    visited_nodes: usize,
+    /// Number of layers traversed (including layer 0)
+    layers_traversed: usize,
+    /// Number of distance computations performed
+    distance_computations: usize,
+    /// Time spent in HNSW traversal (microseconds)
+    traversal_time_us: u64,
 }
 
 #[derive(Debug, Serialize)]
@@ -399,6 +852,28 @@ struct BatchSearchRequest {
     k: usize,
     #[serde(default)]
     filter: Option<Value>,
+}
+
+/// Request for radius-based (range) search
+#[derive(Debug, Deserialize)]
+struct RadiusSearchRequest {
+    /// Query vector
+    vector: Vec<f32>,
+    /// Maximum distance from query (all vectors within this distance are returned)
+    max_distance: f32,
+    /// Maximum number of results to return
+    #[serde(default = "default_radius_limit")]
+    limit: usize,
+    /// Optional metadata filter
+    #[serde(default)]
+    filter: Option<Value>,
+    /// Include vector data in response
+    #[serde(default)]
+    include_vectors: bool,
+}
+
+fn default_radius_limit() -> usize {
+    1000
 }
 
 #[derive(Debug, Serialize)]
@@ -696,14 +1171,61 @@ async fn search(
     let db = state.db.read().await;
     let coll = db.collection(&collection).map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
 
-    let raw_results = if let Some(filter_value) = &req.filter {
-        let filter = Filter::parse(filter_value)
-            .map_err(|e| (StatusCode::BAD_REQUEST, Json(ApiError { error: format!("Invalid filter: {}", e), code: "INVALID_FILTER".to_string() })))?;
-        coll.search_with_filter(&req.vector, req.k, &filter)
+    // Parse filters once
+    let pre_filter = if let Some(filter_value) = &req.filter {
+        Some(Filter::parse(filter_value)
+            .map_err(|e| (StatusCode::BAD_REQUEST, Json(ApiError {
+                error: format!("Invalid pre-filter: {}", e),
+                code: "INVALID_FILTER".to_string()
+            })))?)
     } else {
-        coll.search(&req.vector, req.k)
-    }
-    .map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
+        None
+    };
+
+    let post_filter = if let Some(filter_value) = &req.post_filter {
+        Some(Filter::parse(filter_value)
+            .map_err(|e| (StatusCode::BAD_REQUEST, Json(ApiError {
+                error: format!("Invalid post-filter: {}", e),
+                code: "INVALID_POST_FILTER".to_string()
+            })))?)
+    } else {
+        None
+    };
+
+    // Perform search - use explain variants when profiling is requested
+    // Note: explain mode doesn't support post-filter (uses direct methods)
+    let (raw_results, profiling_data) = if req.explain {
+        // Explain mode: use direct methods (post-filter not supported in explain)
+        if let Some(ref filter) = pre_filter {
+            let (results, explain) = coll.search_with_filter_explain(&req.vector, req.k, filter)
+                .map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
+            (results, Some(explain))
+        } else {
+            let (results, explain) = coll.search_explain(&req.vector, req.k)
+                .map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
+            (results, Some(explain))
+        }
+    } else if let Some(ref pf) = post_filter {
+        // Use search_with_post_filter for post-filter support
+        let results = coll.search_with_post_filter(
+            &req.vector,
+            req.k,
+            pre_filter.as_ref(),
+            pf,
+            req.post_filter_factor,
+        )
+        .map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
+        (results, None)
+    } else {
+        // Standard search without post-filter
+        let results = if let Some(ref filter) = pre_filter {
+            coll.search_with_filter(&req.vector, req.k, filter)
+        } else {
+            coll.search(&req.vector, req.k)
+        }
+        .map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
+        (results, None)
+    };
 
     // Convert to response format with optional vectors
     let results: Vec<SearchResultResponse> = raw_results
@@ -750,10 +1272,38 @@ async fn search(
             })
             .collect();
 
+        // Extract distance metric before moving profiling_data
+        let distance_metric = profiling_data.as_ref()
+            .map(|p| p.distance_function.clone())
+            .unwrap_or_else(|| "cosine".to_string());
+
+        // Convert profiling data if available
+        let profiling = profiling_data.map(|p| ProfilingData {
+            total_time_us: p.total_time_us,
+            index_time_us: p.index_time_us,
+            filter_time_us: p.filter_time_us,
+            enrich_time_us: p.enrich_time_us,
+            candidates_before_filter: p.candidates_before_filter,
+            candidates_after_filter: p.candidates_after_filter,
+            hnsw_stats: HnswStatsResponse {
+                visited_nodes: p.hnsw_stats.visited_nodes,
+                layers_traversed: p.hnsw_stats.layers_traversed,
+                distance_computations: p.hnsw_stats.distance_computations,
+                traversal_time_us: p.hnsw_stats.traversal_time_us,
+            },
+            dimensions: p.dimensions,
+            collection_size: p.collection_size,
+            requested_k: p.requested_k,
+            effective_k: p.effective_k,
+            ef_search: p.ef_search,
+            filter_applied: p.filter_applied,
+        });
+
         Some(SearchExplanation {
             query_norm,
-            distance_metric: "cosine".to_string(),
+            distance_metric,
             top_dimensions: top_dims,
+            profiling,
         })
     } else {
         None
@@ -824,6 +1374,56 @@ async fn batch_search(
     .collect();
 
     Ok(Json(json!({"results": all_results})))
+}
+
+/// Radius-based search (range search)
+/// Returns all vectors within max_distance from the query vector
+async fn radius_search(
+    State(state): State<Arc<AppState>>,
+    Path(collection): Path<String>,
+    Json(req): Json<RadiusSearchRequest>,
+) -> Result<impl IntoResponse, (StatusCode, Json<ApiError>)> {
+    let db = state.db.read().await;
+    let coll = db.collection(&collection).map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
+
+    // Perform radius search with optional filter
+    let raw_results = if let Some(filter_value) = &req.filter {
+        let filter = Filter::parse(filter_value)
+            .map_err(|e| (StatusCode::BAD_REQUEST, Json(ApiError {
+                error: format!("Invalid filter: {}", e),
+                code: "INVALID_FILTER".to_string()
+            })))?;
+        coll.search_radius_with_filter(&req.vector, req.max_distance, req.limit, &filter)
+    } else {
+        coll.search_radius(&req.vector, req.max_distance, req.limit)
+    }
+    .map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
+
+    // Convert to response format with optional vectors
+    let results: Vec<SearchResultResponse> = raw_results
+        .into_iter()
+        .map(|r| {
+            let vector = if req.include_vectors {
+                coll.get(&r.id).map(|(v, _)| v)
+            } else {
+                None
+            };
+
+            SearchResultResponse {
+                id: r.id,
+                distance: r.distance,
+                score: 1.0 / (1.0 + r.distance),
+                metadata: r.metadata,
+                vector,
+            }
+        })
+        .collect();
+
+    Ok(Json(json!({
+        "results": results,
+        "max_distance": req.max_distance,
+        "count": results.len(),
+    })))
 }
 
 /// Compact a collection
@@ -941,6 +1541,7 @@ pub fn create_router_with_config(state: Arc<AppState>, config: &ServerConfig) ->
     let cors_layer = build_cors_layer(&config.cors_config);
     let timeout_layer = TimeoutLayer::new(Duration::from_secs(config.request_timeout_secs));
 
+    #[allow(unused_mut)]
     let mut router = Router::new()
         // Health & Info
         .route("/health", get(health))
@@ -964,6 +1565,7 @@ pub fn create_router_with_config(state: Arc<AppState>, config: &ServerConfig) ->
         // Search
         .route("/collections/:collection/search", post(search))
         .route("/collections/:collection/search/batch", post(batch_search))
+        .route("/collections/:collection/search/radius", post(radius_search))
         // Database operations
         .route("/save", post(save_database));
 
@@ -973,9 +1575,10 @@ pub fn create_router_with_config(state: Arc<AppState>, config: &ServerConfig) ->
         router = router.route("/metrics", get(get_metrics));
     }
 
-    // Apply rate limiting and state
+    // Apply authentication and rate limiting (auth runs first, then rate limiting)
     let router = router
         .layer(middleware::from_fn_with_state(state.clone(), rate_limit_middleware))
+        .layer(middleware::from_fn_with_state(state.clone(), auth_middleware))
         .with_state(state);
 
     // Build final router with all layers
@@ -1068,6 +1671,94 @@ async fn rate_limit_middleware(
     } else {
         next.run(request).await
     }
+}
+
+/// Authentication middleware - validates API keys and JWT tokens.
+///
+/// Checks for authentication credentials in this order:
+/// 1. `X-API-Key` header for API key authentication
+/// 2. `Authorization: Bearer <token>` header for JWT authentication
+///
+/// If authentication is required and no valid credentials are provided,
+/// returns 401 Unauthorized. If credentials are invalid, returns 401.
+/// Public endpoints (as configured in AuthConfig) bypass authentication.
+async fn auth_middleware(
+    State(state): State<Arc<AppState>>,
+    mut request: Request<Body>,
+    next: Next,
+) -> Response {
+    let path = request.uri().path().to_string();
+    let auth_config = &state.auth;
+
+    // Check if this is a public endpoint
+    if auth_config.is_public_endpoint(&path) {
+        // Still try to extract auth context if credentials are present
+        if let Some(context) = try_authenticate(&request, auth_config) {
+            request.extensions_mut().insert(context);
+        }
+        return next.run(request).await;
+    }
+
+    // If auth is not required, proceed without validation
+    if !auth_config.require_auth {
+        // Still try to extract auth context if credentials are present
+        if let Some(context) = try_authenticate(&request, auth_config) {
+            request.extensions_mut().insert(context);
+        }
+        return next.run(request).await;
+    }
+
+    // Auth is required - try to authenticate
+    match try_authenticate(&request, auth_config) {
+        Some(context) => {
+            request.extensions_mut().insert(context);
+            next.run(request).await
+        }
+        None => {
+            warn!(path = %path, "Authentication required but no valid credentials provided");
+            let error = ApiError {
+                error: "Authentication required".to_string(),
+                code: "UNAUTHORIZED".to_string(),
+            };
+            (
+                StatusCode::UNAUTHORIZED,
+                [(header::WWW_AUTHENTICATE, "Bearer, ApiKey")],
+                Json(error),
+            )
+                .into_response()
+        }
+    }
+}
+
+/// Try to authenticate a request using available methods.
+fn try_authenticate(request: &Request<Body>, auth_config: &AuthConfig) -> Option<AuthContext> {
+    // Try API key first (X-API-Key header)
+    if let Some(api_key) = request.headers().get("x-api-key") {
+        if let Ok(key_str) = api_key.to_str() {
+            if let Some(user) = auth_config.validate_api_key(key_str) {
+                return Some(AuthContext {
+                    user,
+                    method: AuthMethod::ApiKey,
+                });
+            }
+        }
+    }
+
+    // Try Bearer token (Authorization header)
+    if let Some(auth_header) = request.headers().get(header::AUTHORIZATION) {
+        if let Ok(auth_str) = auth_header.to_str() {
+            if let Some(token) = auth_str.strip_prefix("Bearer ") {
+                if let Ok(claims) = auth_config.validate_jwt(token.trim()) {
+                    return Some(AuthContext {
+                        user: claims.to_user(),
+                        method: AuthMethod::Jwt,
+                    });
+                }
+            }
+        }
+    }
+
+    None
 }
 
 /// Metrics middleware - records HTTP request metrics (when metrics feature is enabled)
@@ -1357,5 +2048,219 @@ mod tests {
         assert!(config.db_path.is_none());
         assert!(config.cors_config.enabled);
         assert!(config.rate_limit.enabled);
+    }
+
+    // Authentication tests
+    #[test]
+    fn test_api_key_creation() {
+        let key = ApiKey::new("test-key-123");
+        assert_eq!(key.key, "test-key-123");
+        assert_eq!(key.roles, vec!["reader".to_string()]);
+        assert!(key.active);
+        assert!(key.expires_at.is_none());
+    }
+
+    #[test]
+    fn test_api_key_with_role() {
+        let key = ApiKey::new("admin-key").with_role("admin");
+        assert_eq!(key.roles, vec!["admin".to_string()]);
+    }
+
+    #[test]
+    fn test_api_key_with_name() {
+        let key = ApiKey::new("test-key").with_name("Production API Key");
+        assert_eq!(key.name, Some("Production API Key".to_string()));
+    }
+
+    #[test]
+    fn test_api_key_expiration() {
+        // Key expires in the past
+        let expired_key = ApiKey::new("expired")
+            .expires_at(0); // Unix epoch = expired
+        assert!(expired_key.is_expired());
+        assert!(!expired_key.is_valid());
+
+        // Key expires in the future
+        let future_ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() + 3600; // 1 hour from now
+        let valid_key = ApiKey::new("valid").expires_at(future_ts);
+        assert!(!valid_key.is_expired());
+        assert!(valid_key.is_valid());
+    }
+
+    #[test]
+    fn test_api_key_to_user() {
+        let key = ApiKey::new("test-key")
+            .with_name("Test Key")
+            .with_role("writer");
+        let user = key.to_user();
+        assert!(user.id.starts_with("apikey:"));
+        assert!(user.name.is_some());
+        assert!(!user.roles.is_empty());
+    }
+
+    #[test]
+    fn test_auth_config_creation() {
+        let config = AuthConfig::new();
+        assert!(!config.require_auth);
+        assert!(config.api_keys.is_empty());
+        assert!(config.jwt_secret.is_none());
+        // Health and root are public by default
+        assert!(config.is_public_endpoint("/health"));
+        assert!(config.is_public_endpoint("/"));
+    }
+
+    #[test]
+    fn test_auth_config_with_api_key() {
+        let config = AuthConfig::new()
+            .with_api_key(ApiKey::new("test-key"));
+        assert_eq!(config.api_keys.len(), 1);
+    }
+
+    #[test]
+    fn test_auth_config_validate_api_key() {
+        let config = AuthConfig::new()
+            .with_api_key(ApiKey::new("valid-key").with_role("admin"));
+
+        // Valid key
+        let user = config.validate_api_key("valid-key");
+        assert!(user.is_some());
+
+        // Invalid key
+        let invalid = config.validate_api_key("wrong-key");
+        assert!(invalid.is_none());
+    }
+
+    #[test]
+    fn test_auth_config_require_auth() {
+        let config = AuthConfig::new().require_auth(true);
+        assert!(config.require_auth);
+    }
+
+    #[test]
+    fn test_auth_config_public_endpoints() {
+        let config = AuthConfig::new()
+            .with_public_endpoint("/metrics");
+        assert!(config.is_public_endpoint("/health"));
+        assert!(config.is_public_endpoint("/metrics"));
+        assert!(!config.is_public_endpoint("/collections"));
+    }
+
+    #[test]
+    fn test_jwt_claims_creation() {
+        let claims = JwtClaims::new("user123", 3600);
+        assert_eq!(claims.sub, "user123");
+        assert!(!claims.is_expired());
+        assert_eq!(claims.roles, vec!["reader".to_string()]);
+    }
+
+    #[test]
+    fn test_jwt_claims_with_roles() {
+        let claims = JwtClaims::new("admin", 3600)
+            .with_roles(vec!["admin".to_string(), "writer".to_string()]);
+        assert_eq!(claims.roles.len(), 2);
+        assert!(claims.roles.contains(&"admin".to_string()));
+    }
+
+    #[test]
+    fn test_jwt_claims_to_user() {
+        let claims = JwtClaims::new("user@example.com", 3600)
+            .with_roles(vec!["writer".to_string()]);
+        let user = claims.to_user();
+        assert_eq!(user.id, "user@example.com");
+        assert!(!user.roles.is_empty());
+    }
+
+    #[test]
+    fn test_jwt_generate_and_validate() {
+        let config = AuthConfig::new()
+            .with_jwt_secret("super-secret-key-for-testing");
+
+        let claims = JwtClaims::new("testuser", 3600)
+            .with_roles(vec!["admin".to_string()]);
+
+        // Generate token
+        let token = config.generate_jwt(&claims).expect("should generate token");
+        assert!(!token.is_empty());
+        assert_eq!(token.split('.').count(), 3); // header.payload.signature
+
+        // Validate token
+        let validated = config.validate_jwt(&token).expect("should validate token");
+        assert_eq!(validated.sub, "testuser");
+        assert!(validated.roles.contains(&"admin".to_string()));
+    }
+
+    #[test]
+    fn test_jwt_invalid_signature() {
+        let config = AuthConfig::new()
+            .with_jwt_secret("correct-secret");
+
+        let claims = JwtClaims::new("user", 3600);
+        let token = config.generate_jwt(&claims).unwrap();
+
+        // Try validating with a different secret
+        let wrong_config = AuthConfig::new()
+            .with_jwt_secret("wrong-secret");
+
+        let result = wrong_config.validate_jwt(&token);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_jwt_expired_token() {
+        let config = AuthConfig::new()
+            .with_jwt_secret("secret");
+
+        // Create claims that are already expired (negative expiration)
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let mut claims = JwtClaims::new("user", 0);
+        claims.exp = now - 100; // Expired 100 seconds ago
+
+        let token = config.generate_jwt(&claims).unwrap();
+        let result = config.validate_jwt(&token);
+        assert!(matches!(result, Err(AuthError::TokenExpired)));
+    }
+
+    #[test]
+    fn test_jwt_no_secret_configured() {
+        let config = AuthConfig::new(); // No JWT secret
+        let claims = JwtClaims::new("user", 3600);
+
+        let result = config.generate_jwt(&claims);
+        assert!(matches!(result, Err(AuthError::NoJwtSecret)));
+    }
+
+    #[test]
+    fn test_auth_method_equality() {
+        assert_eq!(AuthMethod::ApiKey, AuthMethod::ApiKey);
+        assert_eq!(AuthMethod::Jwt, AuthMethod::Jwt);
+        assert_eq!(AuthMethod::None, AuthMethod::None);
+        assert_ne!(AuthMethod::ApiKey, AuthMethod::Jwt);
+    }
+
+    #[test]
+    fn test_auth_error_display() {
+        assert_eq!(AuthError::MissingCredentials.to_string(), "Authentication required");
+        assert_eq!(AuthError::InvalidApiKey.to_string(), "Invalid API key");
+        assert_eq!(AuthError::TokenExpired.to_string(), "Token has expired");
+        assert_eq!(AuthError::InvalidSignature.to_string(), "Invalid token signature");
+    }
+
+    #[test]
+    fn test_server_config_with_auth() {
+        let auth_config = AuthConfig::new()
+            .with_api_key(ApiKey::new("test-key"))
+            .require_auth(true);
+
+        let server_config = ServerConfig::default()
+            .with_auth(auth_config);
+
+        assert!(server_config.auth.require_auth);
+        assert_eq!(server_config.auth.api_keys.len(), 1);
     }
 }
