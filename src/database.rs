@@ -99,7 +99,45 @@ struct DatabaseState {
     collections: HashMap<String, Collection>,
 }
 
-/// The main database handle
+/// The main database handle for managing vector collections.
+///
+/// A `Database` is the top-level container in Needle, providing:
+/// - Collection management (create, drop, list)
+/// - Thread-safe access to collections via [`CollectionRef`]
+/// - Persistence to a single `.needle` file
+/// - Atomic saves with crash protection
+///
+/// # Storage Modes
+///
+/// - **File-backed**: Created with [`Database::open()`], persists to disk
+/// - **In-memory**: Created with [`Database::in_memory()`], no persistence
+///
+/// # Thread Safety
+///
+/// `Database` is fully thread-safe. Access collections through [`collection()`](Self::collection)
+/// which returns a [`CollectionRef`] with proper locking.
+///
+/// # Example
+///
+/// ```
+/// use needle::Database;
+/// use serde_json::json;
+///
+/// let db = Database::in_memory();
+///
+/// // Create a collection
+/// db.create_collection("embeddings", 384)?;
+///
+/// // Get a thread-safe reference
+/// let coll = db.collection("embeddings")?;
+///
+/// // Insert vectors
+/// coll.insert("doc1", &vec![0.1; 384], Some(json!({"title": "Hello"})))?;
+///
+/// // Search
+/// let results = coll.search(&vec![0.1; 384], 10)?;
+/// # Ok::<(), needle::NeedleError>(())
+/// ```
 pub struct Database {
     /// Database configuration
     config: DatabaseConfig,
@@ -118,13 +156,49 @@ pub struct Database {
 }
 
 impl Database {
-    /// Open or create a database at the given path
+    /// Open or create a database at the given path.
+    ///
+    /// This creates a new database file if it doesn't exist, or opens an
+    /// existing one. The database uses a single-file storage format that
+    /// can be easily backed up or distributed.
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - Path to the database file (typically ending in `.needle`)
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The file exists but is corrupted or invalid
+    /// - The parent directory doesn't exist
+    /// - Permission denied (file or directory is read-only)
+    /// - I/O error during file operations
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use needle::Database;
+    ///
+    /// let db = Database::open("my_vectors.needle")?;
+    /// # Ok::<(), needle::NeedleError>(())
+    /// ```
     pub fn open<P: AsRef<Path>>(path: P) -> Result<Self> {
         let config = DatabaseConfig::new(path.as_ref());
         Self::open_with_config(config)
     }
 
-    /// Open or create a database with custom configuration
+    /// Open or create a database with custom configuration.
+    ///
+    /// This provides more control over database behavior through the
+    /// [`DatabaseConfig`] struct.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - `create_if_missing` is false and the database doesn't exist
+    /// - The file exists but is corrupted (checksum mismatch)
+    /// - The file exists but contains invalid JSON data
+    /// - I/O error during file operations
     #[instrument(skip(config), fields(path = ?config.path))]
     pub fn open_with_config(config: DatabaseConfig) -> Result<Self> {
         let exists = config.path.exists();
@@ -205,7 +279,24 @@ impl Database {
         })
     }
 
-    /// Create an in-memory database (not persisted)
+    /// Create an in-memory database (not persisted).
+    ///
+    /// In-memory databases are useful for:
+    /// - Testing without file I/O
+    /// - Temporary caches that don't need persistence
+    /// - Prototyping and experimentation
+    ///
+    /// Calling [`save()`](Self::save) on an in-memory database is a no-op.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use needle::Database;
+    ///
+    /// let db = Database::in_memory();
+    /// db.create_collection("test", 128).unwrap();
+    /// // Data is lost when `db` is dropped
+    /// ```
     pub fn in_memory() -> Self {
         Self {
             config: DatabaseConfig::default(),
@@ -217,7 +308,27 @@ impl Database {
         }
     }
 
-    /// Get the database path
+    /// Get the database file path.
+    ///
+    /// Returns `Some(&Path)` for file-backed databases, `None` for in-memory databases.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use needle::Database;
+    ///
+    /// let memory_db = Database::in_memory();
+    /// assert!(memory_db.path().is_none());
+    /// ```
+    ///
+    /// ```rust,no_run
+    /// use needle::Database;
+    /// use std::path::Path;
+    ///
+    /// let file_db = Database::open("vectors.needle")?;
+    /// assert_eq!(file_db.path(), Some(Path::new("vectors.needle")));
+    /// # Ok::<(), needle::NeedleError>(())
+    /// ```
     pub fn path(&self) -> Option<&Path> {
         if self.storage.is_some() {
             Some(&self.config.path)
@@ -226,12 +337,61 @@ impl Database {
         }
     }
 
-    /// Create a new collection
+    /// Create a new collection with default settings.
+    ///
+    /// Creates a new collection for storing vectors of the specified dimensionality.
+    /// Uses cosine distance and default HNSW parameters (M=16, ef_construction=200).
+    ///
+    /// # Arguments
+    ///
+    /// * `name` - Unique name for the collection
+    /// * `dimensions` - Number of dimensions for vectors (must be > 0)
+    ///
+    /// # Errors
+    ///
+    /// Returns [`NeedleError::CollectionAlreadyExists`] if a collection with the
+    /// same name already exists.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `dimensions` is 0.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use needle::Database;
+    ///
+    /// let db = Database::in_memory();
+    /// db.create_collection("embeddings", 384)?;
+    /// # Ok::<(), needle::NeedleError>(())
+    /// ```
     pub fn create_collection(&self, name: impl Into<String>, dimensions: usize) -> Result<()> {
         self.create_collection_with_config(CollectionConfig::new(name, dimensions))
     }
 
-    /// Create a new collection with custom configuration
+    /// Create a new collection with custom configuration.
+    ///
+    /// Provides full control over collection settings including distance function
+    /// and HNSW parameters.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`NeedleError::CollectionAlreadyExists`] if a collection with the
+    /// same name already exists.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use needle::{Database, CollectionConfig, DistanceFunction};
+    ///
+    /// let db = Database::in_memory();
+    /// let config = CollectionConfig::new("embeddings", 384)
+    ///     .with_distance(DistanceFunction::Euclidean)
+    ///     .with_m(32)
+    ///     .with_ef_construction(400);
+    /// db.create_collection_with_config(config)?;
+    /// # Ok::<(), needle::NeedleError>(())
+    /// ```
     pub fn create_collection_with_config(&self, config: CollectionConfig) -> Result<()> {
         let mut state = self.state.write();
 
@@ -252,7 +412,33 @@ impl Database {
         Ok(())
     }
 
-    /// Get a collection by name (read-only access)
+    /// Get a thread-safe reference to a collection.
+    ///
+    /// Returns a [`CollectionRef`] that provides safe concurrent access to
+    /// the collection. Multiple threads can hold references simultaneously
+    /// for read operations; write operations are serialized.
+    ///
+    /// # Arguments
+    ///
+    /// * `name` - Name of the collection to access
+    ///
+    /// # Errors
+    ///
+    /// Returns [`NeedleError::CollectionNotFound`] if no collection with
+    /// the given name exists.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use needle::Database;
+    ///
+    /// let db = Database::in_memory();
+    /// db.create_collection("docs", 128)?;
+    ///
+    /// let collection = db.collection("docs")?;
+    /// collection.insert("v1", &vec![0.1; 128], None)?;
+    /// # Ok::<(), needle::NeedleError>(())
+    /// ```
     pub fn collection(&self, name: &str) -> Result<CollectionRef<'_>> {
         let state = self.state.read();
         if !state.collections.contains_key(name) {
@@ -264,12 +450,55 @@ impl Database {
         })
     }
 
-    /// List all collection names
+    /// List all collection names in the database.
+    ///
+    /// Returns the names of all collections in no particular order.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use needle::Database;
+    ///
+    /// let db = Database::in_memory();
+    /// db.create_collection("docs", 128)?;
+    /// db.create_collection("images", 512)?;
+    ///
+    /// let names = db.list_collections();
+    /// assert!(names.contains(&"docs".to_string()));
+    /// assert!(names.contains(&"images".to_string()));
+    /// # Ok::<(), needle::NeedleError>(())
+    /// ```
     pub fn list_collections(&self) -> Vec<String> {
         self.state.read().collections.keys().cloned().collect()
     }
 
-    /// Drop a collection
+    /// Drop a collection and all its data.
+    ///
+    /// Removes the collection and all vectors it contains. This operation
+    /// is immediate but changes are not persisted until [`save()`](Self::save)
+    /// is called.
+    ///
+    /// # Arguments
+    ///
+    /// * `name` - Name of the collection to drop
+    ///
+    /// # Returns
+    ///
+    /// Returns `Ok(true)` if the collection was dropped, `Ok(false)` if no
+    /// collection with that name existed.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use needle::Database;
+    ///
+    /// let db = Database::in_memory();
+    /// db.create_collection("temp", 64)?;
+    ///
+    /// assert!(db.drop_collection("temp")?);
+    /// assert!(!db.drop_collection("nonexistent")?);
+    /// # Ok::<(), needle::NeedleError>(())
+    /// ```
     pub fn drop_collection(&self, name: &str) -> Result<bool> {
         let mut state = self.state.write();
         let removed = state.collections.remove(name).is_some();
@@ -282,15 +511,55 @@ impl Database {
         Ok(removed)
     }
 
-    /// Check if a collection exists
+    /// Check if a collection exists.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use needle::Database;
+    ///
+    /// let db = Database::in_memory();
+    /// db.create_collection("docs", 128)?;
+    ///
+    /// assert!(db.has_collection("docs"));
+    /// assert!(!db.has_collection("nonexistent"));
+    /// # Ok::<(), needle::NeedleError>(())
+    /// ```
     pub fn has_collection(&self, name: &str) -> bool {
         self.state.read().collections.contains_key(name)
     }
 
-    /// Save changes to disk
+    /// Save changes to disk.
+    ///
+    /// Persists all collections and their data to the database file. Uses
+    /// atomic writes to prevent corruption on crash. For in-memory databases,
+    /// this is a no-op.
     ///
     /// Uses generation-based tracking to avoid race conditions where
     /// concurrent modifications could be marked as saved when they weren't.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The database file cannot be written (permission denied, disk full)
+    /// - I/O error during write operations
+    /// - The database is in-memory (returns `Ok(())` instead)
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use needle::Database;
+    ///
+    /// let mut db = Database::open("data.needle")?;
+    /// db.create_collection("docs", 128)?;
+    ///
+    /// let collection = db.collection("docs")?;
+    /// collection.insert("v1", &vec![0.1; 128], None)?;
+    ///
+    /// // Persist changes to disk
+    /// db.save()?;
+    /// # Ok::<(), needle::NeedleError>(())
+    /// ```
     #[instrument(skip(self))]
     pub fn save(&mut self) -> Result<()> {
         let storage = match &mut self.storage {
@@ -351,7 +620,27 @@ impl Database {
         Ok(())
     }
 
-    /// Check if there are unsaved changes
+    /// Check if there are unsaved changes.
+    ///
+    /// Returns `true` if any modifications have been made since the last
+    /// [`save()`](Self::save) call. For in-memory databases, always returns
+    /// `false` after creation since there's nothing to persist.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use needle::Database;
+    ///
+    /// let mut db = Database::open("test.needle")?;
+    /// assert!(!db.is_dirty()); // Just opened, no changes
+    ///
+    /// db.create_collection("docs", 128)?;
+    /// assert!(db.is_dirty()); // Has unsaved changes
+    ///
+    /// db.save()?;
+    /// assert!(!db.is_dirty()); // Changes saved
+    /// # Ok::<(), needle::NeedleError>(())
+    /// ```
     pub fn is_dirty(&self) -> bool {
         // Use generation counters for accurate dirty tracking
         let mod_gen = self.modification_gen.load(Ordering::Acquire);
@@ -365,7 +654,29 @@ impl Database {
         self.dirty.store(true, Ordering::Release);
     }
 
-    /// Get total number of vectors across all collections
+    /// Get total number of vectors across all collections.
+    ///
+    /// Returns the sum of active (non-deleted) vectors in all collections.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use needle::Database;
+    ///
+    /// let db = Database::in_memory();
+    /// db.create_collection("docs", 4)?;
+    /// db.create_collection("images", 4)?;
+    ///
+    /// let docs = db.collection("docs")?;
+    /// let images = db.collection("images")?;
+    ///
+    /// docs.insert("d1", &[1.0, 0.0, 0.0, 0.0], None)?;
+    /// images.insert("i1", &[0.0, 1.0, 0.0, 0.0], None)?;
+    /// images.insert("i2", &[0.0, 0.0, 1.0, 0.0], None)?;
+    ///
+    /// assert_eq!(db.total_vectors(), 3);
+    /// # Ok::<(), needle::NeedleError>(())
+    /// ```
     pub fn total_vectors(&self) -> usize {
         self.state
             .read()
@@ -460,6 +771,97 @@ impl Database {
             .ok_or_else(|| NeedleError::CollectionNotFound(collection.to_string()))?;
 
         coll.search_with_filter(query, k, filter)
+    }
+
+    fn search_explain_internal(
+        &self,
+        collection: &str,
+        query: &[f32],
+        k: usize,
+    ) -> Result<(Vec<SearchResult>, crate::collection::SearchExplain)> {
+        let state = self.state.read();
+        let coll = state
+            .collections
+            .get(collection)
+            .ok_or_else(|| NeedleError::CollectionNotFound(collection.to_string()))?;
+
+        coll.search_explain(query, k)
+    }
+
+    fn search_with_filter_explain_internal(
+        &self,
+        collection: &str,
+        query: &[f32],
+        k: usize,
+        filter: &Filter,
+    ) -> Result<(Vec<SearchResult>, crate::collection::SearchExplain)> {
+        let state = self.state.read();
+        let coll = state
+            .collections
+            .get(collection)
+            .ok_or_else(|| NeedleError::CollectionNotFound(collection.to_string()))?;
+
+        coll.search_with_filter_explain(query, k, filter)
+    }
+
+    fn search_with_post_filter_internal(
+        &self,
+        collection: &str,
+        query: &[f32],
+        k: usize,
+        pre_filter: Option<&Filter>,
+        post_filter: &Filter,
+        post_filter_factor: usize,
+    ) -> Result<Vec<SearchResult>> {
+        let state = self.state.read();
+        let coll = state
+            .collections
+            .get(collection)
+            .ok_or_else(|| NeedleError::CollectionNotFound(collection.to_string()))?;
+
+        let mut builder = coll.search_builder(query)
+            .k(k)
+            .post_filter(post_filter)
+            .post_filter_factor(post_filter_factor);
+
+        if let Some(pf) = pre_filter {
+            builder = builder.filter(pf);
+        }
+
+        builder.execute()
+    }
+
+    fn search_radius_internal(
+        &self,
+        collection: &str,
+        query: &[f32],
+        max_distance: f32,
+        limit: usize,
+    ) -> Result<Vec<SearchResult>> {
+        let state = self.state.read();
+        let coll = state
+            .collections
+            .get(collection)
+            .ok_or_else(|| NeedleError::CollectionNotFound(collection.to_string()))?;
+
+        coll.search_radius(query, max_distance, limit)
+    }
+
+    fn search_radius_with_filter_internal(
+        &self,
+        collection: &str,
+        query: &[f32],
+        max_distance: f32,
+        limit: usize,
+        filter: &Filter,
+    ) -> Result<Vec<SearchResult>> {
+        let state = self.state.read();
+        let coll = state
+            .collections
+            .get(collection)
+            .ok_or_else(|| NeedleError::CollectionNotFound(collection.to_string()))?;
+
+        coll.search_radius_with_filter(query, max_distance, limit, filter)
     }
 
     fn get_internal(&self, collection: &str, id: &str) -> Option<(Vec<f32>, Option<Value>)> {
@@ -598,7 +1000,61 @@ impl Drop for Database {
     }
 }
 
-/// A reference to a collection for convenient access
+/// A thread-safe reference to a collection for concurrent access.
+///
+/// `CollectionRef` is the primary way to interact with collections when using
+/// `Database`. It wraps collection operations with proper locking, enabling
+/// safe concurrent read and write access from multiple threads.
+///
+/// # Thread Safety
+///
+/// - Multiple readers can access the collection simultaneously
+/// - Writers get exclusive access (blocking other readers and writers)
+/// - All operations are atomic at the method level
+///
+/// # Obtaining a CollectionRef
+///
+/// Use [`Database::collection()`] to get a reference:
+///
+/// ```
+/// use needle::Database;
+///
+/// let db = Database::in_memory();
+/// db.create_collection("embeddings", 128)?;
+///
+/// let collection = db.collection("embeddings")?;
+/// // Use collection for insert, search, delete operations
+/// # Ok::<(), needle::NeedleError>(())
+/// ```
+///
+/// # Example: Concurrent Access
+///
+/// ```
+/// use std::sync::Arc;
+/// use std::thread;
+/// use needle::Database;
+///
+/// let db = Arc::new(Database::in_memory());
+/// db.create_collection("docs", 4).unwrap();
+///
+/// // Insert from main thread
+/// let coll = db.collection("docs").unwrap();
+/// coll.insert("v1", &[1.0, 0.0, 0.0, 0.0], None).unwrap();
+///
+/// // Search from multiple threads
+/// let handles: Vec<_> = (0..4).map(|_| {
+///     let db = Arc::clone(&db);
+///     thread::spawn(move || {
+///         let coll = db.collection("docs").unwrap();
+///         coll.search(&[1.0, 0.0, 0.0, 0.0], 10).unwrap()
+///     })
+/// }).collect();
+///
+/// for h in handles {
+///     let results = h.join().unwrap();
+///     assert!(!results.is_empty());
+/// }
+/// ```
 pub struct CollectionRef<'a> {
     db: &'a Database,
     name: String,
@@ -625,7 +1081,22 @@ impl<'a> CollectionRef<'a> {
         self.db.collection_dimensions(&self.name)
     }
 
-    /// Insert a vector
+    /// Insert a vector into the collection.
+    ///
+    /// # Arguments
+    ///
+    /// * `id` - Unique identifier for the vector
+    /// * `vector` - The vector data (must match collection dimensions)
+    /// * `metadata` - Optional JSON metadata to associate with the vector
+    ///
+    /// # Errors
+    ///
+    /// Returns [`NeedleError::DimensionMismatch`] if the vector length doesn't match
+    /// the collection's configured dimensions.
+    ///
+    /// Returns [`NeedleError::InvalidVector`] if the vector contains NaN or Infinity values.
+    ///
+    /// Returns [`NeedleError::DuplicateId`] if a vector with this ID already exists.
     pub fn insert(
         &self,
         id: impl Into<String>,
@@ -635,7 +1106,13 @@ impl<'a> CollectionRef<'a> {
         self.db.insert_internal(&self.name, id, vector, metadata)
     }
 
-    /// Insert a vector, taking ownership (more efficient when you have a Vec)
+    /// Insert a vector, taking ownership (more efficient when you have a Vec).
+    ///
+    /// This variant avoids an allocation when you already have a `Vec<f32>`.
+    ///
+    /// # Errors
+    ///
+    /// Same as [`insert`](Self::insert).
     pub fn insert_vec(
         &self,
         id: impl Into<String>,
@@ -645,12 +1122,33 @@ impl<'a> CollectionRef<'a> {
         self.db.insert_vec_internal(&self.name, id, vector, metadata)
     }
 
-    /// Search for similar vectors
+    /// Search for the k most similar vectors to the query.
+    ///
+    /// # Arguments
+    ///
+    /// * `query` - The query vector (must match collection dimensions)
+    /// * `k` - Number of nearest neighbors to return
+    ///
+    /// # Errors
+    ///
+    /// Returns [`NeedleError::DimensionMismatch`] if the query length doesn't match
+    /// the collection's configured dimensions.
+    ///
+    /// Returns [`NeedleError::InvalidVector`] if the query contains NaN or Infinity values.
     pub fn search(&self, query: &[f32], k: usize) -> Result<Vec<SearchResult>> {
         self.db.search_internal(&self.name, query, k)
     }
 
-    /// Search with metadata filter
+    /// Search for similar vectors with metadata filtering.
+    ///
+    /// Applies the filter before searching, potentially reducing the search space.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`NeedleError::DimensionMismatch`] if the query length doesn't match
+    /// the collection's configured dimensions.
+    ///
+    /// Returns [`NeedleError::InvalidVector`] if the query contains NaN or Infinity values.
     pub fn search_with_filter(
         &self,
         query: &[f32],
@@ -661,59 +1159,454 @@ impl<'a> CollectionRef<'a> {
             .search_with_filter_internal(&self.name, query, k, filter)
     }
 
-    /// Get a vector by ID
+    /// Search with detailed query execution profiling.
+    ///
+    /// Returns both the search results and a [`SearchExplain`](crate::SearchExplain)
+    /// struct containing detailed timing and statistics.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use needle::Database;
+    ///
+    /// let db = Database::in_memory();
+    /// db.create_collection("docs", 4)?;
+    /// let collection = db.collection("docs")?;
+    /// collection.insert("v1", &[1.0, 0.0, 0.0, 0.0], None)?;
+    ///
+    /// let (results, explain) = collection.search_explain(&[1.0, 0.0, 0.0, 0.0], 10)?;
+    /// println!("Search took {}μs, visited {} nodes",
+    ///          explain.total_time_us, explain.hnsw_stats.visited_nodes);
+    /// # Ok::<(), needle::NeedleError>(())
+    /// ```
+    pub fn search_explain(
+        &self,
+        query: &[f32],
+        k: usize,
+    ) -> Result<(Vec<SearchResult>, crate::collection::SearchExplain)> {
+        self.db.search_explain_internal(&self.name, query, k)
+    }
+
+    /// Search with metadata filter and detailed profiling.
+    ///
+    /// Combines filtered search with query execution profiling.
+    pub fn search_with_filter_explain(
+        &self,
+        query: &[f32],
+        k: usize,
+        filter: &Filter,
+    ) -> Result<(Vec<SearchResult>, crate::collection::SearchExplain)> {
+        self.db
+            .search_with_filter_explain_internal(&self.name, query, k, filter)
+    }
+
+    /// Find all vectors within a given distance from the query.
+    ///
+    /// Unlike top-k search which returns exactly k results regardless of distance,
+    /// range queries return all vectors within `max_distance` from the query.
+    ///
+    /// # Arguments
+    ///
+    /// * `query` - The query vector (must match collection dimensions)
+    /// * `max_distance` - Maximum distance threshold (inclusive)
+    /// * `limit` - Maximum number of results to return
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use needle::Database;
+    ///
+    /// let db = Database::in_memory();
+    /// db.create_collection("docs", 4)?;
+    /// let collection = db.collection("docs")?;
+    /// collection.insert("v1", &[1.0, 0.0, 0.0, 0.0], None)?;
+    /// collection.insert("v2", &[0.0, 1.0, 0.0, 0.0], None)?;
+    ///
+    /// // Find all vectors within distance 0.5
+    /// let results = collection.search_radius(&[1.0, 0.0, 0.0, 0.0], 0.5, 100)?;
+    /// # Ok::<(), needle::NeedleError>(())
+    /// ```
+    pub fn search_radius(
+        &self,
+        query: &[f32],
+        max_distance: f32,
+        limit: usize,
+    ) -> Result<Vec<SearchResult>> {
+        self.db
+            .search_radius_internal(&self.name, query, max_distance, limit)
+    }
+
+    /// Find all vectors within a given distance with metadata filtering.
+    ///
+    /// Combines range queries with metadata pre-filtering.
+    ///
+    /// # Arguments
+    ///
+    /// * `query` - The query vector (must match collection dimensions)
+    /// * `max_distance` - Maximum distance threshold (inclusive)
+    /// * `limit` - Maximum number of results to return
+    /// * `filter` - MongoDB-style filter for metadata
+    pub fn search_radius_with_filter(
+        &self,
+        query: &[f32],
+        max_distance: f32,
+        limit: usize,
+        filter: &Filter,
+    ) -> Result<Vec<SearchResult>> {
+        self.db
+            .search_radius_with_filter_internal(&self.name, query, max_distance, limit, filter)
+    }
+
+    /// Retrieve a vector and its metadata by ID.
+    ///
+    /// # Arguments
+    ///
+    /// * `id` - The external ID of the vector to retrieve
+    ///
+    /// # Returns
+    ///
+    /// Returns `Some((vector, metadata))` if found, `None` otherwise.
+    /// The vector data is cloned for thread-safety.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use needle::Database;
+    /// use serde_json::json;
+    ///
+    /// let db = Database::in_memory();
+    /// db.create_collection("docs", 4)?;
+    /// let coll = db.collection("docs")?;
+    /// coll.insert("v1", &[1.0, 2.0, 3.0, 4.0], Some(json!({"title": "Hello"})))?;
+    ///
+    /// if let Some((vector, metadata)) = coll.get("v1") {
+    ///     assert_eq!(vector, vec![1.0, 2.0, 3.0, 4.0]);
+    ///     assert!(metadata.is_some());
+    /// }
+    ///
+    /// assert!(coll.get("nonexistent").is_none());
+    /// # Ok::<(), needle::NeedleError>(())
+    /// ```
     pub fn get(&self, id: &str) -> Option<(Vec<f32>, Option<Value>)> {
         self.db.get_internal(&self.name, id)
     }
 
-    /// Delete a vector
+    /// Delete a vector by its ID.
+    ///
+    /// Removes the vector from the index. Storage space is not immediately
+    /// reclaimed; call [`compact()`](Self::compact) after many deletions.
+    ///
+    /// # Arguments
+    ///
+    /// * `id` - The external ID of the vector to delete
+    ///
+    /// # Returns
+    ///
+    /// Returns `Ok(true)` if the vector was deleted, `Ok(false)` if no vector
+    /// with that ID existed.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the collection no longer exists.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use needle::Database;
+    ///
+    /// let db = Database::in_memory();
+    /// db.create_collection("docs", 4)?;
+    /// let coll = db.collection("docs")?;
+    /// coll.insert("v1", &[1.0, 0.0, 0.0, 0.0], None)?;
+    ///
+    /// assert!(coll.delete("v1")?);       // Returns true
+    /// assert!(!coll.delete("v1")?);      // Already deleted, returns false
+    /// # Ok::<(), needle::NeedleError>(())
+    /// ```
     pub fn delete(&self, id: &str) -> Result<bool> {
         self.db.delete_internal(&self.name, id)
     }
 
-    /// Export all vectors from the collection
-    /// Returns a vector of (id, vector, metadata) tuples
+    /// Export all vectors from the collection.
+    ///
+    /// Returns all vectors with their IDs and metadata, useful for backup
+    /// or migration purposes.
+    ///
+    /// # Returns
+    ///
+    /// A vector of `(id, vector, metadata)` tuples for all vectors in the collection.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`NeedleError::CollectionNotFound`] if the collection no longer exists.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use needle::Database;
+    /// use serde_json::json;
+    ///
+    /// let db = Database::in_memory();
+    /// db.create_collection("docs", 4)?;
+    /// let coll = db.collection("docs")?;
+    /// coll.insert("v1", &[1.0, 0.0, 0.0, 0.0], Some(json!({"x": 1})))?;
+    /// coll.insert("v2", &[0.0, 1.0, 0.0, 0.0], None)?;
+    ///
+    /// let exported = coll.export_all()?;
+    /// assert_eq!(exported.len(), 2);
+    /// # Ok::<(), needle::NeedleError>(())
+    /// ```
     pub fn export_all(&self) -> Result<Vec<ExportEntry>> {
         self.db.export_internal(&self.name)
     }
 
-    /// Get all vector IDs in the collection
+    /// Get all vector IDs in the collection.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`NeedleError::CollectionNotFound`] if the collection no longer exists.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use needle::Database;
+    ///
+    /// let db = Database::in_memory();
+    /// db.create_collection("docs", 4)?;
+    /// let coll = db.collection("docs")?;
+    /// coll.insert("doc1", &[1.0, 0.0, 0.0, 0.0], None)?;
+    /// coll.insert("doc2", &[0.0, 1.0, 0.0, 0.0], None)?;
+    ///
+    /// let ids = coll.ids()?;
+    /// assert!(ids.contains(&"doc1".to_string()));
+    /// assert!(ids.contains(&"doc2".to_string()));
+    /// # Ok::<(), needle::NeedleError>(())
+    /// ```
     pub fn ids(&self) -> Result<Vec<String>> {
         self.db.ids_internal(&self.name)
     }
 
-    /// Compact the collection, removing deleted vectors
-    /// Returns the number of vectors removed
+    /// Compact the collection, removing deleted vectors from storage.
+    ///
+    /// After many deletions, storage space is not immediately reclaimed.
+    /// Calling `compact()` rebuilds internal structures to reclaim space.
+    ///
+    /// # Returns
+    ///
+    /// The number of deleted vectors that were removed from storage.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`NeedleError::CollectionNotFound`] if the collection no longer exists.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use needle::Database;
+    ///
+    /// let db = Database::in_memory();
+    /// db.create_collection("docs", 4)?;
+    /// let coll = db.collection("docs")?;
+    ///
+    /// // Insert and delete vectors
+    /// for i in 0..100 {
+    ///     coll.insert(format!("v{}", i), &[i as f32, 0.0, 0.0, 0.0], None)?;
+    /// }
+    /// for i in 0..50 {
+    ///     coll.delete(&format!("v{}", i))?;
+    /// }
+    ///
+    /// // Reclaim storage space
+    /// let removed = coll.compact()?;
+    /// assert_eq!(removed, 50);
+    /// # Ok::<(), needle::NeedleError>(())
+    /// ```
     pub fn compact(&self) -> Result<usize> {
         self.db.compact_internal(&self.name)
     }
 
-    /// Check if the collection needs compaction
+    /// Check if the collection needs compaction.
+    ///
+    /// Returns `true` if the ratio of deleted vectors to total vectors exceeds
+    /// the given threshold.
+    ///
+    /// # Arguments
+    ///
+    /// * `threshold` - The deleted/total ratio above which compaction is needed (0.0-1.0)
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use needle::Database;
+    ///
+    /// let db = Database::in_memory();
+    /// db.create_collection("docs", 4)?;
+    /// let coll = db.collection("docs")?;
+    ///
+    /// for i in 0..10 {
+    ///     coll.insert(format!("v{}", i), &[i as f32, 0.0, 0.0, 0.0], None)?;
+    /// }
+    /// for i in 0..8 {
+    ///     coll.delete(&format!("v{}", i))?;
+    /// }
+    ///
+    /// // 8 deleted out of 10 = 80% deleted, so threshold 0.5 should trigger
+    /// assert!(coll.needs_compaction(0.5));
+    /// # Ok::<(), needle::NeedleError>(())
+    /// ```
     pub fn needs_compaction(&self, threshold: f64) -> bool {
         self.db.needs_compaction_internal(&self.name, threshold)
     }
 
-    /// Count vectors, optionally matching a filter
+    /// Count vectors in the collection, optionally matching a filter.
+    ///
+    /// # Arguments
+    ///
+    /// * `filter` - Optional metadata filter; if `None`, counts all vectors
+    ///
+    /// # Errors
+    ///
+    /// Returns [`NeedleError::CollectionNotFound`] if the collection no longer exists.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use needle::{Database, Filter};
+    /// use serde_json::json;
+    ///
+    /// let db = Database::in_memory();
+    /// db.create_collection("docs", 4)?;
+    /// let coll = db.collection("docs")?;
+    /// coll.insert("v1", &[1.0, 0.0, 0.0, 0.0], Some(json!({"type": "a"})))?;
+    /// coll.insert("v2", &[0.0, 1.0, 0.0, 0.0], Some(json!({"type": "b"})))?;
+    /// coll.insert("v3", &[0.0, 0.0, 1.0, 0.0], Some(json!({"type": "a"})))?;
+    ///
+    /// assert_eq!(coll.count(None)?, 3);
+    ///
+    /// let filter = Filter::eq("type", "a");
+    /// assert_eq!(coll.count(Some(&filter))?, 2);
+    /// # Ok::<(), needle::NeedleError>(())
+    /// ```
     pub fn count(&self, filter: Option<&Filter>) -> Result<usize> {
         self.db.count_internal(&self.name, filter)
     }
 
-    /// Get the number of deleted vectors pending compaction
+    /// Get the number of deleted vectors pending compaction.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use needle::Database;
+    ///
+    /// let db = Database::in_memory();
+    /// db.create_collection("docs", 4)?;
+    /// let coll = db.collection("docs")?;
+    /// coll.insert("v1", &[1.0, 0.0, 0.0, 0.0], None)?;
+    /// coll.insert("v2", &[0.0, 1.0, 0.0, 0.0], None)?;
+    ///
+    /// assert_eq!(coll.deleted_count(), 0);
+    ///
+    /// coll.delete("v1")?;
+    /// assert_eq!(coll.deleted_count(), 1);
+    /// # Ok::<(), needle::NeedleError>(())
+    /// ```
     pub fn deleted_count(&self) -> usize {
         self.db.deleted_count_internal(&self.name)
     }
 
-    /// Search and return only IDs with distances (faster than full search)
+    /// Search and return only IDs with distances (faster than full search).
+    ///
+    /// Skips metadata lookup, making this faster when you only need vector IDs.
+    ///
+    /// # Arguments
+    ///
+    /// * `query` - The query vector (must match collection dimensions)
+    /// * `k` - Maximum number of results to return
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - [`NeedleError::DimensionMismatch`] - Query dimensions don't match
+    /// - [`NeedleError::InvalidVector`] - Query contains NaN or Infinity
+    /// - [`NeedleError::CollectionNotFound`] - Collection no longer exists
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use needle::Database;
+    ///
+    /// let db = Database::in_memory();
+    /// db.create_collection("docs", 4)?;
+    /// let coll = db.collection("docs")?;
+    /// coll.insert("v1", &[1.0, 0.0, 0.0, 0.0], None)?;
+    /// coll.insert("v2", &[0.9, 0.1, 0.0, 0.0], None)?;
+    ///
+    /// let results = coll.search_ids(&[1.0, 0.0, 0.0, 0.0], 10)?;
+    /// for (id, distance) in results {
+    ///     println!("{}: {:.4}", id, distance);
+    /// }
+    /// # Ok::<(), needle::NeedleError>(())
+    /// ```
     pub fn search_ids(&self, query: &[f32], k: usize) -> Result<Vec<(String, f32)>> {
         self.db.search_ids_internal(&self.name, query, k)
     }
 
-    /// Check if a vector with the given ID exists in the collection
+    /// Check if a vector with the given ID exists in the collection.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use needle::Database;
+    ///
+    /// let db = Database::in_memory();
+    /// db.create_collection("docs", 4)?;
+    /// let coll = db.collection("docs")?;
+    /// coll.insert("v1", &[1.0, 0.0, 0.0, 0.0], None)?;
+    ///
+    /// assert!(coll.contains("v1"));
+    /// assert!(!coll.contains("v2"));
+    /// # Ok::<(), needle::NeedleError>(())
+    /// ```
     pub fn contains(&self, id: &str) -> bool {
         self.get(id).is_some()
     }
 
-    /// Update a vector by ID
+    /// Update an existing vector and its metadata.
+    ///
+    /// Replaces both the vector data and metadata. The vector is re-indexed
+    /// after the update.
+    ///
+    /// # Arguments
+    ///
+    /// * `id` - ID of the vector to update
+    /// * `vector` - New vector data (must match collection dimensions)
+    /// * `metadata` - New metadata (replaces existing metadata)
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - [`NeedleError::VectorNotFound`] - No vector with the given ID exists
+    /// - [`NeedleError::DimensionMismatch`] - Vector dimensions don't match
+    /// - [`NeedleError::CollectionNotFound`] - Collection no longer exists
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use needle::Database;
+    /// use serde_json::json;
+    ///
+    /// let db = Database::in_memory();
+    /// db.create_collection("docs", 4)?;
+    /// let coll = db.collection("docs")?;
+    /// coll.insert("v1", &[1.0, 0.0, 0.0, 0.0], Some(json!({"version": 1})))?;
+    ///
+    /// // Update the vector and metadata
+    /// coll.update("v1", &[0.0, 1.0, 0.0, 0.0], Some(json!({"version": 2})))?;
+    ///
+    /// let (vec, _meta) = coll.get("v1").unwrap();
+    /// assert_eq!(vec, vec![0.0, 1.0, 0.0, 0.0]);
+    /// # Ok::<(), needle::NeedleError>(())
+    /// ```
     pub fn update(
         &self,
         id: &str,
@@ -722,6 +1615,567 @@ impl<'a> CollectionRef<'a> {
     ) -> Result<()> {
         self.db.update_internal(&self.name, id, vector, metadata)
     }
+
+    /// Search with post-filter support.
+    ///
+    /// Post-filtering applies the filter after ANN search, which is useful when:
+    /// - You need to guarantee k candidates before filtering
+    /// - The filter involves expensive computation
+    /// - The filter is highly selective and pre-filtering would miss results
+    ///
+    /// # Arguments
+    ///
+    /// * `query` - The query vector
+    /// * `k` - Number of results to return
+    /// * `pre_filter` - Optional filter applied during ANN search (efficient)
+    /// * `post_filter` - Filter applied after ANN search
+    /// * `post_filter_factor` - Over-fetch factor (search fetches k * factor candidates)
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use needle::{Database, Filter};
+    ///
+    /// let db = Database::in_memory();
+    /// db.create_collection("docs", 4)?;
+    /// let coll = db.collection("docs")?;
+    ///
+    /// // Insert vectors
+    /// coll.insert("v1", &[1.0, 0.0, 0.0, 0.0], Some(serde_json::json!({"score": 10})))?;
+    /// coll.insert("v2", &[0.9, 0.1, 0.0, 0.0], Some(serde_json::json!({"score": 20})))?;
+    ///
+    /// // Search with post-filter: find similar vectors, then filter by score
+    /// let post_filter = Filter::gt("score", 15);
+    /// let results = coll.search_with_post_filter(
+    ///     &[1.0, 0.0, 0.0, 0.0],
+    ///     10,
+    ///     None,
+    ///     &post_filter,
+    ///     3,
+    /// )?;
+    /// # Ok::<(), needle::NeedleError>(())
+    /// ```
+    pub fn search_with_post_filter(
+        &self,
+        query: &[f32],
+        k: usize,
+        pre_filter: Option<&Filter>,
+        post_filter: &Filter,
+        post_filter_factor: usize,
+    ) -> Result<Vec<SearchResult>> {
+        self.db.search_with_post_filter_internal(
+            &self.name,
+            query,
+            k,
+            pre_filter,
+            post_filter,
+            post_filter_factor,
+        )
+    }
+}
+
+// ============================================================================
+// Replicated Database - Raft Integration
+// ============================================================================
+
+use crate::raft::{
+    Command as RaftCommand, NodeId, RaftConfig, RaftError, RaftMessage,
+    RaftNode, RaftState,
+};
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
+
+/// A database command that can be replicated across the cluster.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum ReplicatedCommand {
+    /// Create a new collection.
+    CreateCollection {
+        name: String,
+        dimensions: usize,
+        config: Option<CollectionConfig>,
+    },
+    /// Drop a collection.
+    DropCollection { name: String },
+    /// Insert a vector into a collection.
+    Insert {
+        collection: String,
+        id: String,
+        vector: Vec<f32>,
+        metadata: Option<Value>,
+    },
+    /// Update a vector in a collection.
+    Update {
+        collection: String,
+        id: String,
+        vector: Vec<f32>,
+        metadata: Option<Value>,
+    },
+    /// Delete a vector from a collection.
+    Delete { collection: String, id: String },
+    /// Compact a collection.
+    Compact { collection: String },
+    /// Clear a collection.
+    Clear { collection: String },
+    /// No-op command for Raft leader establishment.
+    Noop,
+}
+
+impl ReplicatedCommand {
+    /// Convert to a Raft command for serialization.
+    fn to_raft_command(&self) -> RaftCommand {
+        // Serialize the replicated command and store in the metadata field
+        let serialized = serde_json::to_string(self).unwrap_or_default();
+        let mut metadata = std::collections::HashMap::new();
+        metadata.insert("cmd".to_string(), serialized);
+
+        // Use the Insert variant to carry our custom command
+        RaftCommand::Insert {
+            id: self.command_id(),
+            vector: Vec::new(),
+            metadata,
+        }
+    }
+
+    /// Generate a unique command ID for deduplication.
+    fn command_id(&self) -> String {
+        let mut hasher = DefaultHasher::new();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        now.hash(&mut hasher);
+        format!("cmd_{:016x}", hasher.finish())
+    }
+
+    /// Parse a replicated command from a Raft command.
+    fn from_raft_command(cmd: &RaftCommand) -> Option<Self> {
+        match cmd {
+            RaftCommand::Insert { metadata, .. } => {
+                metadata.get("cmd")
+                    .and_then(|s| serde_json::from_str(s).ok())
+            }
+            RaftCommand::Noop => Some(ReplicatedCommand::Noop),
+            _ => None,
+        }
+    }
+}
+
+/// Configuration for replicated database.
+#[derive(Debug, Clone)]
+pub struct ReplicatedDatabaseConfig {
+    /// Node ID for this replica.
+    pub node_id: NodeId,
+    /// Raft configuration.
+    pub raft_config: RaftConfig,
+    /// Peer nodes in the cluster.
+    pub peers: Vec<NodeId>,
+    /// Allow reads from followers (eventually consistent).
+    pub allow_follower_reads: bool,
+}
+
+impl Default for ReplicatedDatabaseConfig {
+    fn default() -> Self {
+        Self {
+            node_id: NodeId(1),
+            raft_config: RaftConfig::default(),
+            peers: Vec::new(),
+            allow_follower_reads: true,
+        }
+    }
+}
+
+impl ReplicatedDatabaseConfig {
+    /// Create a new config with the given node ID.
+    pub fn new(node_id: u64) -> Self {
+        Self {
+            node_id: NodeId(node_id),
+            ..Default::default()
+        }
+    }
+
+    /// Add peer nodes to the cluster.
+    pub fn with_peers(mut self, peers: Vec<u64>) -> Self {
+        self.peers = peers.into_iter().map(NodeId).collect();
+        self
+    }
+
+    /// Set Raft configuration.
+    pub fn with_raft_config(mut self, config: RaftConfig) -> Self {
+        self.raft_config = config;
+        self
+    }
+
+    /// Enable or disable follower reads.
+    pub fn allow_follower_reads(mut self, allow: bool) -> Self {
+        self.allow_follower_reads = allow;
+        self
+    }
+}
+
+/// A replicated database that uses Raft for consensus.
+///
+/// This wraps a `Database` and ensures all write operations are
+/// replicated across the cluster before being applied locally.
+///
+/// # Example
+///
+/// ```ignore
+/// use needle::database::{Database, ReplicatedDatabase, ReplicatedDatabaseConfig};
+///
+/// // Create the underlying database
+/// let db = Database::in_memory();
+///
+/// // Configure replication
+/// let config = ReplicatedDatabaseConfig::new(1)
+///     .with_peers(vec![2, 3]);
+///
+/// // Create replicated database
+/// let mut replicated_db = ReplicatedDatabase::new(db, config);
+///
+/// // Operations are now replicated
+/// replicated_db.propose_create_collection("documents", 384)?;
+/// ```
+pub struct ReplicatedDatabase {
+    /// The underlying database.
+    db: Database,
+    /// Raft node for consensus.
+    raft: RaftNode,
+    /// Configuration.
+    config: ReplicatedDatabaseConfig,
+    /// Message handler for network communication.
+    message_handler: Option<Box<dyn MessageHandler>>,
+}
+
+/// Trait for handling Raft messages (network communication).
+pub trait MessageHandler: Send + Sync {
+    /// Send a message to another node.
+    fn send(&self, to: NodeId, message: RaftMessage) -> Result<()>;
+
+    /// Receive messages from other nodes.
+    fn receive(&self) -> Vec<(NodeId, RaftMessage)>;
+}
+
+impl ReplicatedDatabase {
+    /// Create a new replicated database.
+    pub fn new(db: Database, config: ReplicatedDatabaseConfig) -> Self {
+        let mut raft = RaftNode::new(config.node_id, config.raft_config.clone());
+        raft.initialize(config.peers.clone());
+
+        Self {
+            db,
+            raft,
+            config,
+            message_handler: None,
+        }
+    }
+
+    /// Set the message handler for network communication.
+    pub fn with_message_handler<H: MessageHandler + 'static>(mut self, handler: H) -> Self {
+        self.message_handler = Some(Box::new(handler));
+        self
+    }
+
+    /// Get the underlying database reference.
+    pub fn database(&self) -> &Database {
+        &self.db
+    }
+
+    /// Check if this node is the leader.
+    pub fn is_leader(&self) -> bool {
+        self.raft.is_leader()
+    }
+
+    /// Get the current leader's node ID.
+    pub fn leader(&self) -> Option<NodeId> {
+        self.raft.leader()
+    }
+
+    /// Get the current Raft state.
+    pub fn state(&self) -> RaftState {
+        self.raft.state()
+    }
+
+    /// Get the node ID.
+    pub fn node_id(&self) -> NodeId {
+        self.raft.id()
+    }
+
+    /// Tick the Raft node (should be called periodically).
+    ///
+    /// This handles election timeouts and heartbeats.
+    pub fn tick(&mut self) {
+        self.raft.tick();
+
+        // Send outgoing messages
+        if let Some(handler) = &self.message_handler {
+            for msg in self.raft.take_messages() {
+                if let Err(e) = handler.send(msg.to, msg.message) {
+                    warn!(target = ?msg.to, error = %e, "Failed to send Raft message");
+                }
+            }
+        }
+
+        // Receive and process incoming messages
+        if let Some(handler) = &self.message_handler {
+            for (from, message) in handler.receive() {
+                self.raft.handle_message(from, message);
+            }
+        }
+
+        // Apply committed commands
+        self.apply_committed();
+    }
+
+    /// Apply committed commands to the database.
+    fn apply_committed(&mut self) {
+        for cmd in self.raft.take_committed() {
+            if let Some(replicated_cmd) = ReplicatedCommand::from_raft_command(&cmd) {
+                if let Err(e) = self.apply_command(&replicated_cmd) {
+                    warn!(error = %e, "Failed to apply committed command");
+                }
+            }
+        }
+    }
+
+    /// Apply a single command to the database.
+    fn apply_command(&self, cmd: &ReplicatedCommand) -> Result<()> {
+        match cmd {
+            ReplicatedCommand::CreateCollection { name, dimensions, config } => {
+                if let Some(cfg) = config {
+                    self.db.create_collection_with_config(cfg.clone())
+                } else {
+                    self.db.create_collection(name, *dimensions)
+                }
+            }
+            ReplicatedCommand::DropCollection { name } => {
+                self.db.drop_collection(name).map(|_| ())
+            }
+            ReplicatedCommand::Insert { collection, id, vector, metadata } => {
+                let coll = self.db.collection(collection)?;
+                coll.insert(id, vector, metadata.clone())
+            }
+            ReplicatedCommand::Update { collection, id, vector, metadata } => {
+                let coll = self.db.collection(collection)?;
+                coll.update(id, vector, metadata.clone())
+            }
+            ReplicatedCommand::Delete { collection, id } => {
+                let coll = self.db.collection(collection)?;
+                coll.delete(id).map(|_| ())
+            }
+            ReplicatedCommand::Compact { collection } => {
+                let coll = self.db.collection(collection)?;
+                coll.compact().map(|_| ())
+            }
+            ReplicatedCommand::Clear { collection } => {
+                // Clear by iterating and deleting all
+                let coll = self.db.collection(collection)?;
+                let ids = coll.ids()?;
+                for id in ids {
+                    let _ = coll.delete(&id);
+                }
+                Ok(())
+            }
+            ReplicatedCommand::Noop => Ok(()),
+        }
+    }
+
+    /// Propose creating a new collection.
+    pub fn propose_create_collection(
+        &mut self,
+        name: &str,
+        dimensions: usize,
+    ) -> std::result::Result<(), ReplicatedDatabaseError> {
+        self.propose_command(ReplicatedCommand::CreateCollection {
+            name: name.to_string(),
+            dimensions,
+            config: None,
+        })
+    }
+
+    /// Propose creating a collection with custom configuration.
+    pub fn propose_create_collection_with_config(
+        &mut self,
+        config: CollectionConfig,
+    ) -> std::result::Result<(), ReplicatedDatabaseError> {
+        self.propose_command(ReplicatedCommand::CreateCollection {
+            name: config.name.clone(),
+            dimensions: config.dimensions,
+            config: Some(config),
+        })
+    }
+
+    /// Propose dropping a collection.
+    pub fn propose_drop_collection(
+        &mut self,
+        name: &str,
+    ) -> std::result::Result<(), ReplicatedDatabaseError> {
+        self.propose_command(ReplicatedCommand::DropCollection {
+            name: name.to_string(),
+        })
+    }
+
+    /// Propose inserting a vector.
+    pub fn propose_insert(
+        &mut self,
+        collection: &str,
+        id: &str,
+        vector: &[f32],
+        metadata: Option<Value>,
+    ) -> std::result::Result<(), ReplicatedDatabaseError> {
+        self.propose_command(ReplicatedCommand::Insert {
+            collection: collection.to_string(),
+            id: id.to_string(),
+            vector: vector.to_vec(),
+            metadata,
+        })
+    }
+
+    /// Propose updating a vector.
+    pub fn propose_update(
+        &mut self,
+        collection: &str,
+        id: &str,
+        vector: &[f32],
+        metadata: Option<Value>,
+    ) -> std::result::Result<(), ReplicatedDatabaseError> {
+        self.propose_command(ReplicatedCommand::Update {
+            collection: collection.to_string(),
+            id: id.to_string(),
+            vector: vector.to_vec(),
+            metadata,
+        })
+    }
+
+    /// Propose deleting a vector.
+    pub fn propose_delete(
+        &mut self,
+        collection: &str,
+        id: &str,
+    ) -> std::result::Result<(), ReplicatedDatabaseError> {
+        self.propose_command(ReplicatedCommand::Delete {
+            collection: collection.to_string(),
+            id: id.to_string(),
+        })
+    }
+
+    /// Propose a command to the Raft cluster.
+    fn propose_command(
+        &mut self,
+        cmd: ReplicatedCommand,
+    ) -> std::result::Result<(), ReplicatedDatabaseError> {
+        if !self.is_leader() {
+            return Err(ReplicatedDatabaseError::NotLeader(self.leader()));
+        }
+
+        let raft_cmd = cmd.to_raft_command();
+        self.raft.propose(raft_cmd).map_err(|e| match e {
+            RaftError::NotLeader(leader) => ReplicatedDatabaseError::NotLeader(leader),
+            RaftError::InvalidOperation(msg) => ReplicatedDatabaseError::InvalidOperation(msg),
+        })?;
+
+        Ok(())
+    }
+
+    /// Read from the local database.
+    ///
+    /// If `allow_follower_reads` is false and this node is not the leader,
+    /// this will return an error.
+    pub fn read_collection(&self, name: &str) -> std::result::Result<CollectionRef, ReplicatedDatabaseError> {
+        if !self.config.allow_follower_reads && !self.is_leader() {
+            return Err(ReplicatedDatabaseError::NotLeader(self.leader()));
+        }
+
+        self.db.collection(name).map_err(ReplicatedDatabaseError::Database)
+    }
+
+    /// List all collections (local read).
+    pub fn list_collections(&self) -> std::result::Result<Vec<String>, ReplicatedDatabaseError> {
+        if !self.config.allow_follower_reads && !self.is_leader() {
+            return Err(ReplicatedDatabaseError::NotLeader(self.leader()));
+        }
+
+        Ok(self.db.list_collections())
+    }
+
+    /// Check if a collection exists (local read).
+    pub fn has_collection(&self, name: &str) -> std::result::Result<bool, ReplicatedDatabaseError> {
+        if !self.config.allow_follower_reads && !self.is_leader() {
+            return Err(ReplicatedDatabaseError::NotLeader(self.leader()));
+        }
+
+        Ok(self.db.has_collection(name))
+    }
+
+    /// Get cluster status.
+    pub fn status(&self) -> ReplicatedDatabaseStatus {
+        let raft_status = self.raft.status();
+        ReplicatedDatabaseStatus {
+            node_id: raft_status.id,
+            state: raft_status.state,
+            term: raft_status.term,
+            leader_id: raft_status.leader_id,
+            commit_index: raft_status.commit_index,
+            last_applied: raft_status.last_applied,
+            cluster_size: raft_status.cluster_size,
+            collections: self.db.list_collections(),
+            total_vectors: self.db.total_vectors(),
+        }
+    }
+}
+
+/// Errors from replicated database operations.
+#[derive(Debug)]
+pub enum ReplicatedDatabaseError {
+    /// Not the leader; redirect to the leader.
+    NotLeader(Option<NodeId>),
+    /// Invalid operation.
+    InvalidOperation(String),
+    /// Database error.
+    Database(NeedleError),
+}
+
+impl std::fmt::Display for ReplicatedDatabaseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ReplicatedDatabaseError::NotLeader(Some(leader)) => {
+                write!(f, "Not the leader; redirect to node {:?}", leader)
+            }
+            ReplicatedDatabaseError::NotLeader(None) => {
+                write!(f, "Not the leader; leader unknown")
+            }
+            ReplicatedDatabaseError::InvalidOperation(msg) => {
+                write!(f, "Invalid operation: {}", msg)
+            }
+            ReplicatedDatabaseError::Database(e) => {
+                write!(f, "Database error: {}", e)
+            }
+        }
+    }
+}
+
+impl std::error::Error for ReplicatedDatabaseError {}
+
+/// Status of a replicated database node.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReplicatedDatabaseStatus {
+    /// This node's ID.
+    pub node_id: NodeId,
+    /// Current Raft state.
+    pub state: RaftState,
+    /// Current term.
+    pub term: u64,
+    /// Known leader ID.
+    pub leader_id: Option<NodeId>,
+    /// Commit index.
+    pub commit_index: u64,
+    /// Last applied index.
+    pub last_applied: u64,
+    /// Number of nodes in cluster.
+    pub cluster_size: usize,
+    /// List of collections.
+    pub collections: Vec<String>,
+    /// Total vectors across all collections.
+    pub total_vectors: usize,
 }
 
 #[cfg(test)]
