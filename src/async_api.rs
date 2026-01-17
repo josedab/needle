@@ -5,6 +5,18 @@
 //! tokio's `spawn_blocking` for CPU-bound work, enabling integration with
 //! async runtimes without blocking the executor.
 //!
+//! # Feature Flag
+//!
+//! This module is available with the `async` feature:
+//!
+//! ```toml
+//! [dependencies]
+//! needle = { version = "0.1", features = ["async"] }
+//! ```
+//!
+//! The `async` feature provides the async API without the HTTP server.
+//! If you need the HTTP server, use the `server` feature which includes `async`.
+//!
 //! # Features
 //!
 //! - **Async Operations**: All core database operations available as async methods
