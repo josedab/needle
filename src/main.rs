@@ -90,6 +90,10 @@ enum Commands {
         /// Number of results to return
         #[arg(short, long, default_value = "10")]
         k: usize,
+
+        /// Show detailed query profiling information
+        #[arg(short, long, default_value = "false")]
+        explain: bool,
     },
 
     /// Delete a vector by ID
@@ -232,7 +236,8 @@ fn main() -> Result<()> {
             collection,
             query,
             k,
-        } => search_command(&database, &collection, &query, k),
+            explain,
+        } => search_command(&database, &collection, &query, k, explain),
         Commands::Delete {
             database,
             collection,
@@ -421,7 +426,7 @@ fn insert_command(path: &str, collection_name: &str) -> Result<()> {
     Ok(())
 }
 
-fn search_command(path: &str, collection_name: &str, query_str: &str, k: usize) -> Result<()> {
+fn search_command(path: &str, collection_name: &str, query_str: &str, k: usize, explain: bool) -> Result<()> {
     let db = Database::open(path)?;
     let coll = db.collection(collection_name)?;
 
@@ -435,19 +440,58 @@ fn search_command(path: &str, collection_name: &str, query_str: &str, k: usize) 
         return Ok(());
     }
 
-    let results = coll.search(&query, k)?;
+    if explain {
+        let (results, explain_data) = coll.search_explain(&query, k)?;
 
-    println!("Search results (k={}):", k);
-    for result in results {
-        let meta = result
-            .metadata
-            .as_ref()
-            .map(|m| m.to_string())
-            .unwrap_or_else(|| "null".to_string());
-        println!(
-            "  ID: {}, Distance: {:.6}, Metadata: {}",
-            result.id, result.distance, meta
-        );
+        println!("Search results (k={}):", k);
+        for result in &results {
+            let meta = result
+                .metadata
+                .as_ref()
+                .map(|m| m.to_string())
+                .unwrap_or_else(|| "null".to_string());
+            println!(
+                "  ID: {}, Distance: {:.6}, Metadata: {}",
+                result.id, result.distance, meta
+            );
+        }
+
+        // Print profiling information
+        println!();
+        println!("Query Profiling:");
+        println!("  Total time: {}μs", explain_data.total_time_us);
+        println!("  Index traversal: {}μs", explain_data.index_time_us);
+        println!("  Filter evaluation: {}μs", explain_data.filter_time_us);
+        println!("  Result enrichment: {}μs", explain_data.enrich_time_us);
+        println!();
+        println!("HNSW Statistics:");
+        println!("  Visited nodes: {}", explain_data.hnsw_stats.visited_nodes);
+        println!("  Layers traversed: {}", explain_data.hnsw_stats.layers_traversed);
+        println!("  Distance computations: {}", explain_data.hnsw_stats.distance_computations);
+        println!("  Traversal time: {}μs", explain_data.hnsw_stats.traversal_time_us);
+        println!();
+        println!("Query Parameters:");
+        println!("  Dimensions: {}", explain_data.dimensions);
+        println!("  Collection size: {}", explain_data.collection_size);
+        println!("  Requested k: {}", explain_data.requested_k);
+        println!("  Effective k: {}", explain_data.effective_k);
+        println!("  ef_search: {}", explain_data.ef_search);
+        println!("  Distance function: {}", explain_data.distance_function);
+    } else {
+        let results = coll.search(&query, k)?;
+
+        println!("Search results (k={}):", k);
+        for result in results {
+            let meta = result
+                .metadata
+                .as_ref()
+                .map(|m| m.to_string())
+                .unwrap_or_else(|| "null".to_string());
+            println!(
+                "  ID: {}, Distance: {:.6}, Metadata: {}",
+                result.id, result.distance, meta
+            );
+        }
     }
 
     Ok(())
