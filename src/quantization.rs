@@ -1,8 +1,116 @@
+//! # Vector Quantization
+//!
+//! This module provides quantization techniques for compressing vectors to reduce
+//! memory usage while maintaining search quality.
+//!
+//! ## Available Quantizers
+//!
+//! - [`ScalarQuantizer`]: 8-bit scalar quantization (4x compression)
+//! - [`ProductQuantizer`]: Product quantization for higher compression ratios
+//! - [`BinaryQuantizer`]: 1-bit per dimension (32x compression)
+//!
+//! ## Example: Scalar Quantization
+//!
+//! ```
+//! use needle::ScalarQuantizer;
+//!
+//! // Training vectors
+//! let vectors: Vec<Vec<f32>> = vec![
+//!     vec![0.1, 0.2, 0.3, 0.4],
+//!     vec![0.5, 0.6, 0.7, 0.8],
+//!     vec![0.2, 0.3, 0.4, 0.5],
+//! ];
+//! let refs: Vec<&[f32]> = vectors.iter().map(|v| v.as_slice()).collect();
+//!
+//! // Train the quantizer
+//! let sq = ScalarQuantizer::train(&refs);
+//!
+//! // Quantize a vector
+//! let original = vec![0.3, 0.4, 0.5, 0.6];
+//! let quantized = sq.quantize(&original);
+//! assert_eq!(quantized.len(), 4);
+//!
+//! // Dequantize back to f32
+//! let restored = sq.dequantize(&quantized);
+//! assert_eq!(restored.len(), 4);
+//! ```
+//!
+//! ## Example: Product Quantization
+//!
+//! ```
+//! use needle::ProductQuantizer;
+//!
+//! // Training vectors (dimension must be divisible by num_subvectors)
+//! let vectors: Vec<Vec<f32>> = (0..100)
+//!     .map(|i| vec![i as f32 * 0.01; 8])
+//!     .collect();
+//! let refs: Vec<&[f32]> = vectors.iter().map(|v| v.as_slice()).collect();
+//!
+//! // Train with 2 subvectors (each subvector is 4 dimensions)
+//! let pq = ProductQuantizer::train(&refs, 2);
+//!
+//! // Encode a vector to PQ codes
+//! let vector = vec![0.5; 8];
+//! let codes = pq.encode(&vector);
+//! assert_eq!(codes.len(), 2); // One code per subvector
+//!
+//! // Decode back to approximate vector
+//! let decoded = pq.decode(&codes);
+//! assert_eq!(decoded.len(), 8);
+//! ```
+//!
+//! ## Example: Binary Quantization
+//!
+//! ```
+//! use needle::BinaryQuantizer;
+//!
+//! // Training vectors
+//! let vectors: Vec<Vec<f32>> = vec![
+//!     vec![0.1, 0.5, 0.3, 0.8, 0.2, 0.6, 0.4, 0.7],
+//!     vec![0.9, 0.4, 0.7, 0.2, 0.8, 0.3, 0.6, 0.5],
+//! ];
+//! let refs: Vec<&[f32]> = vectors.iter().map(|v| v.as_slice()).collect();
+//!
+//! // Train the binary quantizer
+//! let bq = BinaryQuantizer::train(&refs);
+//!
+//! // Quantize to binary codes (1 byte for 8 dimensions)
+//! let binary = bq.quantize(&vectors[0]);
+//! assert_eq!(binary.len(), 1); // 8 dimensions fit in 1 byte
+//!
+//! // Compute Hamming distance between binary codes
+//! let binary2 = bq.quantize(&vectors[1]);
+//! let distance = BinaryQuantizer::hamming_distance(&binary, &binary2);
+//! assert!(distance <= 8); // Max 8 bits can differ
+//! ```
+
 use rand::seq::SliceRandom;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 
 /// Scalar Quantization (SQ8) - quantizes f32 to u8
+///
+/// Scalar quantization maps each floating-point value to an 8-bit integer,
+/// achieving 4x compression with minimal accuracy loss.
+///
+/// # Example
+///
+/// ```
+/// use needle::ScalarQuantizer;
+///
+/// let training_data: Vec<Vec<f32>> = vec![
+///     vec![0.0, 1.0, 2.0],
+///     vec![3.0, 4.0, 5.0],
+/// ];
+/// let refs: Vec<&[f32]> = training_data.iter().map(|v| v.as_slice()).collect();
+///
+/// let sq = ScalarQuantizer::train(&refs);
+/// let quantized = sq.quantize(&[1.5, 2.5, 3.5]);
+/// let restored = sq.dequantize(&quantized);
+///
+/// // Restored values are close to originals
+/// assert!((restored[0] - 1.5).abs() < 0.1);
+/// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScalarQuantizer {
     /// Minimum value per dimension
@@ -153,6 +261,33 @@ impl ScalarQuantizer {
 }
 
 /// Product Quantization (PQ) - divides vector into subvectors and quantizes each
+///
+/// Product quantization achieves high compression ratios by dividing vectors into
+/// subvectors and learning a codebook for each subspace. This is particularly
+/// effective for high-dimensional vectors.
+///
+/// # Example
+///
+/// ```
+/// use needle::ProductQuantizer;
+///
+/// // Create training data (8-dimensional vectors)
+/// let vectors: Vec<Vec<f32>> = (0..50)
+///     .map(|i| (0..8).map(|j| (i * j) as f32 * 0.01).collect())
+///     .collect();
+/// let refs: Vec<&[f32]> = vectors.iter().map(|v| v.as_slice()).collect();
+///
+/// // Train with 2 subvectors
+/// let pq = ProductQuantizer::train(&refs, 2);
+/// assert_eq!(pq.num_subvectors(), 2);
+/// assert_eq!(pq.subvector_dim(), 4);
+///
+/// // Encode and decode
+/// let original = vec![0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8];
+/// let codes = pq.encode(&original);
+/// let decoded = pq.decode(&codes);
+/// assert_eq!(decoded.len(), 8);
+/// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProductQuantizer {
     /// Number of subvectors
@@ -347,6 +482,34 @@ impl ProductQuantizer {
 }
 
 /// Binary Quantization - extreme compression using 1 bit per dimension
+///
+/// Binary quantization offers the highest compression ratio (32x for f32 vectors)
+/// by representing each dimension as a single bit. Values above the learned threshold
+/// are encoded as 1, values below as 0.
+///
+/// # Example
+///
+/// ```
+/// use needle::BinaryQuantizer;
+///
+/// // Training data
+/// let vectors: Vec<Vec<f32>> = vec![
+///     vec![0.1, 0.9, 0.2, 0.8],
+///     vec![0.3, 0.7, 0.4, 0.6],
+/// ];
+/// let refs: Vec<&[f32]> = vectors.iter().map(|v| v.as_slice()).collect();
+///
+/// // Train the quantizer
+/// let bq = BinaryQuantizer::train(&refs);
+///
+/// // Quantize vectors
+/// let code1 = bq.quantize(&vectors[0]);
+/// let code2 = bq.quantize(&vectors[1]);
+///
+/// // Compute Hamming distance (number of differing bits)
+/// let dist = BinaryQuantizer::hamming_distance(&code1, &code2);
+/// println!("Hamming distance: {}", dist);
+/// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BinaryQuantizer {
     /// Threshold per dimension (usually mean)
