@@ -670,6 +670,14 @@ impl AgentMemory {
         self.short_term.read().is_empty() && self.long_term.read().is_empty()
     }
 
+    /// Clear all memories (short-term, long-term, and working).
+    pub fn clear(&self) {
+        self.short_term.write().clear();
+        self.long_term.write().clear();
+        self.working.write().clear();
+        self.by_type.write().clear();
+    }
+
     // === Private helpers ===
 
     fn compute_similarity(&self, a: &[f32], b: &[f32]) -> f32 {
@@ -778,6 +786,138 @@ impl AgentMemory {
                 break;
             }
         }
+    }
+
+    /// Consolidate similar long-term memories by merging those above the
+    /// similarity threshold. Merged memories combine metadata and keep the
+    /// averaged embedding. Returns the number of memories consolidated.
+    pub fn merge_similar(&self, similarity_threshold: f32) -> usize {
+        let mut long_term = self.long_term.write();
+        let ids: Vec<String> = long_term.keys().cloned().collect();
+        let mut merged_count = 0;
+        let mut to_remove: HashSet<String> = HashSet::new();
+
+        for i in 0..ids.len() {
+            if to_remove.contains(&ids[i]) {
+                continue;
+            }
+            let mut merge_targets = Vec::new();
+            for j in (i + 1)..ids.len() {
+                if to_remove.contains(&ids[j]) {
+                    continue;
+                }
+                let (mem_i, mem_j) = match (long_term.get(&ids[i]), long_term.get(&ids[j])) {
+                    (Some(a), Some(b)) => (a, b),
+                    _ => continue,
+                };
+                let sim = self.cosine_similarity(&mem_i.embedding, &mem_j.embedding);
+                if sim >= similarity_threshold {
+                    merge_targets.push(ids[j].clone());
+                }
+            }
+
+            if !merge_targets.is_empty() {
+                // Collect data from targets before mutating
+                let mut sum_emb = Vec::new();
+                let mut count = 0usize;
+                let mut merged_content_parts: Vec<String> = Vec::new();
+                let mut max_importance = 0.0f64;
+                let mut extra_access = 0u64;
+
+                if let Some(base) = long_term.get(&ids[i]) {
+                    sum_emb = base.embedding.clone();
+                    count = 1;
+                    merged_content_parts.push(base.content.to_string());
+                    max_importance = base.importance;
+                    extra_access = base.access_count;
+                }
+
+                for target_id in &merge_targets {
+                    if let Some(target) = long_term.get(target_id) {
+                        for (k, v) in sum_emb.iter_mut().zip(target.embedding.iter()) {
+                            *k += v;
+                        }
+                        count += 1;
+                        merged_content_parts.push(target.content.to_string());
+                        max_importance = max_importance.max(target.importance);
+                        extra_access += target.access_count;
+                    }
+                }
+
+                // Average the embedding
+                if count > 0 {
+                    for v in &mut sum_emb {
+                        *v /= count as f32;
+                    }
+                    let norm: f32 = sum_emb.iter().map(|x| x * x).sum::<f32>().sqrt();
+                    if norm > 0.0 {
+                        for v in &mut sum_emb {
+                            *v /= norm;
+                        }
+                    }
+                }
+
+                // Apply to base
+                if let Some(base) = long_term.get_mut(&ids[i]) {
+                    base.embedding = sum_emb;
+                    base.importance = max_importance;
+                    base.access_count = extra_access;
+                    base.content = serde_json::json!({
+                        "consolidated_from": merged_content_parts,
+                        "merge_count": count,
+                    });
+                }
+
+                for target_id in &merge_targets {
+                    to_remove.insert(target_id.clone());
+                }
+                merged_count += merge_targets.len();
+            }
+        }
+
+        for id in &to_remove {
+            long_term.remove(id);
+            let mut by_type = self.by_type.write();
+            for ids_set in by_type.values_mut() {
+                ids_set.remove(id);
+            }
+        }
+
+        self.stats.write().consolidations += merged_count as u64;
+        merged_count
+    }
+
+    /// Promote short-term memories that exceed the importance threshold
+    /// to long-term storage. Returns the number of memories promoted.
+    pub fn promote_important(&self, importance_threshold: f64) -> usize {
+        let mut promoted = 0;
+        let to_promote: Vec<(String, Memory)> = {
+            let short_term = self.short_term.read();
+            short_term
+                .iter()
+                .filter(|(_, m)| m.importance >= importance_threshold)
+                .map(|(id, m)| (id.clone(), m.clone()))
+                .collect()
+        };
+
+        for (id, mut memory) in to_promote {
+            memory.memory_type = MemoryType::LongTerm;
+            self.short_term.write().remove(&id);
+            self.long_term.write().insert(id, memory);
+            promoted += 1;
+        }
+
+        promoted
+    }
+
+    fn cosine_similarity(&self, a: &[f32], b: &[f32]) -> f32 {
+        let dot: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
+        let norm_a: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
+        let norm_b: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
+        if norm_a == 0.0 || norm_b == 0.0 {
+            return 0.0;
+        }
+        dot / (norm_a * norm_b)
     }
 }
 
@@ -1256,6 +1396,87 @@ impl ContextWindowManager {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Framework Adapter Trait
+// ---------------------------------------------------------------------------
+
+/// Adapter trait for integrating AgentMemory with AI frameworks
+/// (e.g., LangChain, LlamaIndex).
+///
+/// Implementors bridge the framework's memory interface to AgentMemory.
+pub trait MemoryFrameworkAdapter: Send + Sync {
+    /// Store a message from the conversation into memory.
+    fn add_message(&self, role: &str, content: &str, embedding: &[f32]) -> Result<()>;
+
+    /// Retrieve memories relevant to the current context.
+    fn get_relevant_memories(&self, query_embedding: &[f32], k: usize) -> Result<Vec<String>>;
+
+    /// Clear all stored memories.
+    fn clear(&self) -> Result<()>;
+
+    /// Export memory state as JSON for serialization.
+    fn export_state(&self) -> Result<Value>;
+}
+
+/// Default adapter wrapping AgentMemory for framework integration.
+pub struct DefaultMemoryAdapter {
+    memory: AgentMemory,
+}
+
+impl DefaultMemoryAdapter {
+    pub fn new(config: MemoryConfig) -> Self {
+        Self {
+            memory: AgentMemory::new(config),
+        }
+    }
+
+    /// Access the underlying `AgentMemory` for advanced operations.
+    pub fn inner(&self) -> &AgentMemory {
+        &self.memory
+    }
+}
+
+impl MemoryFrameworkAdapter for DefaultMemoryAdapter {
+    fn add_message(&self, role: &str, content: &str, embedding: &[f32]) -> Result<()> {
+        let memory_type = match role {
+            "system" => MemoryType::Semantic,
+            "user" => MemoryType::Episodic,
+            "assistant" => MemoryType::Episodic,
+            _ => MemoryType::ShortTerm,
+        };
+        let metadata = serde_json::json!({
+            "role": role,
+            "content": content,
+        });
+        self.memory.remember(embedding, memory_type, metadata)?;
+        Ok(())
+    }
+
+    fn get_relevant_memories(&self, query_embedding: &[f32], k: usize) -> Result<Vec<String>> {
+        let results = self.memory.recall(query_embedding, k)?;
+        Ok(results
+            .into_iter()
+            .map(|r| r.memory.content.to_string())
+            .collect())
+    }
+
+    fn clear(&self) -> Result<()> {
+        self.memory.clear();
+        Ok(())
+    }
+
+    fn export_state(&self) -> Result<Value> {
+        let stats = self.memory.stats();
+        Ok(serde_json::json!({
+            "total_memories": stats.total_memories,
+            "short_term": stats.short_term_count,
+            "long_term": stats.long_term_count,
+            "recalls": stats.total_recalls,
+            "consolidations": stats.consolidations,
+        }))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1501,5 +1722,80 @@ mod tests {
         let result = mgr.build_window(sections);
         // "c" doesn't fit (5000 > 3096). "b" and "a" fit.
         assert_eq!(result.len(), 2);
+    }
+
+    #[test]
+    fn test_consolidate_similar_memories() {
+        let config = MemoryConfig::new(64).with_recall_threshold(0.0);
+        let memory = AgentMemory::new(config);
+
+        // Store two nearly identical embeddings
+        let emb1 = random_embedding(64, 42);
+        let mut emb2 = emb1.clone();
+        // Perturb slightly so they're very similar but not identical
+        emb2[0] += 0.001;
+        let norm: f32 = emb2.iter().map(|x| x * x).sum::<f32>().sqrt();
+        for v in &mut emb2 {
+            *v /= norm;
+        }
+
+        memory
+            .remember(&emb1, MemoryType::LongTerm, json!({"a": 1}))
+            .unwrap();
+        memory
+            .remember(&emb2, MemoryType::LongTerm, json!({"b": 2}))
+            .unwrap();
+        // A different memory
+        let emb3 = random_embedding(64, 999);
+        memory
+            .remember(&emb3, MemoryType::LongTerm, json!({"c": 3}))
+            .unwrap();
+
+        assert_eq!(memory.long_term.read().len(), 3);
+
+        let merged = memory.merge_similar(0.99);
+        assert!(merged >= 1);
+        assert!(memory.long_term.read().len() < 3);
+    }
+
+    #[test]
+    fn test_promote_important() {
+        let config = MemoryConfig::new(64);
+        let memory = AgentMemory::new(config);
+
+        let emb = random_embedding(64, 1);
+        let id = memory
+            .remember(&emb, MemoryType::ShortTerm, json!({"note": "important"}))
+            .unwrap();
+
+        // Boost importance manually
+        memory
+            .short_term
+            .write()
+            .get_mut(&id)
+            .unwrap()
+            .importance = 0.9;
+
+        let promoted = memory.promote_important(0.8);
+        assert_eq!(promoted, 1);
+        assert!(memory.short_term.read().is_empty());
+        assert_eq!(memory.long_term.read().len(), 1);
+    }
+
+    #[test]
+    fn test_framework_adapter() {
+        let adapter = DefaultMemoryAdapter::new(MemoryConfig::new(64).with_recall_threshold(0.0));
+
+        let emb = random_embedding(64, 1);
+        adapter.add_message("user", "Hello!", &emb).unwrap();
+
+        let results = adapter.get_relevant_memories(&emb, 5).unwrap();
+        assert!(!results.is_empty());
+
+        let state = adapter.export_state().unwrap();
+        assert_eq!(state["total_memories"], 1);
+
+        adapter.clear().unwrap();
+        assert_eq!(adapter.inner().len(), 0);
     }
 }
