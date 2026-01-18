@@ -2546,6 +2546,25 @@ impl Collection {
         let index_overhead = vector_count * 200; // ~200 bytes per vector for HNSW
         vector_bytes + metadata_bytes + index_overhead
     }
+
+    /// Create a serialized snapshot of the collection state.
+    ///
+    /// Returns the snapshot as a JSON byte vector that can be stored or
+    /// later restored with [`restore_snapshot`].
+    pub fn create_snapshot(&self) -> Result<Vec<u8>> {
+        serde_json::to_vec(self).map_err(|e| {
+            NeedleError::InvalidInput(format!("Failed to serialize snapshot: {e}"))
+        })
+    }
+
+    /// Restore a collection from a previously created snapshot.
+    ///
+    /// Replaces the current collection state with the snapshot data.
+    pub fn restore_snapshot(data: &[u8]) -> Result<Self> {
+        serde_json::from_slice(data).map_err(|e| {
+            NeedleError::InvalidInput(format!("Failed to deserialize snapshot: {e}"))
+        })
+    }
 }
 
 /// Iterator over collection entries.
