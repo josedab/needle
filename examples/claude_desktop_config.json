@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "needle": {
+      "command": "needle",
+      "args": ["mcp", "--database", "vectors.needle"],
+      "env": {}
+    }
+  }
+}

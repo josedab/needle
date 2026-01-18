@@ -1,0 +1,74 @@
+{
+  "$schema": "https://raw.githubusercontent.com/modelcontextprotocol/registry/main/schema/server.json",
+  "name": "needle",
+  "display_name": "Needle Vector Database",
+  "description": "Embedded vector database (SQLite for vectors) with HNSW search, hybrid BM25+vector retrieval, metadata filtering, and collection snapshots. Create, search, and manage vector collections directly from AI agents.",
+  "version": "0.1.0",
+  "author": "Anthropic",
+  "license": "MIT",
+  "homepage": "https://github.com/anthropics/needle",
+  "repository": "https://github.com/anthropics/needle",
+  "documentation": "https://needle.dev",
+  "transport": ["stdio", "http"],
+  "install": {
+    "cargo": "cargo install needle",
+    "docker": "docker run --rm -i ghcr.io/anthropics/needle:latest mcp"
+  },
+  "tools": [
+    {
+      "name": "list_collections",
+      "description": "List all vector collections in the database with their dimensions and vector counts"
+    },
+    {
+      "name": "create_collection",
+      "description": "Create a new vector collection with specified dimensions and distance function"
+    },
+    {
+      "name": "collection_info",
+      "description": "Get detailed statistics about a collection including memory usage"
+    },
+    {
+      "name": "insert_vectors",
+      "description": "Insert one or more vectors with optional JSON metadata"
+    },
+    {
+      "name": "search",
+      "description": "Search for similar vectors using ANN with optional MongoDB-style metadata filters"
+    },
+    {
+      "name": "get_vector",
+      "description": "Retrieve a specific vector and its metadata by ID"
+    },
+    {
+      "name": "delete_vector",
+      "description": "Delete a vector from a collection by ID"
+    },
+    {
+      "name": "delete_collection",
+      "description": "Delete an entire collection and all its vectors"
+    },
+    {
+      "name": "save_database",
+      "description": "Persist all changes to disk"
+    }
+  ],
+  "resources": [
+    {
+      "uri_template": "needle://collections/{name}",
+      "description": "Vector collection accessible by name"
+    }
+  ],
+  "tags": [
+    "vector-database",
+    "embeddings",
+    "semantic-search",
+    "rag",
+    "hnsw",
+    "ai",
+    "machine-learning"
+  ],
+  "claude_desktop_config": {
+    "command": "needle",
+    "args": ["mcp", "--database", "vectors.needle"]
+  }
+}

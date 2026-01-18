@@ -83,6 +83,7 @@ pub(crate) mod storage;
 pub mod tuning;
 pub mod columnar;
 pub mod pipeline;
+pub mod graphrag;
 
 // ── Indexing ──────────────────────────────────────────────────────────────────
 // Vector index implementations: HNSW, DiskANN, IVF, sparse, multi-vector.
@@ -237,6 +238,8 @@ pub mod hybrid;
 
 #[cfg(feature = "server")]
 pub mod server;
+
+pub mod mcp;
 
 #[cfg(feature = "web-ui")]
 pub mod web_ui;
