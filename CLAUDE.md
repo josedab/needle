@@ -51,32 +51,42 @@ cargo run --features server -- serve -a 127.0.0.1:8080 -d mydb.needle
 
 ```
 src/
-├── lib.rs          # Library entry, re-exports public API
-├── main.rs         # CLI application
-├── collection.rs   # Collection: vectors + metadata + index
-├── database.rs     # Database: multi-collection management, persistence
-├── hnsw.rs         # HNSW index implementation
-├── distance.rs     # Distance functions (Cosine, Euclidean, Dot, Manhattan)
-├── metadata.rs     # Metadata storage and filtering (with Filter::parse)
-├── storage.rs      # File I/O, mmap, vector storage
-├── quantization.rs # Scalar, Product, Binary quantization
-├── sparse.rs       # Sparse vector support
-├── multivec.rs     # Multi-vector (ColBERT) support
-├── tuning.rs       # Auto-tuning HNSW parameters
-├── error.rs        # Error types
-├── hybrid.rs       # BM25 + RRF hybrid search (feature: hybrid)
-├── server.rs       # HTTP REST API (feature: server)
-├── metrics.rs      # Prometheus metrics (feature: metrics)
-├── embeddings.rs   # ONNX embedding inference (feature: embeddings)
-├── python.rs       # Python bindings (feature: python)
-├── wasm.rs         # WASM bindings (feature: wasm)
+├── lib.rs              # Library entry, re-exports public API
+├── main.rs             # CLI application
+├── collection/         # Collection: vectors + metadata + index
+│   ├── mod.rs          # Core collection logic, search pipeline
+│   ├── config.rs       # CollectionConfig, CollectionStats
+│   └── search.rs       # SearchResult, SearchExplain
+├── database/           # Database: multi-collection management, persistence
+│   ├── mod.rs          # Database struct, open/save/collections
+│   └── collection_ref.rs  # Thread-safe CollectionRef, SearchParams
+├── indexing/           # Vector index implementations
+│   ├── hnsw.rs         # HNSW index (primary)
+│   ├── ivf.rs          # IVF (Inverted File) index
+│   ├── quantization.rs # Scalar, Product, Binary quantization
+│   ├── sparse.rs       # Sparse vector support
+│   └── multivec.rs     # Multi-vector (ColBERT) support
+├── search/             # Query planning, reranking, federation
+├── persistence/        # Backup, WAL, versioning, cloud storage
+├── enterprise/         # Encryption, RBAC, Raft, namespaces
+├── ml/                 # Auto-embed, RAG, model registry
+├── experimental/       # ⚠️ APIs may change without notice
+├── distance.rs         # Distance functions (Cosine, Euclidean, Dot, Manhattan)
+├── metadata.rs         # Metadata storage and filtering (with Filter::parse)
+├── storage.rs          # File I/O, mmap, vector storage
+├── tuning.rs           # Auto-tuning HNSW parameters
+├── error.rs            # Error types
+├── hybrid.rs           # BM25 + RRF hybrid search (feature: hybrid)
+├── server.rs           # HTTP REST API (feature: server)
+├── metrics.rs          # Prometheus metrics (feature: metrics)
+├── embeddings.rs       # ONNX embedding inference (feature: embeddings)
+├── python.rs           # Python bindings (feature: python)
+├── wasm.rs             # WASM bindings (feature: wasm)
 └── uniffi_bindings.rs  # Swift/Kotlin bindings (feature: uniffi-bindings)
 
-tests/
-└── property_tests.rs  # Proptest-based property tests
-
+tests/                  # 12 test files (integration, concurrent, property, edge cases)
 benches/
-└── benchmarks.rs      # Criterion benchmarks
+└── benchmarks.rs       # Criterion benchmarks
 ```
 
 ## Key Types
