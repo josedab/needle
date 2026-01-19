@@ -1172,6 +1172,187 @@ fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
 }
 
 // ============================================================================
+// A/B Testing for Embedding Models
+// ============================================================================
+
+/// Which variant in an A/B test.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum ABVariant {
+    A,
+    B,
+}
+
+/// A/B test experiment comparing two embedding providers.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ABTestExperiment {
+    /// Experiment name.
+    pub name: String,
+    /// Provider for variant A.
+    pub provider_a: ProviderType,
+    /// Provider for variant B.
+    pub provider_b: ProviderType,
+    /// Quality scores for variant A (e.g., relevance scores from downstream tasks).
+    a_quality_scores: Vec<f64>,
+    /// Quality scores for variant B.
+    b_quality_scores: Vec<f64>,
+    /// Latency samples for A (ms).
+    a_latencies: Vec<u64>,
+    /// Latency samples for B (ms).
+    b_latencies: Vec<u64>,
+}
+
+/// Summary of an A/B test experiment.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ABTestSummary {
+    pub name: String,
+    pub a_count: usize,
+    pub b_count: usize,
+    pub a_avg_quality: f64,
+    pub b_avg_quality: f64,
+    pub a_avg_latency_ms: f64,
+    pub b_avg_latency_ms: f64,
+    /// Recommended variant based on quality.
+    pub recommended: ABVariant,
+}
+
+impl ABTestExperiment {
+    pub fn new(name: &str, provider_a: ProviderType, provider_b: ProviderType) -> Self {
+        Self {
+            name: name.to_string(),
+            provider_a,
+            provider_b,
+            a_quality_scores: Vec::new(),
+            b_quality_scores: Vec::new(),
+            a_latencies: Vec::new(),
+            b_latencies: Vec::new(),
+        }
+    }
+
+    /// Record a quality and latency result for a variant.
+    pub fn record_result(&mut self, variant: ABVariant, quality: f64, latency_ms: u64) {
+        match variant {
+            ABVariant::A => {
+                self.a_quality_scores.push(quality);
+                self.a_latencies.push(latency_ms);
+            }
+            ABVariant::B => {
+                self.b_quality_scores.push(quality);
+                self.b_latencies.push(latency_ms);
+            }
+        }
+    }
+
+    /// Get a summary of the experiment results.
+    pub fn summary(&self) -> ABTestSummary {
+        let a_avg_q = if self.a_quality_scores.is_empty() {
+            0.0
+        } else {
+            self.a_quality_scores.iter().sum::<f64>() / self.a_quality_scores.len() as f64
+        };
+        let b_avg_q = if self.b_quality_scores.is_empty() {
+            0.0
+        } else {
+            self.b_quality_scores.iter().sum::<f64>() / self.b_quality_scores.len() as f64
+        };
+        let a_avg_l = if self.a_latencies.is_empty() {
+            0.0
+        } else {
+            self.a_latencies.iter().sum::<u64>() as f64 / self.a_latencies.len() as f64
+        };
+        let b_avg_l = if self.b_latencies.is_empty() {
+            0.0
+        } else {
+            self.b_latencies.iter().sum::<u64>() as f64 / self.b_latencies.len() as f64
+        };
+
+        ABTestSummary {
+            name: self.name.clone(),
+            a_count: self.a_quality_scores.len(),
+            b_count: self.b_quality_scores.len(),
+            a_avg_quality: a_avg_q,
+            b_avg_quality: b_avg_q,
+            a_avg_latency_ms: a_avg_l,
+            b_avg_latency_ms: b_avg_l,
+            recommended: if a_avg_q >= b_avg_q {
+                ABVariant::A
+            } else {
+                ABVariant::B
+            },
+        }
+    }
+
+    /// Select which variant to use for the next request (simple alternation).
+    pub fn next_variant(&self) -> ABVariant {
+        if self.a_quality_scores.len() <= self.b_quality_scores.len() {
+            ABVariant::A
+        } else {
+            ABVariant::B
+        }
+    }
+}
+
+// ============================================================================
+// Cost Budget Management
+// ============================================================================
+
+/// Budget period for cost tracking.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum BudgetPeriod {
+    Hourly,
+    Daily,
+    Monthly,
+}
+
+/// Cost budget tracker to prevent overspending on embedding APIs.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CostBudget {
+    /// Maximum spend for the period.
+    pub limit: f64,
+    /// Period for the budget.
+    pub period: BudgetPeriod,
+    /// Amount spent in the current period.
+    spent: f64,
+}
+
+impl CostBudget {
+    pub fn new(limit: f64, period: BudgetPeriod) -> Self {
+        Self {
+            limit,
+            period,
+            spent: 0.0,
+        }
+    }
+
+    /// Check if a spend is within budget.
+    pub fn can_spend(&self, amount: f64) -> bool {
+        self.spent + amount <= self.limit
+    }
+
+    /// Record a spend.
+    pub fn record_spend(&mut self, amount: f64) {
+        self.spent += amount;
+    }
+
+    /// Remaining budget.
+    pub fn remaining(&self) -> f64 {
+        (self.limit - self.spent).max(0.0)
+    }
+
+    /// Usage percentage (0.0 to 1.0+).
+    pub fn usage_pct(&self) -> f64 {
+        if self.limit == 0.0 {
+            return 0.0;
+        }
+        self.spent / self.limit
+    }
+
+    /// Reset the budget for a new period.
+    pub fn reset(&mut self) {
+        self.spent = 0.0;
+    }
+}
+
+// ============================================================================
 // Tests
 // ============================================================================
 
@@ -1317,5 +1498,39 @@ mod tests {
 
         let (_, _, size) = cache.stats();
         assert_eq!(size, 3); // Should have evicted 2
+    }
+
+    // A/B testing
+
+    #[test]
+    fn test_ab_experiment() {
+        let mut ab = ABTestExperiment::new(
+            "model_comparison",
+            ProviderType::Mock,
+            ProviderType::Mock,
+        );
+
+        ab.record_result(ABVariant::A, 0.95, 50);
+        ab.record_result(ABVariant::A, 0.90, 55);
+        ab.record_result(ABVariant::B, 0.85, 30);
+        ab.record_result(ABVariant::B, 0.88, 35);
+
+        let summary = ab.summary();
+        assert_eq!(summary.a_count, 2);
+        assert_eq!(summary.b_count, 2);
+        assert!(summary.a_avg_quality > summary.b_avg_quality);
+        assert!(summary.a_avg_latency_ms > summary.b_avg_latency_ms);
+    }
+
+    #[test]
+    fn test_cost_budget() {
+        let mut budget = CostBudget::new(1.0, BudgetPeriod::Hourly);
+
+        assert!(budget.can_spend(0.5));
+        budget.record_spend(0.5);
+        assert!(budget.can_spend(0.5));
+        budget.record_spend(0.5);
+        assert!(!budget.can_spend(0.01));
+        assert!((budget.remaining() - 0.0).abs() < f64::EPSILON);
     }
 }
