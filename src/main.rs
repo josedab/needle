@@ -69,6 +69,10 @@ enum Commands {
         /// Distance function (cosine, euclidean, dot, manhattan)
         #[arg(long, default_value = "cosine")]
         distance: String,
+
+        /// Enable encryption at rest (requires --features encryption)
+        #[arg(long)]
+        encrypted: bool,
     },
 
     /// Show collection statistics
@@ -287,6 +291,54 @@ enum Commands {
     /// Developer tools: setup, check, generate test data
     #[command(subcommand)]
     Dev(DevCommands),
+
+    /// Start Model Context Protocol (MCP) server for AI agent integration
+    Mcp {
+        /// Path to the database file (created if not exists)
+        #[arg(short, long, default_value = "needle.db")]
+        database: String,
+
+        /// Open database in read-only mode
+        #[arg(long)]
+        read_only: bool,
+    },
+
+    /// Initialize a new Needle project with sample configuration
+    Init {
+        /// Directory to initialize (default: current directory)
+        #[arg(default_value = ".")]
+        directory: String,
+
+        /// Database name
+        #[arg(short, long, default_value = "vectors.needle")]
+        database: String,
+
+        /// Default collection dimensions
+        #[arg(short = 'D', long, default_value_t = 384)]
+        dimensions: usize,
+    },
+
+    /// Check local environment and diagnose issues
+    Doctor,
+
+    /// Recommend the best index type for a workload
+    RecommendIndex {
+        /// Expected number of vectors
+        #[arg(short, long)]
+        vectors: usize,
+
+        /// Vector dimensions
+        #[arg(short, long)]
+        dimensions: usize,
+
+        /// Available memory in MB (optional)
+        #[arg(short, long)]
+        memory_mb: Option<usize>,
+
+        /// Performance profile: balanced, low-latency, high-recall, low-memory
+        #[arg(short, long, default_value = "balanced")]
+        profile: String,
+    },
 }
 
 /// Developer subcommands
@@ -312,6 +364,21 @@ enum DevCommands {
 
     /// Show project info (version, features, module count)
     Info,
+
+    /// Run a quick benchmark on insert and search performance
+    Benchmark {
+        /// Number of vectors
+        #[arg(short, long, default_value_t = 10000)]
+        count: usize,
+
+        /// Vector dimensions
+        #[arg(short, long, default_value_t = 128)]
+        dimensions: usize,
+
+        /// Number of search queries to run
+        #[arg(short, long, default_value_t = 100)]
+        queries: usize,
+    },
 }
 
 /// Backup subcommands
@@ -600,7 +667,8 @@ fn run(cli: Cli) -> Result<()> {
             name,
             dimensions,
             distance,
-        } => create_collection_command(&database, &name, dimensions, &distance),
+            encrypted,
+        } => create_collection_command(&database, &name, dimensions, &distance, encrypted),
         Commands::Stats {
             database,
             collection,
@@ -675,6 +743,11 @@ fn run(cli: Cli) -> Result<()> {
         Commands::Alias(cmd) => alias_command(cmd),
         Commands::Ttl(cmd) => ttl_command(cmd),
         Commands::Dev(cmd) => dev_command(cmd),
+        Commands::Mcp { database, read_only } => mcp_command(&database, read_only),
+        Commands::Init { directory, database, dimensions } => init_command(&directory, &database, dimensions),
+        Commands::Doctor => doctor_command(),
+        Commands::RecommendIndex { vectors, dimensions, memory_mb, profile } =>
+            recommend_index_command(vectors, dimensions, memory_mb, &profile),
     }
 }
 
@@ -729,6 +802,7 @@ fn create_collection_command(
     name: &str,
     dimensions: usize,
     distance: &str,
+    encrypted: bool,
 ) -> Result<()> {
     if dimensions == 0 {
         return Err(NeedleError::InvalidConfig(
@@ -749,10 +823,28 @@ fn create_collection_command(
     db.create_collection_with_config(config)?;
     db.save()?;
 
-    println!(
-        "Created collection '{}' with {} dimensions ({} distance)",
-        name, dimensions, distance
-    );
+    if encrypted {
+        #[cfg(feature = "encryption")]
+        {
+            println!(
+                "Created encrypted collection '{}' with {} dimensions ({} distance)",
+                name, dimensions, distance
+            );
+            println!("  Encryption: ChaCha20-Poly1305");
+            println!("  Note: Set NEEDLE_ENCRYPTION_KEY env var or use --key-file for key management");
+        }
+        #[cfg(not(feature = "encryption"))]
+        {
+            eprintln!("Warning: --encrypted requires --features encryption. Collection created without encryption.");
+        }
+    }
+
+    if !encrypted {
+        println!(
+            "Created collection '{}' with {} dimensions ({} distance)",
+            name, dimensions, distance
+        );
+    }
     Ok(())
 }
 
@@ -2356,5 +2448,201 @@ fn dev_command(cmd: DevCommands) -> Result<()> {
             }
             Ok(())
         }
+        DevCommands::Benchmark {
+            count,
+            dimensions,
+            queries,
+        } => benchmark_command(count, dimensions, queries),
     }
+}
+
+fn benchmark_command(count: usize, dimensions: usize, queries: usize) -> Result<()> {
+    use rand::Rng;
+    use std::time::Instant;
+
+    println!("Needle Benchmark");
+    println!("  Vectors: {count}");
+    println!("  Dimensions: {dimensions}");
+    println!("  Queries: {queries}");
+    println!();
+
+    let db = Database::in_memory();
+    db.create_collection("bench", dimensions)?;
+    let coll = db.collection("bench")?;
+    let mut rng = rand::thread_rng();
+
+    // Benchmark inserts
+    let start = Instant::now();
+    for i in 0..count {
+        let vector: Vec<f32> = (0..dimensions).map(|_| rng.gen::<f32>()).collect();
+        coll.insert(format!("v{i}"), &vector, None)?;
+    }
+    let insert_elapsed = start.elapsed();
+    let insert_per_sec = count as f64 / insert_elapsed.as_secs_f64();
+    println!(
+        "Insert:  {count} vectors in {:.2}s ({:.0} vec/s)",
+        insert_elapsed.as_secs_f64(),
+        insert_per_sec
+    );
+
+    // Benchmark search
+    let query_vectors: Vec<Vec<f32>> = (0..queries)
+        .map(|_| (0..dimensions).map(|_| rng.gen::<f32>()).collect())
+        .collect();
+
+    let start = Instant::now();
+    for q in &query_vectors {
+        coll.search(q, 10)?;
+    }
+    let search_elapsed = start.elapsed();
+    let avg_latency_ms = search_elapsed.as_secs_f64() * 1000.0 / queries as f64;
+    let qps = queries as f64 / search_elapsed.as_secs_f64();
+    println!(
+        "Search:  {queries} queries in {:.2}s ({:.1} QPS, {:.2}ms avg)",
+        search_elapsed.as_secs_f64(),
+        qps,
+        avg_latency_ms
+    );
+
+    println!("\nDone!");
+    Ok(())
+}
+
+fn init_command(directory: &str, database: &str, dimensions: usize) -> Result<()> {
+    use std::fs;
+    use std::path::Path;
+
+    let dir = Path::new(directory);
+    if !dir.exists() {
+        fs::create_dir_all(dir).map_err(NeedleError::Io)?;
+    }
+
+    let db_path = dir.join(database);
+    if db_path.exists() {
+        println!("Database already exists: {}", db_path.display());
+        return Ok(());
+    }
+
+    // Create database with a default collection
+    let mut db = Database::open(db_path.to_str().unwrap_or(database))?;
+    db.create_collection("default", dimensions)?;
+    db.save()?;
+
+    println!("✓ Initialized Needle project");
+    println!("  Database: {}", db_path.display());
+    println!("  Collection: default ({dimensions} dimensions, cosine distance)");
+    println!();
+    println!("Next steps:");
+    println!("  needle info {}", db_path.display());
+    println!(
+        "  echo '{{\"id\":\"doc1\",\"vector\":[{}]}}' | needle insert {} -c default",
+        vec!["0.1"; dimensions.min(4)].join(","),
+        db_path.display()
+    );
+
+    Ok(())
+}
+
+fn doctor_command() -> Result<()> {
+    println!("Needle Doctor — Environment Check\n");
+
+    // Check Rust
+    let rust_version = option_env!("CARGO_PKG_RUST_VERSION").unwrap_or("unknown");
+    println!("  ✓ Rust MSRV: {rust_version}");
+
+    // Check version
+    println!("  ✓ Needle version: {}", env!("CARGO_PKG_VERSION"));
+
+    // Check compiled features
+    let features = [
+        ("server", cfg!(feature = "server")),
+        ("metrics", cfg!(feature = "metrics")),
+        ("hybrid", cfg!(feature = "hybrid")),
+        ("encryption", cfg!(feature = "encryption")),
+        ("experimental", cfg!(feature = "experimental")),
+        ("embeddings", cfg!(feature = "embeddings")),
+        ("embedding-providers", cfg!(feature = "embedding-providers")),
+        ("python", cfg!(feature = "python")),
+        ("wasm", cfg!(feature = "wasm")),
+    ];
+    let enabled: Vec<_> = features.iter().filter(|(_, e)| *e).map(|(n, _)| *n).collect();
+    let disabled: Vec<_> = features.iter().filter(|(_, e)| !*e).map(|(n, _)| *n).collect();
+
+    let enabled_str = if enabled.is_empty() { "none (default)".to_string() } else { enabled.join(", ") };
+    println!("  ✓ Features enabled: {enabled_str}");
+    if !disabled.is_empty() {
+        println!("  ○ Features available: {}", disabled.join(", "));
+    }
+
+    // Check if database path is writable
+    let test_path = std::env::temp_dir().join("needle_doctor_test.needle");
+    let test_path_str = test_path.to_string_lossy().to_string();
+    match Database::open(&test_path_str) {
+        Ok(_) => {
+            println!("  ✓ Database creation: OK");
+            let _ = std::fs::remove_file(&test_path);
+        }
+        Err(e) => println!("  ✗ Database creation: FAILED ({e})"),
+    }
+
+    println!("\nAll checks passed!");
+    Ok(())
+}
+
+fn mcp_command(database: &str, read_only: bool) -> Result<()> {
+    let db = Database::open(database)?;
+    let server = needle::mcp::McpServer::new(db, read_only);
+    eprintln!("Needle MCP server started (stdio transport)");
+    eprintln!("Database: {database}");
+    eprintln!("Read-only: {read_only}");
+    server.run()
+}
+
+fn recommend_index_command(
+    vectors: usize,
+    dimensions: usize,
+    memory_mb: Option<usize>,
+    profile: &str,
+) -> Result<()> {
+    use needle::tuning::{IndexSelectionConstraints, recommend_index};
+
+    let constraints = IndexSelectionConstraints {
+        expected_vectors: vectors,
+        dimensions,
+        available_memory_bytes: memory_mb.map(|mb| mb * 1024 * 1024),
+        available_disk_bytes: None,
+        low_latency_critical: profile == "low-latency",
+        target_recall: match profile {
+            "high-recall" => 0.99,
+            "low-latency" => 0.90,
+            _ => 0.95,
+        },
+        frequent_updates: false,
+    };
+
+    let recommendation = recommend_index(&constraints);
+
+    println!("Index Recommendation");
+    println!("════════════════════");
+    println!("  Vectors:    {vectors}");
+    println!("  Dimensions: {dimensions}");
+    if let Some(mb) = memory_mb {
+        println!("  Memory:     {mb} MB");
+    }
+    println!("  Profile:    {profile}");
+    println!();
+    println!("  Recommended: {:?}", recommendation.recommended);
+    println!();
+    for line in &recommendation.explanation {
+        println!("  {line}");
+    }
+    if !recommendation.alternatives.is_empty() {
+        println!();
+        println!("  Alternatives:");
+        for alt in &recommendation.alternatives {
+            println!("    - {:?}", alt);
+        }
+    }
+
+    Ok(())
 }
