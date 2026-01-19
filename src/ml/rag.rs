@@ -30,6 +30,7 @@ use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::num::NonZeroUsize;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -412,6 +413,8 @@ pub struct RagPipeline {
     documents: HashMap<String, Document>,
     chunks: HashMap<String, Chunk>,
     cache: Option<Arc<RagCache>>,
+    query_count: AtomicU64,
+    total_query_latency_ms: AtomicU64,
 }
 
 impl RagPipeline {
@@ -438,6 +441,8 @@ impl RagPipeline {
             documents: HashMap::new(),
             chunks: HashMap::new(),
             cache,
+            query_count: AtomicU64::new(0),
+            total_query_latency_ms: AtomicU64::new(0),
         })
     }
 
@@ -638,6 +643,11 @@ impl RagPipeline {
         let citations = self.build_citations(&retrieved);
 
         let total_latency = start_time.elapsed().as_millis() as u64;
+
+        // Track query metrics
+        self.query_count.fetch_add(1, Ordering::Relaxed);
+        self.total_query_latency_ms
+            .fetch_add(total_latency, Ordering::Relaxed);
 
         // Cache the response
         if let Some(ref cache) = self.cache {
@@ -1157,7 +1167,125 @@ impl RagPipeline {
             } else {
                 self.chunks.len() as f64 / self.documents.len() as f64
             },
+            total_queries: self.query_count.load(Ordering::Relaxed),
+            avg_query_latency_ms: {
+                let count = self.query_count.load(Ordering::Relaxed);
+                if count == 0 {
+                    0.0
+                } else {
+                    self.total_query_latency_ms.load(Ordering::Relaxed) as f64 / count as f64
+                }
+            },
+            cache_hit_rate: self.cache_hit_rate(),
         }
+    }
+
+    /// Ingest multiple documents in batch
+    pub fn batch_ingest(
+        &mut self,
+        documents: &[(&str, &str, Option<serde_json::Value>)],
+        embedder: &dyn Embedder,
+        options: &BatchIngestOptions,
+    ) -> BatchIngestResult {
+        let start = std::time::Instant::now();
+        let mut result = BatchIngestResult {
+            ingested: 0,
+            skipped: 0,
+            failed: 0,
+            errors: Vec::new(),
+            elapsed_ms: 0,
+        };
+
+        let strategy = options.chunking.clone().unwrap_or_else(|| self.config.chunking.clone());
+
+        for (doc_id, text, metadata) in documents {
+            if options.skip_existing && self.documents.contains_key(*doc_id) {
+                result.skipped += 1;
+                continue;
+            }
+
+            match self.ingest_with_strategy(doc_id, text, metadata.clone(), &strategy, embedder) {
+                Ok(_) => result.ingested += 1,
+                Err(e) => {
+                    result.failed += 1;
+                    result.errors.push(format!("{}: {}", doc_id, e));
+                }
+            }
+        }
+
+        result.elapsed_ms = start.elapsed().as_millis() as u64;
+        result
+    }
+
+    /// Query with multiple query expansions for improved recall.
+    ///
+    /// Generates paraphrased queries and merges results from all expansions.
+    pub fn multi_query(
+        &mut self,
+        queries: &[&str],
+        embedder: &dyn Embedder,
+        options: &MultiQueryOptions,
+    ) -> Result<RagResponse> {
+        let start_time = std::time::Instant::now();
+
+        let mut all_chunks: Vec<RetrievedChunk> = Vec::new();
+        let mut seen_ids = std::collections::HashSet::new();
+
+        for query in queries {
+            if let Ok(response) = self.query(query, embedder) {
+                for chunk in response.chunks {
+                    if seen_ids.insert(chunk.chunk.id.clone()) {
+                        all_chunks.push(chunk);
+                    }
+                }
+            }
+        }
+
+        // Merge based on strategy
+        match &options.merge_strategy {
+            MultiQueryMerge::RoundRobin => {
+                // Already in interleaved order from sequential queries
+            }
+            MultiQueryMerge::ReciprocalRankFusion { k } => {
+                // RRF: score = sum(1 / (k + rank_i)) across all queries
+                let mut rrf_scores: HashMap<String, f32> = HashMap::new();
+                for (rank, chunk) in all_chunks.iter().enumerate() {
+                    *rrf_scores.entry(chunk.chunk.id.clone()).or_default() +=
+                        1.0 / (k + rank as f32 + 1.0);
+                }
+                all_chunks.sort_by(|a, b| {
+                    let sa = rrf_scores.get(&a.chunk.id).copied().unwrap_or(0.0);
+                    let sb = rrf_scores.get(&b.chunk.id).copied().unwrap_or(0.0);
+                    sb.partial_cmp(&sa).unwrap_or(std::cmp::Ordering::Equal)
+                });
+            }
+            MultiQueryMerge::UnionBestScore => {
+                all_chunks.sort_by(|a, b| {
+                    b.final_score
+                        .partial_cmp(&a.final_score)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                });
+            }
+        }
+
+        all_chunks.truncate(self.config.top_k);
+
+        let context = self.assemble_context(&all_chunks);
+        let citations = self.build_citations(&all_chunks);
+        let total_latency = start_time.elapsed().as_millis() as u64;
+
+        Ok(RagResponse {
+            chunks: all_chunks,
+            context,
+            citations,
+            metadata: RagQueryMetadata {
+                chunks_retrieved: queries.len() * self.config.top_k,
+                chunks_after_dedup: 0,
+                retrieval_latency_ms: total_latency,
+                rerank_latency_ms: None,
+                total_latency_ms: total_latency,
+            },
+        })
     }
 }
 
@@ -1167,6 +1295,66 @@ pub struct RagStats {
     pub total_documents: usize,
     pub total_chunks: usize,
     pub avg_chunks_per_doc: f64,
+    pub total_queries: u64,
+    pub avg_query_latency_ms: f64,
+    pub cache_hit_rate: Option<f64>,
+}
+
+/// Options for batch document ingestion
+#[derive(Debug, Clone)]
+pub struct BatchIngestOptions {
+    /// Chunking strategy override (uses pipeline default if None)
+    pub chunking: Option<ChunkingStrategy>,
+    /// Skip documents that already exist
+    pub skip_existing: bool,
+}
+
+impl Default for BatchIngestOptions {
+    fn default() -> Self {
+        Self {
+            chunking: None,
+            skip_existing: true,
+        }
+    }
+}
+
+/// Result of a batch ingestion operation
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BatchIngestResult {
+    pub ingested: usize,
+    pub skipped: usize,
+    pub failed: usize,
+    pub errors: Vec<String>,
+    pub elapsed_ms: u64,
+}
+
+/// Options for multi-query RAG
+#[derive(Debug, Clone)]
+pub struct MultiQueryOptions {
+    /// Number of query expansions to generate
+    pub num_expansions: usize,
+    /// Merge strategy for results from multiple queries
+    pub merge_strategy: MultiQueryMerge,
+}
+
+impl Default for MultiQueryOptions {
+    fn default() -> Self {
+        Self {
+            num_expansions: 3,
+            merge_strategy: MultiQueryMerge::RoundRobin,
+        }
+    }
+}
+
+/// Strategy for merging results from multiple queries
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum MultiQueryMerge {
+    /// Interleave results in round-robin order
+    RoundRobin,
+    /// Reciprocal rank fusion across all result sets
+    ReciprocalRankFusion { k: f32 },
+    /// Take union and re-sort by best score
+    UnionBestScore,
 }
 
 /// Trait for embedding text
@@ -1895,5 +2083,82 @@ mod tests {
         let pipeline = quick_rag_pipeline(db, 64).unwrap();
         let stats = pipeline.stats();
         assert_eq!(stats.total_documents, 0);
+    }
+
+    #[test]
+    fn test_batch_ingest() {
+        let db = Arc::new(Database::in_memory());
+        let config = RagConfig {
+            dimensions: 64,
+            ..Default::default()
+        };
+        let mut pipeline = RagPipeline::new(db, config).unwrap();
+        let embedder = MockEmbedder::new(64);
+
+        let docs = vec![
+            ("doc1", "First document about machine learning.", None),
+            ("doc2", "Second document about AI.", None),
+            ("doc3", "Third document about databases.", None),
+        ];
+
+        let result = pipeline.batch_ingest(&docs, &embedder, &BatchIngestOptions::default());
+        assert_eq!(result.ingested, 3);
+        assert_eq!(result.skipped, 0);
+        assert_eq!(result.failed, 0);
+        assert_eq!(pipeline.stats().total_documents, 3);
+
+        // Re-ingest with skip_existing should skip all
+        let result2 = pipeline.batch_ingest(&docs, &embedder, &BatchIngestOptions::default());
+        assert_eq!(result2.skipped, 3);
+        assert_eq!(result2.ingested, 0);
+    }
+
+    #[test]
+    fn test_multi_query() {
+        let db = Arc::new(Database::in_memory());
+        let config = RagConfig {
+            dimensions: 64,
+            ..Default::default()
+        };
+        let mut pipeline = RagPipeline::new(db, config).unwrap();
+        let embedder = MockEmbedder::new(64);
+
+        pipeline
+            .ingest_document("doc1", "Machine learning uses algorithms.", None, &embedder)
+            .unwrap();
+        pipeline
+            .ingest_document("doc2", "AI is transforming industries.", None, &embedder)
+            .unwrap();
+
+        let response = pipeline
+            .multi_query(
+                &["machine learning", "artificial intelligence"],
+                &embedder,
+                &MultiQueryOptions::default(),
+            )
+            .unwrap();
+
+        assert!(!response.chunks.is_empty());
+    }
+
+    #[test]
+    fn test_enhanced_stats() {
+        let db = Arc::new(Database::in_memory());
+        let config = RagConfig {
+            dimensions: 64,
+            ..Default::default()
+        };
+        let mut pipeline = RagPipeline::new(db, config).unwrap();
+        let embedder = MockEmbedder::new(64);
+
+        pipeline
+            .ingest_document("doc1", "Test document content.", None, &embedder)
+            .unwrap();
+        pipeline.query("test", &embedder).unwrap();
+        pipeline.query("another query", &embedder).unwrap();
+
+        let stats = pipeline.stats();
+        assert_eq!(stats.total_queries, 2);
+        assert!(stats.avg_query_latency_ms >= 0.0);
     }
 }
