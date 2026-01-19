@@ -6,6 +6,7 @@
 [![Crates.io](https://img.shields.io/crates/v/needle.svg)](https://crates.io/crates/needle)
 [![docs.rs](https://docs.rs/needle/badge.svg)](https://docs.rs/needle)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Status: Alpha](https://img.shields.io/badge/Status-Alpha-orange.svg)](https://github.com/anthropics/needle/blob/main/ROADMAP.md)
 
 **SQLite for Vectors** - An embedded vector database written in Rust.
 
@@ -94,6 +95,8 @@ Memory usage: ~1.7GB for 1M vectors (384 dims) with HNSW index.
 - Real-time streaming ingestion at >100K vectors/second
 
 ## Documentation
+
+📖 **[Full Documentation Website →](https://needle.dev)**
 
 | Guide | Description |
 |-------|-------------|
