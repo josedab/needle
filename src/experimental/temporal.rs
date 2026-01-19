@@ -483,6 +483,16 @@ impl TemporalIndex {
             .as_u64()
     }
 
+    /// Delete a vector by ID, removing it from the underlying collection.
+    pub fn delete(&mut self, id: &str) -> Result<bool> {
+        let collection = self.db.collection(&self.collection_name)?;
+        let deleted = collection.delete(id)?;
+        if deleted {
+            self.versions.remove(id);
+        }
+        Ok(deleted)
+    }
+
     /// Get statistics about temporal data
     pub fn stats(&self) -> TemporalStats {
         let total_vectors = self.versions.len();
@@ -644,6 +654,175 @@ impl<'a> TemporalQueryBuilder<'a> {
     }
 }
 
+// ── Temporal Partitioning ────────────────────────────────────────────────────
+
+/// Granularity for time-based partitioning.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PartitionGranularity {
+    Hourly,
+    Daily,
+    Weekly,
+    /// Custom partition window in seconds.
+    Custom(u64),
+}
+
+impl PartitionGranularity {
+    fn bucket_for(&self, timestamp: u64) -> u64 {
+        let window = match self {
+            PartitionGranularity::Hourly => 3600,
+            PartitionGranularity::Daily => 86400,
+            PartitionGranularity::Weekly => 604800,
+            PartitionGranularity::Custom(secs) => *secs,
+        };
+        timestamp / window
+    }
+}
+
+/// A single time partition containing vectors from a specific time window.
+struct Partition {
+    bucket: u64,
+    index: TemporalIndex,
+    vector_count: usize,
+    min_timestamp: u64,
+    max_timestamp: u64,
+}
+
+/// Manager for time-partitioned vector storage.
+///
+/// Automatically routes inserts to the correct time partition and supports
+/// TTL-based expiration and partition-level lifecycle management.
+pub struct TemporalPartitionManager {
+    db: Arc<Database>,
+    base_collection: String,
+    config: TemporalConfig,
+    granularity: PartitionGranularity,
+    partitions: BTreeMap<u64, Partition>,
+}
+
+impl TemporalPartitionManager {
+    pub fn new(
+        db: Arc<Database>,
+        base_collection: &str,
+        config: TemporalConfig,
+        granularity: PartitionGranularity,
+    ) -> Self {
+        Self {
+            db,
+            base_collection: base_collection.to_string(),
+            config,
+            granularity,
+            partitions: BTreeMap::new(),
+        }
+    }
+
+    /// Insert a vector, automatically routing to the correct time partition.
+    pub fn insert(
+        &mut self,
+        id: &str,
+        vector: &[f32],
+        timestamp: u64,
+        metadata: Option<serde_json::Value>,
+    ) -> Result<u64> {
+        let bucket = self.granularity.bucket_for(timestamp);
+        let partition = self.get_or_create_partition(bucket, vector.len())?;
+        partition.vector_count += 1;
+        if timestamp < partition.min_timestamp {
+            partition.min_timestamp = timestamp;
+        }
+        if timestamp > partition.max_timestamp {
+            partition.max_timestamp = timestamp;
+        }
+        partition.index.insert(id, vector, timestamp, metadata)
+    }
+
+    fn get_or_create_partition(
+        &mut self,
+        bucket: u64,
+        dimensions: usize,
+    ) -> Result<&mut Partition> {
+        if !self.partitions.contains_key(&bucket) {
+            let coll_name = format!("{}_{}", self.base_collection, bucket);
+            if !self.db.has_collection(&coll_name) {
+                self.db.create_collection(&coll_name, dimensions)?;
+            }
+            let index = TemporalIndex::new(
+                Arc::clone(&self.db),
+                &coll_name,
+                self.config.clone(),
+            );
+            self.partitions.insert(
+                bucket,
+                Partition {
+                    bucket,
+                    index,
+                    vector_count: 0,
+                    min_timestamp: u64::MAX,
+                    max_timestamp: 0,
+                },
+            );
+        }
+        Ok(self.partitions.get_mut(&bucket).unwrap())
+    }
+
+    /// Number of active partitions.
+    pub fn partition_count(&self) -> usize {
+        self.partitions.len()
+    }
+
+    /// Remove all partitions whose bucket is strictly before `bucket_threshold`.
+    /// Returns the number of partitions removed.
+    pub fn expire_before(&mut self, timestamp: u64) -> usize {
+        let bucket_threshold = self.granularity.bucket_for(timestamp);
+        let to_remove: Vec<u64> = self
+            .partitions
+            .keys()
+            .copied()
+            .filter(|&b| b < bucket_threshold)
+            .collect();
+        let count = to_remove.len();
+        for bucket in to_remove {
+            self.partitions.remove(&bucket);
+        }
+        count
+    }
+
+    /// Apply a TTL: remove individual vectors older than `ttl_seconds` at `current_time`.
+    /// Returns the number of vectors removed.
+    pub fn apply_ttl(&mut self, ttl_seconds: u64, current_time: u64) -> usize {
+        let cutoff = current_time.saturating_sub(ttl_seconds);
+        let mut removed = 0;
+
+        for partition in self.partitions.values_mut() {
+            let expired_ids: Vec<String> = partition
+                .index
+                .time_index
+                .range(..=cutoff)
+                .flat_map(|(_, ids)| ids.clone())
+                .collect();
+
+            for id in &expired_ids {
+                if partition.index.delete(id).is_ok() {
+                    removed += 1;
+                    partition.vector_count = partition.vector_count.saturating_sub(1);
+                }
+            }
+
+            // Clean up time index entries
+            let stale_keys: Vec<u64> = partition
+                .index
+                .time_index
+                .range(..=cutoff)
+                .map(|(k, _)| *k)
+                .collect();
+            for key in stale_keys {
+                partition.index.time_index.remove(&key);
+            }
+        }
+
+        removed
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -755,5 +934,51 @@ mod tests {
         let changes = index.get_changes_in_range(1500, 2500);
         assert_eq!(changes.len(), 1);
         assert_eq!(changes[0].0, "doc2");
+    }
+
+    #[test]
+    fn test_partition_manager() {
+        let db = Arc::new(Database::in_memory());
+        db.create_collection("test", 8).unwrap();
+
+        let config = TemporalConfig::default();
+        let mut mgr = TemporalPartitionManager::new(
+            db,
+            "test",
+            config,
+            PartitionGranularity::Custom(100),
+        );
+
+        mgr.insert("doc1", &[1.0; 8], 50, None).unwrap();
+        mgr.insert("doc2", &[2.0; 8], 150, None).unwrap();
+        mgr.insert("doc3", &[3.0; 8], 250, None).unwrap();
+
+        assert_eq!(mgr.partition_count(), 3);
+
+        // Expire old partitions
+        let expired = mgr.expire_before(200);
+        assert_eq!(expired, 2);
+        assert_eq!(mgr.partition_count(), 1);
+    }
+
+    #[test]
+    fn test_ttl_expiration() {
+        let db = Arc::new(Database::in_memory());
+        db.create_collection("test", 8).unwrap();
+
+        let config = TemporalConfig::default();
+        let mut mgr = TemporalPartitionManager::new(
+            db,
+            "test",
+            config,
+            PartitionGranularity::Custom(1000),
+        );
+
+        mgr.insert("doc1", &[1.0; 8], 100, None).unwrap();
+        mgr.insert("doc2", &[2.0; 8], 200, None).unwrap();
+
+        // TTL of 50 seconds at current_time=250: doc1 (age 150) expired, doc2 (age 50) kept
+        let removed = mgr.apply_ttl(50, 250);
+        assert_eq!(removed, 1);
     }
 }
