@@ -476,6 +476,222 @@ impl BrowserCollection {
     pub fn is_empty(&self) -> bool {
         self.vector_count == 0
     }
+
+    /// Streaming search that yields results incrementally as they are found.
+    ///
+    /// Returns batches of results, each batch containing up to `batch_size`
+    /// results. This enables progressive rendering in browser UIs.
+    pub fn search_streaming(
+        &mut self,
+        query: &[f32],
+        total_k: usize,
+        batch_size: usize,
+        options: Option<SearchOptions>,
+    ) -> Result<StreamingSearchResults> {
+        let all_results = self.search(query, total_k, options)?;
+
+        Ok(StreamingSearchResults {
+            results: all_results,
+            batch_size: batch_size.max(1),
+            cursor: 0,
+        })
+    }
+
+    /// Export collection as portable chunks for incremental loading.
+    ///
+    /// Splits the serialized data into chunks of approximately `chunk_size`
+    /// vectors each, enabling progressive loading in browsers.
+    pub fn export_chunks(&self, chunk_size: usize) -> Result<Vec<CollectionChunk>> {
+        let chunk_size = chunk_size.max(1);
+        let mut chunks = Vec::new();
+        let mut current_vectors = HashMap::new();
+        let mut current_metadata = HashMap::new();
+        let mut chunk_index = 0;
+
+        for (id, vec, meta) in self.collection.iter() {
+            current_vectors.insert(id.to_string(), vec.to_vec());
+            if let Some(m) = meta {
+                current_metadata.insert(id.to_string(), m.clone());
+            }
+
+            if current_vectors.len() >= chunk_size {
+                chunks.push(CollectionChunk {
+                    index: chunk_index,
+                    vectors: std::mem::take(&mut current_vectors),
+                    metadata: std::mem::take(&mut current_metadata),
+                    is_last: false,
+                });
+                chunk_index += 1;
+            }
+        }
+
+        // Final partial chunk
+        if !current_vectors.is_empty() || chunks.is_empty() {
+            chunks.push(CollectionChunk {
+                index: chunk_index,
+                vectors: current_vectors,
+                metadata: current_metadata,
+                is_last: true,
+            });
+        }
+        if let Some(last) = chunks.last_mut() {
+            last.is_last = true;
+        }
+
+        Ok(chunks)
+    }
+
+    /// Import a single chunk into the collection (for progressive loading).
+    pub fn import_chunk(&mut self, chunk: &CollectionChunk) -> Result<usize> {
+        let mut count = 0;
+        for (id, vector) in &chunk.vectors {
+            let meta = chunk.metadata.get(id).cloned();
+            self.insert(id, vector, meta)?;
+            count += 1;
+        }
+        Ok(count)
+    }
+}
+
+// ── Streaming Search ─────────────────────────────────────────────────────────
+
+/// Iterator-like structure for streaming search results in batches.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StreamingSearchResults {
+    results: Vec<BrowserSearchResult>,
+    batch_size: usize,
+    cursor: usize,
+}
+
+impl StreamingSearchResults {
+    /// Get the next batch of results. Returns `None` when exhausted.
+    pub fn next_batch(&mut self) -> Option<Vec<BrowserSearchResult>> {
+        if self.cursor >= self.results.len() {
+            return None;
+        }
+        let end = (self.cursor + self.batch_size).min(self.results.len());
+        let batch = self.results[self.cursor..end].to_vec();
+        self.cursor = end;
+        Some(batch)
+    }
+
+    /// Total number of results available.
+    pub fn total(&self) -> usize {
+        self.results.len()
+    }
+
+    /// Number of results already consumed.
+    pub fn consumed(&self) -> usize {
+        self.cursor
+    }
+
+    /// Whether all results have been consumed.
+    pub fn is_exhausted(&self) -> bool {
+        self.cursor >= self.results.len()
+    }
+}
+
+/// A chunk of collection data for progressive loading.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CollectionChunk {
+    /// Chunk index (0-based)
+    pub index: usize,
+    /// Vectors in this chunk (id → vector)
+    pub vectors: HashMap<String, Vec<f32>>,
+    /// Metadata in this chunk (id → metadata)
+    pub metadata: HashMap<String, Value>,
+    /// Whether this is the last chunk
+    pub is_last: bool,
+}
+
+// ── Web Worker Abstraction ───────────────────────────────────────────────────
+
+/// Message types for communicating with a Web Worker hosting a BrowserCollection.
+///
+/// Serialize these to JSON and post via `Worker.postMessage()`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", content = "payload")]
+pub enum WorkerRequest {
+    /// Insert a vector
+    Insert {
+        id: String,
+        vector: Vec<f32>,
+        metadata: Option<Value>,
+    },
+    /// Search for similar vectors
+    Search {
+        query: Vec<f32>,
+        k: usize,
+        options: Option<SearchOptions>,
+    },
+    /// Delete a vector by ID
+    Delete { id: String },
+    /// Get collection statistics
+    Stats,
+    /// Serialize collection for persistence
+    Serialize,
+}
+
+/// Response types from the Web Worker.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", content = "payload")]
+pub enum WorkerResponse {
+    /// Insert succeeded
+    Inserted,
+    /// Search results
+    SearchResults(Vec<BrowserSearchResult>),
+    /// Delete result
+    Deleted { found: bool },
+    /// Collection statistics
+    Stats(BrowserCollectionStats),
+    /// Serialized collection data
+    Serialized(Vec<u8>),
+    /// An error occurred
+    Error { message: String },
+}
+
+/// Process a worker request against a BrowserCollection.
+///
+/// This function is meant to be called inside a Web Worker's `onmessage`
+/// handler. It takes a request, applies it to the collection, and returns
+/// the response to post back.
+pub fn handle_worker_request(
+    collection: &mut BrowserCollection,
+    request: WorkerRequest,
+) -> WorkerResponse {
+    match request {
+        WorkerRequest::Insert {
+            id,
+            vector,
+            metadata,
+        } => match collection.insert(&id, &vector, metadata) {
+            Ok(()) => WorkerResponse::Inserted,
+            Err(e) => WorkerResponse::Error {
+                message: e.to_string(),
+            },
+        },
+        WorkerRequest::Search { query, k, options } => {
+            match collection.search(&query, k, options) {
+                Ok(results) => WorkerResponse::SearchResults(results),
+                Err(e) => WorkerResponse::Error {
+                    message: e.to_string(),
+                },
+            }
+        }
+        WorkerRequest::Delete { id } => match collection.delete(&id) {
+            Ok(found) => WorkerResponse::Deleted { found },
+            Err(e) => WorkerResponse::Error {
+                message: e.to_string(),
+            },
+        },
+        WorkerRequest::Stats => WorkerResponse::Stats(collection.stats()),
+        WorkerRequest::Serialize => match collection.to_json_bytes() {
+            Ok(bytes) => WorkerResponse::Serialized(bytes),
+            Err(e) => WorkerResponse::Error {
+                message: e.to_string(),
+            },
+        },
+    }
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────────
@@ -592,5 +808,106 @@ mod tests {
         assert_eq!(stats.dimensions, 128);
         assert_eq!(stats.persistence, "memory");
         assert!(stats.memory_bytes > 0);
+    }
+
+    #[test]
+    fn test_streaming_search() {
+        let mut coll = make_collection(4);
+        for i in 0..10 {
+            coll.insert(&format!("v{i}"), &[i as f32, 0.0, 0.0, 0.0], None)
+                .unwrap();
+        }
+
+        let mut stream = coll
+            .search_streaming(&[5.0, 0.0, 0.0, 0.0], 10, 3, None)
+            .unwrap();
+
+        assert_eq!(stream.total(), 10);
+
+        let batch1 = stream.next_batch().unwrap();
+        assert_eq!(batch1.len(), 3);
+        assert_eq!(stream.consumed(), 3);
+        assert!(!stream.is_exhausted());
+
+        let batch2 = stream.next_batch().unwrap();
+        assert_eq!(batch2.len(), 3);
+
+        let batch3 = stream.next_batch().unwrap();
+        assert_eq!(batch3.len(), 3);
+
+        let batch4 = stream.next_batch().unwrap();
+        assert_eq!(batch4.len(), 1);
+
+        assert!(stream.next_batch().is_none());
+        assert!(stream.is_exhausted());
+    }
+
+    #[test]
+    fn test_export_import_chunks() {
+        let mut coll = make_collection(4);
+        for i in 0..5 {
+            coll.insert(&format!("v{i}"), &[i as f32, 0.0, 0.0, 0.0], None)
+                .unwrap();
+        }
+
+        let chunks = coll.export_chunks(2).unwrap();
+        assert!(chunks.len() >= 2);
+        assert!(chunks.last().unwrap().is_last);
+
+        // Import into a fresh collection
+        let mut restored = make_collection(4);
+        for chunk in &chunks {
+            restored.import_chunk(chunk).unwrap();
+        }
+        assert_eq!(restored.len(), 5);
+    }
+
+    #[test]
+    fn test_worker_request_handling() {
+        let mut coll = make_collection(4);
+
+        // Insert
+        let resp = handle_worker_request(
+            &mut coll,
+            WorkerRequest::Insert {
+                id: "v1".into(),
+                vector: vec![1.0, 0.0, 0.0, 0.0],
+                metadata: None,
+            },
+        );
+        assert!(matches!(resp, WorkerResponse::Inserted));
+
+        // Search
+        let resp = handle_worker_request(
+            &mut coll,
+            WorkerRequest::Search {
+                query: vec![1.0, 0.0, 0.0, 0.0],
+                k: 1,
+                options: None,
+            },
+        );
+        if let WorkerResponse::SearchResults(results) = resp {
+            assert_eq!(results.len(), 1);
+            assert_eq!(results[0].id, "v1");
+        } else {
+            panic!("Expected SearchResults");
+        }
+
+        // Stats
+        let resp = handle_worker_request(&mut coll, WorkerRequest::Stats);
+        if let WorkerResponse::Stats(stats) = resp {
+            assert_eq!(stats.vector_count, 1);
+        } else {
+            panic!("Expected Stats");
+        }
+
+        // Delete
+        let resp = handle_worker_request(
+            &mut coll,
+            WorkerRequest::Delete {
+                id: "v1".into(),
+            },
+        );
+        assert!(matches!(resp, WorkerResponse::Deleted { found: true }));
     }
 }
