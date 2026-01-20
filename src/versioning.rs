@@ -751,7 +751,7 @@ impl VectorRepo {
             })
             .collect();
 
-        results.sort_by(|a, b| b.similarity.partial_cmp(&a.similarity).unwrap());
+        results.sort_by(|a, b| b.similarity.partial_cmp(&a.similarity).unwrap_or(std::cmp::Ordering::Equal));
         results.truncate(k);
 
         Ok(results)
@@ -782,7 +782,7 @@ impl VectorRepo {
             })
             .collect();
 
-        results.sort_by(|a, b| b.similarity.partial_cmp(&a.similarity).unwrap());
+        results.sort_by(|a, b| b.similarity.partial_cmp(&a.similarity).unwrap_or(std::cmp::Ordering::Equal));
         results.truncate(k);
 
         Ok(results)
@@ -832,6 +832,502 @@ pub struct SearchResult {
     pub similarity: f32,
     /// Vector entry.
     pub entry: VectorEntry,
+}
+
+// ============================================================================
+// Semantic Time-Travel Extensions
+// ============================================================================
+
+/// Time specification for time-travel queries
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum TimeSpec {
+    /// Unix timestamp (seconds since epoch)
+    Timestamp(u64),
+    /// ISO 8601 datetime string
+    DateTime(String),
+    /// Relative time (e.g., "1 hour ago", "last tuesday")
+    Relative(String),
+    /// Specific commit hash
+    Commit(CommitHash),
+}
+
+impl TimeSpec {
+    /// Convert to Unix timestamp
+    pub fn to_timestamp(&self) -> Result<u64> {
+        match self {
+            TimeSpec::Timestamp(ts) => Ok(*ts),
+            TimeSpec::Commit(_) => Err(NeedleError::InvalidInput(
+                "Commit hash cannot be converted to timestamp".to_string()
+            )),
+            TimeSpec::DateTime(s) => {
+                // Parse ISO 8601 format: "2024-01-15T10:30:00Z"
+                parse_datetime(s)
+            }
+            TimeSpec::Relative(s) => {
+                parse_relative_time(s)
+            }
+        }
+    }
+}
+
+/// Parse ISO 8601 datetime to Unix timestamp
+fn parse_datetime(s: &str) -> Result<u64> {
+    // Simple parser for common formats
+    // Format: "2024-01-15T10:30:00Z" or "2024-01-15 10:30:00"
+    let s = s.trim().replace('T', " ").replace('Z', "");
+    let parts: Vec<&str> = s.split(' ').collect();
+
+    if parts.is_empty() {
+        return Err(NeedleError::InvalidInput(format!("Invalid datetime: {}", s)));
+    }
+
+    let date_parts: Vec<&str> = parts[0].split('-').collect();
+    if date_parts.len() != 3 {
+        return Err(NeedleError::InvalidInput(format!("Invalid date format: {}", parts[0])));
+    }
+
+    let year: i32 = date_parts[0].parse().map_err(|_| NeedleError::InvalidInput("Invalid year".to_string()))?;
+    let month: u32 = date_parts[1].parse().map_err(|_| NeedleError::InvalidInput("Invalid month".to_string()))?;
+    let day: u32 = date_parts[2].parse().map_err(|_| NeedleError::InvalidInput("Invalid day".to_string()))?;
+
+    let (hour, minute, second) = if parts.len() > 1 {
+        let time_parts: Vec<&str> = parts[1].split(':').collect();
+        (
+            time_parts.first().and_then(|s| s.parse().ok()).unwrap_or(0),
+            time_parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(0),
+            time_parts.get(2).and_then(|s| s.parse().ok()).unwrap_or(0),
+        )
+    } else {
+        (0, 0, 0)
+    };
+
+    // Simple timestamp calculation using chrono-style calculation
+    // Days from year 1 to the given date, then subtract days to Unix epoch
+    let days = days_from_year_1(year, month, day);
+    let unix_epoch_days = days_from_year_1(1970, 1, 1);
+    let days_since_epoch = days - unix_epoch_days;
+
+    if days_since_epoch < 0 {
+        return Err(NeedleError::InvalidInput("Date is before Unix epoch".to_string()));
+    }
+
+    let seconds = days_since_epoch as u64 * 86400 + hour as u64 * 3600 + minute as u64 * 60 + second as u64;
+
+    Ok(seconds)
+}
+
+/// Calculate days from year 1 to a given date (simplified)
+fn days_from_year_1(year: i32, month: u32, day: u32) -> i64 {
+    let y = year as i64;
+    let m = month as i64;
+    let d = day as i64;
+
+    // Simplified calculation
+    let mut days = (y - 1) * 365 + (y - 1) / 4 - (y - 1) / 100 + (y - 1) / 400;
+
+    // Add days for months
+    let month_days = [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334];
+    if (1..=12).contains(&m) {
+        days += month_days[(m - 1) as usize] as i64;
+    }
+
+    // Add leap day if applicable
+    let is_leap = (y % 4 == 0 && y % 100 != 0) || (y % 400 == 0);
+    if is_leap && m > 2 {
+        days += 1;
+    }
+
+    days + d
+}
+
+/// Calculate days since Unix epoch (1970-01-01) - kept for compatibility
+#[allow(dead_code)]
+fn days_since_unix_epoch(year: i32, month: u32, day: u32) -> i64 {
+    let mut y = year as i64;
+    let m = month as i64;
+    let d = day as i64;
+
+    // Adjust for months
+    let a = (14 - m) / 12;
+    y -= a;
+    let m_adj = m + 12 * a - 3;
+
+    // Julian day number
+    let jdn = d + (153 * m_adj + 2) / 5 + 365 * y + y / 4 - y / 100 + y / 400 - 32045;
+
+    // Unix epoch is Julian day 2440588
+    jdn - 2440588
+}
+
+/// Parse relative time string to Unix timestamp
+fn parse_relative_time(s: &str) -> Result<u64> {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+
+    let s = s.to_lowercase();
+
+    // Handle common patterns
+    if s == "now" {
+        return Ok(now);
+    }
+
+    // "X units ago" pattern
+    if s.ends_with(" ago") {
+        let parts: Vec<&str> = s.trim_end_matches(" ago").split_whitespace().collect();
+        if parts.len() >= 2 {
+            let amount: u64 = parts[0].parse().map_err(|_| {
+                NeedleError::InvalidInput(format!("Invalid amount in relative time: {}", s))
+            })?;
+            let unit = parts[1];
+
+            let seconds = match unit {
+                "second" | "seconds" | "sec" | "secs" => amount,
+                "minute" | "minutes" | "min" | "mins" => amount * 60,
+                "hour" | "hours" | "hr" | "hrs" => amount * 3600,
+                "day" | "days" => amount * 86400,
+                "week" | "weeks" => amount * 86400 * 7,
+                "month" | "months" => amount * 86400 * 30,
+                "year" | "years" => amount * 86400 * 365,
+                _ => return Err(NeedleError::InvalidInput(format!("Unknown time unit: {}", unit))),
+            };
+
+            return Ok(now.saturating_sub(seconds));
+        }
+    }
+
+    // Handle day names (last monday, last tuesday, etc.)
+    let weekdays = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
+    for (i, day_name) in weekdays.iter().enumerate() {
+        if s.contains(day_name) {
+            // Calculate days back to that weekday
+            let current_day = (now / 86400 + 4) % 7; // Days since epoch mod 7, adjusted for Thursday epoch
+            let target_day = i as u64;
+            let days_back = if current_day >= target_day {
+                current_day - target_day
+            } else {
+                7 - (target_day - current_day)
+            };
+            // If "last", go back one more week if we're on that day
+            let days_back = if s.contains("last") && days_back == 0 { 7 } else { days_back };
+            return Ok(now - days_back * 86400);
+        }
+    }
+
+    // Handle "yesterday"
+    if s == "yesterday" {
+        return Ok(now - 86400);
+    }
+
+    Err(NeedleError::InvalidInput(format!("Cannot parse relative time: {}", s)))
+}
+
+/// History entry for a vector
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VectorHistoryEntry {
+    /// Commit hash where this version exists
+    pub commit_hash: CommitHash,
+    /// Commit message
+    pub commit_message: String,
+    /// Timestamp of the commit
+    pub timestamp: u64,
+    /// Change type at this commit
+    pub change_type: ChangeType,
+    /// The vector data at this version (None if deleted)
+    pub vector: Option<Vec<f32>>,
+    /// Similarity to previous version (for modifications)
+    pub similarity_to_previous: Option<f32>,
+}
+
+/// Time range for querying changes
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TimeRange {
+    /// Start time (inclusive)
+    pub start: TimeSpec,
+    /// End time (inclusive)
+    pub end: TimeSpec,
+}
+
+impl VectorRepo {
+    /// Find the commit that was active at a specific time
+    pub fn find_commit_at_time(&self, time: &TimeSpec) -> Result<Option<&Commit>> {
+        let target_ts = match time {
+            TimeSpec::Commit(hash) => {
+                return self.commits.get(hash)
+                    .map(Some)
+                    .ok_or_else(|| NeedleError::NotFound(format!("Commit '{}' not found", hash)));
+            }
+            _ => time.to_timestamp()?,
+        };
+
+        // Find the most recent commit at or before the target timestamp
+        let mut best_commit: Option<&Commit> = None;
+
+        for commit in self.commits.values() {
+            if commit.timestamp <= target_ts {
+                match best_commit {
+                    None => best_commit = Some(commit),
+                    Some(current_best) if commit.timestamp > current_best.timestamp => {
+                        best_commit = Some(commit);
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        Ok(best_commit)
+    }
+
+    /// Search vectors as they existed at a specific time
+    ///
+    /// This is the core "semantic time-travel" functionality - query your vectors
+    /// as they existed at any point in time.
+    ///
+    /// # Example
+    /// ```ignore
+    /// // Search as of last Tuesday
+    /// let results = repo.search_at_time(
+    ///     &query_vec,
+    ///     &TimeSpec::Relative("last tuesday".to_string()),
+    ///     10
+    /// )?;
+    /// ```
+    pub fn search_at_time(
+        &self,
+        query: &[f32],
+        time: &TimeSpec,
+        k: usize,
+    ) -> Result<Vec<SearchResult>> {
+        if query.len() != self.dimensions {
+            return Err(NeedleError::InvalidInput(format!(
+                "Query dimension mismatch: expected {}, got {}",
+                self.dimensions,
+                query.len()
+            )));
+        }
+
+        // Find the commit at the specified time
+        let commit = self.find_commit_at_time(time)?
+            .ok_or_else(|| NeedleError::NotFound(
+                "No commit found at the specified time".to_string()
+            ))?;
+
+        // Search within that commit's snapshot
+        let mut results: Vec<SearchResult> = commit.snapshot
+            .iter()
+            .map(|(id, entry)| {
+                let similarity = self.cosine_similarity(query, &entry.vector);
+                SearchResult {
+                    id: id.clone(),
+                    similarity,
+                    entry: entry.clone(),
+                }
+            })
+            .collect();
+
+        results.sort_by(|a, b| b.similarity.partial_cmp(&a.similarity).unwrap_or(std::cmp::Ordering::Equal));
+        results.truncate(k);
+
+        Ok(results)
+    }
+
+    /// Get the complete history of a vector across all commits
+    pub fn vector_history(&self, vector_id: &str) -> Vec<VectorHistoryEntry> {
+        let mut history = Vec::new();
+
+        // Build ordered commit list by following parent chain from HEAD
+        let mut ordered_commits = Vec::new();
+        let head = &self.branches[&self.current_branch].head;
+
+        if !head.is_empty() {
+            let mut current = head.clone();
+            while !current.is_empty() {
+                if let Some(commit) = self.commits.get(&current) {
+                    ordered_commits.push(commit);
+                    current = commit.parent.clone().unwrap_or_default();
+                } else {
+                    break;
+                }
+            }
+        }
+
+        // Reverse to get chronological order (oldest first)
+        ordered_commits.reverse();
+
+        let mut previous_vector: Option<Vec<f32>> = None;
+
+        for commit in ordered_commits {
+            let current_vector = commit.snapshot.get(vector_id);
+
+            let change_type = if commit.added.contains(&vector_id.to_string()) {
+                ChangeType::Added
+            } else if commit.modified.contains(&vector_id.to_string()) {
+                ChangeType::Modified
+            } else if commit.deleted.contains(&vector_id.to_string()) {
+                ChangeType::Deleted
+            } else if current_vector.is_some() {
+                // Vector exists but wasn't changed in this commit
+                continue;
+            } else {
+                continue;
+            };
+
+            let similarity = match (&previous_vector, &current_vector) {
+                (Some(prev), Some(curr)) => {
+                    Some(self.cosine_similarity(prev, &curr.vector))
+                }
+                _ => None,
+            };
+
+            history.push(VectorHistoryEntry {
+                commit_hash: commit.hash.clone(),
+                commit_message: commit.message.clone(),
+                timestamp: commit.timestamp,
+                change_type,
+                vector: current_vector.map(|e| e.vector.clone()),
+                similarity_to_previous: similarity,
+            });
+
+            previous_vector = current_vector.map(|e| e.vector.clone());
+        }
+
+        history
+    }
+
+    /// Get all changes between two points in time
+    pub fn changes_between(&self, range: &TimeRange) -> Result<Vec<VectorDiff>> {
+        let start_commit = self.find_commit_at_time(&range.start)?;
+        let end_commit = self.find_commit_at_time(&range.end)?;
+
+        match (start_commit, end_commit) {
+            (Some(start), Some(end)) => {
+                self.diff(&start.hash, &end.hash)
+            }
+            (None, Some(end)) => {
+                // From beginning of time to end
+                let mut diffs = Vec::new();
+
+                for (id, entry) in &end.snapshot {
+                    diffs.push(VectorDiff {
+                        id: id.clone(),
+                        change_type: ChangeType::Added,
+                        old_vector: None,
+                        new_vector: Some(entry.vector.clone()),
+                        similarity: None,
+                    });
+                }
+
+                Ok(diffs)
+            }
+            (Some(start), None) => {
+                // All vectors at start were "deleted" by end
+                let mut diffs = Vec::new();
+
+                for (id, entry) in &start.snapshot {
+                    diffs.push(VectorDiff {
+                        id: id.clone(),
+                        change_type: ChangeType::Deleted,
+                        old_vector: Some(entry.vector.clone()),
+                        new_vector: None,
+                        similarity: None,
+                    });
+                }
+
+                Ok(diffs)
+            }
+            (None, None) => {
+                Ok(Vec::new())
+            }
+        }
+    }
+
+    /// Get a vector at a specific time
+    pub fn get_at_time(&self, vector_id: &str, time: &TimeSpec) -> Result<VectorEntry> {
+        let commit = self.find_commit_at_time(time)?
+            .ok_or_else(|| NeedleError::NotFound(
+                "No commit found at the specified time".to_string()
+            ))?;
+
+        commit.snapshot.get(vector_id)
+            .cloned()
+            .ok_or_else(|| NeedleError::NotFound(format!(
+                "Vector '{}' not found at specified time",
+                vector_id
+            )))
+    }
+
+    /// Compare a vector between two points in time
+    pub fn compare_at_times(
+        &self,
+        vector_id: &str,
+        time1: &TimeSpec,
+        time2: &TimeSpec,
+    ) -> Result<VectorDiff> {
+        let entry1 = self.get_at_time(vector_id, time1).ok();
+        let entry2 = self.get_at_time(vector_id, time2).ok();
+
+        match (entry1, entry2) {
+            (None, None) => {
+                Err(NeedleError::NotFound(format!(
+                    "Vector '{}' not found at either time point",
+                    vector_id
+                )))
+            }
+            (None, Some(e2)) => {
+                Ok(VectorDiff {
+                    id: vector_id.to_string(),
+                    change_type: ChangeType::Added,
+                    old_vector: None,
+                    new_vector: Some(e2.vector),
+                    similarity: None,
+                })
+            }
+            (Some(e1), None) => {
+                Ok(VectorDiff {
+                    id: vector_id.to_string(),
+                    change_type: ChangeType::Deleted,
+                    old_vector: Some(e1.vector),
+                    new_vector: None,
+                    similarity: None,
+                })
+            }
+            (Some(e1), Some(e2)) => {
+                if e1.vector == e2.vector {
+                    Ok(VectorDiff {
+                        id: vector_id.to_string(),
+                        change_type: ChangeType::Unchanged,
+                        old_vector: None,
+                        new_vector: None,
+                        similarity: Some(1.0),
+                    })
+                } else {
+                    let sim = self.cosine_similarity(&e1.vector, &e2.vector);
+                    Ok(VectorDiff {
+                        id: vector_id.to_string(),
+                        change_type: ChangeType::Modified,
+                        old_vector: Some(e1.vector),
+                        new_vector: Some(e2.vector),
+                        similarity: Some(sim),
+                    })
+                }
+            }
+        }
+    }
+
+    /// List all commits within a time range
+    pub fn commits_in_range(&self, range: &TimeRange) -> Result<Vec<&Commit>> {
+        let start_ts = range.start.to_timestamp()?;
+        let end_ts = range.end.to_timestamp()?;
+
+        let mut commits: Vec<&Commit> = self.commits
+            .values()
+            .filter(|c| c.timestamp >= start_ts && c.timestamp <= end_ts)
+            .collect();
+
+        commits.sort_by_key(|c| c.timestamp);
+        Ok(commits)
+    }
 }
 
 #[cfg(test)]
@@ -1120,5 +1616,249 @@ mod tests {
 
         let entry = repo.get_latest("vec1").unwrap();
         assert_eq!(entry.metadata.get("category"), Some(&"test".to_string()));
+    }
+
+    // ========================================================================
+    // Semantic Time-Travel Tests
+    // ========================================================================
+
+    #[test]
+    fn test_parse_relative_time_ago() {
+        // Test "X units ago" parsing
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
+        let result = parse_relative_time("1 hour ago").unwrap();
+        assert!(result > now - 3700 && result < now - 3500);
+
+        let result = parse_relative_time("2 days ago").unwrap();
+        assert!(result > now - 2 * 86400 - 100 && result < now - 2 * 86400 + 100);
+    }
+
+    #[test]
+    fn test_parse_relative_time_now() {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
+        let result = parse_relative_time("now").unwrap();
+        assert!(result >= now - 1 && result <= now + 1);
+    }
+
+    #[test]
+    fn test_parse_relative_time_yesterday() {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
+        let result = parse_relative_time("yesterday").unwrap();
+        assert!(result > now - 86500 && result < now - 86300);
+    }
+
+    #[test]
+    fn test_parse_datetime() {
+        // Test ISO 8601 format
+        let result = parse_datetime("2024-01-15T10:30:00Z").unwrap();
+        assert!(result > 0); // Should parse successfully
+
+        let result = parse_datetime("2024-01-15 10:30:00").unwrap();
+        assert!(result > 0);
+    }
+
+    #[test]
+    fn test_timespec_to_timestamp() {
+        let ts = TimeSpec::Timestamp(1705312200);
+        assert_eq!(ts.to_timestamp().unwrap(), 1705312200);
+
+        let dt = TimeSpec::DateTime("2024-01-15T10:30:00Z".to_string());
+        assert!(dt.to_timestamp().is_ok());
+
+        let rel = TimeSpec::Relative("1 hour ago".to_string());
+        assert!(rel.to_timestamp().is_ok());
+    }
+
+    #[test]
+    fn test_find_commit_at_time() {
+        let mut repo = VectorRepo::new("test", 4);
+
+        repo.add("vec1", &[1.0, 2.0, 3.0, 4.0], HashMap::new()).unwrap();
+        let commit1 = repo.commit("V1").unwrap();
+        let ts1 = repo.commits.get(&commit1).unwrap().timestamp;
+
+        // Use TimeSpec::Commit for exact commit lookup
+        let found = repo.find_commit_at_time(&TimeSpec::Commit(commit1.clone())).unwrap();
+        assert!(found.is_some());
+        assert_eq!(found.unwrap().hash, commit1);
+
+        // Ensure we can find a commit at a given timestamp
+        let found = repo.find_commit_at_time(&TimeSpec::Timestamp(ts1)).unwrap();
+        assert!(found.is_some());
+
+        // Far past should return None
+        let found = repo.find_commit_at_time(&TimeSpec::Timestamp(0)).unwrap();
+        assert!(found.is_none());
+    }
+
+    #[test]
+    fn test_search_at_time() {
+        let mut repo = VectorRepo::new("test", 4);
+
+        repo.add("a", &[1.0, 0.0, 0.0, 0.0], HashMap::new()).unwrap();
+        let commit1 = repo.commit("V1").unwrap();
+
+        repo.update("a", &[0.0, 1.0, 0.0, 0.0]).unwrap();
+        repo.commit("V2").unwrap();
+
+        // Search at first commit (using commit-based lookup)
+        let results = repo.search_at_time(
+            &[1.0, 0.0, 0.0, 0.0],
+            &TimeSpec::Commit(commit1),
+            1
+        ).unwrap();
+
+        // Should find vector with high similarity (it was [1,0,0,0] at that time)
+        assert!(results[0].similarity > 0.99);
+    }
+
+    #[test]
+    fn test_vector_history() {
+        let mut repo = VectorRepo::new("test", 4);
+
+        repo.add("vec1", &[1.0, 0.0, 0.0, 0.0], HashMap::new()).unwrap();
+        repo.commit("Added").unwrap();
+
+        repo.update("vec1", &[0.5, 0.5, 0.0, 0.0]).unwrap();
+        repo.commit("Modified").unwrap();
+
+        repo.update("vec1", &[0.0, 1.0, 0.0, 0.0]).unwrap();
+        repo.commit("Modified again").unwrap();
+
+        let history = repo.vector_history("vec1");
+
+        assert_eq!(history.len(), 3);
+        assert_eq!(history[0].change_type, ChangeType::Added);
+        assert_eq!(history[1].change_type, ChangeType::Modified);
+        assert_eq!(history[2].change_type, ChangeType::Modified);
+
+        // Check similarity tracking
+        assert!(history[1].similarity_to_previous.is_some());
+        assert!(history[2].similarity_to_previous.is_some());
+    }
+
+    #[test]
+    fn test_get_at_time() {
+        let mut repo = VectorRepo::new("test", 4);
+
+        repo.add("vec1", &[1.0, 2.0, 3.0, 4.0], HashMap::new()).unwrap();
+        let commit1 = repo.commit("V1").unwrap();
+
+        repo.update("vec1", &[9.0, 8.0, 7.0, 6.0]).unwrap();
+        repo.commit("V2").unwrap();
+
+        // Get at commit1 (using commit-based lookup)
+        let entry = repo.get_at_time("vec1", &TimeSpec::Commit(commit1)).unwrap();
+        assert_eq!(entry.vector, vec![1.0, 2.0, 3.0, 4.0]);
+    }
+
+    #[test]
+    fn test_compare_at_times() {
+        let mut repo = VectorRepo::new("test", 4);
+
+        repo.add("vec1", &[1.0, 0.0, 0.0, 0.0], HashMap::new()).unwrap();
+        let commit1 = repo.commit("V1").unwrap();
+
+        repo.update("vec1", &[0.0, 1.0, 0.0, 0.0]).unwrap();
+        let commit2 = repo.commit("V2").unwrap();
+
+        // Use commit-based time specs for precise comparison
+        let diff = repo.compare_at_times(
+            "vec1",
+            &TimeSpec::Commit(commit1),
+            &TimeSpec::Commit(commit2)
+        ).unwrap();
+
+        assert_eq!(diff.change_type, ChangeType::Modified);
+        assert!(diff.similarity.unwrap() < 0.1); // Orthogonal vectors
+    }
+
+    #[test]
+    fn test_changes_between_times() {
+        let mut repo = VectorRepo::new("test", 4);
+
+        repo.add("vec1", &[1.0, 0.0, 0.0, 0.0], HashMap::new()).unwrap();
+        let commit1 = repo.commit("V1").unwrap();
+
+        repo.add("vec2", &[0.0, 1.0, 0.0, 0.0], HashMap::new()).unwrap();
+        repo.update("vec1", &[0.5, 0.5, 0.0, 0.0]).unwrap();
+        let commit2 = repo.commit("V2").unwrap();
+
+        // Use commit-based time specs
+        let range = TimeRange {
+            start: TimeSpec::Commit(commit1),
+            end: TimeSpec::Commit(commit2),
+        };
+
+        let changes = repo.changes_between(&range).unwrap();
+
+        let added: Vec<_> = changes.iter().filter(|d| d.change_type == ChangeType::Added).collect();
+        let modified: Vec<_> = changes.iter().filter(|d| d.change_type == ChangeType::Modified).collect();
+
+        assert_eq!(added.len(), 1);
+        assert_eq!(modified.len(), 1);
+    }
+
+    #[test]
+    fn test_commits_in_range() {
+        let mut repo = VectorRepo::new("test", 4);
+
+        repo.add("vec1", &[1.0, 0.0, 0.0, 0.0], HashMap::new()).unwrap();
+        repo.commit("V1").unwrap();
+
+        repo.add("vec2", &[0.0, 1.0, 0.0, 0.0], HashMap::new()).unwrap();
+        repo.commit("V2").unwrap();
+
+        repo.add("vec3", &[0.0, 0.0, 1.0, 0.0], HashMap::new()).unwrap();
+        repo.commit("V3").unwrap();
+
+        // Get all commits (use wide timestamp range)
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
+        let range = TimeRange {
+            start: TimeSpec::Timestamp(now - 10),
+            end: TimeSpec::Timestamp(now + 10),
+        };
+        let commits = repo.commits_in_range(&range).unwrap();
+        assert_eq!(commits.len(), 3);
+    }
+
+    #[test]
+    fn test_time_travel_with_deletion() {
+        let mut repo = VectorRepo::new("test", 4);
+
+        repo.add("vec1", &[1.0, 2.0, 3.0, 4.0], HashMap::new()).unwrap();
+        let commit1 = repo.commit("Added").unwrap();
+
+        repo.delete("vec1").unwrap();
+        let commit2 = repo.commit("Deleted").unwrap();
+
+        // Can still retrieve at commit1 using commit-based lookup
+        let entry = repo.get_at_time("vec1", &TimeSpec::Commit(commit1)).unwrap();
+        assert_eq!(entry.vector, vec![1.0, 2.0, 3.0, 4.0]);
+
+        // Cannot retrieve at commit2 (deleted)
+        let result = repo.get_at_time("vec1", &TimeSpec::Commit(commit2));
+        assert!(result.is_err());
+
+        // History shows deletion
+        let history = repo.vector_history("vec1");
+        assert_eq!(history.len(), 2);
+        assert_eq!(history[1].change_type, ChangeType::Deleted);
     }
 }
