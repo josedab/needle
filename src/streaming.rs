@@ -1645,6 +1645,1584 @@ fn current_timestamp_millis() -> u64 {
 }
 
 // ============================================================================
+// Change Data Capture (CDC) Module
+// ============================================================================
+
+/// CDC connector trait for database change capture
+#[allow(async_fn_in_trait)]
+pub trait CdcConnector: Send + Sync {
+    /// Connect to the data source
+    async fn connect(&mut self) -> StreamResult<()>;
+
+    /// Start capturing changes
+    async fn start_capture(&mut self) -> StreamResult<()>;
+
+    /// Stop capturing changes
+    async fn stop_capture(&mut self) -> StreamResult<()>;
+
+    /// Get the next change event (blocking)
+    async fn next_change(&mut self) -> StreamResult<Option<ChangeEvent>>;
+
+    /// Get current position/offset for checkpointing
+    fn current_position(&self) -> CdcPosition;
+
+    /// Resume from a specific position
+    async fn seek(&mut self, position: &CdcPosition) -> StreamResult<()>;
+
+    /// Check if connector is connected
+    fn is_connected(&self) -> bool;
+
+    /// Get connector statistics
+    fn stats(&self) -> CdcConnectorStats;
+}
+
+/// CDC position for checkpointing and resumption
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CdcPosition {
+    /// Source-specific position identifier
+    pub position: String,
+    /// Timestamp when this position was recorded
+    pub timestamp: u64,
+    /// Source identifier (topic, table, etc.)
+    pub source: String,
+    /// Partition/shard identifier (if applicable)
+    pub partition: Option<i32>,
+}
+
+impl CdcPosition {
+    /// Create a new CDC position
+    pub fn new(position: impl Into<String>, source: impl Into<String>) -> Self {
+        Self {
+            position: position.into(),
+            timestamp: current_timestamp_millis(),
+            source: source.into(),
+            partition: None,
+        }
+    }
+
+    /// With partition
+    pub fn with_partition(mut self, partition: i32) -> Self {
+        self.partition = Some(partition);
+        self
+    }
+
+    /// Serialize to string for storage/transmission
+    pub fn serialize(&self) -> String {
+        if let Some(partition) = self.partition {
+            format!(
+                "{}:{}:{}:{}",
+                self.source, partition, self.position, self.timestamp
+            )
+        } else {
+            format!("{}::{}:{}", self.source, self.position, self.timestamp)
+        }
+    }
+    /// Parse from string
+    pub fn parse(s: &str) -> StreamResult<Self> {
+        let parts: Vec<&str> = s.split(':').collect();
+        if parts.len() < 4 {
+            return Err(StreamError::InvalidResumeToken(format!(
+                "Invalid CDC position format: {}",
+                s
+            )));
+        }
+
+        let source = parts[0].to_string();
+        let partition = if parts[1].is_empty() {
+            None
+        } else {
+            parts[1]
+                .parse::<i32>()
+                .map(Some)
+                .map_err(|_| StreamError::InvalidResumeToken("Invalid partition".to_string()))?
+        };
+        let position = parts[2].to_string();
+        let timestamp = parts[3]
+            .parse::<u64>()
+            .map_err(|_| StreamError::InvalidResumeToken("Invalid timestamp".to_string()))?;
+
+        Ok(Self {
+            position,
+            timestamp,
+            source,
+            partition,
+        })
+    }
+}
+
+impl std::fmt::Display for CdcPosition {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.serialize())
+    }
+}
+
+/// Statistics for CDC connectors
+#[derive(Debug, Clone, Default)]
+pub struct CdcConnectorStats {
+    /// Total messages received
+    pub messages_received: u64,
+    /// Messages processed successfully
+    pub messages_processed: u64,
+    /// Messages that failed processing
+    pub messages_failed: u64,
+    /// Current lag (messages behind)
+    pub lag: u64,
+    /// Bytes received
+    pub bytes_received: u64,
+    /// Average processing latency in milliseconds
+    pub avg_latency_ms: f64,
+    /// Last error message (if any)
+    pub last_error: Option<String>,
+    /// Connection uptime in seconds
+    pub uptime_secs: u64,
+}
+
+/// Configuration for CDC connectors
+#[derive(Debug, Clone)]
+pub struct CdcConfig {
+    /// Batch size for fetching messages
+    pub batch_size: usize,
+    /// Timeout for fetch operations in milliseconds
+    pub fetch_timeout_ms: u64,
+    /// Auto-commit interval in milliseconds (0 to disable)
+    pub auto_commit_interval_ms: u64,
+    /// Maximum retries on failure
+    pub max_retries: u32,
+    /// Retry backoff base in milliseconds
+    pub retry_backoff_ms: u64,
+    /// Enable exactly-once semantics (if supported)
+    pub exactly_once: bool,
+    /// Dead letter queue topic/collection (if supported)
+    pub dlq_destination: Option<String>,
+}
+
+impl Default for CdcConfig {
+    fn default() -> Self {
+        Self {
+            batch_size: 100,
+            fetch_timeout_ms: 5000,
+            auto_commit_interval_ms: 5000,
+            max_retries: 3,
+            retry_backoff_ms: 1000,
+            exactly_once: false,
+            dlq_destination: None,
+        }
+    }
+}
+
+// ============================================================================
+// Debezium Format Parser
+// ============================================================================
+
+/// Parser for Debezium CDC format
+///
+/// Debezium is a popular CDC tool that produces a standardized JSON format
+/// for database changes. This parser converts Debezium messages to ChangeEvents.
+pub struct DebeziumParser {
+    /// Source database type
+    pub source_type: DebeziumSourceType,
+    /// Collection name mapping (table -> collection)
+    pub collection_mapping: HashMap<String, String>,
+    /// Whether to include full document before change
+    pub include_before: bool,
+    /// Schema registry URL (for Avro format)
+    pub schema_registry_url: Option<String>,
+}
+
+/// Debezium source database types
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DebeziumSourceType {
+    PostgreSQL,
+    MySQL,
+    MongoDB,
+    SQLServer,
+    Oracle,
+    Cassandra,
+}
+
+impl DebeziumParser {
+    /// Create a new Debezium parser
+    pub fn new(source_type: DebeziumSourceType) -> Self {
+        Self {
+            source_type,
+            collection_mapping: HashMap::new(),
+            include_before: true,
+            schema_registry_url: None,
+        }
+    }
+
+    /// Add a collection mapping
+    pub fn with_mapping(mut self, table: impl Into<String>, collection: impl Into<String>) -> Self {
+        self.collection_mapping
+            .insert(table.into(), collection.into());
+        self
+    }
+
+    /// Set schema registry URL for Avro
+    pub fn with_schema_registry(mut self, url: impl Into<String>) -> Self {
+        self.schema_registry_url = Some(url.into());
+        self
+    }
+
+    /// Parse a Debezium JSON message
+    pub fn parse_json(&self, json: &str) -> StreamResult<ChangeEvent> {
+        let value: serde_json::Value = serde_json::from_str(json)
+            .map_err(|e| StreamError::EventLogError(format!("JSON parse error: {}", e)))?;
+
+        self.parse_value(&value)
+    }
+
+    /// Parse a Debezium JSON value
+    pub fn parse_value(&self, value: &serde_json::Value) -> StreamResult<ChangeEvent> {
+        // Extract payload (Debezium wraps in "payload" for Kafka Connect)
+        let payload = value.get("payload").unwrap_or(value);
+
+        // Get operation type
+        let op = payload
+            .get("op")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| StreamError::EventLogError("Missing 'op' field".to_string()))?;
+
+        let operation = match op {
+            "c" | "r" => OperationType::Insert, // create or read (snapshot)
+            "u" => OperationType::Update,
+            "d" => OperationType::Delete,
+            "t" => OperationType::Drop, // truncate
+            _ => {
+                return Err(StreamError::EventLogError(format!(
+                    "Unknown operation: {}",
+                    op
+                )))
+            }
+        };
+
+        // Extract source metadata
+        let source = payload.get("source");
+        let table = source
+            .and_then(|s| s.get("table"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown");
+
+        let collection = self
+            .collection_mapping
+            .get(table)
+            .cloned()
+            .unwrap_or_else(|| table.to_string());
+
+        // Extract timestamp
+        let ts_ms = payload
+            .get("ts_ms")
+            .and_then(|v| v.as_u64())
+            .unwrap_or_else(current_timestamp_millis);
+
+        // Extract document key
+        let key = payload.get("key");
+        let document_key = key
+            .and_then(|k| {
+                if k.is_string() {
+                    k.as_str().map(String::from)
+                } else {
+                    Some(k.to_string())
+                }
+            })
+            .or_else(|| {
+                // Try to extract from after/before document
+                payload
+                    .get("after")
+                    .or_else(|| payload.get("before"))
+                    .and_then(|doc| doc.get("id").or_else(|| doc.get("_id")))
+                    .map(|id| id.to_string())
+            });
+
+        // Extract full documents
+        let after_doc = payload.get("after").map(|v| v.to_string().into_bytes());
+        let before_doc = if self.include_before {
+            payload.get("before").map(|v| v.to_string().into_bytes())
+        } else {
+            None
+        };
+
+        // Build change event
+        let mut event = ChangeEvent {
+            id: 0, // Will be set by event log
+            operation,
+            collection,
+            document_key,
+            full_document: after_doc,
+            updated_fields: None,
+            removed_fields: None,
+            timestamp: ts_ms,
+            resume_token: ResumeToken::new(0, ts_ms),
+            full_document_before_change: before_doc,
+            metadata: None,
+        };
+
+        // Extract update description for updates
+        if operation == OperationType::Update {
+            if let Some(update_desc) = payload.get("updateDescription") {
+                let mut updated_fields = HashMap::new();
+                if let Some(updated) = update_desc.get("updatedFields") {
+                    if let Some(obj) = updated.as_object() {
+                        for (key, value) in obj {
+                            updated_fields.insert(key.clone(), value.to_string().into_bytes());
+                        }
+                    }
+                }
+                event.updated_fields = Some(updated_fields);
+
+                if let Some(removed) = update_desc.get("removedFields") {
+                    if let Some(arr) = removed.as_array() {
+                        event.removed_fields = Some(
+                            arr.iter()
+                                .filter_map(|v| v.as_str().map(String::from))
+                                .collect(),
+                        );
+                    }
+                }
+            }
+        }
+
+        // Add source metadata
+        if let Some(source) = source {
+            let mut metadata = HashMap::new();
+            if let Some(db) = source.get("db").and_then(|v| v.as_str()) {
+                metadata.insert("database".to_string(), db.to_string());
+            }
+            if let Some(schema) = source.get("schema").and_then(|v| v.as_str()) {
+                metadata.insert("schema".to_string(), schema.to_string());
+            }
+            if let Some(connector) = source.get("connector").and_then(|v| v.as_str()) {
+                metadata.insert("connector".to_string(), connector.to_string());
+            }
+            if let Some(lsn) = source.get("lsn").and_then(|v| v.as_u64()) {
+                metadata.insert("lsn".to_string(), lsn.to_string());
+            }
+            if !metadata.is_empty() {
+                event.metadata = Some(metadata);
+            }
+        }
+
+        Ok(event)
+    }
+}
+
+// ============================================================================
+// Kafka Connector
+// ============================================================================
+
+/// Kafka CDC connector configuration
+#[derive(Debug, Clone)]
+pub struct KafkaConnectorConfig {
+    /// Kafka broker addresses
+    pub brokers: Vec<String>,
+    /// Topic to consume from
+    pub topic: String,
+    /// Consumer group ID
+    pub group_id: String,
+    /// General CDC config
+    pub cdc_config: CdcConfig,
+    /// Security protocol (PLAINTEXT, SSL, SASL_SSL, etc.)
+    pub security_protocol: String,
+    /// SASL mechanism (PLAIN, SCRAM-SHA-256, etc.)
+    pub sasl_mechanism: Option<String>,
+    /// SASL username
+    pub sasl_username: Option<String>,
+    /// SASL password
+    pub sasl_password: Option<String>,
+    /// SSL CA certificate path
+    pub ssl_ca_path: Option<String>,
+    /// Consumer offset reset policy (earliest, latest)
+    pub offset_reset: String,
+}
+
+impl Default for KafkaConnectorConfig {
+    fn default() -> Self {
+        Self {
+            brokers: vec!["localhost:9092".to_string()],
+            topic: "".to_string(),
+            group_id: "needle-cdc".to_string(),
+            cdc_config: CdcConfig::default(),
+            security_protocol: "PLAINTEXT".to_string(),
+            sasl_mechanism: None,
+            sasl_username: None,
+            sasl_password: None,
+            ssl_ca_path: None,
+            offset_reset: "earliest".to_string(),
+        }
+    }
+}
+
+/// Kafka CDC connector for consuming Debezium messages
+#[cfg(feature = "cdc-kafka")]
+pub struct KafkaConnector {
+    config: KafkaConnectorConfig,
+    consumer: Option<rdkafka::consumer::StreamConsumer>,
+    parser: DebeziumParser,
+    connected: Arc<AtomicBool>,
+    stats: Arc<RwLock<CdcConnectorStats>>,
+    current_offset: Arc<AtomicU64>,
+    start_time: Option<std::time::Instant>,
+}
+
+#[cfg(feature = "cdc-kafka")]
+impl KafkaConnector {
+    /// Create a new Kafka connector
+    pub fn new(config: KafkaConnectorConfig, parser: DebeziumParser) -> Self {
+        Self {
+            config,
+            consumer: None,
+            parser,
+            connected: Arc::new(AtomicBool::new(false)),
+            stats: Arc::new(RwLock::new(CdcConnectorStats::default())),
+            current_offset: Arc::new(AtomicU64::new(0)),
+            start_time: None,
+        }
+    }
+
+    /// Build rdkafka consumer config
+    fn build_consumer_config(&self) -> rdkafka::ClientConfig {
+        use rdkafka::ClientConfig;
+
+        let mut config = ClientConfig::new();
+        config
+            .set("bootstrap.servers", self.config.brokers.join(","))
+            .set("group.id", &self.config.group_id)
+            .set("enable.auto.commit", "true")
+            .set(
+                "auto.commit.interval.ms",
+                self.config.cdc_config.auto_commit_interval_ms.to_string(),
+            )
+            .set("auto.offset.reset", &self.config.offset_reset)
+            .set("security.protocol", &self.config.security_protocol);
+
+        if let Some(ref mechanism) = self.config.sasl_mechanism {
+            config.set("sasl.mechanism", mechanism);
+        }
+        if let Some(ref username) = self.config.sasl_username {
+            config.set("sasl.username", username);
+        }
+        if let Some(ref password) = self.config.sasl_password {
+            config.set("sasl.password", password);
+        }
+        if let Some(ref ca_path) = self.config.ssl_ca_path {
+            config.set("ssl.ca.location", ca_path);
+        }
+
+        config
+    }
+}
+
+#[cfg(feature = "cdc-kafka")]
+impl CdcConnector for KafkaConnector {
+    async fn connect(&mut self) -> StreamResult<()> {
+        use rdkafka::consumer::Consumer;
+
+        let consumer_config = self.build_consumer_config();
+        let consumer: rdkafka::consumer::StreamConsumer = consumer_config
+            .create()
+            .map_err(|e| StreamError::SubscriptionError(format!("Kafka create error: {}", e)))?;
+
+        consumer
+            .subscribe(&[&self.config.topic])
+            .map_err(|e| StreamError::SubscriptionError(format!("Kafka subscribe error: {}", e)))?;
+
+        self.consumer = Some(consumer);
+        self.connected.store(true, Ordering::Relaxed);
+        self.start_time = Some(std::time::Instant::now());
+
+        Ok(())
+    }
+
+    async fn start_capture(&mut self) -> StreamResult<()> {
+        if !self.is_connected() {
+            self.connect().await?;
+        }
+        Ok(())
+    }
+
+    async fn stop_capture(&mut self) -> StreamResult<()> {
+        self.connected.store(false, Ordering::Relaxed);
+        self.consumer = None;
+        Ok(())
+    }
+
+    async fn next_change(&mut self) -> StreamResult<Option<ChangeEvent>> {
+        use rdkafka::consumer::StreamConsumer;
+        use rdkafka::Message;
+
+        let consumer = self
+            .consumer
+            .as_ref()
+            .ok_or(StreamError::StreamClosed)?;
+
+        let timeout = Duration::from_millis(self.config.cdc_config.fetch_timeout_ms);
+
+        match tokio::time::timeout(timeout, consumer.recv()).await {
+            Ok(Ok(msg)) => {
+                let mut stats = self.stats.write().await;
+                stats.messages_received += 1;
+
+                if let Some(payload) = msg.payload() {
+                    stats.bytes_received += payload.len() as u64;
+
+                    let json_str = String::from_utf8_lossy(payload);
+                    match self.parser.parse_json(&json_str) {
+                        Ok(event) => {
+                            stats.messages_processed += 1;
+                            self.current_offset
+                                .store(msg.offset() as u64, Ordering::Relaxed);
+                            Ok(Some(event))
+                        }
+                        Err(e) => {
+                            stats.messages_failed += 1;
+                            stats.last_error = Some(e.to_string());
+                            Err(e)
+                        }
+                    }
+                } else {
+                    Ok(None)
+                }
+            }
+            Ok(Err(e)) => {
+                let mut stats = self.stats.write().await;
+                stats.last_error = Some(e.to_string());
+                Err(StreamError::ReceiveError(format!("Kafka error: {}", e)))
+            }
+            Err(_) => Err(StreamError::Timeout),
+        }
+    }
+
+    fn current_position(&self) -> CdcPosition {
+        CdcPosition::new(
+            self.current_offset.load(Ordering::Relaxed).to_string(),
+            &self.config.topic,
+        )
+    }
+
+    async fn seek(&mut self, position: &CdcPosition) -> StreamResult<()> {
+        use rdkafka::consumer::Consumer;
+        use rdkafka::TopicPartitionList;
+
+        let consumer = self
+            .consumer
+            .as_ref()
+            .ok_or(StreamError::StreamClosed)?;
+
+        let offset: i64 = position
+            .position
+            .parse()
+            .map_err(|_| StreamError::InvalidResumeToken("Invalid offset".to_string()))?;
+
+        let partition = position.partition.unwrap_or(0);
+
+        let mut tpl = TopicPartitionList::new();
+        tpl.add_partition_offset(
+            &self.config.topic,
+            partition,
+            rdkafka::Offset::Offset(offset),
+        )
+        .map_err(|e| StreamError::EventLogError(format!("TPL error: {}", e)))?;
+
+        consumer
+            .seek(
+                &self.config.topic,
+                partition,
+                rdkafka::Offset::Offset(offset),
+                Duration::from_secs(10),
+            )
+            .map_err(|e| StreamError::EventLogError(format!("Seek error: {}", e)))?;
+
+        self.current_offset.store(offset as u64, Ordering::Relaxed);
+        Ok(())
+    }
+
+    fn is_connected(&self) -> bool {
+        self.connected.load(Ordering::Relaxed)
+    }
+
+    fn stats(&self) -> CdcConnectorStats {
+        let stats = self.stats.blocking_read();
+        let mut result = stats.clone();
+        if let Some(start) = self.start_time {
+            result.uptime_secs = start.elapsed().as_secs();
+        }
+        result
+    }
+}
+
+/// Mock Kafka connector for when feature is disabled
+#[cfg(not(feature = "cdc-kafka"))]
+pub struct KafkaConnector {
+    _config: KafkaConnectorConfig,
+}
+
+#[cfg(not(feature = "cdc-kafka"))]
+impl KafkaConnector {
+    pub fn new(config: KafkaConnectorConfig, _parser: DebeziumParser) -> Self {
+        Self { _config: config }
+    }
+}
+
+// ============================================================================
+// Apache Pulsar CDC Connector
+// ============================================================================
+
+/// Apache Pulsar connector configuration
+#[derive(Debug, Clone)]
+pub struct PulsarConnectorConfig {
+    /// Pulsar service URL
+    pub service_url: String,
+    /// Topic to consume from
+    pub topic: String,
+    /// Subscription name
+    pub subscription: String,
+    /// Consumer name
+    pub consumer_name: String,
+    /// Batch receive settings
+    pub batch_size: usize,
+    /// Receive timeout in milliseconds
+    pub receive_timeout_ms: u64,
+    /// General CDC config
+    pub cdc_config: CdcConfig,
+    /// Initial subscription position
+    pub subscription_initial_position: PulsarSubscriptionPosition,
+    /// Enable dead letter queue
+    pub enable_dead_letter: bool,
+    /// Dead letter topic (if enabled)
+    pub dead_letter_topic: Option<String>,
+    /// Max redelivery count before dead letter
+    pub max_redelivery_count: u32,
+}
+
+/// Pulsar subscription initial position
+#[derive(Debug, Clone, Copy, Default)]
+pub enum PulsarSubscriptionPosition {
+    #[default]
+    Latest,
+    Earliest,
+}
+
+impl Default for PulsarConnectorConfig {
+    fn default() -> Self {
+        Self {
+            service_url: "pulsar://localhost:6650".to_string(),
+            topic: "persistent://public/default/needle-cdc".to_string(),
+            subscription: "needle-cdc-subscription".to_string(),
+            consumer_name: "needle-cdc-consumer".to_string(),
+            batch_size: 100,
+            receive_timeout_ms: 5000,
+            cdc_config: CdcConfig::default(),
+            subscription_initial_position: PulsarSubscriptionPosition::Latest,
+            enable_dead_letter: false,
+            dead_letter_topic: None,
+            max_redelivery_count: 3,
+        }
+    }
+}
+
+impl PulsarConnectorConfig {
+    /// Create a new Pulsar connector config with custom settings
+    pub fn new(service_url: impl Into<String>, topic: impl Into<String>) -> Self {
+        Self {
+            service_url: service_url.into(),
+            topic: topic.into(),
+            ..Default::default()
+        }
+    }
+
+    /// Set subscription name
+    pub fn with_subscription(mut self, subscription: impl Into<String>) -> Self {
+        self.subscription = subscription.into();
+        self
+    }
+
+    /// Set consumer name
+    pub fn with_consumer_name(mut self, name: impl Into<String>) -> Self {
+        self.consumer_name = name.into();
+        self
+    }
+
+    /// Set batch size
+    pub fn with_batch_size(mut self, size: usize) -> Self {
+        self.batch_size = size;
+        self
+    }
+
+    /// Set initial subscription position
+    pub fn with_initial_position(mut self, position: PulsarSubscriptionPosition) -> Self {
+        self.subscription_initial_position = position;
+        self
+    }
+
+    /// Enable dead letter queue
+    pub fn with_dead_letter(mut self, topic: impl Into<String>, max_redelivery: u32) -> Self {
+        self.enable_dead_letter = true;
+        self.dead_letter_topic = Some(topic.into());
+        self.max_redelivery_count = max_redelivery;
+        self
+    }
+}
+
+/// Apache Pulsar CDC connector
+#[cfg(feature = "cdc-pulsar")]
+pub struct PulsarConnector {
+    config: PulsarConnectorConfig,
+    client: Option<pulsar::Pulsar<pulsar::TokioExecutor>>,
+    consumer: Option<pulsar::Consumer<Vec<u8>, pulsar::TokioExecutor>>,
+    connected: Arc<AtomicBool>,
+    stats: Arc<RwLock<CdcConnectorStats>>,
+    parser: DebeziumParser,
+    current_message_id: Arc<RwLock<Option<String>>>,
+}
+
+#[cfg(feature = "cdc-pulsar")]
+impl PulsarConnector {
+    /// Create a new Pulsar connector
+    pub fn new(config: PulsarConnectorConfig, parser: DebeziumParser) -> Self {
+        Self {
+            config,
+            client: None,
+            consumer: None,
+            connected: Arc::new(AtomicBool::new(false)),
+            stats: Arc::new(RwLock::new(CdcConnectorStats::default())),
+            parser,
+            current_message_id: Arc::new(RwLock::new(None)),
+        }
+    }
+
+    /// Parse message payload to ChangeEvent
+    fn parse_message(&self, payload: &[u8]) -> StreamResult<Option<ChangeEvent>> {
+        // Try to parse as JSON
+        let json: serde_json::Value = serde_json::from_slice(payload)
+            .map_err(|e| StreamError::EventLogError(format!("JSON parse error: {}", e)))?;
+
+        // Use Debezium parser
+        self.parser.parse(&json)
+    }
+
+    /// Get connector statistics
+    pub fn get_stats(&self) -> CdcConnectorStats {
+        self.stats.blocking_read().clone()
+    }
+}
+
+#[cfg(feature = "cdc-pulsar")]
+impl CdcConnector for PulsarConnector {
+    async fn connect(&mut self) -> StreamResult<()> {
+        use pulsar::{Pulsar, TokioExecutor};
+
+        let client = Pulsar::builder(&self.config.service_url, TokioExecutor)
+            .build()
+            .await
+            .map_err(|e| StreamError::SubscriptionError(format!("Pulsar connect error: {}", e)))?;
+
+        self.client = Some(client);
+        self.connected.store(true, Ordering::Relaxed);
+
+        Ok(())
+    }
+
+    async fn start_capture(&mut self) -> StreamResult<()> {
+        use pulsar::SubType;
+
+        if !self.is_connected() {
+            self.connect().await?;
+        }
+
+        let client = self.client.as_ref().ok_or(StreamError::StreamClosed)?;
+
+        // Build consumer options
+        let mut consumer_builder = client
+            .consumer()
+            .with_topic(&self.config.topic)
+            .with_subscription(&self.config.subscription)
+            .with_subscription_type(SubType::Exclusive)
+            .with_consumer_name(&self.config.consumer_name);
+
+        // Set initial position
+        // Note: Pulsar crate may need different API for initial position
+        // This is a simplified version
+
+        let consumer: pulsar::Consumer<Vec<u8>, pulsar::TokioExecutor> = consumer_builder
+            .build()
+            .await
+            .map_err(|e| StreamError::SubscriptionError(format!("Consumer build error: {}", e)))?;
+
+        self.consumer = Some(consumer);
+
+        Ok(())
+    }
+
+    async fn stop_capture(&mut self) -> StreamResult<()> {
+        self.consumer = None;
+        self.connected.store(false, Ordering::Relaxed);
+        Ok(())
+    }
+
+    async fn next_change(&mut self) -> StreamResult<Option<ChangeEvent>> {
+        use futures_util::StreamExt;
+
+        let consumer = self.consumer.as_mut().ok_or(StreamError::StreamClosed)?;
+
+        let timeout = Duration::from_millis(self.config.receive_timeout_ms);
+
+        match tokio::time::timeout(timeout, consumer.next()).await {
+            Ok(Some(Ok(msg))) => {
+                let mut stats = self.stats.write().await;
+                stats.messages_received += 1;
+                stats.bytes_received += msg.payload.data.len() as u64;
+
+                // Store message ID for checkpointing
+                let msg_id = format!("{:?}", msg.message_id());
+                *self.current_message_id.write().await = Some(msg_id);
+
+                match self.parse_message(&msg.payload.data) {
+                    Ok(Some(event)) => {
+                        // Acknowledge the message
+                        if let Err(e) = consumer.ack(&msg).await {
+                            stats.last_error = Some(format!("Ack error: {}", e));
+                        }
+                        stats.messages_processed += 1;
+                        Ok(Some(event))
+                    }
+                    Ok(None) => {
+                        // Filtered out, still ack
+                        let _ = consumer.ack(&msg).await;
+                        Ok(None)
+                    }
+                    Err(e) => {
+                        stats.messages_failed += 1;
+                        stats.last_error = Some(e.to_string());
+                        // Negative ack for redelivery
+                        let _ = consumer.nack(&msg).await;
+                        Err(e)
+                    }
+                }
+            }
+            Ok(Some(Err(e))) => {
+                let mut stats = self.stats.write().await;
+                stats.last_error = Some(e.to_string());
+                Err(StreamError::ReceiveError(format!("Pulsar error: {}", e)))
+            }
+            Ok(None) => Ok(None),
+            Err(_) => Err(StreamError::Timeout),
+        }
+    }
+
+    fn current_position(&self) -> CdcPosition {
+        let msg_id = self.current_message_id.blocking_read();
+        let position = msg_id.clone().unwrap_or_else(|| "0".to_string());
+        CdcPosition::new(position, &self.config.topic)
+    }
+
+    async fn seek(&mut self, position: &CdcPosition) -> StreamResult<()> {
+        // Pulsar seek requires message ID, which is complex
+        // For now, log the intent
+        tracing::info!("Pulsar seek requested to position: {:?}", position);
+        Ok(())
+    }
+
+    fn is_connected(&self) -> bool {
+        self.connected.load(Ordering::Relaxed)
+    }
+
+    fn stats(&self) -> CdcConnectorStats {
+        self.stats.blocking_read().clone()
+    }
+}
+
+/// Mock Pulsar connector for when feature is disabled
+#[cfg(not(feature = "cdc-pulsar"))]
+pub struct PulsarConnector {
+    _config: PulsarConnectorConfig,
+}
+
+#[cfg(not(feature = "cdc-pulsar"))]
+impl PulsarConnector {
+    pub fn new(config: PulsarConnectorConfig, _parser: DebeziumParser) -> Self {
+        Self { _config: config }
+    }
+}
+
+// ============================================================================
+// PostgreSQL CDC Connector (Logical Replication)
+// ============================================================================
+
+/// PostgreSQL CDC connector configuration
+#[derive(Debug, Clone)]
+pub struct PostgresCdcConfig {
+    /// PostgreSQL connection string
+    pub connection_string: String,
+    /// Replication slot name
+    pub slot_name: String,
+    /// Publication name
+    pub publication_name: String,
+    /// Tables to capture changes from
+    pub tables: Vec<String>,
+    /// General CDC config
+    pub cdc_config: CdcConfig,
+}
+
+impl Default for PostgresCdcConfig {
+    fn default() -> Self {
+        Self {
+            connection_string: "postgres://localhost/needle".to_string(),
+            slot_name: "needle_slot".to_string(),
+            publication_name: "needle_publication".to_string(),
+            tables: vec![],
+            cdc_config: CdcConfig::default(),
+        }
+    }
+}
+
+/// PostgreSQL CDC connector using logical replication
+#[cfg(feature = "cdc-postgres")]
+pub struct PostgresCdcConnector {
+    config: PostgresCdcConfig,
+    client: Option<tokio_postgres::Client>,
+    connected: Arc<AtomicBool>,
+    stats: Arc<RwLock<CdcConnectorStats>>,
+    current_lsn: Arc<AtomicU64>,
+    collection_mapping: HashMap<String, String>,
+}
+
+#[cfg(feature = "cdc-postgres")]
+impl PostgresCdcConnector {
+    /// Create a new PostgreSQL CDC connector
+    pub fn new(config: PostgresCdcConfig) -> Self {
+        Self {
+            config,
+            client: None,
+            connected: Arc::new(AtomicBool::new(false)),
+            stats: Arc::new(RwLock::new(CdcConnectorStats::default())),
+            current_lsn: Arc::new(AtomicU64::new(0)),
+            collection_mapping: HashMap::new(),
+        }
+    }
+
+    /// Add table to collection mapping
+    pub fn with_mapping(mut self, table: impl Into<String>, collection: impl Into<String>) -> Self {
+        self.collection_mapping.insert(table.into(), collection.into());
+        self
+    }
+
+    /// Parse a PostgreSQL logical replication message
+    fn parse_message(&self, data: &[u8]) -> StreamResult<Option<ChangeEvent>> {
+        // Simplified parsing - real implementation would use pgoutput protocol
+        if data.is_empty() {
+            return Ok(None);
+        }
+
+        let msg_type = data[0] as char;
+        let timestamp = current_timestamp_millis();
+
+        match msg_type {
+            'I' => {
+                // Insert
+                let json_str = String::from_utf8_lossy(&data[1..]);
+                let value: serde_json::Value = serde_json::from_str(&json_str)
+                    .map_err(|e| StreamError::EventLogError(format!("Parse error: {}", e)))?;
+
+                let table = value.get("table").and_then(|v| v.as_str()).unwrap_or("unknown");
+                let collection = self.collection_mapping.get(table).cloned().unwrap_or_else(|| table.to_string());
+                let id = value.get("id").map(|v| v.to_string());
+
+                Ok(Some(ChangeEvent::insert(
+                    &collection,
+                    &id.unwrap_or_default(),
+                    json_str.as_bytes().to_vec(),
+                    0,
+                )))
+            }
+            'U' => {
+                // Update
+                let json_str = String::from_utf8_lossy(&data[1..]);
+                let value: serde_json::Value = serde_json::from_str(&json_str)
+                    .map_err(|e| StreamError::EventLogError(format!("Parse error: {}", e)))?;
+
+                let table = value.get("table").and_then(|v| v.as_str()).unwrap_or("unknown");
+                let collection = self.collection_mapping.get(table).cloned().unwrap_or_else(|| table.to_string());
+                let id = value.get("id").map(|v| v.to_string()).unwrap_or_default();
+
+                let mut event = ChangeEvent {
+                    id: 0,
+                    operation: OperationType::Update,
+                    collection,
+                    document_key: Some(id),
+                    full_document: Some(json_str.as_bytes().to_vec()),
+                    updated_fields: None,
+                    removed_fields: None,
+                    timestamp,
+                    resume_token: ResumeToken::new(0, timestamp),
+                    full_document_before_change: None,
+                    metadata: None,
+                };
+
+                Ok(Some(event))
+            }
+            'D' => {
+                // Delete
+                let json_str = String::from_utf8_lossy(&data[1..]);
+                let value: serde_json::Value = serde_json::from_str(&json_str)
+                    .map_err(|e| StreamError::EventLogError(format!("Parse error: {}", e)))?;
+
+                let table = value.get("table").and_then(|v| v.as_str()).unwrap_or("unknown");
+                let collection = self.collection_mapping.get(table).cloned().unwrap_or_else(|| table.to_string());
+                let id = value.get("id").map(|v| v.to_string()).unwrap_or_default();
+
+                Ok(Some(ChangeEvent::delete(&collection, &id, 0)))
+            }
+            _ => Ok(None),
+        }
+    }
+}
+
+#[cfg(feature = "cdc-postgres")]
+impl CdcConnector for PostgresCdcConnector {
+    async fn connect(&mut self) -> StreamResult<()> {
+        let (client, connection) = tokio_postgres::connect(&self.config.connection_string, tokio_postgres::NoTls)
+            .await
+            .map_err(|e| StreamError::SubscriptionError(format!("PostgreSQL connect error: {}", e)))?;
+
+        // Spawn connection handler
+        tokio::spawn(async move {
+            if let Err(e) = connection.await {
+                eprintln!("PostgreSQL connection error: {}", e);
+            }
+        });
+
+        self.client = Some(client);
+        self.connected.store(true, Ordering::Relaxed);
+
+        Ok(())
+    }
+
+    async fn start_capture(&mut self) -> StreamResult<()> {
+        if !self.is_connected() {
+            self.connect().await?;
+        }
+
+        let client = self.client.as_ref().ok_or(StreamError::StreamClosed)?;
+
+        // Create replication slot if it doesn't exist
+        let slot_query = format!(
+            "SELECT pg_create_logical_replication_slot('{}', 'pgoutput') WHERE NOT EXISTS (
+                SELECT 1 FROM pg_replication_slots WHERE slot_name = '{}'
+            )",
+            self.config.slot_name, self.config.slot_name
+        );
+
+        let _ = client.execute(&slot_query, &[]).await;
+
+        Ok(())
+    }
+
+    async fn stop_capture(&mut self) -> StreamResult<()> {
+        self.connected.store(false, Ordering::Relaxed);
+        self.client = None;
+        Ok(())
+    }
+
+    async fn next_change(&mut self) -> StreamResult<Option<ChangeEvent>> {
+        let client = self.client.as_ref().ok_or(StreamError::StreamClosed)?;
+
+        // Poll for changes using pg_logical_slot_get_changes
+        let query = format!(
+            "SELECT lsn, xid, data FROM pg_logical_slot_get_changes('{}', NULL, {}, 'proto_version', '1', 'publication_names', '{}')",
+            self.config.slot_name,
+            self.config.cdc_config.batch_size,
+            self.config.publication_name
+        );
+
+        let rows = client
+            .query(&query, &[])
+            .await
+            .map_err(|e| StreamError::ReceiveError(format!("PostgreSQL query error: {}", e)))?;
+
+        if let Some(row) = rows.first() {
+            let data: &[u8] = row.get(2);
+            let mut stats = self.stats.write().await;
+            stats.messages_received += 1;
+            stats.bytes_received += data.len() as u64;
+
+            match self.parse_message(data) {
+                Ok(Some(event)) => {
+                    stats.messages_processed += 1;
+                    Ok(Some(event))
+                }
+                Ok(None) => Ok(None),
+                Err(e) => {
+                    stats.messages_failed += 1;
+                    stats.last_error = Some(e.to_string());
+                    Err(e)
+                }
+            }
+        } else {
+            Ok(None)
+        }
+    }
+
+    fn current_position(&self) -> CdcPosition {
+        CdcPosition::new(
+            self.current_lsn.load(Ordering::Relaxed).to_string(),
+            &self.config.slot_name,
+        )
+    }
+
+    async fn seek(&mut self, position: &CdcPosition) -> StreamResult<()> {
+        let lsn: u64 = position
+            .position
+            .parse()
+            .map_err(|_| StreamError::InvalidResumeToken("Invalid LSN".to_string()))?;
+
+        self.current_lsn.store(lsn, Ordering::Relaxed);
+        Ok(())
+    }
+
+    fn is_connected(&self) -> bool {
+        self.connected.load(Ordering::Relaxed)
+    }
+
+    fn stats(&self) -> CdcConnectorStats {
+        self.stats.blocking_read().clone()
+    }
+}
+
+/// Mock PostgreSQL CDC connector for when feature is disabled
+#[cfg(not(feature = "cdc-postgres"))]
+pub struct PostgresCdcConnector {
+    _config: PostgresCdcConfig,
+}
+
+#[cfg(not(feature = "cdc-postgres"))]
+impl PostgresCdcConnector {
+    pub fn new(config: PostgresCdcConfig) -> Self {
+        Self { _config: config }
+    }
+}
+
+// ============================================================================
+// MongoDB Change Stream Connector
+// ============================================================================
+
+/// MongoDB change stream configuration
+#[derive(Debug, Clone)]
+pub struct MongoCdcConfig {
+    /// MongoDB connection string
+    pub connection_string: String,
+    /// Database name
+    pub database: String,
+    /// Collections to watch (empty = all)
+    pub collections: Vec<String>,
+    /// General CDC config
+    pub cdc_config: CdcConfig,
+    /// Full document lookup on update
+    pub full_document: String,
+    /// Full document before change (MongoDB 6.0+)
+    pub full_document_before_change: String,
+}
+
+impl Default for MongoCdcConfig {
+    fn default() -> Self {
+        Self {
+            connection_string: "mongodb://localhost:27017".to_string(),
+            database: "needle".to_string(),
+            collections: vec![],
+            cdc_config: CdcConfig::default(),
+            full_document: "updateLookup".to_string(),
+            full_document_before_change: "off".to_string(),
+        }
+    }
+}
+
+/// MongoDB change stream connector
+#[cfg(feature = "cdc-mongodb")]
+pub struct MongoCdcConnector {
+    config: MongoCdcConfig,
+    client: Option<mongodb::Client>,
+    connected: Arc<AtomicBool>,
+    stats: Arc<RwLock<CdcConnectorStats>>,
+    resume_token: Arc<RwLock<Option<mongodb::bson::Document>>>,
+}
+
+#[cfg(feature = "cdc-mongodb")]
+impl MongoCdcConnector {
+    /// Create a new MongoDB CDC connector
+    pub fn new(config: MongoCdcConfig) -> Self {
+        Self {
+            config,
+            client: None,
+            connected: Arc::new(AtomicBool::new(false)),
+            stats: Arc::new(RwLock::new(CdcConnectorStats::default())),
+            resume_token: Arc::new(RwLock::new(None)),
+        }
+    }
+
+    /// Convert MongoDB change event to ChangeEvent
+    fn convert_change_event(&self, doc: mongodb::bson::Document) -> StreamResult<ChangeEvent> {
+        use mongodb::bson::Bson;
+
+        let op_type = doc
+            .get_str("operationType")
+            .map_err(|_| StreamError::EventLogError("Missing operationType".to_string()))?;
+
+        let operation = match op_type {
+            "insert" => OperationType::Insert,
+            "update" | "replace" => OperationType::Update,
+            "delete" => OperationType::Delete,
+            "drop" => OperationType::Drop,
+            "rename" => OperationType::Rename,
+            "dropDatabase" => OperationType::Drop,
+            "invalidate" => OperationType::Drop,
+            _ => {
+                return Err(StreamError::EventLogError(format!(
+                    "Unknown operation type: {}",
+                    op_type
+                )))
+            }
+        };
+
+        let ns = doc.get_document("ns").ok();
+        let collection = ns
+            .and_then(|n| n.get_str("coll").ok())
+            .unwrap_or("unknown")
+            .to_string();
+
+        let document_key = doc
+            .get_document("documentKey")
+            .ok()
+            .and_then(|dk| dk.get("_id"))
+            .map(|id| match id {
+                Bson::ObjectId(oid) => oid.to_hex(),
+                _ => id.to_string(),
+            });
+
+        let timestamp = doc
+            .get_timestamp("clusterTime")
+            .map(|t| (t.time as u64) * 1000)
+            .unwrap_or_else(|_| current_timestamp_millis());
+
+        let full_document = doc
+            .get_document("fullDocument")
+            .ok()
+            .map(|d| serde_json::to_vec(d).unwrap_or_default());
+
+        let full_document_before = doc
+            .get_document("fullDocumentBeforeChange")
+            .ok()
+            .map(|d| serde_json::to_vec(d).unwrap_or_default());
+
+        let mut event = ChangeEvent {
+            id: 0,
+            operation,
+            collection,
+            document_key,
+            full_document,
+            updated_fields: None,
+            removed_fields: None,
+            timestamp,
+            resume_token: ResumeToken::new(0, timestamp),
+            full_document_before_change: full_document_before,
+            metadata: None,
+        };
+
+        // Extract update description
+        if let Ok(update_desc) = doc.get_document("updateDescription") {
+            if let Ok(updated_fields) = update_desc.get_document("updatedFields") {
+                let mut fields = HashMap::new();
+                for (key, value) in updated_fields {
+                    fields.insert(key.clone(), serde_json::to_vec(value).unwrap_or_default());
+                }
+                event.updated_fields = Some(fields);
+            }
+
+            if let Ok(removed) = update_desc.get_array("removedFields") {
+                event.removed_fields = Some(
+                    removed
+                        .iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect(),
+                );
+            }
+        }
+
+        Ok(event)
+    }
+}
+
+#[cfg(feature = "cdc-mongodb")]
+impl CdcConnector for MongoCdcConnector {
+    async fn connect(&mut self) -> StreamResult<()> {
+        let client = mongodb::Client::with_uri_str(&self.config.connection_string)
+            .await
+            .map_err(|e| StreamError::SubscriptionError(format!("MongoDB connect error: {}", e)))?;
+
+        self.client = Some(client);
+        self.connected.store(true, Ordering::Relaxed);
+
+        Ok(())
+    }
+
+    async fn start_capture(&mut self) -> StreamResult<()> {
+        if !self.is_connected() {
+            self.connect().await?;
+        }
+        Ok(())
+    }
+
+    async fn stop_capture(&mut self) -> StreamResult<()> {
+        self.connected.store(false, Ordering::Relaxed);
+        self.client = None;
+        Ok(())
+    }
+
+    async fn next_change(&mut self) -> StreamResult<Option<ChangeEvent>> {
+        use futures_util::StreamExt;
+        use mongodb::options::ChangeStreamOptions;
+
+        let client = self.client.as_ref().ok_or(StreamError::StreamClosed)?;
+        let db = client.database(&self.config.database);
+
+        let mut options = ChangeStreamOptions::default();
+        options.full_document = Some(mongodb::options::FullDocumentType::UpdateLookup);
+
+        // Resume from token if available
+        let resume_token = self.resume_token.read().await.clone();
+        if let Some(token) = resume_token {
+            options.resume_after = Some(mongodb::change_stream::ResumeToken::from(token));
+        }
+
+        let mut change_stream = db
+            .watch()
+            .await
+            .map_err(|e| StreamError::SubscriptionError(format!("Watch error: {}", e)))?;
+
+        let timeout = Duration::from_millis(self.config.cdc_config.fetch_timeout_ms);
+
+        match tokio::time::timeout(timeout, change_stream.next()).await {
+            Ok(Some(Ok(change))) => {
+                let mut stats = self.stats.write().await;
+                stats.messages_received += 1;
+
+                // Store resume token
+                if let Some(token) = change_stream.resume_token() {
+                    *self.resume_token.write().await = Some(token.to_raw_value().as_document()
+                        .cloned()
+                        .unwrap_or_default());
+                }
+
+                // Convert to raw document for processing
+                let doc = mongodb::bson::to_document(&change)
+                    .map_err(|e| StreamError::EventLogError(format!("Bson error: {}", e)))?;
+
+                match self.convert_change_event(doc) {
+                    Ok(event) => {
+                        stats.messages_processed += 1;
+                        Ok(Some(event))
+                    }
+                    Err(e) => {
+                        stats.messages_failed += 1;
+                        stats.last_error = Some(e.to_string());
+                        Err(e)
+                    }
+                }
+            }
+            Ok(Some(Err(e))) => {
+                let mut stats = self.stats.write().await;
+                stats.last_error = Some(e.to_string());
+                Err(StreamError::ReceiveError(format!("MongoDB error: {}", e)))
+            }
+            Ok(None) => Ok(None),
+            Err(_) => Err(StreamError::Timeout),
+        }
+    }
+
+    fn current_position(&self) -> CdcPosition {
+        let token = self.resume_token.blocking_read();
+        let position = token
+            .as_ref()
+            .map(|t| t.to_string())
+            .unwrap_or_else(|| "0".to_string());
+        CdcPosition::new(position, &self.config.database)
+    }
+
+    async fn seek(&mut self, _position: &CdcPosition) -> StreamResult<()> {
+        // MongoDB uses resume tokens, which are opaque
+        // For now, just reset
+        *self.resume_token.write().await = None;
+        Ok(())
+    }
+
+    fn is_connected(&self) -> bool {
+        self.connected.load(Ordering::Relaxed)
+    }
+
+    fn stats(&self) -> CdcConnectorStats {
+        self.stats.blocking_read().clone()
+    }
+}
+
+/// Mock MongoDB CDC connector for when feature is disabled
+#[cfg(not(feature = "cdc-mongodb"))]
+pub struct MongoCdcConnector {
+    _config: MongoCdcConfig,
+}
+
+#[cfg(not(feature = "cdc-mongodb"))]
+impl MongoCdcConnector {
+    pub fn new(config: MongoCdcConfig) -> Self {
+        Self { _config: config }
+    }
+}
+
+// ============================================================================
+// CDC Ingestion Pipeline
+// ============================================================================
+
+/// Pipeline for ingesting CDC events into Needle
+pub struct CdcIngestionPipeline {
+    /// Stream manager for recording events
+    stream_manager: Arc<StreamManager>,
+    /// Transformation function
+    transformer: Option<Box<dyn Fn(ChangeEvent) -> Option<ChangeEvent> + Send + Sync>>,
+    /// Checkpoint interval (events)
+    checkpoint_interval: usize,
+    /// Events since last checkpoint
+    events_since_checkpoint: AtomicU64,
+    /// Last checkpoint position
+    last_checkpoint: RwLock<Option<CdcPosition>>,
+    /// Pipeline statistics
+    stats: RwLock<CdcPipelineStats>,
+}
+
+/// Statistics for the CDC pipeline
+#[derive(Debug, Clone, Default)]
+pub struct CdcPipelineStats {
+    /// Total events ingested
+    pub events_ingested: u64,
+    /// Events transformed
+    pub events_transformed: u64,
+    /// Events filtered out
+    pub events_filtered: u64,
+    /// Last checkpoint time
+    pub last_checkpoint_time: Option<u64>,
+    /// Errors encountered
+    pub errors: u64,
+}
+
+impl CdcIngestionPipeline {
+    /// Create a new ingestion pipeline
+    pub fn new(stream_manager: Arc<StreamManager>) -> Self {
+        Self {
+            stream_manager,
+            transformer: None,
+            checkpoint_interval: 1000,
+            events_since_checkpoint: AtomicU64::new(0),
+            last_checkpoint: RwLock::new(None),
+            stats: RwLock::new(CdcPipelineStats::default()),
+        }
+    }
+
+    /// Set a transformation function
+    pub fn with_transformer<F>(mut self, f: F) -> Self
+    where
+        F: Fn(ChangeEvent) -> Option<ChangeEvent> + Send + Sync + 'static,
+    {
+        self.transformer = Some(Box::new(f));
+        self
+    }
+
+    /// Set checkpoint interval
+    pub fn with_checkpoint_interval(mut self, interval: usize) -> Self {
+        self.checkpoint_interval = interval;
+        self
+    }
+
+    /// Ingest a single event
+    pub async fn ingest(&self, event: ChangeEvent) -> StreamResult<Option<u64>> {
+        let mut stats = self.stats.write().await;
+
+        // Apply transformation
+        let event = if let Some(ref transformer) = self.transformer {
+            match transformer(event) {
+                Some(e) => {
+                    stats.events_transformed += 1;
+                    e
+                }
+                None => {
+                    stats.events_filtered += 1;
+                    return Ok(None);
+                }
+            }
+        } else {
+            event
+        };
+
+        // Record the event
+        match self.stream_manager.record_change(event).await {
+            Ok(position) => {
+                stats.events_ingested += 1;
+                self.events_since_checkpoint.fetch_add(1, Ordering::Relaxed);
+                Ok(Some(position))
+            }
+            Err(e) => {
+                stats.errors += 1;
+                Err(e)
+            }
+        }
+    }
+
+    /// Ingest events from a CDC connector
+    pub async fn ingest_from_connector<C: CdcConnector>(
+        &self,
+        connector: &mut C,
+    ) -> StreamResult<usize> {
+        let mut ingested = 0;
+
+        loop {
+            match connector.next_change().await {
+                Ok(Some(event)) => {
+                    self.ingest(event).await?;
+                    ingested += 1;
+
+                    // Check if we need to checkpoint
+                    let events_since = self.events_since_checkpoint.load(Ordering::Relaxed);
+                    if events_since >= self.checkpoint_interval as u64 {
+                        self.checkpoint(connector.current_position()).await?;
+                    }
+                }
+                Ok(None) => break,
+                Err(StreamError::Timeout) => break,
+                Err(e) => return Err(e),
+            }
+        }
+
+        Ok(ingested)
+    }
+
+    /// Create a checkpoint
+    pub async fn checkpoint(&self, position: CdcPosition) -> StreamResult<()> {
+        *self.last_checkpoint.write().await = Some(position);
+        self.events_since_checkpoint.store(0, Ordering::Relaxed);
+
+        let mut stats = self.stats.write().await;
+        stats.last_checkpoint_time = Some(current_timestamp_millis());
+
+        Ok(())
+    }
+
+    /// Get the last checkpoint position
+    pub async fn last_checkpoint(&self) -> Option<CdcPosition> {
+        self.last_checkpoint.read().await.clone()
+    }
+
+    /// Get pipeline statistics
+    pub async fn stats(&self) -> CdcPipelineStats {
+        self.stats.read().await.clone()
+    }
+}
+
+// ============================================================================
 // Tests
 // ============================================================================
 
@@ -2376,5 +3954,459 @@ mod tests {
 
         assert!(snapshot.is_empty());
         assert_eq!(snapshot.len(), 0);
+    }
+
+    // ========================================================================
+    // CDC Tests
+    // ========================================================================
+
+    #[test]
+    fn test_cdc_position_new() {
+        let pos = CdcPosition::new("12345", "my-topic");
+
+        assert_eq!(pos.position, "12345");
+        assert_eq!(pos.source, "my-topic");
+        assert!(pos.partition.is_none());
+    }
+
+    #[test]
+    fn test_cdc_position_with_partition() {
+        let pos = CdcPosition::new("12345", "my-topic").with_partition(2);
+
+        assert_eq!(pos.partition, Some(2));
+    }
+
+    #[test]
+    fn test_cdc_position_serialize_parse() {
+        let pos = CdcPosition::new("12345", "my-topic").with_partition(2);
+        let serialized = pos.serialize();
+
+        let parsed = CdcPosition::parse(&serialized).unwrap();
+        assert_eq!(parsed.source, pos.source);
+        assert_eq!(parsed.position, pos.position);
+        assert_eq!(parsed.partition, pos.partition);
+    }
+
+    #[test]
+    fn test_cdc_position_serialize_without_partition() {
+        let pos = CdcPosition::new("12345", "my-topic");
+        let serialized = pos.serialize();
+
+        let parsed = CdcPosition::parse(&serialized).unwrap();
+        assert_eq!(parsed.source, "my-topic");
+        assert_eq!(parsed.position, "12345");
+        assert!(parsed.partition.is_none());
+    }
+
+    #[test]
+    fn test_cdc_config_default() {
+        let config = CdcConfig::default();
+
+        assert_eq!(config.batch_size, 100);
+        assert_eq!(config.fetch_timeout_ms, 5000);
+        assert_eq!(config.max_retries, 3);
+        assert!(!config.exactly_once);
+    }
+
+    #[test]
+    fn test_debezium_parser_insert() {
+        let parser = DebeziumParser::new(DebeziumSourceType::PostgreSQL);
+
+        let json = r#"{
+            "op": "c",
+            "ts_ms": 1234567890,
+            "source": {
+                "table": "users",
+                "db": "mydb"
+            },
+            "after": {
+                "id": 1,
+                "name": "Alice"
+            }
+        }"#;
+
+        let event = parser.parse_json(json).unwrap();
+
+        assert_eq!(event.operation, OperationType::Insert);
+        assert_eq!(event.collection, "users");
+        assert!(event.full_document.is_some());
+    }
+
+    #[test]
+    fn test_debezium_parser_update() {
+        let parser = DebeziumParser::new(DebeziumSourceType::PostgreSQL);
+
+        let json = r#"{
+            "op": "u",
+            "ts_ms": 1234567890,
+            "source": {
+                "table": "users"
+            },
+            "before": {
+                "id": 1,
+                "name": "Alice"
+            },
+            "after": {
+                "id": 1,
+                "name": "Bob"
+            }
+        }"#;
+
+        let event = parser.parse_json(json).unwrap();
+
+        assert_eq!(event.operation, OperationType::Update);
+        assert!(event.full_document.is_some());
+        assert!(event.full_document_before_change.is_some());
+    }
+
+    #[test]
+    fn test_debezium_parser_delete() {
+        let parser = DebeziumParser::new(DebeziumSourceType::PostgreSQL);
+
+        let json = r#"{
+            "op": "d",
+            "ts_ms": 1234567890,
+            "source": {
+                "table": "users"
+            },
+            "before": {
+                "id": 1,
+                "name": "Alice"
+            }
+        }"#;
+
+        let event = parser.parse_json(json).unwrap();
+
+        assert_eq!(event.operation, OperationType::Delete);
+    }
+
+    #[test]
+    fn test_debezium_parser_with_mapping() {
+        let parser = DebeziumParser::new(DebeziumSourceType::PostgreSQL)
+            .with_mapping("users", "user_vectors");
+
+        let json = r#"{
+            "op": "c",
+            "ts_ms": 1234567890,
+            "source": {
+                "table": "users"
+            },
+            "after": {"id": 1}
+        }"#;
+
+        let event = parser.parse_json(json).unwrap();
+
+        assert_eq!(event.collection, "user_vectors");
+    }
+
+    #[test]
+    fn test_debezium_parser_mongodb_format() {
+        let parser = DebeziumParser::new(DebeziumSourceType::MongoDB);
+
+        let json = r#"{
+            "op": "c",
+            "ts_ms": 1234567890,
+            "source": {
+                "table": "documents"
+            },
+            "after": {
+                "_id": "507f1f77bcf86cd799439011",
+                "content": "test"
+            }
+        }"#;
+
+        let event = parser.parse_json(json).unwrap();
+
+        assert_eq!(event.operation, OperationType::Insert);
+        assert_eq!(event.collection, "documents");
+    }
+
+    #[test]
+    fn test_debezium_parser_with_update_description() {
+        let parser = DebeziumParser::new(DebeziumSourceType::MongoDB);
+
+        let json = r#"{
+            "op": "u",
+            "ts_ms": 1234567890,
+            "source": {
+                "table": "users"
+            },
+            "after": {"id": 1, "name": "Bob"},
+            "updateDescription": {
+                "updatedFields": {"name": "Bob"},
+                "removedFields": ["old_field"]
+            }
+        }"#;
+
+        let event = parser.parse_json(json).unwrap();
+
+        assert!(event.updated_fields.is_some());
+        assert!(event.removed_fields.is_some());
+        assert_eq!(event.removed_fields.as_ref().unwrap(), &vec!["old_field".to_string()]);
+    }
+
+    #[test]
+    fn test_debezium_parser_extract_metadata() {
+        let parser = DebeziumParser::new(DebeziumSourceType::PostgreSQL);
+
+        let json = r#"{
+            "op": "c",
+            "ts_ms": 1234567890,
+            "source": {
+                "table": "users",
+                "db": "mydb",
+                "schema": "public",
+                "connector": "postgresql",
+                "lsn": 12345678
+            },
+            "after": {"id": 1}
+        }"#;
+
+        let event = parser.parse_json(json).unwrap();
+
+        assert!(event.metadata.is_some());
+        let meta = event.metadata.unwrap();
+        assert_eq!(meta.get("database"), Some(&"mydb".to_string()));
+        assert_eq!(meta.get("schema"), Some(&"public".to_string()));
+        assert_eq!(meta.get("connector"), Some(&"postgresql".to_string()));
+        assert_eq!(meta.get("lsn"), Some(&"12345678".to_string()));
+    }
+
+    #[test]
+    fn test_debezium_parser_invalid_op() {
+        let parser = DebeziumParser::new(DebeziumSourceType::PostgreSQL);
+
+        let json = r#"{"op": "x"}"#;
+        let result = parser.parse_json(json);
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_debezium_parser_missing_op() {
+        let parser = DebeziumParser::new(DebeziumSourceType::PostgreSQL);
+
+        let json = r#"{"ts_ms": 123}"#;
+        let result = parser.parse_json(json);
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_kafka_connector_config_default() {
+        let config = KafkaConnectorConfig::default();
+
+        assert_eq!(config.brokers, vec!["localhost:9092".to_string()]);
+        assert_eq!(config.group_id, "needle-cdc");
+        assert_eq!(config.security_protocol, "PLAINTEXT");
+        assert_eq!(config.offset_reset, "earliest");
+    }
+
+    #[test]
+    fn test_postgres_cdc_config_default() {
+        let config = PostgresCdcConfig::default();
+
+        assert_eq!(config.slot_name, "needle_slot");
+        assert_eq!(config.publication_name, "needle_publication");
+        assert!(config.tables.is_empty());
+    }
+
+    #[test]
+    fn test_mongo_cdc_config_default() {
+        let config = MongoCdcConfig::default();
+
+        assert_eq!(config.database, "needle");
+        assert_eq!(config.full_document, "updateLookup");
+        assert!(config.collections.is_empty());
+    }
+
+    #[test]
+    fn test_pulsar_connector_config_default() {
+        let config = PulsarConnectorConfig::default();
+
+        assert_eq!(config.service_url, "pulsar://localhost:6650");
+        assert_eq!(
+            config.topic,
+            "persistent://public/default/needle-cdc"
+        );
+        assert_eq!(config.subscription, "needle-cdc-subscription");
+        assert_eq!(config.consumer_name, "needle-cdc-consumer");
+        assert_eq!(config.batch_size, 100);
+        assert_eq!(config.receive_timeout_ms, 5000);
+        assert!(!config.enable_dead_letter);
+    }
+
+    #[test]
+    fn test_pulsar_connector_config_builder() {
+        let config = PulsarConnectorConfig::new("pulsar://myhost:6650", "my-topic")
+            .with_subscription("my-sub")
+            .with_consumer_name("my-consumer")
+            .with_batch_size(50)
+            .with_initial_position(PulsarSubscriptionPosition::Earliest)
+            .with_dead_letter("dlq-topic", 5);
+
+        assert_eq!(config.service_url, "pulsar://myhost:6650");
+        assert_eq!(config.topic, "my-topic");
+        assert_eq!(config.subscription, "my-sub");
+        assert_eq!(config.consumer_name, "my-consumer");
+        assert_eq!(config.batch_size, 50);
+        assert!(config.enable_dead_letter);
+        assert_eq!(config.dead_letter_topic, Some("dlq-topic".to_string()));
+        assert_eq!(config.max_redelivery_count, 5);
+    }
+
+    #[test]
+    fn test_pulsar_subscription_position_default() {
+        let position = PulsarSubscriptionPosition::default();
+        assert!(matches!(position, PulsarSubscriptionPosition::Latest));
+    }
+
+    #[tokio::test]
+    async fn test_cdc_ingestion_pipeline() {
+        let manager = Arc::new(StreamManager::new());
+        let pipeline = CdcIngestionPipeline::new(Arc::clone(&manager));
+
+        let event = ChangeEvent::insert("test", "1", vec![1, 2, 3], 0);
+        let position = pipeline.ingest(event).await.unwrap();
+
+        assert!(position.is_some());
+
+        let stats = pipeline.stats().await;
+        assert_eq!(stats.events_ingested, 1);
+    }
+
+    #[tokio::test]
+    async fn test_cdc_ingestion_pipeline_with_transformer() {
+        let manager = Arc::new(StreamManager::new());
+        let pipeline = CdcIngestionPipeline::new(Arc::clone(&manager))
+            .with_transformer(|mut event| {
+                // Add a prefix to collection name
+                event.collection = format!("transformed_{}", event.collection);
+                Some(event)
+            });
+
+        let event = ChangeEvent::insert("test", "1", vec![1, 2, 3], 0);
+        pipeline.ingest(event).await.unwrap();
+
+        let stats = pipeline.stats().await;
+        assert_eq!(stats.events_transformed, 1);
+    }
+
+    #[tokio::test]
+    async fn test_cdc_ingestion_pipeline_filter() {
+        let manager = Arc::new(StreamManager::new());
+        let pipeline = CdcIngestionPipeline::new(Arc::clone(&manager))
+            .with_transformer(|event| {
+                // Filter out delete operations
+                if event.operation == OperationType::Delete {
+                    None
+                } else {
+                    Some(event)
+                }
+            });
+
+        let insert = ChangeEvent::insert("test", "1", vec![1], 0);
+        let delete = ChangeEvent::delete("test", "1", 0);
+
+        pipeline.ingest(insert).await.unwrap();
+        pipeline.ingest(delete).await.unwrap();
+
+        let stats = pipeline.stats().await;
+        assert_eq!(stats.events_ingested, 1);
+        assert_eq!(stats.events_filtered, 1);
+    }
+
+    #[tokio::test]
+    async fn test_cdc_ingestion_pipeline_checkpoint() {
+        let manager = Arc::new(StreamManager::new());
+        let pipeline = CdcIngestionPipeline::new(Arc::clone(&manager))
+            .with_checkpoint_interval(5);
+
+        // Ingest some events
+        for i in 0..10 {
+            let event = ChangeEvent::insert("test", &i.to_string(), vec![i as u8], 0);
+            pipeline.ingest(event).await.unwrap();
+        }
+
+        // Create a checkpoint
+        let position = CdcPosition::new("offset_10", "test-topic");
+        pipeline.checkpoint(position.clone()).await.unwrap();
+
+        let last_checkpoint = pipeline.last_checkpoint().await;
+        assert!(last_checkpoint.is_some());
+        assert_eq!(last_checkpoint.unwrap().position, "offset_10");
+
+        let stats = pipeline.stats().await;
+        assert!(stats.last_checkpoint_time.is_some());
+    }
+
+    #[test]
+    fn test_cdc_connector_stats_default() {
+        let stats = CdcConnectorStats::default();
+
+        assert_eq!(stats.messages_received, 0);
+        assert_eq!(stats.messages_processed, 0);
+        assert_eq!(stats.messages_failed, 0);
+        assert!(stats.last_error.is_none());
+    }
+
+    #[test]
+    fn test_debezium_source_types() {
+        // Ensure all source types can be created
+        let _ = DebeziumParser::new(DebeziumSourceType::PostgreSQL);
+        let _ = DebeziumParser::new(DebeziumSourceType::MySQL);
+        let _ = DebeziumParser::new(DebeziumSourceType::MongoDB);
+        let _ = DebeziumParser::new(DebeziumSourceType::SQLServer);
+        let _ = DebeziumParser::new(DebeziumSourceType::Oracle);
+        let _ = DebeziumParser::new(DebeziumSourceType::Cassandra);
+    }
+
+    #[test]
+    fn test_debezium_parser_snapshot_read() {
+        let parser = DebeziumParser::new(DebeziumSourceType::PostgreSQL);
+
+        // "r" operation is a snapshot read, treated as insert
+        let json = r#"{
+            "op": "r",
+            "ts_ms": 1234567890,
+            "source": {"table": "users"},
+            "after": {"id": 1}
+        }"#;
+
+        let event = parser.parse_json(json).unwrap();
+        assert_eq!(event.operation, OperationType::Insert);
+    }
+
+    #[test]
+    fn test_debezium_parser_truncate() {
+        let parser = DebeziumParser::new(DebeziumSourceType::PostgreSQL);
+
+        let json = r#"{
+            "op": "t",
+            "ts_ms": 1234567890,
+            "source": {"table": "users"}
+        }"#;
+
+        let event = parser.parse_json(json).unwrap();
+        assert_eq!(event.operation, OperationType::Drop);
+    }
+
+    #[test]
+    fn test_debezium_parser_payload_wrapped() {
+        let parser = DebeziumParser::new(DebeziumSourceType::PostgreSQL);
+
+        // Kafka Connect wraps in "payload"
+        let json = r#"{
+            "payload": {
+                "op": "c",
+                "ts_ms": 1234567890,
+                "source": {"table": "users"},
+                "after": {"id": 1}
+            }
+        }"#;
+
+        let event = parser.parse_json(json).unwrap();
+        assert_eq!(event.operation, OperationType::Insert);
+        assert_eq!(event.collection, "users");
     }
 }
