@@ -42,6 +42,9 @@ parking_lot = "0.12"
 # Parallelization
 rayon = "1.10"
 
+# LRU cache for query result caching
+lru = "0.12"
+
 # Logging/tracing
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"], optional = true }
@@ -84,9 +87,38 @@ ort = { version = "2.0.0-rc.9", optional = true }
 ndarray = { version = "0.16", optional = true }
 tokenizers = { version = "0.20", optional = true }
 
+# Cloud Storage - AWS S3 (optional)
+aws-config = { version = "1.5", optional = true }
+aws-sdk-s3 = { version = "1.65", optional = true }
+aws-smithy-types = { version = "1.2", optional = true }
+
+# Cloud Storage - Google Cloud Storage (optional)
+google-cloud-storage = { version = "0.22", optional = true }
+
+# Cloud Storage - Azure Blob Storage (optional)
+azure_storage = { version = "0.21", optional = true }
+azure_storage_blobs = { version = "0.21", optional = true }
+azure_identity = { version = "0.21", optional = true }
+
+# GPU Acceleration - CUDA (optional, requires CUDA Toolkit)
+cudarc = { version = "0.12", optional = true }
+
+# GPU Acceleration - Metal (optional, macOS only)
+metal = { version = "0.30", optional = true }
+objc = { version = "0.2", optional = true }
+
+# SIMD-optimized operations (auto-vectorization helpers)
+wide = { version = "0.7", optional = true }
+
 # TUI (optional)
 ratatui = { version = "0.29", optional = true }
 crossterm = { version = "0.28", optional = true }
+
+# CDC / Streaming connectors (optional)
+rdkafka = { version = "0.36", features = ["cmake-build"], optional = true }
+pulsar = { version = "6.3", optional = true }
+tokio-postgres = { version = "0.7", optional = true }
+mongodb = { version = "3.1", optional = true }
 
 # File hashing for backup
 sha2 = "0.10"
@@ -136,11 +168,26 @@ hybrid = ["rust-stemmers"]
 # Note: embeddings feature uses pre-release ort crate, consider unstable
 embeddings = ["ort", "ndarray", "tokenizers"]
 embedding-providers = ["async", "async-trait", "reqwest"]
-full = ["server", "metrics", "hybrid", "web-ui", "embedding-providers"]
+# Cloud storage backends
+cloud-storage-s3 = ["async", "aws-config", "aws-sdk-s3", "aws-smithy-types"]
+cloud-storage-gcs = ["async", "google-cloud-storage"]
+cloud-storage-azure = ["async", "azure_storage", "azure_storage_blobs", "azure_identity"]
+cloud-storage = ["cloud-storage-s3", "cloud-storage-gcs", "cloud-storage-azure"]
+# GPU acceleration backends
+gpu = ["wide"]
+gpu-cuda = ["gpu", "cudarc"]
+gpu-metal = ["gpu", "metal", "objc"]
+full = ["server", "metrics", "hybrid", "web-ui", "embedding-providers", "cloud-storage"]
 python = ["pyo3", "pythonize"]
 wasm = ["wasm-bindgen", "js-sys", "web-sys"]
 uniffi-bindings = ["uniffi"]
 tui = ["async", "ratatui", "crossterm"]
+# CDC / Streaming connectors
+cdc-kafka = ["async", "rdkafka"]
+cdc-pulsar = ["async", "pulsar"]
+cdc-postgres = ["async", "tokio-postgres"]
+cdc-mongodb = ["async", "mongodb"]
+cdc = ["cdc-kafka", "cdc-pulsar", "cdc-postgres", "cdc-mongodb"]
 
 [profile.release]
 lto = true
