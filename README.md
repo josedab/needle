@@ -1,5 +1,12 @@
 # Needle
 
+[![CI](https://github.com/anthropics/needle/actions/workflows/ci.yml/badge.svg)](https://github.com/anthropics/needle/actions/workflows/ci.yml)
+[![Security](https://github.com/anthropics/needle/actions/workflows/security.yml/badge.svg)](https://github.com/anthropics/needle/actions/workflows/security.yml)
+[![codecov](https://codecov.io/gh/anthropics/needle/branch/main/graph/badge.svg)](https://codecov.io/gh/anthropics/needle)
+[![Crates.io](https://img.shields.io/crates/v/needle.svg)](https://crates.io/crates/needle)
+[![docs.rs](https://docs.rs/needle/badge.svg)](https://docs.rs/needle)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
 **SQLite for Vectors** - An embedded vector database written in Rust.
 
 Needle is a high-performance, zero-configuration vector database designed for AI applications. It provides fast approximate nearest neighbor (ANN) search with a single-file storage format.
@@ -22,13 +29,13 @@ Needle is a high-performance, zero-configuration vector database designed for AI
 - **Sparse Vectors**: TF-IDF and SPLADE support with inverted index
 - **Multi-Vector (ColBERT)**: MaxSim search for token-level embeddings
 - **Reranking**: Cross-encoder reranking with Cohere, HuggingFace, and custom providers
-- **GPU Acceleration**: CUDA/OpenCL support for distance computation
+- **GPU Acceleration**: CUDA/OpenCL support for distance computation *(planned - CPU fallback only)*
 
 ### Enterprise
 - **Encryption at Rest**: ChaCha20-Poly1305 authenticated encryption
 - **RBAC**: Role-based access control with audit logging
 - **Write-Ahead Log (WAL)**: Crash recovery and durability guarantees
-- **Cloud Storage**: S3, Azure Blob, and GCS backends with caching
+- **Cloud Storage**: S3, Azure Blob, and GCS backends with caching *(interface only - not production-ready)*
 - **Sharding**: Consistent hash ring for horizontal scaling
 - **Multi-Tenancy**: Namespace isolation with access control
 - **Raft Consensus**: Leader election and log replication for high availability
@@ -371,6 +378,10 @@ Needle uses Cargo feature flags to enable optional functionality. By default, no
 | `uniffi-bindings` | Swift/Kotlin bindings via UniFFI | Stable |
 
 > **Note**: The `embeddings` feature uses a pre-release version of the `ort` crate (ONNX Runtime). API stability is not guaranteed for this feature until `ort` reaches a stable release.
+
+> **Note**: Some enterprise features are in development:
+> - **Cloud Storage** (S3, GCS, Azure): Interface defined but implementations are mock/stub only. Not recommended for production use.
+> - **GPU Acceleration**: Scaffolding only, currently falls back to CPU for all operations.
 
 Build with features:
 
