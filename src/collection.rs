@@ -49,9 +49,14 @@ use crate::error::{NeedleError, Result};
 use crate::hnsw::{HnswConfig, HnswIndex, VectorId};
 use crate::metadata::{Filter, MetadataStore};
 use crate::storage::VectorStore;
+use lru::LruCache;
+use ordered_float::OrderedFloat;
+use parking_lot::Mutex;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::hash::{Hash, Hasher};
+use std::num::NonZeroUsize;
 use tracing::warn;
 
 /// Search result with metadata
@@ -119,7 +124,7 @@ impl From<SearchResult> for (String, f32, Option<Value>) {
 /// println!("Total time: {}μs", explain.total_time_us);
 /// println!("Nodes visited: {}", explain.hnsw_stats.visited_nodes);
 /// ```
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct SearchExplain {
     /// Total search time in microseconds
     pub total_time_us: u64,
@@ -149,27 +154,6 @@ pub struct SearchExplain {
     pub filter_applied: bool,
     /// Distance function used
     pub distance_function: String,
-}
-
-impl Default for SearchExplain {
-    fn default() -> Self {
-        Self {
-            total_time_us: 0,
-            index_time_us: 0,
-            filter_time_us: 0,
-            enrich_time_us: 0,
-            candidates_before_filter: 0,
-            candidates_after_filter: 0,
-            hnsw_stats: crate::hnsw::SearchStats::default(),
-            dimensions: 0,
-            collection_size: 0,
-            requested_k: 0,
-            effective_k: 0,
-            ef_search: 0,
-            filter_applied: false,
-            distance_function: String::new(),
-        }
-    }
 }
 
 /// Builder for configuring and executing searches.
@@ -409,6 +393,118 @@ pub struct CollectionStats {
     pub index_stats: crate::hnsw::HnswStats,
 }
 
+/// Cache key for query result caching.
+///
+/// Uses OrderedFloat to make f32 values hashable while handling NaN/Inf correctly.
+#[derive(Clone, PartialEq, Eq)]
+struct QueryCacheKey {
+    /// Query vector converted to ordered floats for hashing
+    query: Vec<OrderedFloat<f32>>,
+    /// Number of results requested
+    k: usize,
+}
+
+impl Hash for QueryCacheKey {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.k.hash(state);
+        for &v in &self.query {
+            v.hash(state);
+        }
+    }
+}
+
+impl QueryCacheKey {
+    fn new(query: &[f32], k: usize) -> Self {
+        Self {
+            query: query.iter().map(|&f| OrderedFloat(f)).collect(),
+            k,
+        }
+    }
+}
+
+/// Cached search result entry
+#[derive(Clone)]
+struct CachedSearchResult {
+    results: Vec<SearchResult>,
+}
+
+/// Query cache statistics
+#[derive(Debug, Clone, Default)]
+pub struct QueryCacheStats {
+    /// Number of cache hits
+    pub hits: u64,
+    /// Number of cache misses
+    pub misses: u64,
+    /// Current number of cached entries
+    pub size: usize,
+    /// Maximum cache capacity
+    pub capacity: usize,
+}
+
+impl QueryCacheStats {
+    /// Returns the cache hit ratio (0.0 to 1.0)
+    pub fn hit_ratio(&self) -> f64 {
+        let total = self.hits + self.misses;
+        if total == 0 {
+            0.0
+        } else {
+            self.hits as f64 / total as f64
+        }
+    }
+}
+
+/// Configuration for query result caching.
+///
+/// Query caching stores search results to avoid redundant HNSW traversals
+/// for identical queries. This is beneficial when the same queries are
+/// executed repeatedly, such as in benchmarking or when serving repeated
+/// user requests.
+///
+/// # Example
+///
+/// ```
+/// use needle::{CollectionConfig, QueryCacheConfig};
+///
+/// // Enable caching with 1000 entries
+/// let cache_config = QueryCacheConfig::new(1000);
+///
+/// let config = CollectionConfig::new("embeddings", 128)
+///     .with_query_cache(cache_config);
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QueryCacheConfig {
+    /// Maximum number of query results to cache.
+    /// Set to 0 to disable caching.
+    pub capacity: usize,
+}
+
+impl QueryCacheConfig {
+    /// Create a new query cache configuration.
+    ///
+    /// # Arguments
+    ///
+    /// * `capacity` - Maximum number of query results to cache
+    pub fn new(capacity: usize) -> Self {
+        Self { capacity }
+    }
+
+    /// Create a disabled cache configuration.
+    pub fn disabled() -> Self {
+        Self { capacity: 0 }
+    }
+
+    /// Check if caching is enabled.
+    pub fn is_enabled(&self) -> bool {
+        self.capacity > 0
+    }
+}
+
+impl Default for QueryCacheConfig {
+    fn default() -> Self {
+        Self::disabled()
+    }
+}
+
 /// Collection configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CollectionConfig {
@@ -424,6 +520,9 @@ pub struct CollectionConfig {
     /// If set, queries exceeding this time will be logged at warn level.
     #[serde(default)]
     pub slow_query_threshold_us: Option<u64>,
+    /// Query cache configuration
+    #[serde(default)]
+    pub query_cache: QueryCacheConfig,
 }
 
 impl CollectionConfig {
@@ -439,6 +538,7 @@ impl CollectionConfig {
             distance: DistanceFunction::Cosine,
             hnsw: HnswConfig::default(),
             slow_query_threshold_us: None,
+            query_cache: QueryCacheConfig::default(),
         }
     }
 
@@ -476,6 +576,44 @@ impl CollectionConfig {
     /// ```
     pub fn with_slow_query_threshold_us(mut self, threshold_us: u64) -> Self {
         self.slow_query_threshold_us = Some(threshold_us);
+        self
+    }
+
+    /// Enable query result caching with the specified configuration.
+    ///
+    /// Query caching stores search results to avoid redundant HNSW traversals
+    /// for identical queries. The cache is automatically invalidated when
+    /// vectors are inserted, updated, or deleted.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use needle::{CollectionConfig, QueryCacheConfig};
+    ///
+    /// // Enable caching with 1000 entries
+    /// let config = CollectionConfig::new("embeddings", 128)
+    ///     .with_query_cache(QueryCacheConfig::new(1000));
+    /// ```
+    pub fn with_query_cache(mut self, cache_config: QueryCacheConfig) -> Self {
+        self.query_cache = cache_config;
+        self
+    }
+
+    /// Enable query result caching with a specified capacity.
+    ///
+    /// Shorthand for `with_query_cache(QueryCacheConfig::new(capacity))`.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use needle::CollectionConfig;
+    ///
+    /// // Enable caching with 500 entries
+    /// let config = CollectionConfig::new("embeddings", 128)
+    ///     .with_query_cache_capacity(500);
+    /// ```
+    pub fn with_query_cache_capacity(mut self, capacity: usize) -> Self {
+        self.query_cache = QueryCacheConfig::new(capacity);
         self
     }
 }
@@ -524,15 +662,82 @@ pub struct Collection {
     index: HnswIndex,
     /// Metadata storage
     metadata: MetadataStore,
+    /// Query result cache (wrapped in Mutex for interior mutability)
+    /// Skipped during serialization - cache is rebuilt on load
+    #[serde(skip)]
+    query_cache: Option<Mutex<QueryCache>>,
+}
+
+/// Internal query cache with statistics tracking
+struct QueryCache {
+    cache: LruCache<QueryCacheKey, CachedSearchResult>,
+    hits: u64,
+    misses: u64,
+}
+
+impl std::fmt::Debug for QueryCache {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("QueryCache")
+            .field("size", &self.cache.len())
+            .field("capacity", &self.cache.cap())
+            .field("hits", &self.hits)
+            .field("misses", &self.misses)
+            .finish()
+    }
+}
+
+impl QueryCache {
+    fn new(capacity: NonZeroUsize) -> Self {
+        Self {
+            cache: LruCache::new(capacity),
+            hits: 0,
+            misses: 0,
+        }
+    }
+
+    fn get(&mut self, key: &QueryCacheKey) -> Option<&CachedSearchResult> {
+        if let Some(result) = self.cache.get(key) {
+            self.hits += 1;
+            Some(result)
+        } else {
+            self.misses += 1;
+            None
+        }
+    }
+
+    fn put(&mut self, key: QueryCacheKey, value: CachedSearchResult) {
+        self.cache.put(key, value);
+    }
+
+    fn clear(&mut self) {
+        self.cache.clear();
+    }
+
+    fn stats(&self, capacity: usize) -> QueryCacheStats {
+        QueryCacheStats {
+            hits: self.hits,
+            misses: self.misses,
+            size: self.cache.len(),
+            capacity,
+        }
+    }
 }
 
 impl Collection {
     /// Create a new collection
     pub fn new(config: CollectionConfig) -> Self {
+        let query_cache = if config.query_cache.is_enabled() {
+            NonZeroUsize::new(config.query_cache.capacity)
+                .map(|cap| Mutex::new(QueryCache::new(cap)))
+        } else {
+            None
+        };
+
         Self {
             vectors: VectorStore::new(config.dimensions),
             index: HnswIndex::new(config.hnsw.clone(), config.distance),
             metadata: MetadataStore::new(),
+            query_cache,
             config,
         }
     }
@@ -604,6 +809,138 @@ impl Collection {
     /// ```
     pub fn set_slow_query_threshold_us(&mut self, threshold_us: Option<u64>) {
         self.config.slow_query_threshold_us = threshold_us;
+    }
+
+    /// Check if query caching is enabled.
+    pub fn is_query_cache_enabled(&self) -> bool {
+        self.query_cache.is_some()
+    }
+
+    /// Enable query result caching with the specified capacity.
+    ///
+    /// If caching was already enabled, this replaces the existing cache.
+    /// The old cache is cleared.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use needle::Collection;
+    ///
+    /// let mut collection = Collection::with_dimensions("test", 128);
+    ///
+    /// // Enable caching with 500 entries
+    /// collection.enable_query_cache(500);
+    /// assert!(collection.is_query_cache_enabled());
+    /// ```
+    pub fn enable_query_cache(&mut self, capacity: usize) {
+        if let Some(cap) = NonZeroUsize::new(capacity) {
+            self.query_cache = Some(Mutex::new(QueryCache::new(cap)));
+            self.config.query_cache = QueryCacheConfig::new(capacity);
+        }
+    }
+
+    /// Disable query result caching.
+    ///
+    /// Clears the existing cache if present.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use needle::{Collection, CollectionConfig, QueryCacheConfig};
+    ///
+    /// let config = CollectionConfig::new("test", 128)
+    ///     .with_query_cache_capacity(100);
+    /// let mut collection = Collection::new(config);
+    ///
+    /// assert!(collection.is_query_cache_enabled());
+    /// collection.disable_query_cache();
+    /// assert!(!collection.is_query_cache_enabled());
+    /// ```
+    pub fn disable_query_cache(&mut self) {
+        self.query_cache = None;
+        self.config.query_cache = QueryCacheConfig::disabled();
+    }
+
+    /// Clear the query cache.
+    ///
+    /// This removes all cached results but keeps caching enabled.
+    /// No-op if caching is disabled.
+    pub fn clear_query_cache(&self) {
+        if let Some(ref cache) = self.query_cache {
+            cache.lock().clear();
+        }
+    }
+
+    /// Get query cache statistics.
+    ///
+    /// Returns `None` if caching is disabled.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use needle::{Collection, CollectionConfig, QueryCacheConfig};
+    ///
+    /// let config = CollectionConfig::new("test", 128)
+    ///     .with_query_cache_capacity(100);
+    /// let mut collection = Collection::new(config);
+    /// collection.insert("v1", &[0.0; 128], None).unwrap();
+    ///
+    /// // First search - cache miss
+    /// let _ = collection.search(&[0.0; 128], 10);
+    ///
+    /// // Second search - cache hit
+    /// let _ = collection.search(&[0.0; 128], 10);
+    ///
+    /// let stats = collection.query_cache_stats().unwrap();
+    /// assert_eq!(stats.hits, 1);
+    /// assert_eq!(stats.misses, 1);
+    /// ```
+    pub fn query_cache_stats(&self) -> Option<QueryCacheStats> {
+        self.query_cache.as_ref().map(|cache| {
+            cache.lock().stats(self.config.query_cache.capacity)
+        })
+    }
+
+    /// Helper to invalidate the query cache.
+    /// Called automatically on mutations (insert, update, delete).
+    fn invalidate_cache(&self) {
+        if let Some(ref cache) = self.query_cache {
+            cache.lock().clear();
+        }
+    }
+
+    /// Helper to get a cached result or compute and cache it.
+    fn search_with_cache<F>(&self, query: &[f32], k: usize, compute: F) -> Result<Vec<SearchResult>>
+    where
+        F: FnOnce() -> Result<Vec<SearchResult>>,
+    {
+        if let Some(ref cache) = self.query_cache {
+            let cache_key = QueryCacheKey::new(query, k);
+
+            // Try to get from cache
+            {
+                let mut cache_guard = cache.lock();
+                if let Some(cached) = cache_guard.get(&cache_key) {
+                    return Ok(cached.results.clone());
+                }
+            }
+
+            // Cache miss - compute result
+            let results = compute()?;
+
+            // Store in cache
+            {
+                let mut cache_guard = cache.lock();
+                cache_guard.put(cache_key, CachedSearchResult {
+                    results: results.clone(),
+                });
+            }
+
+            Ok(results)
+        } else {
+            // No cache - just compute
+            compute()
+        }
     }
 
     /// Validate that a vector contains only finite values (no NaN or Inf)
@@ -711,6 +1048,9 @@ impl Collection {
         self.index
             .insert(internal_id, vector, self.vectors.as_slice())?;
 
+        // Invalidate cache since collection changed
+        self.invalidate_cache();
+
         Ok(())
     }
 
@@ -745,6 +1085,9 @@ impl Collection {
             .ok_or_else(|| NeedleError::Index("Vector not found after insert".into()))?;
         self.index
             .insert(internal_id, vector_ref, self.vectors.as_slice())?;
+
+        // Invalidate cache since collection changed
+        self.invalidate_cache();
 
         Ok(())
     }
@@ -829,8 +1172,11 @@ impl Collection {
             return Ok(Vec::new());
         }
 
-        let results = self.index.search(query, k, self.vectors.as_slice());
-        let results = self.enrich_results(results)?;
+        // Use cache if enabled
+        let results = self.search_with_cache(query, k, || {
+            let raw_results = self.index.search(query, k, self.vectors.as_slice());
+            self.enrich_results(raw_results)
+        })?;
 
         // Log slow queries if threshold is configured
         if let Some(threshold_us) = self.config.slow_query_threshold_us {
@@ -1604,6 +1950,9 @@ impl Collection {
         self.metadata.delete(internal_id);
         self.index.delete(internal_id)?;
 
+        // Invalidate cache since collection changed
+        self.invalidate_cache();
+
         Ok(true)
     }
 
@@ -1680,6 +2029,9 @@ impl Collection {
         self.index.delete(internal_id)?;
         self.index.insert(internal_id, vector, self.vectors.as_slice())?;
 
+        // Invalidate cache since collection changed
+        self.invalidate_cache();
+
         Ok(())
     }
 
@@ -1690,6 +2042,10 @@ impl Collection {
             .ok_or_else(|| NeedleError::VectorNotFound(id.to_string()))?;
 
         self.metadata.update_data(internal_id, metadata)?;
+
+        // Invalidate cache since metadata is part of search results
+        self.invalidate_cache();
+
         Ok(())
     }
 
@@ -1812,6 +2168,9 @@ impl Collection {
 
         self.vectors = new_vectors;
         self.metadata = new_metadata;
+
+        // Invalidate cache since internal IDs changed
+        self.invalidate_cache();
 
         Ok(deleted_count)
     }
@@ -2260,7 +2619,7 @@ mod tests {
 
         // Search within radius 0.15 - should only find origin and close
         let results = collection.search_radius(&query, 0.15, 100).unwrap();
-        assert!(results.len() >= 1 && results.len() <= 2);
+        assert!(!results.is_empty() && results.len() <= 2);
         for r in &results {
             assert!(r.distance <= 0.15, "Distance {} exceeds max 0.15", r.distance);
         }
@@ -2309,7 +2668,7 @@ mod tests {
         let results = collection.search_radius_with_filter(&query, 0.3, 100, &filter).unwrap();
 
         // Should find a1 and a2 (type A, within 0.3), but not b1 (type B) or far (beyond 0.3)
-        assert!(results.len() >= 1 && results.len() <= 2);
+        assert!(!results.is_empty() && results.len() <= 2);
         for r in &results {
             assert!(r.distance <= 0.3);
             let meta = r.metadata.as_ref().unwrap();
@@ -2366,5 +2725,232 @@ mod tests {
 
         // Threshold should be preserved
         assert_eq!(deserialized.slow_query_threshold_us(), Some(75_000));
+    }
+
+    #[test]
+    fn test_query_cache_config() {
+        // Test configuration via CollectionConfig builder
+        let config = CollectionConfig::new("test", 64)
+            .with_query_cache_capacity(100);
+
+        assert!(config.query_cache.is_enabled());
+        assert_eq!(config.query_cache.capacity, 100);
+
+        let collection = Collection::new(config);
+        assert!(collection.is_query_cache_enabled());
+    }
+
+    #[test]
+    fn test_query_cache_disabled_by_default() {
+        let collection = Collection::with_dimensions("test", 64);
+        assert!(!collection.is_query_cache_enabled());
+        assert!(collection.query_cache_stats().is_none());
+    }
+
+    #[test]
+    fn test_query_cache_hit_miss() {
+        let config = CollectionConfig::new("test", 32)
+            .with_query_cache_capacity(100);
+        let mut collection = Collection::new(config);
+
+        // Insert some vectors
+        for i in 0..10 {
+            collection.insert(format!("v{}", i), &random_vector(32), None).unwrap();
+        }
+
+        let query = random_vector(32);
+
+        // First search - cache miss
+        let results1 = collection.search(&query, 5).unwrap();
+
+        let stats = collection.query_cache_stats().unwrap();
+        assert_eq!(stats.misses, 1);
+        assert_eq!(stats.hits, 0);
+        assert_eq!(stats.size, 1); // One entry cached
+
+        // Second search with same query - cache hit
+        let results2 = collection.search(&query, 5).unwrap();
+
+        let stats = collection.query_cache_stats().unwrap();
+        assert_eq!(stats.misses, 1);
+        assert_eq!(stats.hits, 1);
+
+        // Results should be identical
+        assert_eq!(results1.len(), results2.len());
+        for (r1, r2) in results1.iter().zip(results2.iter()) {
+            assert_eq!(r1.id, r2.id);
+            assert_eq!(r1.distance, r2.distance);
+        }
+    }
+
+    #[test]
+    fn test_query_cache_different_k() {
+        let config = CollectionConfig::new("test", 32)
+            .with_query_cache_capacity(100);
+        let mut collection = Collection::new(config);
+
+        // Insert some vectors
+        for i in 0..10 {
+            collection.insert(format!("v{}", i), &random_vector(32), None).unwrap();
+        }
+
+        let query = random_vector(32);
+
+        // Search with k=5
+        let _ = collection.search(&query, 5).unwrap();
+
+        // Search with k=3 (different k, should miss)
+        let _ = collection.search(&query, 3).unwrap();
+
+        let stats = collection.query_cache_stats().unwrap();
+        assert_eq!(stats.misses, 2); // Both were misses due to different k
+        assert_eq!(stats.size, 2);
+    }
+
+    #[test]
+    fn test_query_cache_invalidation_on_insert() {
+        let config = CollectionConfig::new("test", 32)
+            .with_query_cache_capacity(100);
+        let mut collection = Collection::new(config);
+
+        // Insert initial vectors
+        for i in 0..5 {
+            collection.insert(format!("v{}", i), &random_vector(32), None).unwrap();
+        }
+
+        let query = random_vector(32);
+
+        // Cache the query
+        let _ = collection.search(&query, 5).unwrap();
+        assert_eq!(collection.query_cache_stats().unwrap().size, 1);
+
+        // Insert a new vector - should invalidate cache
+        collection.insert("new", &random_vector(32), None).unwrap();
+        assert_eq!(collection.query_cache_stats().unwrap().size, 0);
+    }
+
+    #[test]
+    fn test_query_cache_invalidation_on_delete() {
+        let config = CollectionConfig::new("test", 32)
+            .with_query_cache_capacity(100);
+        let mut collection = Collection::new(config);
+
+        // Insert vectors
+        for i in 0..5 {
+            collection.insert(format!("v{}", i), &random_vector(32), None).unwrap();
+        }
+
+        let query = random_vector(32);
+
+        // Cache the query
+        let _ = collection.search(&query, 5).unwrap();
+        assert_eq!(collection.query_cache_stats().unwrap().size, 1);
+
+        // Delete a vector - should invalidate cache
+        collection.delete("v0").unwrap();
+        assert_eq!(collection.query_cache_stats().unwrap().size, 0);
+    }
+
+    #[test]
+    fn test_query_cache_invalidation_on_update() {
+        let config = CollectionConfig::new("test", 32)
+            .with_query_cache_capacity(100);
+        let mut collection = Collection::new(config);
+
+        // Insert vectors
+        for i in 0..5 {
+            collection.insert(format!("v{}", i), &random_vector(32), None).unwrap();
+        }
+
+        let query = random_vector(32);
+
+        // Cache the query
+        let _ = collection.search(&query, 5).unwrap();
+        assert_eq!(collection.query_cache_stats().unwrap().size, 1);
+
+        // Update a vector - should invalidate cache
+        collection.update("v0", &random_vector(32), None).unwrap();
+        assert_eq!(collection.query_cache_stats().unwrap().size, 0);
+    }
+
+    #[test]
+    fn test_query_cache_enable_disable_runtime() {
+        let mut collection = Collection::with_dimensions("test", 32);
+
+        // Initially disabled
+        assert!(!collection.is_query_cache_enabled());
+
+        // Enable at runtime
+        collection.enable_query_cache(100);
+        assert!(collection.is_query_cache_enabled());
+
+        // Insert and search
+        for i in 0..5 {
+            collection.insert(format!("v{}", i), &random_vector(32), None).unwrap();
+        }
+        let query = random_vector(32);
+        let _ = collection.search(&query, 5).unwrap();
+
+        let stats = collection.query_cache_stats().unwrap();
+        assert_eq!(stats.capacity, 100);
+
+        // Disable
+        collection.disable_query_cache();
+        assert!(!collection.is_query_cache_enabled());
+        assert!(collection.query_cache_stats().is_none());
+    }
+
+    #[test]
+    fn test_query_cache_clear() {
+        let config = CollectionConfig::new("test", 32)
+            .with_query_cache_capacity(100);
+        let mut collection = Collection::new(config);
+
+        // Insert vectors
+        for i in 0..5 {
+            collection.insert(format!("v{}", i), &random_vector(32), None).unwrap();
+        }
+
+        // Cache some queries
+        for _ in 0..10 {
+            let query = random_vector(32);
+            let _ = collection.search(&query, 5).unwrap();
+        }
+
+        assert!(collection.query_cache_stats().unwrap().size > 0);
+
+        // Clear cache
+        collection.clear_query_cache();
+        assert_eq!(collection.query_cache_stats().unwrap().size, 0);
+
+        // Cache should still be enabled
+        assert!(collection.is_query_cache_enabled());
+    }
+
+    #[test]
+    fn test_query_cache_hit_ratio() {
+        let config = CollectionConfig::new("test", 32)
+            .with_query_cache_capacity(100);
+        let mut collection = Collection::new(config);
+
+        // Insert vectors
+        for i in 0..5 {
+            collection.insert(format!("v{}", i), &random_vector(32), None).unwrap();
+        }
+
+        let query = random_vector(32);
+
+        // 1 miss
+        let _ = collection.search(&query, 5).unwrap();
+
+        // 4 hits
+        for _ in 0..4 {
+            let _ = collection.search(&query, 5).unwrap();
+        }
+
+        let stats = collection.query_cache_stats().unwrap();
+        assert_eq!(stats.hits, 4);
+        assert_eq!(stats.misses, 1);
+        assert!((stats.hit_ratio() - 0.8).abs() < 0.001);
     }
 }
