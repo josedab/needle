@@ -153,6 +153,14 @@ pub use services::{
     nl_filter_parser, streaming_ingest, time_travel_query, visual_explorer, wasm_sdk,
 };
 
+// ── Next-Gen v2 Services ─────────────────────────────────────────────────────
+pub use services::{
+    inference_engine, plugin_api, semantic_cache, streaming_protocol, sync_engine,
+    vector_transactions, wasm_browser,
+};
+pub use search::cost_estimator;
+pub use indexing::{graph_vector_fusion, multimodal_fusion};
+
 // ── Experimental / Advanced ──────────────────────────────────────────────────
 // Features under active development. APIs may change without notice.
 // Enable experimental modules with: --features experimental
