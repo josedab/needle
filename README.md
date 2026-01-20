@@ -7,6 +7,8 @@
 [![docs.rs](https://docs.rs/needle/badge.svg)](https://docs.rs/needle)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Status: Alpha](https://img.shields.io/badge/Status-Alpha-orange.svg)](https://github.com/anthropics/needle/blob/main/ROADMAP.md)
+[![Changelog](https://img.shields.io/badge/Changelog-v0.1.0-blue.svg)](https://github.com/anthropics/needle/blob/main/CHANGELOG.md)
+[![Feature Matrix](https://github.com/anthropics/needle/actions/workflows/feature-matrix.yml/badge.svg)](https://github.com/anthropics/needle/actions/workflows/feature-matrix.yml)
 
 **SQLite for Vectors** - An embedded vector database written in Rust.
 

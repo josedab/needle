@@ -1,6 +1,7 @@
 [workspace]
 members = [".", "crates/needle-core", "crates/needle-cli", "crates/needle-python"]
 default-members = [".", "crates/needle-core", "crates/needle-cli"]
+resolver = "2"
 
 [workspace.package]
 version = "0.1.0"
@@ -43,6 +44,8 @@ option_if_let_else = "allow"
 struct_field_names = "allow"
 redundant_closure_for_method_calls = "allow"
 uninlined_format_args = "allow"
+# Warn on unwrap() in new code — existing unwraps are tracked for elimination
+unwrap_used = "warn"
 
 [package]
 name = "needle"
@@ -55,8 +58,22 @@ license.workspace = true
 keywords = ["vector", "database", "embedding", "hnsw", "similarity-search"]
 categories = ["database", "algorithms", "science"]
 repository.workspace = true
+homepage = "https://needle.dev"
+documentation = "https://docs.rs/needle"
 readme = "README.md"
 default-run = "needle"
+exclude = [
+    "target/",
+    "tests/",
+    "benches/",
+    "fuzz/",
+    "deploy/",
+    "helm/",
+    "website/",
+    "scripts/",
+    "docker-compose*.yml",
+    ".github/",
+]
 include = [
   "src/**/*.rs",
   "Cargo.toml",
