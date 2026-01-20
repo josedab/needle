@@ -66,6 +66,31 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+// Cloud storage SDK imports (feature-gated)
+#[cfg(feature = "cloud-storage-s3")]
+use aws_sdk_s3::{
+    config::Region,
+    primitives::ByteStream,
+    Client as S3Client,
+};
+
+#[cfg(feature = "cloud-storage-gcs")]
+use google_cloud_storage::{
+    client::{Client as GcsClient, ClientConfig as GcsClientConfig},
+    http::objects::{
+        download::Range as GcsRange,
+        get::GetObjectRequest,
+        upload::{Media, UploadObjectRequest, UploadType},
+        delete::DeleteObjectRequest,
+        list::ListObjectsRequest,
+    },
+};
+
+#[cfg(feature = "cloud-storage-azure")]
+use azure_storage::StorageCredentials;
+#[cfg(feature = "cloud-storage-azure")]
+use azure_storage_blobs::prelude::*;
+
 // ============================================================================
 // Core Trait
 // ============================================================================
@@ -560,27 +585,116 @@ impl LocalBackend {
 }
 
 // ============================================================================
-// S3 Backend (Stub)
+// S3 Backend
 // ============================================================================
 
-/// AWS S3 storage backend (stub implementation).
+/// AWS S3 storage backend with real SDK integration.
 ///
-/// This is a mock implementation for testing and development.
-/// In production, replace with actual AWS SDK calls.
-#[allow(dead_code)]
+/// When the `cloud-storage-s3` feature is enabled, this uses the real AWS SDK.
+/// Otherwise, it falls back to an in-memory mock for testing.
 pub struct S3Backend {
     /// Configuration.
     config: S3Config,
     /// Connection pool.
     pool: ConnectionPool,
-    /// Retry policy (reserved for real S3 implementation).
-    retry_policy: RetryPolicy,
-    /// In-memory storage for testing.
+    /// Retry policy for transient failures (reserved for future use).
+    _retry_policy: RetryPolicy,
+    /// Real S3 client (when feature is enabled).
+    #[cfg(feature = "cloud-storage-s3")]
+    client: Option<S3Client>,
+    /// In-memory storage for testing/fallback.
     storage: parking_lot::RwLock<HashMap<String, Vec<u8>>>,
 }
 
 impl S3Backend {
-    /// Create a new S3 backend.
+    /// Create a new S3 backend with default credentials from environment.
+    ///
+    /// Uses AWS SDK's default credential provider chain:
+    /// - Environment variables (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY)
+    /// - Shared credentials file (~/.aws/credentials)
+    /// - IAM role (when running on AWS)
+    #[cfg(feature = "cloud-storage-s3")]
+    pub async fn new_with_default_credentials(config: S3Config) -> Result<Self> {
+        let region = Region::new(config.region.clone());
+
+        let mut aws_config_builder = aws_config::defaults(aws_config::BehaviorVersion::latest())
+            .region(region);
+
+        // Use custom endpoint if provided (for S3-compatible services like MinIO)
+        if let Some(ref endpoint) = config.endpoint {
+            aws_config_builder = aws_config_builder.endpoint_url(endpoint);
+        }
+
+        let aws_config = aws_config_builder.load().await;
+
+        let mut s3_config_builder = aws_sdk_s3::config::Builder::from(&aws_config);
+
+        // Force path-style addressing if configured (required for some S3-compatible services)
+        if config.path_style {
+            s3_config_builder = s3_config_builder.force_path_style(true);
+        }
+
+        let client = S3Client::from_conf(s3_config_builder.build());
+
+        Ok(Self {
+            pool: ConnectionPool::new(50, 5, config.storage.connection_timeout),
+            _retry_policy: RetryPolicy {
+                max_attempts: config.storage.max_retries,
+                initial_delay: config.storage.initial_retry_delay,
+                max_delay: config.storage.max_retry_delay,
+                jitter: 0.1,
+            },
+            config,
+            client: Some(client),
+            storage: parking_lot::RwLock::new(HashMap::new()),
+        })
+    }
+
+    /// Create a new S3 backend with explicit credentials.
+    #[cfg(feature = "cloud-storage-s3")]
+    pub async fn new_with_credentials(
+        config: S3Config,
+        access_key_id: &str,
+        secret_access_key: &str,
+    ) -> Result<Self> {
+        let region = Region::new(config.region.clone());
+        let credentials = aws_sdk_s3::config::Credentials::new(
+            access_key_id,
+            secret_access_key,
+            None, // session token
+            None, // expiration
+            "needle-explicit-credentials",
+        );
+
+        let mut s3_config_builder = aws_sdk_s3::config::Builder::new()
+            .region(region)
+            .credentials_provider(credentials);
+
+        if let Some(ref endpoint) = config.endpoint {
+            s3_config_builder = s3_config_builder.endpoint_url(endpoint);
+        }
+
+        if config.path_style {
+            s3_config_builder = s3_config_builder.force_path_style(true);
+        }
+
+        let client = S3Client::from_conf(s3_config_builder.build());
+
+        Ok(Self {
+            pool: ConnectionPool::new(50, 5, config.storage.connection_timeout),
+            _retry_policy: RetryPolicy {
+                max_attempts: config.storage.max_retries,
+                initial_delay: config.storage.initial_retry_delay,
+                max_delay: config.storage.max_retry_delay,
+                jitter: 0.1,
+            },
+            config,
+            client: Some(client),
+            storage: parking_lot::RwLock::new(HashMap::new()),
+        })
+    }
+
+    /// Create a mock S3 backend for testing (no real S3 connection).
     pub fn new(config: S3Config) -> Self {
         Self {
             pool: ConnectionPool::new(
@@ -588,13 +702,15 @@ impl S3Backend {
                 5,
                 config.storage.connection_timeout,
             ),
-            retry_policy: RetryPolicy {
+            _retry_policy: RetryPolicy {
                 max_attempts: config.storage.max_retries,
                 initial_delay: config.storage.initial_retry_delay,
                 max_delay: config.storage.max_retry_delay,
                 jitter: 0.1,
             },
             config,
+            #[cfg(feature = "cloud-storage-s3")]
+            client: None,
             storage: parking_lot::RwLock::new(HashMap::new()),
         }
     }
@@ -613,22 +729,55 @@ impl S3Backend {
     pub fn region(&self) -> &str {
         &self.config.region
     }
+
+    /// Check if connected to real S3.
+    #[cfg(feature = "cloud-storage-s3")]
+    pub fn is_connected(&self) -> bool {
+        self.client.is_some()
+    }
+
+    /// Check if connected to real S3 (always false without feature).
+    #[cfg(not(feature = "cloud-storage-s3"))]
+    pub fn is_connected(&self) -> bool {
+        false
+    }
 }
 
 impl StorageBackend for S3Backend {
     fn read<'a>(&'a self, key: &'a str) -> Pin<Box<dyn Future<Output = Result<Vec<u8>>> + Send + 'a>> {
         Box::pin(async move {
             let _conn = self.pool.acquire()?;
+
+            #[cfg(feature = "cloud-storage-s3")]
+            if let Some(ref client) = self.client {
+                // Real S3 implementation
+                let resp = client
+                    .get_object()
+                    .bucket(&self.config.bucket)
+                    .key(key)
+                    .send()
+                    .await
+                    .map_err(|e| {
+                        if e.to_string().contains("NoSuchKey") || e.to_string().contains("not found") {
+                            NeedleError::NotFound(format!("S3 key '{}' not found", key))
+                        } else {
+                            NeedleError::Io(std::io::Error::other(format!("S3 get_object error: {}", e)))
+                        }
+                    })?;
+
+                let data = resp
+                    .body
+                    .collect()
+                    .await
+                    .map_err(|e| NeedleError::Io(std::io::Error::other(format!("S3 body read error: {}", e))))?
+                    .into_bytes()
+                    .to_vec();
+
+                return Ok(data);
+            }
+
+            // Fallback to in-memory storage (mock mode)
             let full_key = self.full_key(key);
-
-            // Stub: In production, use aws_sdk_s3::Client::get_object
-            // let resp = client.get_object()
-            //     .bucket(&self.config.bucket)
-            //     .key(key)
-            //     .send()
-            //     .await?;
-            // let data = resp.body.collect().await?.into_bytes().to_vec();
-
             let storage = self.storage.read();
             storage
                 .get(&full_key)
@@ -640,16 +789,26 @@ impl StorageBackend for S3Backend {
     fn write<'a>(&'a self, key: &'a str, data: &'a [u8]) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
         Box::pin(async move {
             let _conn = self.pool.acquire()?;
+
+            #[cfg(feature = "cloud-storage-s3")]
+            if let Some(ref client) = self.client {
+                // Real S3 implementation
+                let body = ByteStream::from(data.to_vec());
+
+                client
+                    .put_object()
+                    .bucket(&self.config.bucket)
+                    .key(key)
+                    .body(body)
+                    .send()
+                    .await
+                    .map_err(|e| NeedleError::Io(std::io::Error::other(format!("S3 put_object error: {}", e))))?;
+
+                return Ok(());
+            }
+
+            // Fallback to in-memory storage (mock mode)
             let full_key = self.full_key(key);
-
-            // Stub: In production, use aws_sdk_s3::Client::put_object
-            // client.put_object()
-            //     .bucket(&self.config.bucket)
-            //     .key(key)
-            //     .body(ByteStream::from(data.to_vec()))
-            //     .send()
-            //     .await?;
-
             let mut storage = self.storage.write();
             storage.insert(full_key, data.to_vec());
             Ok(())
@@ -659,15 +818,23 @@ impl StorageBackend for S3Backend {
     fn delete<'a>(&'a self, key: &'a str) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
         Box::pin(async move {
             let _conn = self.pool.acquire()?;
+
+            #[cfg(feature = "cloud-storage-s3")]
+            if let Some(ref client) = self.client {
+                // Real S3 implementation - delete is idempotent in S3
+                client
+                    .delete_object()
+                    .bucket(&self.config.bucket)
+                    .key(key)
+                    .send()
+                    .await
+                    .map_err(|e| NeedleError::Io(std::io::Error::other(format!("S3 delete_object error: {}", e))))?;
+
+                return Ok(());
+            }
+
+            // Fallback to in-memory storage (mock mode)
             let full_key = self.full_key(key);
-
-            // Stub: In production, use aws_sdk_s3::Client::delete_object
-            // client.delete_object()
-            //     .bucket(&self.config.bucket)
-            //     .key(key)
-            //     .send()
-            //     .await?;
-
             let mut storage = self.storage.write();
             storage.remove(&full_key);
             Ok(())
@@ -677,15 +844,48 @@ impl StorageBackend for S3Backend {
     fn list<'a>(&'a self, prefix: &'a str) -> Pin<Box<dyn Future<Output = Result<Vec<String>>> + Send + 'a>> {
         Box::pin(async move {
             let _conn = self.pool.acquire()?;
+
+            #[cfg(feature = "cloud-storage-s3")]
+            if let Some(ref client) = self.client {
+                // Real S3 implementation with pagination
+                let mut keys = Vec::new();
+                let mut continuation_token: Option<String> = None;
+
+                loop {
+                    let mut request = client
+                        .list_objects_v2()
+                        .bucket(&self.config.bucket)
+                        .prefix(prefix);
+
+                    if let Some(token) = continuation_token {
+                        request = request.continuation_token(token);
+                    }
+
+                    let resp = request
+                        .send()
+                        .await
+                        .map_err(|e| NeedleError::Io(std::io::Error::other(format!("S3 list_objects_v2 error: {}", e))))?;
+
+                    if let Some(contents) = resp.contents {
+                        for obj in contents {
+                            if let Some(key) = obj.key {
+                                keys.push(key);
+                            }
+                        }
+                    }
+
+                    if resp.is_truncated.unwrap_or(false) {
+                        continuation_token = resp.next_continuation_token;
+                    } else {
+                        break;
+                    }
+                }
+
+                return Ok(keys);
+            }
+
+            // Fallback to in-memory storage (mock mode)
             let full_prefix = self.full_key(prefix);
-
-            // Stub: In production, use aws_sdk_s3::Client::list_objects_v2
-            // let resp = client.list_objects_v2()
-            //     .bucket(&self.config.bucket)
-            //     .prefix(prefix)
-            //     .send()
-            //     .await?;
-
             let storage = self.storage.read();
             let bucket_prefix = format!("{}/", self.config.bucket);
 
@@ -700,20 +900,31 @@ impl StorageBackend for S3Backend {
     fn exists<'a>(&'a self, key: &'a str) -> Pin<Box<dyn Future<Output = Result<bool>> + Send + 'a>> {
         Box::pin(async move {
             let _conn = self.pool.acquire()?;
+
+            #[cfg(feature = "cloud-storage-s3")]
+            if let Some(ref client) = self.client {
+                // Real S3 implementation using HEAD request
+                match client
+                    .head_object()
+                    .bucket(&self.config.bucket)
+                    .key(key)
+                    .send()
+                    .await
+                {
+                    Ok(_) => return Ok(true),
+                    Err(e) => {
+                        // Check if it's a "not found" error
+                        let err_str = e.to_string();
+                        if err_str.contains("NoSuchKey") || err_str.contains("404") || err_str.contains("not found") {
+                            return Ok(false);
+                        }
+                        return Err(NeedleError::Io(std::io::Error::other(format!("S3 head_object error: {}", e))));
+                    }
+                }
+            }
+
+            // Fallback to in-memory storage (mock mode)
             let full_key = self.full_key(key);
-
-            // Stub: In production, use aws_sdk_s3::Client::head_object
-            // match client.head_object()
-            //     .bucket(&self.config.bucket)
-            //     .key(key)
-            //     .send()
-            //     .await
-            // {
-            //     Ok(_) => Ok(true),
-            //     Err(e) if e.is_not_found() => Ok(false),
-            //     Err(e) => Err(e.into()),
-            // }
-
             let storage = self.storage.read();
             Ok(storage.contains_key(&full_key))
         })
@@ -721,34 +932,97 @@ impl StorageBackend for S3Backend {
 }
 
 // ============================================================================
-// GCS Backend (Stub)
+// GCS Backend
 // ============================================================================
 
-/// Google Cloud Storage backend (stub implementation).
-#[allow(dead_code)]
+/// Google Cloud Storage backend with real SDK integration.
+///
+/// When the `cloud-storage-gcs` feature is enabled, this uses the real GCS SDK.
+/// Otherwise, it falls back to an in-memory mock for testing.
 pub struct GCSBackend {
     /// Configuration.
     config: GCSConfig,
     /// Connection pool.
     pool: ConnectionPool,
-    /// Retry policy (reserved for real GCS implementation).
-    retry_policy: RetryPolicy,
-    /// In-memory storage for testing.
+    /// Retry policy for transient failures (reserved for future use).
+    _retry_policy: RetryPolicy,
+    /// Real GCS client (when feature is enabled).
+    #[cfg(feature = "cloud-storage-gcs")]
+    client: Option<GcsClient>,
+    /// In-memory storage for testing/fallback.
     storage: parking_lot::RwLock<HashMap<String, Vec<u8>>>,
 }
 
 impl GCSBackend {
-    /// Create a new GCS backend.
-    pub fn new(config: GCSConfig) -> Self {
-        Self {
+    /// Create a new GCS backend with default credentials.
+    ///
+    /// Uses Google Cloud's default credential provider:
+    /// - GOOGLE_APPLICATION_CREDENTIALS environment variable
+    /// - Application default credentials
+    /// - GCE metadata service (when running on GCP)
+    #[cfg(feature = "cloud-storage-gcs")]
+    pub async fn new_with_default_credentials(config: GCSConfig) -> Result<Self> {
+        let gcs_config = GcsClientConfig::default()
+            .with_auth()
+            .await
+            .map_err(|e| NeedleError::Io(std::io::Error::other(format!("GCS auth error: {}", e))))?;
+
+        let client = GcsClient::new(gcs_config);
+
+        Ok(Self {
             pool: ConnectionPool::new(50, 5, config.storage.connection_timeout),
-            retry_policy: RetryPolicy {
+            _retry_policy: RetryPolicy {
                 max_attempts: config.storage.max_retries,
                 initial_delay: config.storage.initial_retry_delay,
                 max_delay: config.storage.max_retry_delay,
                 jitter: 0.1,
             },
             config,
+            client: Some(client),
+            storage: parking_lot::RwLock::new(HashMap::new()),
+        })
+    }
+
+    /// Create a new GCS backend with service account credentials from file.
+    #[cfg(feature = "cloud-storage-gcs")]
+    pub async fn new_with_credentials_file(config: GCSConfig, credentials_path: &str) -> Result<Self> {
+        // Set the environment variable for the credentials file
+        std::env::set_var("GOOGLE_APPLICATION_CREDENTIALS", credentials_path);
+
+        let gcs_config = GcsClientConfig::default()
+            .with_auth()
+            .await
+            .map_err(|e| NeedleError::Io(std::io::Error::other(format!("GCS auth error: {}", e))))?;
+
+        let client = GcsClient::new(gcs_config);
+
+        Ok(Self {
+            pool: ConnectionPool::new(50, 5, config.storage.connection_timeout),
+            _retry_policy: RetryPolicy {
+                max_attempts: config.storage.max_retries,
+                initial_delay: config.storage.initial_retry_delay,
+                max_delay: config.storage.max_retry_delay,
+                jitter: 0.1,
+            },
+            config,
+            client: Some(client),
+            storage: parking_lot::RwLock::new(HashMap::new()),
+        })
+    }
+
+    /// Create a mock GCS backend for testing (no real GCS connection).
+    pub fn new(config: GCSConfig) -> Self {
+        Self {
+            pool: ConnectionPool::new(50, 5, config.storage.connection_timeout),
+            _retry_policy: RetryPolicy {
+                max_attempts: config.storage.max_retries,
+                initial_delay: config.storage.initial_retry_delay,
+                max_delay: config.storage.max_retry_delay,
+                jitter: 0.1,
+            },
+            config,
+            #[cfg(feature = "cloud-storage-gcs")]
+            client: None,
             storage: parking_lot::RwLock::new(HashMap::new()),
         }
     }
@@ -767,22 +1041,52 @@ impl GCSBackend {
     pub fn project_id(&self) -> &str {
         &self.config.project_id
     }
+
+    /// Check if connected to real GCS.
+    #[cfg(feature = "cloud-storage-gcs")]
+    pub fn is_connected(&self) -> bool {
+        self.client.is_some()
+    }
+
+    /// Check if connected to real GCS (always false without feature).
+    #[cfg(not(feature = "cloud-storage-gcs"))]
+    pub fn is_connected(&self) -> bool {
+        false
+    }
 }
 
 impl StorageBackend for GCSBackend {
     fn read<'a>(&'a self, key: &'a str) -> Pin<Box<dyn Future<Output = Result<Vec<u8>>> + Send + 'a>> {
         Box::pin(async move {
             let _conn = self.pool.acquire()?;
+
+            #[cfg(feature = "cloud-storage-gcs")]
+            if let Some(ref client) = self.client {
+                // Real GCS implementation
+                let data = client
+                    .download_object(
+                        &GetObjectRequest {
+                            bucket: self.config.bucket.clone(),
+                            object: key.to_string(),
+                            ..Default::default()
+                        },
+                        &GcsRange::default(),
+                    )
+                    .await
+                    .map_err(|e| {
+                        let err_str = e.to_string();
+                        if err_str.contains("404") || err_str.contains("not found") || err_str.contains("No such object") {
+                            NeedleError::NotFound(format!("GCS object '{}' not found", key))
+                        } else {
+                            NeedleError::Io(std::io::Error::other(format!("GCS download error: {}", e)))
+                        }
+                    })?;
+
+                return Ok(data);
+            }
+
+            // Fallback to in-memory storage (mock mode)
             let full_key = self.full_key(key);
-
-            // Stub: In production, use google-cloud-storage crate
-            // let client = Client::default();
-            // let data = client.object()
-            //     .bucket(&self.config.bucket)
-            //     .name(key)
-            //     .download()
-            //     .await?;
-
             let storage = self.storage.read();
             storage
                 .get(&full_key)
@@ -794,16 +1098,29 @@ impl StorageBackend for GCSBackend {
     fn write<'a>(&'a self, key: &'a str, data: &'a [u8]) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
         Box::pin(async move {
             let _conn = self.pool.acquire()?;
+
+            #[cfg(feature = "cloud-storage-gcs")]
+            if let Some(ref client) = self.client {
+                // Real GCS implementation
+                let upload_type = UploadType::Simple(Media::new(key.to_string()));
+
+                client
+                    .upload_object(
+                        &UploadObjectRequest {
+                            bucket: self.config.bucket.clone(),
+                            ..Default::default()
+                        },
+                        data.to_vec(),
+                        &upload_type,
+                    )
+                    .await
+                    .map_err(|e| NeedleError::Io(std::io::Error::other(format!("GCS upload error: {}", e))))?;
+
+                return Ok(());
+            }
+
+            // Fallback to in-memory storage (mock mode)
             let full_key = self.full_key(key);
-
-            // Stub: In production, use google-cloud-storage crate
-            // let client = Client::default();
-            // client.object()
-            //     .bucket(&self.config.bucket)
-            //     .name(key)
-            //     .upload(data)
-            //     .await?;
-
             let mut storage = self.storage.write();
             storage.insert(full_key, data.to_vec());
             Ok(())
@@ -813,16 +1130,32 @@ impl StorageBackend for GCSBackend {
     fn delete<'a>(&'a self, key: &'a str) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
         Box::pin(async move {
             let _conn = self.pool.acquire()?;
+
+            #[cfg(feature = "cloud-storage-gcs")]
+            if let Some(ref client) = self.client {
+                // Real GCS implementation - ignore "not found" errors for idempotency
+                let result = client
+                    .delete_object(&DeleteObjectRequest {
+                        bucket: self.config.bucket.clone(),
+                        object: key.to_string(),
+                        ..Default::default()
+                    })
+                    .await;
+
+                match result {
+                    Ok(_) => return Ok(()),
+                    Err(e) => {
+                        let err_str = e.to_string();
+                        if err_str.contains("404") || err_str.contains("not found") {
+                            return Ok(()); // Idempotent delete
+                        }
+                        return Err(NeedleError::Io(std::io::Error::other(format!("GCS delete error: {}", e))));
+                    }
+                }
+            }
+
+            // Fallback to in-memory storage (mock mode)
             let full_key = self.full_key(key);
-
-            // Stub: In production, use google-cloud-storage crate
-            // let client = Client::default();
-            // client.object()
-            //     .bucket(&self.config.bucket)
-            //     .name(key)
-            //     .delete()
-            //     .await?;
-
             let mut storage = self.storage.write();
             storage.remove(&full_key);
             Ok(())
@@ -832,17 +1165,32 @@ impl StorageBackend for GCSBackend {
     fn list<'a>(&'a self, prefix: &'a str) -> Pin<Box<dyn Future<Output = Result<Vec<String>>> + Send + 'a>> {
         Box::pin(async move {
             let _conn = self.pool.acquire()?;
+
+            #[cfg(feature = "cloud-storage-gcs")]
+            if let Some(ref client) = self.client {
+                // Real GCS implementation
+                let objects = client
+                    .list_objects(&ListObjectsRequest {
+                        bucket: self.config.bucket.clone(),
+                        prefix: Some(prefix.to_string()),
+                        ..Default::default()
+                    })
+                    .await
+                    .map_err(|e| NeedleError::Io(std::io::Error::other(format!("GCS list error: {}", e))))?;
+
+                let keys: Vec<String> = objects
+                    .items
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|obj| obj.name)
+                    .collect();
+
+                return Ok(keys);
+            }
+
+            // Fallback to in-memory storage (mock mode)
             let full_prefix = self.full_key(prefix);
             let bucket_prefix = format!("gs://{}/", self.config.bucket);
-
-            // Stub: In production, use google-cloud-storage crate
-            // let client = Client::default();
-            // let objects = client.bucket(&self.config.bucket)
-            //     .list_objects()
-            //     .prefix(prefix)
-            //     .send()
-            //     .await?;
-
             let storage = self.storage.read();
             Ok(storage
                 .keys()
@@ -855,8 +1203,31 @@ impl StorageBackend for GCSBackend {
     fn exists<'a>(&'a self, key: &'a str) -> Pin<Box<dyn Future<Output = Result<bool>> + Send + 'a>> {
         Box::pin(async move {
             let _conn = self.pool.acquire()?;
-            let full_key = self.full_key(key);
 
+            #[cfg(feature = "cloud-storage-gcs")]
+            if let Some(ref client) = self.client {
+                // Real GCS implementation - use get metadata to check existence
+                match client
+                    .get_object(&GetObjectRequest {
+                        bucket: self.config.bucket.clone(),
+                        object: key.to_string(),
+                        ..Default::default()
+                    })
+                    .await
+                {
+                    Ok(_) => return Ok(true),
+                    Err(e) => {
+                        let err_str = e.to_string();
+                        if err_str.contains("404") || err_str.contains("not found") {
+                            return Ok(false);
+                        }
+                        return Err(NeedleError::Io(std::io::Error::other(format!("GCS get_object error: {}", e))));
+                    }
+                }
+            }
+
+            // Fallback to in-memory storage (mock mode)
+            let full_key = self.full_key(key);
             let storage = self.storage.read();
             Ok(storage.contains_key(&full_key))
         })
@@ -864,34 +1235,134 @@ impl StorageBackend for GCSBackend {
 }
 
 // ============================================================================
-// Azure Blob Backend (Stub)
+// Azure Blob Backend
 // ============================================================================
 
-/// Azure Blob Storage backend (stub implementation).
-#[allow(dead_code)]
+/// Azure Blob Storage backend with real SDK integration.
+///
+/// When the `cloud-storage-azure` feature is enabled, this uses the real Azure SDK.
+/// Otherwise, it falls back to an in-memory mock for testing.
 pub struct AzureBlobBackend {
     /// Configuration.
     config: AzureBlobConfig,
     /// Connection pool.
     pool: ConnectionPool,
-    /// Retry policy (reserved for real Azure implementation).
-    retry_policy: RetryPolicy,
-    /// In-memory storage for testing.
+    /// Retry policy for transient failures (reserved for future use).
+    _retry_policy: RetryPolicy,
+    /// Real Azure container client (when feature is enabled).
+    #[cfg(feature = "cloud-storage-azure")]
+    container_client: Option<ContainerClient>,
+    /// In-memory storage for testing/fallback.
     storage: parking_lot::RwLock<HashMap<String, Vec<u8>>>,
 }
 
 impl AzureBlobBackend {
-    /// Create a new Azure Blob backend.
-    pub fn new(config: AzureBlobConfig) -> Self {
-        Self {
+    /// Create a new Azure Blob backend with account key authentication.
+    #[cfg(feature = "cloud-storage-azure")]
+    pub fn new_with_account_key(config: AzureBlobConfig, account_key: &str) -> Result<Self> {
+        let storage_credentials = StorageCredentials::access_key(
+            config.account_name.clone(),
+            account_key.to_string(),
+        );
+
+        let service_client = BlobServiceClient::new(
+            config.account_name.clone(),
+            storage_credentials,
+        );
+
+        let container_client = service_client.container_client(&config.container);
+
+        Ok(Self {
             pool: ConnectionPool::new(50, 5, config.storage.connection_timeout),
-            retry_policy: RetryPolicy {
+            _retry_policy: RetryPolicy {
                 max_attempts: config.storage.max_retries,
                 initial_delay: config.storage.initial_retry_delay,
                 max_delay: config.storage.max_retry_delay,
                 jitter: 0.1,
             },
             config,
+            container_client: Some(container_client),
+            storage: parking_lot::RwLock::new(HashMap::new()),
+        })
+    }
+
+    /// Create a new Azure Blob backend with access key.
+    #[cfg(feature = "cloud-storage-azure")]
+    pub fn new_with_access_key(config: AzureBlobConfig, access_key: String) -> Result<Self> {
+        let storage_credentials = StorageCredentials::access_key(
+            config.account_name.clone(),
+            access_key,
+        );
+
+        let service_client = BlobServiceClient::new(
+            config.account_name.clone(),
+            storage_credentials,
+        );
+
+        let container_client = service_client.container_client(&config.container);
+
+        Ok(Self {
+            pool: ConnectionPool::new(50, 5, config.storage.connection_timeout),
+            _retry_policy: RetryPolicy {
+                max_attempts: config.storage.max_retries,
+                initial_delay: config.storage.initial_retry_delay,
+                max_delay: config.storage.max_retry_delay,
+                jitter: 0.1,
+            },
+            config,
+            container_client: Some(container_client),
+            storage: parking_lot::RwLock::new(HashMap::new()),
+        })
+    }
+
+    /// Create a new Azure Blob backend with default Azure credentials.
+    ///
+    /// Uses Azure Identity's default credential chain:
+    /// - Environment variables (AZURE_CLIENT_ID, AZURE_CLIENT_SECRET, AZURE_TENANT_ID)
+    /// - Azure CLI credentials
+    /// - Managed Identity (when running on Azure)
+    #[cfg(feature = "cloud-storage-azure")]
+    pub async fn new_with_default_credentials(config: AzureBlobConfig) -> Result<Self> {
+        use azure_identity::TokenCredentialOptions;
+
+        let credential = azure_identity::DefaultAzureCredential::create(TokenCredentialOptions::default())
+            .map_err(|e| NeedleError::Io(std::io::Error::other(format!("Azure credential error: {}", e))))?;
+        let storage_credentials = StorageCredentials::token_credential(Arc::new(credential));
+
+        let service_client = BlobServiceClient::new(
+            config.account_name.clone(),
+            storage_credentials,
+        );
+
+        let container_client = service_client.container_client(&config.container);
+
+        Ok(Self {
+            pool: ConnectionPool::new(50, 5, config.storage.connection_timeout),
+            _retry_policy: RetryPolicy {
+                max_attempts: config.storage.max_retries,
+                initial_delay: config.storage.initial_retry_delay,
+                max_delay: config.storage.max_retry_delay,
+                jitter: 0.1,
+            },
+            config,
+            container_client: Some(container_client),
+            storage: parking_lot::RwLock::new(HashMap::new()),
+        })
+    }
+
+    /// Create a mock Azure Blob backend for testing (no real Azure connection).
+    pub fn new(config: AzureBlobConfig) -> Self {
+        Self {
+            pool: ConnectionPool::new(50, 5, config.storage.connection_timeout),
+            _retry_policy: RetryPolicy {
+                max_attempts: config.storage.max_retries,
+                initial_delay: config.storage.initial_retry_delay,
+                max_delay: config.storage.max_retry_delay,
+                jitter: 0.1,
+            },
+            config,
+            #[cfg(feature = "cloud-storage-azure")]
+            container_client: None,
             storage: parking_lot::RwLock::new(HashMap::new()),
         }
     }
@@ -913,20 +1384,47 @@ impl AzureBlobBackend {
     pub fn account_name(&self) -> &str {
         &self.config.account_name
     }
+
+    /// Check if connected to real Azure.
+    #[cfg(feature = "cloud-storage-azure")]
+    pub fn is_connected(&self) -> bool {
+        self.container_client.is_some()
+    }
+
+    /// Check if connected to real Azure (always false without feature).
+    #[cfg(not(feature = "cloud-storage-azure"))]
+    pub fn is_connected(&self) -> bool {
+        false
+    }
 }
 
 impl StorageBackend for AzureBlobBackend {
     fn read<'a>(&'a self, key: &'a str) -> Pin<Box<dyn Future<Output = Result<Vec<u8>>> + Send + 'a>> {
         Box::pin(async move {
             let _conn = self.pool.acquire()?;
+
+            #[cfg(feature = "cloud-storage-azure")]
+            if let Some(ref container_client) = self.container_client {
+                // Real Azure implementation
+                let blob_client = container_client.blob_client(key);
+
+                let response = blob_client
+                    .get_content()
+                    .await
+                    .map_err(|e| {
+                        let err_str = e.to_string();
+                        if err_str.contains("404") || err_str.contains("BlobNotFound") || err_str.contains("not found") {
+                            NeedleError::NotFound(format!("Azure blob '{}' not found", key))
+                        } else {
+                            NeedleError::Io(std::io::Error::other(format!("Azure get_content error: {}", e)))
+                        }
+                    })?;
+
+                return Ok(response);
+            }
+
+            // Fallback to in-memory storage (mock mode)
             let full_key = self.full_key(key);
-
-            // Stub: In production, use azure_storage_blobs crate
-            // let client = BlobServiceClient::new(&self.config.account_name, credential);
-            // let container = client.container_client(&self.config.container);
-            // let blob = container.blob_client(key);
-            // let data = blob.get_content().await?;
-
             let storage = self.storage.read();
             storage
                 .get(&full_key)
@@ -938,14 +1436,22 @@ impl StorageBackend for AzureBlobBackend {
     fn write<'a>(&'a self, key: &'a str, data: &'a [u8]) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
         Box::pin(async move {
             let _conn = self.pool.acquire()?;
+
+            #[cfg(feature = "cloud-storage-azure")]
+            if let Some(ref container_client) = self.container_client {
+                // Real Azure implementation
+                let blob_client = container_client.blob_client(key);
+
+                blob_client
+                    .put_block_blob(data.to_vec())
+                    .await
+                    .map_err(|e| NeedleError::Io(std::io::Error::other(format!("Azure put_block_blob error: {}", e))))?;
+
+                return Ok(());
+            }
+
+            // Fallback to in-memory storage (mock mode)
             let full_key = self.full_key(key);
-
-            // Stub: In production, use azure_storage_blobs crate
-            // let client = BlobServiceClient::new(&self.config.account_name, credential);
-            // let container = client.container_client(&self.config.container);
-            // let blob = container.blob_client(key);
-            // blob.put_block_blob(data).await?;
-
             let mut storage = self.storage.write();
             storage.insert(full_key, data.to_vec());
             Ok(())
@@ -955,14 +1461,26 @@ impl StorageBackend for AzureBlobBackend {
     fn delete<'a>(&'a self, key: &'a str) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
         Box::pin(async move {
             let _conn = self.pool.acquire()?;
+
+            #[cfg(feature = "cloud-storage-azure")]
+            if let Some(ref container_client) = self.container_client {
+                // Real Azure implementation - ignore "not found" errors for idempotency
+                let blob_client = container_client.blob_client(key);
+
+                match blob_client.delete().await {
+                    Ok(_) => return Ok(()),
+                    Err(e) => {
+                        let err_str = e.to_string();
+                        if err_str.contains("404") || err_str.contains("BlobNotFound") {
+                            return Ok(()); // Idempotent delete
+                        }
+                        return Err(NeedleError::Io(std::io::Error::other(format!("Azure delete error: {}", e))));
+                    }
+                }
+            }
+
+            // Fallback to in-memory storage (mock mode)
             let full_key = self.full_key(key);
-
-            // Stub: In production, use azure_storage_blobs crate
-            // let client = BlobServiceClient::new(&self.config.account_name, credential);
-            // let container = client.container_client(&self.config.container);
-            // let blob = container.blob_client(key);
-            // blob.delete().await?;
-
             let mut storage = self.storage.write();
             storage.remove(&full_key);
             Ok(())
@@ -970,23 +1488,43 @@ impl StorageBackend for AzureBlobBackend {
     }
 
     fn list<'a>(&'a self, prefix: &'a str) -> Pin<Box<dyn Future<Output = Result<Vec<String>>> + Send + 'a>> {
+        let full_prefix = self.full_key(prefix);
+        let container_prefix = format!(
+            "https://{}.blob.core.windows.net/{}/",
+            self.config.account_name, self.config.container
+        );
+
+        #[cfg(feature = "cloud-storage-azure")]
+        let container_client = self.container_client.clone();
+        let prefix_owned = prefix.to_string();
+
         Box::pin(async move {
             let _conn = self.pool.acquire()?;
-            let full_prefix = self.full_key(prefix);
-            let container_prefix = format!(
-                "https://{}.blob.core.windows.net/{}/",
-                self.config.account_name, self.config.container
-            );
 
-            // Stub: In production, use azure_storage_blobs crate
-            // let client = BlobServiceClient::new(&self.config.account_name, credential);
-            // let container = client.container_client(&self.config.container);
-            // let blobs = container.list_blobs()
-            //     .prefix(prefix)
-            //     .into_stream()
-            //     .collect()
-            //     .await?;
+            #[cfg(feature = "cloud-storage-azure")]
+            if let Some(container_client) = container_client {
+                // Real Azure implementation with pagination
+                use futures::StreamExt;
 
+                let mut keys = Vec::new();
+                let mut stream = container_client
+                    .list_blobs()
+                    .prefix(prefix_owned)
+                    .into_stream();
+
+                while let Some(result) = stream.next().await {
+                    let response = result
+                        .map_err(|e| NeedleError::Io(std::io::Error::other(format!("Azure list_blobs error: {}", e))))?;
+
+                    for blob in response.blobs.blobs() {
+                        keys.push(blob.name.clone());
+                    }
+                }
+
+                return Ok(keys);
+            }
+
+            // Fallback to in-memory storage (mock mode)
             let storage = self.storage.read();
             Ok(storage
                 .keys()
@@ -999,12 +1537,712 @@ impl StorageBackend for AzureBlobBackend {
     fn exists<'a>(&'a self, key: &'a str) -> Pin<Box<dyn Future<Output = Result<bool>> + Send + 'a>> {
         Box::pin(async move {
             let _conn = self.pool.acquire()?;
-            let full_key = self.full_key(key);
 
+            #[cfg(feature = "cloud-storage-azure")]
+            if let Some(ref container_client) = self.container_client {
+                // Real Azure implementation - use get_properties to check existence
+                let blob_client = container_client.blob_client(key);
+
+                match blob_client.get_properties().await {
+                    Ok(_) => return Ok(true),
+                    Err(e) => {
+                        let err_str = e.to_string();
+                        if err_str.contains("404") || err_str.contains("BlobNotFound") {
+                            return Ok(false);
+                        }
+                        return Err(NeedleError::Io(std::io::Error::other(format!("Azure get_properties error: {}", e))));
+                    }
+                }
+            }
+
+            // Fallback to in-memory storage (mock mode)
+            let full_key = self.full_key(key);
             let storage = self.storage.read();
             Ok(storage.contains_key(&full_key))
         })
     }
+}
+
+// ============================================================================
+// 3-Tier Smart Cache (Memory → SSD → Cloud)
+// ============================================================================
+
+/// Configuration for the 3-tier smart cache.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TieredCacheConfig {
+    /// Maximum memory cache size in bytes.
+    pub memory_max_size: usize,
+    /// Maximum SSD cache size in bytes.
+    pub ssd_max_size: usize,
+    /// SSD cache directory path.
+    pub ssd_cache_path: PathBuf,
+    /// Default TTL for memory-cached items.
+    pub memory_ttl: Duration,
+    /// Default TTL for SSD-cached items.
+    pub ssd_ttl: Duration,
+    /// Enable prefetching based on access patterns.
+    pub enable_prefetch: bool,
+    /// Maximum number of prefetch items.
+    pub max_prefetch_items: usize,
+    /// Promote items from SSD to memory after N accesses.
+    pub promotion_threshold: u32,
+    /// Enable access pattern tracking for analytics.
+    pub enable_access_tracking: bool,
+}
+
+impl Default for TieredCacheConfig {
+    fn default() -> Self {
+        Self {
+            memory_max_size: 100 * 1024 * 1024, // 100MB
+            ssd_max_size: 1024 * 1024 * 1024,   // 1GB
+            ssd_cache_path: PathBuf::from("/tmp/needle_cache"),
+            memory_ttl: Duration::from_secs(300),  // 5 minutes
+            ssd_ttl: Duration::from_secs(3600),    // 1 hour
+            enable_prefetch: true,
+            max_prefetch_items: 10,
+            promotion_threshold: 3,
+            enable_access_tracking: true,
+        }
+    }
+}
+
+/// Entry in the tiered cache with metadata.
+#[derive(Clone)]
+struct TieredCacheEntry {
+    /// Cached data (present for memory tier, None for SSD tier entries in memory index).
+    data: Option<Vec<u8>>,
+    /// Which tier this entry resides in.
+    tier: CacheTier,
+    /// Expiration time.
+    expires_at: Instant,
+    /// Last access time.
+    last_accessed: Instant,
+    /// Access count (for promotion decisions).
+    access_count: u32,
+    /// Size in bytes.
+    size: usize,
+    /// SSD file path (if stored on SSD).
+    ssd_path: Option<PathBuf>,
+}
+
+/// Cache tier enum.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CacheTier {
+    /// In-memory cache (fastest).
+    Memory,
+    /// SSD/disk cache (fast).
+    Ssd,
+    /// Origin storage (cloud backend).
+    Origin,
+}
+
+/// Statistics for the tiered cache.
+#[derive(Debug, Clone, Default)]
+pub struct TieredCacheStats {
+    /// Memory tier hits.
+    pub memory_hits: Arc<AtomicU64>,
+    /// SSD tier hits.
+    pub ssd_hits: Arc<AtomicU64>,
+    /// Origin (cloud) fetches.
+    pub origin_fetches: Arc<AtomicU64>,
+    /// Memory tier evictions.
+    pub memory_evictions: Arc<AtomicU64>,
+    /// SSD tier evictions.
+    pub ssd_evictions: Arc<AtomicU64>,
+    /// Promotions from SSD to memory.
+    pub promotions: Arc<AtomicU64>,
+    /// Demotions from memory to SSD.
+    pub demotions: Arc<AtomicU64>,
+    /// Prefetch hits.
+    pub prefetch_hits: Arc<AtomicU64>,
+    /// Total bytes in memory.
+    pub memory_bytes: Arc<AtomicU64>,
+    /// Total bytes on SSD.
+    pub ssd_bytes: Arc<AtomicU64>,
+}
+
+impl TieredCacheStats {
+    /// Calculate overall hit rate (memory + SSD hits vs total requests).
+    pub fn hit_rate(&self) -> f64 {
+        let memory_hits = self.memory_hits.load(Ordering::Relaxed) as f64;
+        let ssd_hits = self.ssd_hits.load(Ordering::Relaxed) as f64;
+        let origin_fetches = self.origin_fetches.load(Ordering::Relaxed) as f64;
+        let total = memory_hits + ssd_hits + origin_fetches;
+        if total > 0.0 {
+            (memory_hits + ssd_hits) / total
+        } else {
+            0.0
+        }
+    }
+
+    /// Calculate memory hit rate.
+    pub fn memory_hit_rate(&self) -> f64 {
+        let memory_hits = self.memory_hits.load(Ordering::Relaxed) as f64;
+        let ssd_hits = self.ssd_hits.load(Ordering::Relaxed) as f64;
+        let origin_fetches = self.origin_fetches.load(Ordering::Relaxed) as f64;
+        let total = memory_hits + ssd_hits + origin_fetches;
+        if total > 0.0 {
+            memory_hits / total
+        } else {
+            0.0
+        }
+    }
+}
+
+/// Access pattern tracking for prefetching.
+#[derive(Debug, Clone)]
+struct AccessPattern {
+    /// Keys accessed in sequence.
+    recent_keys: Vec<String>,
+    /// Maximum keys to track.
+    max_keys: usize,
+    /// Detected sequential patterns (key prefix -> next likely key).
+    sequential_patterns: HashMap<String, Vec<String>>,
+}
+
+impl AccessPattern {
+    fn new(max_keys: usize) -> Self {
+        Self {
+            recent_keys: Vec::with_capacity(max_keys),
+            max_keys,
+            sequential_patterns: HashMap::new(),
+        }
+    }
+
+    fn record_access(&mut self, key: &str) {
+        // Record the key
+        if self.recent_keys.len() >= self.max_keys {
+            self.recent_keys.remove(0);
+        }
+        self.recent_keys.push(key.to_string());
+
+        // Detect sequential patterns
+        if self.recent_keys.len() >= 2 {
+            let prev_key = &self.recent_keys[self.recent_keys.len() - 2];
+            let patterns = self.sequential_patterns
+                .entry(prev_key.clone())
+                .or_default();
+            if !patterns.contains(&key.to_string()) && patterns.len() < 5 {
+                patterns.push(key.to_string());
+            }
+        }
+    }
+
+    fn predict_next(&self, key: &str) -> Vec<String> {
+        self.sequential_patterns
+            .get(key)
+            .cloned()
+            .unwrap_or_default()
+    }
+}
+
+/// 3-tier smart cache backend wrapper.
+///
+/// Provides intelligent caching with:
+/// - Memory tier: fastest access, limited size
+/// - SSD tier: fast access, larger capacity
+/// - Cloud tier: origin storage (slowest)
+///
+/// Features:
+/// - Automatic promotion/demotion between tiers
+/// - Access pattern tracking for prefetching
+/// - LRU eviction within each tier
+pub struct TieredCacheBackend<B: StorageBackend> {
+    /// Inner (origin) backend.
+    inner: B,
+    /// Configuration.
+    config: TieredCacheConfig,
+    /// Cache index (tracks all entries across tiers).
+    cache_index: parking_lot::RwLock<HashMap<String, TieredCacheEntry>>,
+    /// Statistics.
+    stats: TieredCacheStats,
+    /// Access pattern tracker.
+    access_patterns: parking_lot::Mutex<AccessPattern>,
+    /// Current memory usage.
+    memory_usage: AtomicU64,
+    /// Current SSD usage.
+    ssd_usage: AtomicU64,
+}
+
+impl<B: StorageBackend> TieredCacheBackend<B> {
+    /// Create a new tiered cache backend.
+    pub fn new(inner: B, config: TieredCacheConfig) -> Result<Self> {
+        // Ensure SSD cache directory exists
+        std::fs::create_dir_all(&config.ssd_cache_path)?;
+
+        Ok(Self {
+            inner,
+            config: config.clone(),
+            cache_index: parking_lot::RwLock::new(HashMap::new()),
+            stats: TieredCacheStats::default(),
+            access_patterns: parking_lot::Mutex::new(AccessPattern::new(100)),
+            memory_usage: AtomicU64::new(0),
+            ssd_usage: AtomicU64::new(0),
+        })
+    }
+
+    /// Get cache statistics.
+    pub fn stats(&self) -> &TieredCacheStats {
+        &self.stats
+    }
+
+    /// Clear all caches.
+    pub fn clear_all(&self) -> Result<()> {
+        // Clear memory cache
+        let mut index = self.cache_index.write();
+
+        // Delete SSD files
+        for entry in index.values() {
+            if let Some(ref path) = entry.ssd_path {
+                let _ = std::fs::remove_file(path);
+            }
+        }
+
+        index.clear();
+        self.memory_usage.store(0, Ordering::Relaxed);
+        self.ssd_usage.store(0, Ordering::Relaxed);
+        self.stats.memory_bytes.store(0, Ordering::Relaxed);
+        self.stats.ssd_bytes.store(0, Ordering::Relaxed);
+
+        Ok(())
+    }
+
+    /// Clear only memory tier (demote to SSD).
+    pub fn clear_memory(&self) -> Result<()> {
+        let mut index = self.cache_index.write();
+
+        for (key, entry) in index.iter_mut() {
+            if entry.tier == CacheTier::Memory {
+                // Demote to SSD
+                if let Some(ref data) = entry.data {
+                    let ssd_path = self.config.ssd_cache_path.join(key_to_filename(key));
+                    if std::fs::write(&ssd_path, data).is_ok() {
+                        entry.tier = CacheTier::Ssd;
+                        entry.ssd_path = Some(ssd_path);
+                        entry.data = None;
+                        self.stats.demotions.fetch_add(1, Ordering::Relaxed);
+                    }
+                }
+            }
+        }
+
+        self.memory_usage.store(0, Ordering::Relaxed);
+        self.stats.memory_bytes.store(0, Ordering::Relaxed);
+
+        Ok(())
+    }
+
+    /// Evict expired entries from all tiers.
+    pub fn evict_expired(&self) {
+        let mut index = self.cache_index.write();
+        let now = Instant::now();
+
+        let expired_keys: Vec<String> = index
+            .iter()
+            .filter(|(_, entry)| entry.expires_at <= now)
+            .map(|(k, _)| k.clone())
+            .collect();
+
+        for key in expired_keys {
+            if let Some(entry) = index.remove(&key) {
+                match entry.tier {
+                    CacheTier::Memory => {
+                        self.memory_usage.fetch_sub(entry.size as u64, Ordering::Relaxed);
+                        self.stats.memory_bytes.fetch_sub(entry.size as u64, Ordering::Relaxed);
+                        self.stats.memory_evictions.fetch_add(1, Ordering::Relaxed);
+                    }
+                    CacheTier::Ssd => {
+                        if let Some(ref path) = entry.ssd_path {
+                            let _ = std::fs::remove_file(path);
+                        }
+                        self.ssd_usage.fetch_sub(entry.size as u64, Ordering::Relaxed);
+                        self.stats.ssd_bytes.fetch_sub(entry.size as u64, Ordering::Relaxed);
+                        self.stats.ssd_evictions.fetch_add(1, Ordering::Relaxed);
+                    }
+                    CacheTier::Origin => {}
+                }
+            }
+        }
+    }
+
+    /// Evict from memory to make room (LRU-based).
+    fn evict_memory(&self, needed_space: usize, index: &mut HashMap<String, TieredCacheEntry>) {
+        let current_usage = self.memory_usage.load(Ordering::Relaxed) as usize;
+        if current_usage + needed_space <= self.config.memory_max_size {
+            return;
+        }
+
+        // Collect memory entries sorted by last access time (LRU)
+        let mut memory_entries: Vec<_> = index
+            .iter()
+            .filter(|(_, e)| e.tier == CacheTier::Memory)
+            .map(|(k, e)| (k.clone(), e.last_accessed, e.size))
+            .collect();
+
+        memory_entries.sort_by_key(|(_, accessed, _)| *accessed);
+
+        let target_size = self.config.memory_max_size.saturating_sub(needed_space);
+        let mut freed = 0usize;
+
+        for (key, _, size) in memory_entries {
+            if current_usage - freed <= target_size {
+                break;
+            }
+
+            if let Some(entry) = index.get_mut(&key) {
+                // Try to demote to SSD
+                if let Some(ref data) = entry.data {
+                    let ssd_path = self.config.ssd_cache_path.join(key_to_filename(&key));
+                    if std::fs::write(&ssd_path, data).is_ok() {
+                        entry.tier = CacheTier::Ssd;
+                        entry.ssd_path = Some(ssd_path);
+                        entry.data = None;
+                        entry.expires_at = Instant::now() + self.config.ssd_ttl;
+                        self.ssd_usage.fetch_add(size as u64, Ordering::Relaxed);
+                        self.stats.ssd_bytes.fetch_add(size as u64, Ordering::Relaxed);
+                        self.stats.demotions.fetch_add(1, Ordering::Relaxed);
+                    }
+                }
+
+                self.memory_usage.fetch_sub(size as u64, Ordering::Relaxed);
+                self.stats.memory_bytes.fetch_sub(size as u64, Ordering::Relaxed);
+                self.stats.memory_evictions.fetch_add(1, Ordering::Relaxed);
+                freed += size;
+            }
+        }
+    }
+
+    /// Evict from SSD to make room (LRU-based).
+    fn evict_ssd(&self, needed_space: usize, index: &mut HashMap<String, TieredCacheEntry>) {
+        let current_usage = self.ssd_usage.load(Ordering::Relaxed) as usize;
+        if current_usage + needed_space <= self.config.ssd_max_size {
+            return;
+        }
+
+        // Collect SSD entries sorted by last access time (LRU)
+        let mut ssd_entries: Vec<_> = index
+            .iter()
+            .filter(|(_, e)| e.tier == CacheTier::Ssd)
+            .map(|(k, e)| (k.clone(), e.last_accessed, e.size))
+            .collect();
+
+        ssd_entries.sort_by_key(|(_, accessed, _)| *accessed);
+
+        let target_size = self.config.ssd_max_size.saturating_sub(needed_space);
+        let mut freed = 0usize;
+
+        for (key, _, size) in ssd_entries {
+            if current_usage - freed <= target_size {
+                break;
+            }
+
+            if let Some(entry) = index.remove(&key) {
+                if let Some(ref path) = entry.ssd_path {
+                    let _ = std::fs::remove_file(path);
+                }
+                self.ssd_usage.fetch_sub(size as u64, Ordering::Relaxed);
+                self.stats.ssd_bytes.fetch_sub(size as u64, Ordering::Relaxed);
+                self.stats.ssd_evictions.fetch_add(1, Ordering::Relaxed);
+                freed += size;
+            }
+        }
+    }
+
+    /// Promote entry from SSD to memory.
+    #[allow(dead_code)]
+    fn promote_to_memory(&self, _key: &str, entry: &mut TieredCacheEntry) -> Result<()> {
+        if entry.tier != CacheTier::Ssd {
+            return Ok(());
+        }
+
+        // Read from SSD
+        let ssd_path = entry.ssd_path.as_ref().ok_or_else(|| {
+            NeedleError::Io(std::io::Error::other("SSD path not found for entry"))
+        })?;
+
+        let data = std::fs::read(ssd_path)?;
+        let size = data.len();
+
+        // Evict memory if needed
+        let mut index = self.cache_index.write();
+        self.evict_memory(size, &mut index);
+
+        // Update entry
+        entry.data = Some(data);
+        entry.tier = CacheTier::Memory;
+        entry.expires_at = Instant::now() + self.config.memory_ttl;
+
+        // Clean up SSD file
+        let _ = std::fs::remove_file(ssd_path);
+        entry.ssd_path = None;
+
+        // Update stats
+        self.ssd_usage.fetch_sub(size as u64, Ordering::Relaxed);
+        self.stats.ssd_bytes.fetch_sub(size as u64, Ordering::Relaxed);
+        self.memory_usage.fetch_add(size as u64, Ordering::Relaxed);
+        self.stats.memory_bytes.fetch_add(size as u64, Ordering::Relaxed);
+        self.stats.promotions.fetch_add(1, Ordering::Relaxed);
+
+        Ok(())
+    }
+
+    /// Cache data at the appropriate tier.
+    fn cache_data(&self, key: &str, data: &[u8]) {
+        let size = data.len();
+        let now = Instant::now();
+
+        let mut index = self.cache_index.write();
+
+        // Determine which tier to use based on size and current usage
+        if size <= self.config.memory_max_size / 4 {
+            // Small enough for memory
+            self.evict_memory(size, &mut index);
+
+            let entry = TieredCacheEntry {
+                data: Some(data.to_vec()),
+                tier: CacheTier::Memory,
+                expires_at: now + self.config.memory_ttl,
+                last_accessed: now,
+                access_count: 1,
+                size,
+                ssd_path: None,
+            };
+
+            index.insert(key.to_string(), entry);
+            self.memory_usage.fetch_add(size as u64, Ordering::Relaxed);
+            self.stats.memory_bytes.fetch_add(size as u64, Ordering::Relaxed);
+        } else {
+            // Write to SSD
+            self.evict_ssd(size, &mut index);
+
+            let ssd_path = self.config.ssd_cache_path.join(key_to_filename(key));
+            if let Some(parent) = ssd_path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+
+            if std::fs::write(&ssd_path, data).is_ok() {
+                let entry = TieredCacheEntry {
+                    data: None,
+                    tier: CacheTier::Ssd,
+                    expires_at: now + self.config.ssd_ttl,
+                    last_accessed: now,
+                    access_count: 1,
+                    size,
+                    ssd_path: Some(ssd_path),
+                };
+
+                index.insert(key.to_string(), entry);
+                self.ssd_usage.fetch_add(size as u64, Ordering::Relaxed);
+                self.stats.ssd_bytes.fetch_add(size as u64, Ordering::Relaxed);
+            }
+        }
+    }
+
+    /// Prefetch predicted keys in the background.
+    async fn prefetch(&self, key: &str) {
+        if !self.config.enable_prefetch {
+            return;
+        }
+
+        let predictions = {
+            let patterns = self.access_patterns.lock();
+            patterns.predict_next(key)
+        };
+
+        for predicted_key in predictions.into_iter().take(self.config.max_prefetch_items) {
+            // Check if already cached
+            {
+                let index = self.cache_index.read();
+                if index.contains_key(&predicted_key) {
+                    continue;
+                }
+            }
+
+            // Fetch and cache
+            if let Ok(data) = self.inner.read(&predicted_key).await {
+                self.cache_data(&predicted_key, &data);
+                self.stats.prefetch_hits.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+    }
+}
+
+impl<B: StorageBackend> StorageBackend for TieredCacheBackend<B> {
+    fn read<'a>(&'a self, key: &'a str) -> Pin<Box<dyn Future<Output = Result<Vec<u8>>> + Send + 'a>> {
+        Box::pin(async move {
+            let now = Instant::now();
+
+            // Track access pattern (outside of cache lock)
+            if self.config.enable_access_tracking {
+                let mut patterns = self.access_patterns.lock();
+                patterns.record_access(key);
+            }
+
+            // Check cache - do all work synchronously, store result to use after lock is released
+            enum CacheResult {
+                MemoryHit(Vec<u8>),
+                SsdHit(Vec<u8>),
+                Miss,
+            }
+
+            let cache_result = {
+                let mut index = self.cache_index.write();
+                if let Some(entry) = index.get_mut(key) {
+                    if entry.expires_at > now {
+                        entry.last_accessed = now;
+                        entry.access_count += 1;
+
+                        match entry.tier {
+                            CacheTier::Memory => {
+                                self.stats.memory_hits.fetch_add(1, Ordering::Relaxed);
+                                if let Some(ref data) = entry.data {
+                                    CacheResult::MemoryHit(data.clone())
+                                } else {
+                                    CacheResult::Miss
+                                }
+                            }
+                            CacheTier::Ssd => {
+                                self.stats.ssd_hits.fetch_add(1, Ordering::Relaxed);
+
+                                // Read from SSD
+                                if let Some(ref ssd_path) = entry.ssd_path {
+                                    if let Ok(data) = std::fs::read(ssd_path) {
+                                        // Check if should promote to memory
+                                        if entry.access_count >= self.config.promotion_threshold {
+                                            let ssd_path_clone = ssd_path.clone();
+                                            let size = entry.size;
+
+                                            // Update entry for promotion
+                                            entry.data = Some(data.clone());
+                                            entry.tier = CacheTier::Memory;
+                                            entry.expires_at = now + self.config.memory_ttl;
+                                            entry.ssd_path = None;
+
+                                            // Clean up SSD file
+                                            let _ = std::fs::remove_file(&ssd_path_clone);
+
+                                            // Update stats
+                                            self.ssd_usage.fetch_sub(size as u64, Ordering::Relaxed);
+                                            self.stats.ssd_bytes.fetch_sub(size as u64, Ordering::Relaxed);
+                                            self.memory_usage.fetch_add(size as u64, Ordering::Relaxed);
+                                            self.stats.memory_bytes.fetch_add(size as u64, Ordering::Relaxed);
+                                            self.stats.promotions.fetch_add(1, Ordering::Relaxed);
+                                        }
+
+                                        CacheResult::SsdHit(data)
+                                    } else {
+                                        CacheResult::Miss
+                                    }
+                                } else {
+                                    CacheResult::Miss
+                                }
+                            }
+                            CacheTier::Origin => CacheResult::Miss,
+                        }
+                    } else {
+                        CacheResult::Miss
+                    }
+                } else {
+                    CacheResult::Miss
+                }
+            }; // Lock released here
+
+            // Now handle the result without holding the lock
+            match cache_result {
+                CacheResult::MemoryHit(data) | CacheResult::SsdHit(data) => {
+                    // Prefetch can now safely await
+                    self.prefetch(key).await;
+                    return Ok(data);
+                }
+                CacheResult::Miss => {}
+            }
+
+            // Cache miss - fetch from origin
+            self.stats.origin_fetches.fetch_add(1, Ordering::Relaxed);
+            let data = self.inner.read(key).await?;
+
+            // Cache the data
+            self.cache_data(key, &data);
+
+            // Trigger prefetch
+            self.prefetch(key).await;
+
+            Ok(data)
+        })
+    }
+
+    fn write<'a>(&'a self, key: &'a str, data: &'a [u8]) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
+        Box::pin(async move {
+            // Write to origin
+            self.inner.write(key, data).await?;
+
+            // Update cache
+            self.cache_data(key, data);
+
+            Ok(())
+        })
+    }
+
+    fn delete<'a>(&'a self, key: &'a str) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
+        Box::pin(async move {
+            // Delete from origin
+            self.inner.delete(key).await?;
+
+            // Remove from cache
+            let mut index = self.cache_index.write();
+            if let Some(entry) = index.remove(key) {
+                match entry.tier {
+                    CacheTier::Memory => {
+                        self.memory_usage.fetch_sub(entry.size as u64, Ordering::Relaxed);
+                        self.stats.memory_bytes.fetch_sub(entry.size as u64, Ordering::Relaxed);
+                    }
+                    CacheTier::Ssd => {
+                        if let Some(ref path) = entry.ssd_path {
+                            let _ = std::fs::remove_file(path);
+                        }
+                        self.ssd_usage.fetch_sub(entry.size as u64, Ordering::Relaxed);
+                        self.stats.ssd_bytes.fetch_sub(entry.size as u64, Ordering::Relaxed);
+                    }
+                    CacheTier::Origin => {}
+                }
+            }
+
+            Ok(())
+        })
+    }
+
+    fn list<'a>(&'a self, prefix: &'a str) -> Pin<Box<dyn Future<Output = Result<Vec<String>>> + Send + 'a>> {
+        // List always goes to origin (cache may be incomplete)
+        self.inner.list(prefix)
+    }
+
+    fn exists<'a>(&'a self, key: &'a str) -> Pin<Box<dyn Future<Output = Result<bool>> + Send + 'a>> {
+        Box::pin(async move {
+            // Check cache first
+            {
+                let index = self.cache_index.read();
+                if let Some(entry) = index.get(key) {
+                    if entry.expires_at > Instant::now() {
+                        return Ok(true);
+                    }
+                }
+            }
+
+            // Check origin
+            self.inner.exists(key).await
+        })
+    }
+}
+
+/// Convert a key to a valid filename for SSD caching.
+fn key_to_filename(key: &str) -> String {
+    // Replace path separators and other problematic characters
+    // Using a loop for clarity on which characters are replaced
+    let mut result = key.to_string();
+    for c in ['/', '\\', ':', '*', '?', '"', '<', '>', '|'] {
+        result = result.replace(c, "_");
+    }
+    result
 }
 
 // ============================================================================
@@ -1991,5 +3229,206 @@ mod tests {
         let delete_future = backend.delete("nonexistent/key");
         let result = futures::executor::block_on(delete_future);
         assert!(result.is_ok());
+    }
+
+    // ========================================================================
+    // Tiered Cache Tests
+    // ========================================================================
+
+    #[test]
+    fn test_tiered_cache_config_defaults() {
+        let config = TieredCacheConfig::default();
+
+        assert_eq!(config.memory_max_size, 100 * 1024 * 1024);
+        assert_eq!(config.ssd_max_size, 1024 * 1024 * 1024);
+        assert_eq!(config.memory_ttl, Duration::from_secs(300));
+        assert_eq!(config.ssd_ttl, Duration::from_secs(3600));
+        assert!(config.enable_prefetch);
+        assert_eq!(config.promotion_threshold, 3);
+    }
+
+    #[test]
+    fn test_tiered_cache_basic_operations() {
+        let temp_dir = TempDir::new().unwrap();
+        let inner = LocalBackend::new(temp_dir.path().join("storage")).unwrap();
+
+        let cache_config = TieredCacheConfig {
+            ssd_cache_path: temp_dir.path().join("cache"),
+            ..Default::default()
+        };
+
+        let cached = TieredCacheBackend::new(inner, cache_config).unwrap();
+
+        // Write data
+        let write_future = cached.write("tiered/key1", b"tiered cache data");
+        futures::executor::block_on(write_future).unwrap();
+
+        // First read - should be a hit (cached on write)
+        let read_future = cached.read("tiered/key1");
+        let data = futures::executor::block_on(read_future).unwrap();
+        assert_eq!(data, b"tiered cache data");
+
+        // Check stats
+        assert!(cached.stats().memory_hits.load(Ordering::Relaxed) > 0
+            || cached.stats().ssd_hits.load(Ordering::Relaxed) > 0
+            || cached.stats().origin_fetches.load(Ordering::Relaxed) > 0);
+    }
+
+    #[test]
+    fn test_tiered_cache_memory_tier() {
+        let temp_dir = TempDir::new().unwrap();
+        let inner = LocalBackend::new(temp_dir.path().join("storage")).unwrap();
+
+        let cache_config = TieredCacheConfig {
+            ssd_cache_path: temp_dir.path().join("cache"),
+            memory_max_size: 10 * 1024 * 1024, // 10MB
+            ..Default::default()
+        };
+
+        let cached = TieredCacheBackend::new(inner, cache_config).unwrap();
+
+        // Write small data (should go to memory)
+        let small_data = b"small data for memory tier";
+        let write_future = cached.write("memory/small", small_data);
+        futures::executor::block_on(write_future).unwrap();
+
+        // Read should hit memory
+        let read_future = cached.read("memory/small");
+        let data = futures::executor::block_on(read_future).unwrap();
+        assert_eq!(data, small_data);
+
+        // Memory bytes should be tracked
+        assert!(cached.stats().memory_bytes.load(Ordering::Relaxed) > 0);
+    }
+
+    #[test]
+    fn test_tiered_cache_stats() {
+        let stats = TieredCacheStats::default();
+
+        assert_eq!(stats.memory_hits.load(Ordering::Relaxed), 0);
+        assert_eq!(stats.ssd_hits.load(Ordering::Relaxed), 0);
+        assert_eq!(stats.origin_fetches.load(Ordering::Relaxed), 0);
+        assert_eq!(stats.hit_rate(), 0.0);
+
+        // Simulate some hits
+        stats.memory_hits.fetch_add(8, Ordering::Relaxed);
+        stats.ssd_hits.fetch_add(2, Ordering::Relaxed);
+
+        // Hit rate should be 100% (no origin fetches)
+        assert_eq!(stats.hit_rate(), 1.0);
+
+        // Add an origin fetch
+        stats.origin_fetches.fetch_add(1, Ordering::Relaxed);
+
+        // Hit rate should now be ~90.9%
+        let hit_rate = stats.hit_rate();
+        assert!(hit_rate > 0.9 && hit_rate < 0.92);
+    }
+
+    #[test]
+    fn test_tiered_cache_clear() {
+        let temp_dir = TempDir::new().unwrap();
+        let inner = LocalBackend::new(temp_dir.path().join("storage")).unwrap();
+
+        let cache_config = TieredCacheConfig {
+            ssd_cache_path: temp_dir.path().join("cache"),
+            ..Default::default()
+        };
+
+        let cached = TieredCacheBackend::new(inner, cache_config).unwrap();
+
+        // Write some data
+        let write_future = cached.write("clear/test1", b"data1");
+        futures::executor::block_on(write_future).unwrap();
+
+        let write_future = cached.write("clear/test2", b"data2");
+        futures::executor::block_on(write_future).unwrap();
+
+        assert!(cached.stats().memory_bytes.load(Ordering::Relaxed) > 0);
+
+        // Clear all caches
+        cached.clear_all().unwrap();
+
+        assert_eq!(cached.stats().memory_bytes.load(Ordering::Relaxed), 0);
+        assert_eq!(cached.stats().ssd_bytes.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn test_tiered_cache_delete() {
+        let temp_dir = TempDir::new().unwrap();
+        let inner = LocalBackend::new(temp_dir.path().join("storage")).unwrap();
+
+        let cache_config = TieredCacheConfig {
+            ssd_cache_path: temp_dir.path().join("cache"),
+            ..Default::default()
+        };
+
+        let cached = TieredCacheBackend::new(inner, cache_config).unwrap();
+
+        // Write data
+        let write_future = cached.write("delete/test", b"to be deleted");
+        futures::executor::block_on(write_future).unwrap();
+
+        let initial_bytes = cached.stats().memory_bytes.load(Ordering::Relaxed);
+        assert!(initial_bytes > 0);
+
+        // Delete
+        let delete_future = cached.delete("delete/test");
+        futures::executor::block_on(delete_future).unwrap();
+
+        // Cache should be updated
+        let final_bytes = cached.stats().memory_bytes.load(Ordering::Relaxed);
+        assert!(final_bytes < initial_bytes);
+
+        // Data should not exist
+        let read_future = cached.read("delete/test");
+        let result = futures::executor::block_on(read_future);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_key_to_filename() {
+        assert_eq!(key_to_filename("simple"), "simple");
+        assert_eq!(key_to_filename("path/to/file"), "path_to_file");
+        assert_eq!(key_to_filename("a\\b:c*d?e"), "a_b_c_d_e");
+        assert_eq!(key_to_filename("<test>|file"), "_test__file");
+    }
+
+    #[test]
+    fn test_cache_tier_enum() {
+        let memory_tier = CacheTier::Memory;
+        let ssd_tier = CacheTier::Ssd;
+        let origin_tier = CacheTier::Origin;
+
+        assert_eq!(memory_tier, CacheTier::Memory);
+        assert_ne!(memory_tier, ssd_tier);
+        assert_ne!(ssd_tier, origin_tier);
+    }
+
+    #[test]
+    fn test_s3_backend_is_connected() {
+        let config = S3Config::default();
+        let backend = S3Backend::new(config);
+
+        // Mock backend should not be connected
+        assert!(!backend.is_connected());
+    }
+
+    #[test]
+    fn test_gcs_backend_is_connected() {
+        let config = GCSConfig::default();
+        let backend = GCSBackend::new(config);
+
+        // Mock backend should not be connected
+        assert!(!backend.is_connected());
+    }
+
+    #[test]
+    fn test_azure_backend_is_connected() {
+        let config = AzureBlobConfig::default();
+        let backend = AzureBlobBackend::new(config);
+
+        // Mock backend should not be connected
+        assert!(!backend.is_connected());
     }
 }
