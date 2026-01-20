@@ -11,5 +11,7 @@ pub mod multimodal_index;
 pub mod multivec;
 pub mod quantization;
 pub mod sparse;
+pub mod graph_vector_fusion;
+pub mod multimodal_fusion;
 #[cfg(feature = "diskann")]
 pub mod tiered_ann;
