@@ -1,5 +1,158 @@
 use thiserror::Error;
 
+/// Error code categories for programmatic error handling
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ErrorCode {
+    // IO errors (1xxx)
+    IoRead = 1001,
+    IoWrite = 1002,
+    IoPermission = 1003,
+    IoDiskFull = 1004,
+
+    // Serialization errors (2xxx)
+    SerializationFailed = 2001,
+    DeserializationFailed = 2002,
+    InvalidFormat = 2003,
+
+    // Collection errors (3xxx)
+    CollectionNotFound = 3001,
+    CollectionAlreadyExists = 3002,
+    CollectionCorrupted = 3003,
+
+    // Vector errors (4xxx)
+    VectorNotFound = 4001,
+    VectorAlreadyExists = 4002,
+    DimensionMismatch = 4003,
+    InvalidVector = 4004,
+
+    // Database errors (5xxx)
+    InvalidDatabase = 5001,
+    DatabaseCorrupted = 5002,
+    DatabaseLocked = 5003,
+
+    // Index errors (6xxx)
+    IndexError = 6001,
+    IndexCorrupted = 6002,
+    IndexBuildFailed = 6003,
+
+    // Configuration errors (7xxx)
+    InvalidConfig = 7001,
+    MissingConfig = 7002,
+
+    // Resource errors (8xxx)
+    CapacityExceeded = 8001,
+    QuotaExceeded = 8002,
+    MemoryExhausted = 8003,
+
+    // Operational errors (9xxx)
+    Timeout = 9001,
+    LockTimeout = 9002,
+    Conflict = 9003,
+    NotFound = 9004,
+
+    // Security errors (10xxx)
+    EncryptionError = 10001,
+    DecryptionError = 10002,
+    AuthenticationFailed = 10003,
+
+    // Distributed errors (11xxx)
+    ConsensusError = 11001,
+    ReplicationError = 11002,
+    NetworkError = 11003,
+
+    // Backup errors (12xxx)
+    BackupFailed = 12001,
+    RestoreFailed = 12002,
+    BackupCorrupted = 12003,
+}
+
+impl ErrorCode {
+    /// Get the numeric error code
+    pub fn code(&self) -> u32 {
+        *self as u32
+    }
+
+    /// Get a brief description of the error category
+    pub fn category(&self) -> &'static str {
+        match self {
+            ErrorCode::IoRead | ErrorCode::IoWrite | ErrorCode::IoPermission | ErrorCode::IoDiskFull => "I/O",
+            ErrorCode::SerializationFailed | ErrorCode::DeserializationFailed | ErrorCode::InvalidFormat => "Serialization",
+            ErrorCode::CollectionNotFound | ErrorCode::CollectionAlreadyExists | ErrorCode::CollectionCorrupted => "Collection",
+            ErrorCode::VectorNotFound | ErrorCode::VectorAlreadyExists | ErrorCode::DimensionMismatch | ErrorCode::InvalidVector => "Vector",
+            ErrorCode::InvalidDatabase | ErrorCode::DatabaseCorrupted | ErrorCode::DatabaseLocked => "Database",
+            ErrorCode::IndexError | ErrorCode::IndexCorrupted | ErrorCode::IndexBuildFailed => "Index",
+            ErrorCode::InvalidConfig | ErrorCode::MissingConfig => "Configuration",
+            ErrorCode::CapacityExceeded | ErrorCode::QuotaExceeded | ErrorCode::MemoryExhausted => "Resource",
+            ErrorCode::Timeout | ErrorCode::LockTimeout | ErrorCode::Conflict | ErrorCode::NotFound => "Operational",
+            ErrorCode::EncryptionError | ErrorCode::DecryptionError | ErrorCode::AuthenticationFailed => "Security",
+            ErrorCode::ConsensusError | ErrorCode::ReplicationError | ErrorCode::NetworkError => "Distributed",
+            ErrorCode::BackupFailed | ErrorCode::RestoreFailed | ErrorCode::BackupCorrupted => "Backup",
+        }
+    }
+}
+
+/// A recovery hint providing actionable guidance for resolving errors
+#[derive(Debug, Clone)]
+pub struct RecoveryHint {
+    /// Short summary of the recovery action
+    pub summary: String,
+    /// Detailed steps or explanation
+    pub details: Option<String>,
+    /// Related documentation or reference
+    pub doc_ref: Option<String>,
+}
+
+impl RecoveryHint {
+    /// Create a new recovery hint with just a summary
+    pub fn new(summary: impl Into<String>) -> Self {
+        Self {
+            summary: summary.into(),
+            details: None,
+            doc_ref: None,
+        }
+    }
+
+    /// Add detailed recovery steps
+    pub fn with_details(mut self, details: impl Into<String>) -> Self {
+        self.details = Some(details.into());
+        self
+    }
+
+    /// Add documentation reference
+    pub fn with_doc(mut self, doc_ref: impl Into<String>) -> Self {
+        self.doc_ref = Some(doc_ref.into());
+        self
+    }
+}
+
+impl std::fmt::Display for RecoveryHint {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.summary)?;
+        if let Some(details) = &self.details {
+            write!(f, "\n  Details: {}", details)?;
+        }
+        if let Some(doc) = &self.doc_ref {
+            write!(f, "\n  See: {}", doc)?;
+        }
+        Ok(())
+    }
+}
+
+/// Trait for errors that can provide recovery hints
+pub trait Recoverable {
+    /// Get the error code for this error
+    fn error_code(&self) -> ErrorCode;
+
+    /// Get recovery hints for this error
+    fn recovery_hints(&self) -> Vec<RecoveryHint>;
+
+    /// Check if the error is retryable
+    fn is_retryable(&self) -> bool;
+
+    /// Get suggested retry delay in milliseconds
+    fn suggested_retry_delay_ms(&self) -> Option<u64>;
+}
+
 /// Error types for Needle database operations
 #[derive(Error, Debug)]
 pub enum NeedleError {
@@ -73,5 +226,328 @@ pub enum NeedleError {
     LockTimeout(std::time::Duration),
 }
 
+impl Recoverable for NeedleError {
+    fn error_code(&self) -> ErrorCode {
+        match self {
+            NeedleError::Io(source) => {
+                match source.kind() {
+                    std::io::ErrorKind::NotFound => ErrorCode::IoRead,
+                    std::io::ErrorKind::PermissionDenied => ErrorCode::IoPermission,
+                    std::io::ErrorKind::WriteZero => ErrorCode::IoDiskFull,
+                    _ => ErrorCode::IoWrite,
+                }
+            }
+            NeedleError::Serialization(_) => ErrorCode::SerializationFailed,
+            NeedleError::DimensionMismatch { .. } => ErrorCode::DimensionMismatch,
+            NeedleError::CollectionNotFound(_) => ErrorCode::CollectionNotFound,
+            NeedleError::CollectionAlreadyExists(_) => ErrorCode::CollectionAlreadyExists,
+            NeedleError::VectorNotFound(_) => ErrorCode::VectorNotFound,
+            NeedleError::VectorAlreadyExists(_) => ErrorCode::VectorAlreadyExists,
+            NeedleError::InvalidDatabase(_) => ErrorCode::InvalidDatabase,
+            NeedleError::Corruption(_) => ErrorCode::DatabaseCorrupted,
+            NeedleError::Index(_) => ErrorCode::IndexError,
+            NeedleError::InvalidConfig(_) => ErrorCode::InvalidConfig,
+            NeedleError::CapacityExceeded(_) => ErrorCode::CapacityExceeded,
+            NeedleError::InvalidVector(_) => ErrorCode::InvalidVector,
+            NeedleError::InvalidInput(_) => ErrorCode::InvalidConfig,
+            NeedleError::QuotaExceeded(_) => ErrorCode::QuotaExceeded,
+            NeedleError::BackupError(_) => ErrorCode::BackupFailed,
+            NeedleError::NotFound(_) => ErrorCode::NotFound,
+            NeedleError::Conflict(_) => ErrorCode::Conflict,
+            NeedleError::EncryptionError(_) => ErrorCode::EncryptionError,
+            NeedleError::ConsensusError(_) => ErrorCode::ConsensusError,
+            NeedleError::LockError => ErrorCode::DatabaseLocked,
+            NeedleError::Timeout(_) => ErrorCode::Timeout,
+            NeedleError::LockTimeout(_) => ErrorCode::LockTimeout,
+        }
+    }
+
+    fn recovery_hints(&self) -> Vec<RecoveryHint> {
+        match self {
+            NeedleError::Io(source) => {
+                match source.kind() {
+                    std::io::ErrorKind::NotFound => vec![
+                        RecoveryHint::new("Verify the file or directory exists")
+                            .with_details("Check file path spelling and ensure parent directories exist"),
+                        RecoveryHint::new("Create the database file using Database::open() or Database::in_memory()"),
+                    ],
+                    std::io::ErrorKind::PermissionDenied => vec![
+                        RecoveryHint::new("Check file permissions")
+                            .with_details("Ensure the process has read/write access to the file and directory"),
+                        RecoveryHint::new("Try running with elevated permissions or change file ownership"),
+                    ],
+                    std::io::ErrorKind::WriteZero | std::io::ErrorKind::StorageFull => vec![
+                        RecoveryHint::new("Free up disk space")
+                            .with_details("The disk is full; delete unnecessary files or expand storage"),
+                        RecoveryHint::new("Run database compact() to reclaim space from deleted vectors"),
+                    ],
+                    _ => vec![
+                        RecoveryHint::new("Check disk health and file system integrity"),
+                        RecoveryHint::new("Ensure no other process has exclusive access to the file"),
+                    ],
+                }
+            }
+
+            NeedleError::Serialization(_) => vec![
+                RecoveryHint::new("Check data format compatibility")
+                    .with_details("Ensure data matches expected JSON schema"),
+                RecoveryHint::new("Verify metadata values are valid JSON types"),
+                RecoveryHint::new("If upgrading, check for breaking changes in data format"),
+            ],
+
+            NeedleError::DimensionMismatch { expected, got } => vec![
+                RecoveryHint::new(format!("Resize vector to {} dimensions (currently {})", expected, got))
+                    .with_details("All vectors in a collection must have the same dimensionality"),
+                RecoveryHint::new("Verify your embedding model produces the expected dimensions"),
+                RecoveryHint::new("If using a different model, create a new collection with the correct dimensions"),
+            ],
+
+            NeedleError::CollectionNotFound(name) => vec![
+                RecoveryHint::new(format!("Create collection '{}' first using db.create_collection()", name)),
+                RecoveryHint::new("Check collection name spelling (case-sensitive)"),
+                RecoveryHint::new("Use db.list_collections() to see available collections"),
+            ],
+
+            NeedleError::CollectionAlreadyExists(name) => vec![
+                RecoveryHint::new(format!("Use db.collection(\"{}\") to access the existing collection", name)),
+                RecoveryHint::new("Delete the existing collection first if you need to recreate it"),
+                RecoveryHint::new("Choose a different collection name"),
+            ],
+
+            NeedleError::VectorNotFound(id) => vec![
+                RecoveryHint::new(format!("Insert vector '{}' before accessing it", id)),
+                RecoveryHint::new("Verify the vector ID is correct"),
+                RecoveryHint::new("Check if the vector was previously deleted"),
+            ],
+
+            NeedleError::VectorAlreadyExists(id) => vec![
+                RecoveryHint::new(format!("Use a unique ID instead of '{}'", id)),
+                RecoveryHint::new(format!("Delete the existing vector first: collection.delete(\"{}\")", id)),
+                RecoveryHint::new("Use upsert semantics if you want to replace existing vectors"),
+            ],
+
+            NeedleError::InvalidDatabase(reason) => vec![
+                RecoveryHint::new("The database file appears corrupted or incompatible")
+                    .with_details(reason.clone()),
+                RecoveryHint::new("Restore from a recent backup if available"),
+                RecoveryHint::new("Create a new database if no backup exists"),
+                RecoveryHint::new("Check if the file was created by a different version of Needle"),
+            ],
+
+            NeedleError::Corruption(reason) => vec![
+                RecoveryHint::new("Restore from the most recent backup")
+                    .with_details(format!("Corruption detected: {}", reason)),
+                RecoveryHint::new("Run database repair utility if available"),
+                RecoveryHint::new("Consider enabling write-ahead logging (WAL) for crash recovery"),
+            ],
+
+            NeedleError::Index(reason) => vec![
+                RecoveryHint::new("Rebuild the index")
+                    .with_details(reason.clone()),
+                RecoveryHint::new("Check HNSW parameters (M, ef_construction) are within valid ranges"),
+                RecoveryHint::new("Ensure sufficient memory for index construction"),
+            ],
+
+            NeedleError::InvalidConfig(reason) => vec![
+                RecoveryHint::new(format!("Fix configuration: {}", reason)),
+                RecoveryHint::new("Use default configuration as a starting point")
+                    .with_doc("See CLAUDE.md for configuration guidelines"),
+            ],
+
+            NeedleError::CapacityExceeded(reason) => vec![
+                RecoveryHint::new(reason.clone()),
+                RecoveryHint::new("Delete unused vectors to free capacity"),
+                RecoveryHint::new("Use quantization to reduce memory per vector"),
+                RecoveryHint::new("Consider sharding data across multiple collections"),
+            ],
+
+            NeedleError::InvalidVector(reason) => vec![
+                RecoveryHint::new(format!("Fix vector data: {}", reason)),
+                RecoveryHint::new("Ensure vector contains no NaN or Infinity values"),
+                RecoveryHint::new("Verify vector dimensions match collection configuration"),
+                RecoveryHint::new("Normalize vectors if using cosine distance"),
+            ],
+
+            NeedleError::InvalidInput(reason) => vec![
+                RecoveryHint::new(format!("Check input value: {}", reason)),
+                RecoveryHint::new("Verify input types match expected signatures"),
+            ],
+
+            NeedleError::QuotaExceeded(reason) => vec![
+                RecoveryHint::new(reason.clone()),
+                RecoveryHint::new("Request a quota increase if needed"),
+                RecoveryHint::new("Delete unused resources to stay within limits"),
+            ],
+
+            NeedleError::BackupError(reason) => vec![
+                RecoveryHint::new(format!("Backup operation failed: {}", reason)),
+                RecoveryHint::new("Verify backup directory has sufficient space and permissions"),
+                RecoveryHint::new("Check backup integrity with verify_backup()"),
+                RecoveryHint::new("Retry the backup operation"),
+            ],
+
+            NeedleError::NotFound(resource) => vec![
+                RecoveryHint::new(format!("Resource '{}' not found", resource)),
+                RecoveryHint::new("Verify the resource identifier is correct"),
+                RecoveryHint::new("Create the resource before accessing it"),
+            ],
+
+            NeedleError::Conflict(reason) => vec![
+                RecoveryHint::new(format!("Resolve conflict: {}", reason)),
+                RecoveryHint::new("Retry the operation after a short delay"),
+                RecoveryHint::new("Use optimistic locking for concurrent operations"),
+            ],
+
+            NeedleError::EncryptionError(reason) => vec![
+                RecoveryHint::new(format!("Encryption operation failed: {}", reason)),
+                RecoveryHint::new("Verify the encryption key is correct"),
+                RecoveryHint::new("Ensure the key was generated with KeyManager::new()"),
+                RecoveryHint::new("Check that encrypted data hasn't been corrupted"),
+            ],
+
+            NeedleError::ConsensusError(reason) => vec![
+                RecoveryHint::new(format!("Consensus failed: {}", reason)),
+                RecoveryHint::new("Check network connectivity between cluster nodes"),
+                RecoveryHint::new("Verify quorum requirements are met"),
+                RecoveryHint::new("Wait for cluster to stabilize and retry"),
+            ],
+
+            NeedleError::LockError => vec![
+                RecoveryHint::new("Failed to acquire lock"),
+                RecoveryHint::new("Another operation may be holding the lock"),
+                RecoveryHint::new("Wait for the other operation to complete and retry"),
+                RecoveryHint::new("Check for deadlock conditions in concurrent code"),
+            ],
+
+            NeedleError::Timeout(duration) => vec![
+                RecoveryHint::new(format!("Operation timed out after {:?}", duration)),
+                RecoveryHint::new("Increase the timeout value for long-running operations"),
+                RecoveryHint::new("Check for performance bottlenecks or resource contention"),
+                RecoveryHint::new("Consider breaking large operations into smaller batches"),
+            ],
+
+            NeedleError::LockTimeout(duration) => vec![
+                RecoveryHint::new(format!("Lock acquisition timed out after {:?}", duration)),
+                RecoveryHint::new("Another process may be holding the lock"),
+                RecoveryHint::new("Retry after a short delay"),
+                RecoveryHint::new("Consider using shorter lock hold times"),
+            ],
+        }
+    }
+
+    fn is_retryable(&self) -> bool {
+        matches!(
+            self,
+            NeedleError::Timeout(_)
+                | NeedleError::LockTimeout(_)
+                | NeedleError::LockError
+                | NeedleError::Conflict(_)
+                | NeedleError::ConsensusError(_)
+        )
+    }
+
+    fn suggested_retry_delay_ms(&self) -> Option<u64> {
+        match self {
+            NeedleError::Timeout(_) => Some(1000),
+            NeedleError::LockTimeout(_) => Some(100),
+            NeedleError::LockError => Some(50),
+            NeedleError::Conflict(_) => Some(100),
+            NeedleError::ConsensusError(_) => Some(500),
+            _ => None,
+        }
+    }
+}
+
+impl NeedleError {
+    /// Get a formatted error message with recovery hints
+    pub fn format_with_hints(&self) -> String {
+        let hints = self.recovery_hints();
+        let mut output = format!("Error [{}]: {}", self.error_code().code(), self);
+
+        if !hints.is_empty() {
+            output.push_str("\n\nRecovery suggestions:");
+            for (i, hint) in hints.iter().enumerate() {
+                output.push_str(&format!("\n  {}. {}", i + 1, hint));
+            }
+        }
+
+        if self.is_retryable() {
+            if let Some(delay) = self.suggested_retry_delay_ms() {
+                output.push_str(&format!("\n\nThis error is retryable. Suggested delay: {}ms", delay));
+            } else {
+                output.push_str("\n\nThis error is retryable.");
+            }
+        }
+
+        output
+    }
+}
+
 /// Result type alias for Needle operations
 pub type Result<T> = std::result::Result<T, NeedleError>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_error_codes() {
+        let error = NeedleError::CollectionNotFound("test".to_string());
+        assert_eq!(error.error_code(), ErrorCode::CollectionNotFound);
+        assert_eq!(error.error_code().code(), 3001);
+        assert_eq!(error.error_code().category(), "Collection");
+    }
+
+    #[test]
+    fn test_recovery_hints() {
+        let error = NeedleError::CollectionNotFound("missing".to_string());
+        let hints = error.recovery_hints();
+        assert!(!hints.is_empty());
+        assert!(hints.iter().any(|h| h.summary.contains("missing")));
+    }
+
+    #[test]
+    fn test_retryable_errors() {
+        let timeout = NeedleError::Timeout(std::time::Duration::from_secs(5));
+        assert!(timeout.is_retryable());
+        assert!(timeout.suggested_retry_delay_ms().is_some());
+
+        let not_found = NeedleError::CollectionNotFound("test".to_string());
+        assert!(!not_found.is_retryable());
+        assert!(not_found.suggested_retry_delay_ms().is_none());
+    }
+
+    #[test]
+    fn test_dimension_mismatch_hints() {
+        let error = NeedleError::DimensionMismatch {
+            expected: 128,
+            got: 256,
+        };
+        let hints = error.recovery_hints();
+        assert!(hints.iter().any(|h| h.summary.contains("128") && h.summary.contains("256")));
+    }
+
+    #[test]
+    fn test_format_with_hints() {
+        let error = NeedleError::CollectionNotFound("test_collection".to_string());
+        let formatted = error.format_with_hints();
+        assert!(formatted.contains("Error [3001]"));
+        assert!(formatted.contains("test_collection"));
+        assert!(formatted.contains("Recovery suggestions"));
+    }
+
+    #[test]
+    fn test_io_error_hints_by_kind() {
+        // Test NotFound
+        let error = NeedleError::Io(std::io::Error::new(std::io::ErrorKind::NotFound, "file not found"));
+        let hints = error.recovery_hints();
+        assert!(hints.iter().any(|h| h.summary.contains("exist")));
+        assert_eq!(error.error_code(), ErrorCode::IoRead);
+
+        // Test PermissionDenied
+        let error = NeedleError::Io(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "access denied"));
+        let hints = error.recovery_hints();
+        assert!(hints.iter().any(|h| h.summary.contains("permission")));
+        assert_eq!(error.error_code(), ErrorCode::IoPermission);
+    }
+}
