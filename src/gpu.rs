@@ -8,8 +8,9 @@
 //! - **Multi-backend support**: CUDA (NVIDIA), Metal (Apple), OpenCL (cross-platform)
 //! - **Automatic device selection**: Chooses best available GPU
 //! - **Memory management**: Efficient GPU memory allocation and transfers
-//! - **Batch operations**: Optimized for processing many vectors at once
+//! - **Batch operations**: Optimized for processing many vectors at once using Rayon
 //! - **Kernel fusion**: Combines operations to minimize memory transfers
+//! - **SIMD optimization**: Uses wide SIMD operations for CPU fallback
 //!
 //! # Example
 //!
@@ -29,10 +30,28 @@
 //! let distances = gpu.batch_cosine_distance(&query, &vectors)?;
 //! ```
 
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
+
+// CUDA backend imports
+#[cfg(feature = "gpu-cuda")]
+use cudarc::driver::{CudaDevice, CudaSlice, LaunchAsync, LaunchConfig};
+#[cfg(feature = "gpu-cuda")]
+use cudarc::nvrtc::Ptx;
+
+// Metal backend imports
+#[cfg(feature = "gpu-metal")]
+use metal::{Device as MetalDevice, MTLResourceOptions, MTLSize};
+
+/// Minimum vector count for parallel processing (below this, sequential is faster)
+const PARALLEL_THRESHOLD: usize = 100;
+
+/// Chunk size for parallel batch processing (reserved for future streaming operations)
+#[allow(dead_code)]
+const PARALLEL_CHUNK_SIZE: usize = 256;
 
 /// GPU backend type
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -606,7 +625,7 @@ impl GpuAccelerator {
         Ok(vec![0.0; count])
     }
 
-    /// Batch cosine distance calculation
+    /// Batch cosine distance calculation with automatic parallelization
     pub fn batch_cosine_distance(
         &self,
         query: &[f32],
@@ -623,20 +642,31 @@ impl GpuAccelerator {
             return Err("Dimension mismatch".to_string());
         }
 
-        // Compute distances (CPU fallback implementation)
-        let results: Vec<f32> = if self.device.backend == GpuBackend::CpuSimd {
-            // Optimized CPU implementation
-            vectors
-                .iter()
-                .map(|v| cosine_distance_simd(query, v))
-                .collect()
-        } else {
-            // GPU kernel would go here
-            // For now, use CPU implementation
-            vectors
-                .iter()
-                .map(|v| cosine_distance_simd(query, v))
-                .collect()
+        // Pre-compute query norm for efficiency
+        let query_norm = dot_product_simd(query, query).sqrt();
+        if query_norm == 0.0 {
+            return Ok(vec![1.0; vectors.len()]);
+        }
+
+        let results: Vec<f32> = match self.device.backend {
+            #[cfg(feature = "gpu-cuda")]
+            GpuBackend::Cuda => self.cuda_batch_cosine_distance(query, vectors)?,
+            #[cfg(feature = "gpu-metal")]
+            GpuBackend::Metal => self.metal_batch_cosine_distance(query, vectors)?,
+            _ => {
+                // Parallel CPU SIMD implementation
+                if vectors.len() >= PARALLEL_THRESHOLD {
+                    vectors
+                        .par_iter()
+                        .map(|v| cosine_distance_simd_precomputed(query, v, query_norm))
+                        .collect()
+                } else {
+                    vectors
+                        .iter()
+                        .map(|v| cosine_distance_simd_precomputed(query, v, query_norm))
+                        .collect()
+                }
+            }
         };
 
         // Update metrics
@@ -650,7 +680,7 @@ impl GpuAccelerator {
         Ok(results)
     }
 
-    /// Batch euclidean distance calculation
+    /// Batch euclidean distance calculation with automatic parallelization
     pub fn batch_euclidean_distance(
         &self,
         query: &[f32],
@@ -667,10 +697,26 @@ impl GpuAccelerator {
             return Err("Dimension mismatch".to_string());
         }
 
-        let results: Vec<f32> = vectors
-            .iter()
-            .map(|v| euclidean_distance_simd(query, v))
-            .collect();
+        let results: Vec<f32> = match self.device.backend {
+            #[cfg(feature = "gpu-cuda")]
+            GpuBackend::Cuda => self.cuda_batch_euclidean_distance(query, vectors)?,
+            #[cfg(feature = "gpu-metal")]
+            GpuBackend::Metal => self.metal_batch_euclidean_distance(query, vectors)?,
+            _ => {
+                // Parallel CPU SIMD implementation
+                if vectors.len() >= PARALLEL_THRESHOLD {
+                    vectors
+                        .par_iter()
+                        .map(|v| euclidean_distance_simd(query, v))
+                        .collect()
+                } else {
+                    vectors
+                        .iter()
+                        .map(|v| euclidean_distance_simd(query, v))
+                        .collect()
+                }
+            }
+        };
 
         self.update_metrics(
             KernelType::EuclideanDistance,
@@ -682,7 +728,7 @@ impl GpuAccelerator {
         Ok(results)
     }
 
-    /// Batch dot product calculation
+    /// Batch dot product calculation with automatic parallelization
     pub fn batch_dot_product(
         &self,
         query: &[f32],
@@ -695,7 +741,22 @@ impl GpuAccelerator {
         }
 
         let dim = query.len();
-        let results: Vec<f32> = vectors.iter().map(|v| dot_product_simd(query, v)).collect();
+        let results: Vec<f32> = match self.device.backend {
+            #[cfg(feature = "gpu-cuda")]
+            GpuBackend::Cuda => self.cuda_batch_dot_product(query, vectors)?,
+            #[cfg(feature = "gpu-metal")]
+            GpuBackend::Metal => self.metal_batch_dot_product(query, vectors)?,
+            _ => {
+                if vectors.len() >= PARALLEL_THRESHOLD {
+                    vectors
+                        .par_iter()
+                        .map(|v| dot_product_simd(query, v))
+                        .collect()
+                } else {
+                    vectors.iter().map(|v| dot_product_simd(query, v)).collect()
+                }
+            }
+        };
 
         self.update_metrics(
             KernelType::DotProduct,
@@ -707,12 +768,18 @@ impl GpuAccelerator {
         Ok(results)
     }
 
-    /// Normalize vectors in batch
+    /// Normalize vectors in batch with parallelization
     pub fn batch_normalize(&self, vectors: &mut [Vec<f32>]) -> Result<(), String> {
         let start = Instant::now();
 
-        for vector in vectors.iter_mut() {
-            normalize_vector_simd(vector);
+        if vectors.len() >= PARALLEL_THRESHOLD {
+            vectors.par_iter_mut().for_each(|vector| {
+                normalize_vector_simd(vector);
+            });
+        } else {
+            for vector in vectors.iter_mut() {
+                normalize_vector_simd(vector);
+            }
         }
 
         let total_elements: usize = vectors.iter().map(|v| v.len()).sum();
@@ -726,7 +793,7 @@ impl GpuAccelerator {
         Ok(())
     }
 
-    /// Matrix multiplication (for projections, etc.)
+    /// Matrix multiplication (for projections, etc.) with parallelization
     pub fn matmul(
         &self,
         a: &[Vec<f32>],
@@ -753,18 +820,31 @@ impl GpuAccelerator {
             ));
         }
 
-        // Naive matmul (would use optimized GPU kernel in real implementation)
-        let mut result = vec![vec![0.0; n]; m];
+        // Transpose B for better cache locality
+        let b_transposed: Vec<Vec<f32>> = (0..n)
+            .map(|j| (0..k).map(|i| b[i][j]).collect())
+            .collect();
 
-        for i in 0..m {
-            for j in 0..n {
-                let mut sum = 0.0;
-                for l in 0..k {
-                    sum += a[i][l] * b[l][j];
-                }
-                result[i][j] = sum;
-            }
-        }
+        // Parallel matrix multiplication with cache-friendly access
+        let result: Vec<Vec<f32>> = if m >= PARALLEL_THRESHOLD {
+            a.par_iter()
+                .map(|row_a| {
+                    b_transposed
+                        .iter()
+                        .map(|col_b| dot_product_simd(row_a, col_b))
+                        .collect()
+                })
+                .collect()
+        } else {
+            a.iter()
+                .map(|row_a| {
+                    b_transposed
+                        .iter()
+                        .map(|col_b| dot_product_simd(row_a, col_b))
+                        .collect()
+                })
+                .collect()
+        };
 
         self.update_metrics(
             KernelType::MatMul,
@@ -908,7 +988,7 @@ impl GpuAccelerator {
         Ok(projected)
     }
 
-    /// K-means assignment step
+    /// K-means assignment step with parallelization
     pub fn kmeans_assign(
         &self,
         vectors: &[Vec<f32>],
@@ -916,20 +996,36 @@ impl GpuAccelerator {
     ) -> Result<Vec<usize>, String> {
         let start = Instant::now();
 
-        let assignments: Vec<usize> = vectors
-            .iter()
-            .map(|v| {
-                centroids
-                    .iter()
-                    .enumerate()
-                    .map(|(i, c)| (i, euclidean_distance_simd(v, c)))
-                    .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
-                    .map(|(i, _)| i)
-                    .unwrap_or(0)
-            })
-            .collect();
+        let assignments: Vec<usize> = if vectors.len() >= PARALLEL_THRESHOLD {
+            vectors
+                .par_iter()
+                .map(|v| {
+                    centroids
+                        .iter()
+                        .enumerate()
+                        .map(|(i, c)| (i, euclidean_distance_simd(v, c)))
+                        .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
+                        .map(|(i, _)| i)
+                        .unwrap_or(0)
+                })
+                .collect()
+        } else {
+            vectors
+                .iter()
+                .map(|v| {
+                    centroids
+                        .iter()
+                        .enumerate()
+                        .map(|(i, c)| (i, euclidean_distance_simd(v, c)))
+                        .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
+                        .map(|(i, _)| i)
+                        .unwrap_or(0)
+                })
+                .collect()
+        };
 
-        let total_ops = vectors.len() * centroids.len() * vectors[0].len();
+        let dim = vectors.first().map(|v| v.len()).unwrap_or(0);
+        let total_ops = vectors.len() * centroids.len() * dim;
         self.update_metrics(
             KernelType::KMeansAssign,
             start.elapsed(),
@@ -940,7 +1036,7 @@ impl GpuAccelerator {
         Ok(assignments)
     }
 
-    /// Execute fused kernel (multiple operations in one)
+    /// Execute fused kernel (multiple operations in one) with parallelization
     pub fn fused_search(
         &self,
         query: &[f32],
@@ -949,34 +1045,112 @@ impl GpuAccelerator {
         distance_type: DistanceType,
     ) -> Result<Vec<(usize, f32)>, String> {
         let start = Instant::now();
+        let dim = query.len();
 
-        // Compute distances
-        let distances: Vec<f32> = match distance_type {
-            DistanceType::Cosine => vectors
-                .iter()
-                .map(|v| cosine_distance_simd(query, v))
-                .collect(),
-            DistanceType::Euclidean => vectors
-                .iter()
-                .map(|v| euclidean_distance_simd(query, v))
-                .collect(),
-            DistanceType::DotProduct => vectors
-                .iter()
-                .map(|v| -dot_product_simd(query, v)) // Negative for sorting
-                .collect(),
+        // Pre-compute query norm for cosine distance
+        let query_norm = dot_product_simd(query, query).sqrt();
+
+        // Compute distances using parallel processing for large batches
+        let distances: Vec<f32> = if vectors.len() >= PARALLEL_THRESHOLD {
+            match distance_type {
+                DistanceType::Cosine => {
+                    if query_norm == 0.0 {
+                        vec![1.0; vectors.len()]
+                    } else {
+                        vectors
+                            .par_iter()
+                            .map(|v| cosine_distance_simd_precomputed(query, v, query_norm))
+                            .collect()
+                    }
+                }
+                DistanceType::Euclidean => vectors
+                    .par_iter()
+                    .map(|v| euclidean_distance_simd(query, v))
+                    .collect(),
+                DistanceType::DotProduct => vectors
+                    .par_iter()
+                    .map(|v| -dot_product_simd(query, v)) // Negative for sorting
+                    .collect(),
+            }
+        } else {
+            match distance_type {
+                DistanceType::Cosine => {
+                    if query_norm == 0.0 {
+                        vec![1.0; vectors.len()]
+                    } else {
+                        vectors
+                            .iter()
+                            .map(|v| cosine_distance_simd_precomputed(query, v, query_norm))
+                            .collect()
+                    }
+                }
+                DistanceType::Euclidean => vectors
+                    .iter()
+                    .map(|v| euclidean_distance_simd(query, v))
+                    .collect(),
+                DistanceType::DotProduct => vectors
+                    .iter()
+                    .map(|v| -dot_product_simd(query, v))
+                    .collect(),
+            }
         };
 
-        // Top-K selection
-        let mut indexed: Vec<(usize, f32)> = distances.into_iter().enumerate().collect();
-        indexed.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
-        let results: Vec<(usize, f32)> = indexed.into_iter().take(k).collect();
+        // Top-K selection using parallel sort for large results
+        let results = if k >= vectors.len() {
+            // Return all sorted
+            let mut indexed: Vec<(usize, f32)> = distances.into_iter().enumerate().collect();
+            indexed.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+            indexed
+        } else if vectors.len() >= PARALLEL_THRESHOLD {
+            // Use partial sort for efficiency
+            partial_sort_top_k(distances, k)
+        } else {
+            let mut indexed: Vec<(usize, f32)> = distances.into_iter().enumerate().collect();
+            indexed.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+            indexed.into_iter().take(k).collect()
+        };
 
-        let dim = query.len();
         self.update_metrics(
             KernelType::CosineSimilarity, // Approximate
             start.elapsed(),
             (vectors.len() * dim * 4 * 2) as u64, // Read vectors + write distances
             Some(calculate_gflops(vectors.len() * dim * 3, start.elapsed())),
+        );
+
+        Ok(results)
+    }
+
+    /// Batch search with multiple queries (fully parallel)
+    pub fn batch_fused_search(
+        &self,
+        queries: &[Vec<f32>],
+        vectors: &[Vec<f32>],
+        k: usize,
+        distance_type: DistanceType,
+    ) -> Result<Vec<Vec<(usize, f32)>>, String> {
+        let start = Instant::now();
+
+        if queries.is_empty() || vectors.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let dim = queries[0].len();
+
+        // Process all queries in parallel
+        let results: Vec<Vec<(usize, f32)>> = queries
+            .par_iter()
+            .map(|query| {
+                self.fused_search(query, vectors, k, distance_type)
+                    .unwrap_or_default()
+            })
+            .collect();
+
+        let total_ops = queries.len() * vectors.len() * dim * 3;
+        self.update_metrics(
+            KernelType::CosineSimilarity,
+            start.elapsed(),
+            (total_ops * 4) as u64,
+            Some(calculate_gflops(total_ops, start.elapsed())),
         );
 
         Ok(results)
@@ -1001,6 +1175,729 @@ impl GpuAccelerator {
             *entry = (*entry * (count - 1.0) + g) / count;
         }
     }
+
+    // ==========================================================================
+    // CUDA Backend Implementation
+    // ==========================================================================
+
+    #[cfg(feature = "gpu-cuda")]
+    fn cuda_batch_cosine_distance(
+        &self,
+        query: &[f32],
+        vectors: &[Vec<f32>],
+    ) -> Result<Vec<f32>, String> {
+        // CUDA kernel for cosine distance
+        // This uses cudarc to execute GPU kernels
+        let device = CudaDevice::new(0).map_err(|e| format!("CUDA device error: {}", e))?;
+
+        let dim = query.len();
+        let n_vectors = vectors.len();
+
+        // Flatten vectors for GPU transfer
+        let flat_vectors: Vec<f32> = vectors.iter().flatten().copied().collect();
+
+        // Allocate GPU memory
+        let query_gpu = device
+            .htod_copy(query.to_vec())
+            .map_err(|e| format!("CUDA copy error: {}", e))?;
+        let vectors_gpu = device
+            .htod_copy(flat_vectors)
+            .map_err(|e| format!("CUDA copy error: {}", e))?;
+        let mut results_gpu = device
+            .alloc_zeros::<f32>(n_vectors)
+            .map_err(|e| format!("CUDA alloc error: {}", e))?;
+
+        // Load and execute kernel
+        let ptx = Self::get_cosine_distance_ptx();
+        let module = device
+            .load_ptx(ptx, "cosine_distance", &["cosine_distance_kernel"])
+            .map_err(|e| format!("CUDA module load error: {}", e))?;
+        let kernel = module
+            .get_fn("cosine_distance_kernel")
+            .map_err(|e| format!("CUDA kernel not found: {}", e))?;
+
+        // Configure grid and block dimensions
+        let block_size = 256;
+        let grid_size = (n_vectors + block_size - 1) / block_size;
+
+        unsafe {
+            kernel
+                .clone()
+                .launch(
+                    LaunchConfig {
+                        grid_dim: (grid_size as u32, 1, 1),
+                        block_dim: (block_size as u32, 1, 1),
+                        shared_mem_bytes: 0,
+                    },
+                    (&query_gpu, &vectors_gpu, &mut results_gpu, dim as i32, n_vectors as i32),
+                )
+                .map_err(|e| format!("CUDA launch error: {}", e))?;
+        }
+
+        // Copy results back to host
+        let results = device
+            .dtoh_sync_copy(&results_gpu)
+            .map_err(|e| format!("CUDA copy back error: {}", e))?;
+
+        Ok(results)
+    }
+
+    #[cfg(feature = "gpu-cuda")]
+    fn cuda_batch_euclidean_distance(
+        &self,
+        query: &[f32],
+        vectors: &[Vec<f32>],
+    ) -> Result<Vec<f32>, String> {
+        let device = CudaDevice::new(0).map_err(|e| format!("CUDA device error: {}", e))?;
+
+        let dim = query.len();
+        let n_vectors = vectors.len();
+        let flat_vectors: Vec<f32> = vectors.iter().flatten().copied().collect();
+
+        let query_gpu = device
+            .htod_copy(query.to_vec())
+            .map_err(|e| format!("CUDA copy error: {}", e))?;
+        let vectors_gpu = device
+            .htod_copy(flat_vectors)
+            .map_err(|e| format!("CUDA copy error: {}", e))?;
+        let mut results_gpu = device
+            .alloc_zeros::<f32>(n_vectors)
+            .map_err(|e| format!("CUDA alloc error: {}", e))?;
+
+        let ptx = Self::get_euclidean_distance_ptx();
+        let module = device
+            .load_ptx(ptx, "euclidean_distance", &["euclidean_distance_kernel"])
+            .map_err(|e| format!("CUDA module load error: {}", e))?;
+        let kernel = module
+            .get_fn("euclidean_distance_kernel")
+            .map_err(|e| format!("CUDA kernel not found: {}", e))?;
+
+        let block_size = 256;
+        let grid_size = (n_vectors + block_size - 1) / block_size;
+
+        unsafe {
+            kernel
+                .clone()
+                .launch(
+                    LaunchConfig {
+                        grid_dim: (grid_size as u32, 1, 1),
+                        block_dim: (block_size as u32, 1, 1),
+                        shared_mem_bytes: 0,
+                    },
+                    (&query_gpu, &vectors_gpu, &mut results_gpu, dim as i32, n_vectors as i32),
+                )
+                .map_err(|e| format!("CUDA launch error: {}", e))?;
+        }
+
+        let results = device
+            .dtoh_sync_copy(&results_gpu)
+            .map_err(|e| format!("CUDA copy back error: {}", e))?;
+
+        Ok(results)
+    }
+
+    #[cfg(feature = "gpu-cuda")]
+    fn cuda_batch_dot_product(
+        &self,
+        query: &[f32],
+        vectors: &[Vec<f32>],
+    ) -> Result<Vec<f32>, String> {
+        let device = CudaDevice::new(0).map_err(|e| format!("CUDA device error: {}", e))?;
+
+        let dim = query.len();
+        let n_vectors = vectors.len();
+        let flat_vectors: Vec<f32> = vectors.iter().flatten().copied().collect();
+
+        let query_gpu = device
+            .htod_copy(query.to_vec())
+            .map_err(|e| format!("CUDA copy error: {}", e))?;
+        let vectors_gpu = device
+            .htod_copy(flat_vectors)
+            .map_err(|e| format!("CUDA copy error: {}", e))?;
+        let mut results_gpu = device
+            .alloc_zeros::<f32>(n_vectors)
+            .map_err(|e| format!("CUDA alloc error: {}", e))?;
+
+        let ptx = Self::get_dot_product_ptx();
+        let module = device
+            .load_ptx(ptx, "dot_product", &["dot_product_kernel"])
+            .map_err(|e| format!("CUDA module load error: {}", e))?;
+        let kernel = module
+            .get_fn("dot_product_kernel")
+            .map_err(|e| format!("CUDA kernel not found: {}", e))?;
+
+        let block_size = 256;
+        let grid_size = (n_vectors + block_size - 1) / block_size;
+
+        unsafe {
+            kernel
+                .clone()
+                .launch(
+                    LaunchConfig {
+                        grid_dim: (grid_size as u32, 1, 1),
+                        block_dim: (block_size as u32, 1, 1),
+                        shared_mem_bytes: 0,
+                    },
+                    (&query_gpu, &vectors_gpu, &mut results_gpu, dim as i32, n_vectors as i32),
+                )
+                .map_err(|e| format!("CUDA launch error: {}", e))?;
+        }
+
+        let results = device
+            .dtoh_sync_copy(&results_gpu)
+            .map_err(|e| format!("CUDA copy back error: {}", e))?;
+
+        Ok(results)
+    }
+
+    #[cfg(feature = "gpu-cuda")]
+    fn get_cosine_distance_ptx() -> Ptx {
+        // CUDA kernel for cosine distance computation
+        // This is compiled PTX code for the kernel
+        Ptx::from_src(
+            r#"
+            .version 7.0
+            .target sm_70
+            .address_size 64
+
+            .visible .entry cosine_distance_kernel(
+                .param .u64 query_ptr,
+                .param .u64 vectors_ptr,
+                .param .u64 results_ptr,
+                .param .s32 dim,
+                .param .s32 n_vectors
+            )
+            {
+                .reg .pred %p<2>;
+                .reg .f32 %f<10>;
+                .reg .b32 %r<10>;
+                .reg .b64 %rd<10>;
+
+                ld.param.u64 %rd1, [query_ptr];
+                ld.param.u64 %rd2, [vectors_ptr];
+                ld.param.u64 %rd3, [results_ptr];
+                ld.param.s32 %r1, [dim];
+                ld.param.s32 %r2, [n_vectors];
+
+                // Get thread index
+                mov.u32 %r3, %ctaid.x;
+                mov.u32 %r4, %ntid.x;
+                mov.u32 %r5, %tid.x;
+                mad.lo.s32 %r6, %r3, %r4, %r5;
+
+                // Check bounds
+                setp.ge.s32 %p1, %r6, %r2;
+                @%p1 bra END;
+
+                // Initialize accumulators
+                mov.f32 %f1, 0.0;  // dot product
+                mov.f32 %f2, 0.0;  // norm_a
+                mov.f32 %f3, 0.0;  // norm_b
+
+                // Calculate offset for this vector
+                mul.lo.s32 %r7, %r6, %r1;
+                cvt.s64.s32 %rd4, %r7;
+                shl.b64 %rd5, %rd4, 2;
+                add.u64 %rd6, %rd2, %rd5;
+
+                // Loop over dimensions
+                mov.s32 %r8, 0;
+            LOOP:
+                setp.ge.s32 %p1, %r8, %r1;
+                @%p1 bra COMPUTE;
+
+                // Load values
+                cvt.s64.s32 %rd7, %r8;
+                shl.b64 %rd8, %rd7, 2;
+                add.u64 %rd9, %rd1, %rd8;
+                ld.global.f32 %f4, [%rd9];  // query[i]
+
+                add.u64 %rd9, %rd6, %rd8;
+                ld.global.f32 %f5, [%rd9];  // vector[i]
+
+                // Accumulate
+                fma.rn.f32 %f1, %f4, %f5, %f1;  // dot += q*v
+                fma.rn.f32 %f2, %f4, %f4, %f2;  // norm_a += q*q
+                fma.rn.f32 %f3, %f5, %f5, %f3;  // norm_b += v*v
+
+                add.s32 %r8, %r8, 1;
+                bra LOOP;
+
+            COMPUTE:
+                // Compute cosine distance = 1 - dot/(sqrt(norm_a)*sqrt(norm_b))
+                sqrt.rn.f32 %f6, %f2;
+                sqrt.rn.f32 %f7, %f3;
+                mul.f32 %f8, %f6, %f7;
+                div.rn.f32 %f9, %f1, %f8;
+                mov.f32 %f4, 1.0;
+                sub.f32 %f5, %f4, %f9;
+
+                // Store result
+                cvt.s64.s32 %rd4, %r6;
+                shl.b64 %rd5, %rd4, 2;
+                add.u64 %rd6, %rd3, %rd5;
+                st.global.f32 [%rd6], %f5;
+
+            END:
+                ret;
+            }
+            "#,
+        )
+    }
+
+    #[cfg(feature = "gpu-cuda")]
+    fn get_euclidean_distance_ptx() -> Ptx {
+        Ptx::from_src(
+            r#"
+            .version 7.0
+            .target sm_70
+            .address_size 64
+
+            .visible .entry euclidean_distance_kernel(
+                .param .u64 query_ptr,
+                .param .u64 vectors_ptr,
+                .param .u64 results_ptr,
+                .param .s32 dim,
+                .param .s32 n_vectors
+            )
+            {
+                .reg .pred %p<2>;
+                .reg .f32 %f<6>;
+                .reg .b32 %r<10>;
+                .reg .b64 %rd<10>;
+
+                ld.param.u64 %rd1, [query_ptr];
+                ld.param.u64 %rd2, [vectors_ptr];
+                ld.param.u64 %rd3, [results_ptr];
+                ld.param.s32 %r1, [dim];
+                ld.param.s32 %r2, [n_vectors];
+
+                mov.u32 %r3, %ctaid.x;
+                mov.u32 %r4, %ntid.x;
+                mov.u32 %r5, %tid.x;
+                mad.lo.s32 %r6, %r3, %r4, %r5;
+
+                setp.ge.s32 %p1, %r6, %r2;
+                @%p1 bra END;
+
+                mov.f32 %f1, 0.0;  // sum of squared differences
+
+                mul.lo.s32 %r7, %r6, %r1;
+                cvt.s64.s32 %rd4, %r7;
+                shl.b64 %rd5, %rd4, 2;
+                add.u64 %rd6, %rd2, %rd5;
+
+                mov.s32 %r8, 0;
+            LOOP:
+                setp.ge.s32 %p1, %r8, %r1;
+                @%p1 bra COMPUTE;
+
+                cvt.s64.s32 %rd7, %r8;
+                shl.b64 %rd8, %rd7, 2;
+                add.u64 %rd9, %rd1, %rd8;
+                ld.global.f32 %f2, [%rd9];
+
+                add.u64 %rd9, %rd6, %rd8;
+                ld.global.f32 %f3, [%rd9];
+
+                sub.f32 %f4, %f2, %f3;
+                fma.rn.f32 %f1, %f4, %f4, %f1;
+
+                add.s32 %r8, %r8, 1;
+                bra LOOP;
+
+            COMPUTE:
+                sqrt.rn.f32 %f5, %f1;
+
+                cvt.s64.s32 %rd4, %r6;
+                shl.b64 %rd5, %rd4, 2;
+                add.u64 %rd6, %rd3, %rd5;
+                st.global.f32 [%rd6], %f5;
+
+            END:
+                ret;
+            }
+            "#,
+        )
+    }
+
+    #[cfg(feature = "gpu-cuda")]
+    fn get_dot_product_ptx() -> Ptx {
+        Ptx::from_src(
+            r#"
+            .version 7.0
+            .target sm_70
+            .address_size 64
+
+            .visible .entry dot_product_kernel(
+                .param .u64 query_ptr,
+                .param .u64 vectors_ptr,
+                .param .u64 results_ptr,
+                .param .s32 dim,
+                .param .s32 n_vectors
+            )
+            {
+                .reg .pred %p<2>;
+                .reg .f32 %f<4>;
+                .reg .b32 %r<10>;
+                .reg .b64 %rd<10>;
+
+                ld.param.u64 %rd1, [query_ptr];
+                ld.param.u64 %rd2, [vectors_ptr];
+                ld.param.u64 %rd3, [results_ptr];
+                ld.param.s32 %r1, [dim];
+                ld.param.s32 %r2, [n_vectors];
+
+                mov.u32 %r3, %ctaid.x;
+                mov.u32 %r4, %ntid.x;
+                mov.u32 %r5, %tid.x;
+                mad.lo.s32 %r6, %r3, %r4, %r5;
+
+                setp.ge.s32 %p1, %r6, %r2;
+                @%p1 bra END;
+
+                mov.f32 %f1, 0.0;
+
+                mul.lo.s32 %r7, %r6, %r1;
+                cvt.s64.s32 %rd4, %r7;
+                shl.b64 %rd5, %rd4, 2;
+                add.u64 %rd6, %rd2, %rd5;
+
+                mov.s32 %r8, 0;
+            LOOP:
+                setp.ge.s32 %p1, %r8, %r1;
+                @%p1 bra STORE;
+
+                cvt.s64.s32 %rd7, %r8;
+                shl.b64 %rd8, %rd7, 2;
+                add.u64 %rd9, %rd1, %rd8;
+                ld.global.f32 %f2, [%rd9];
+
+                add.u64 %rd9, %rd6, %rd8;
+                ld.global.f32 %f3, [%rd9];
+
+                fma.rn.f32 %f1, %f2, %f3, %f1;
+
+                add.s32 %r8, %r8, 1;
+                bra LOOP;
+
+            STORE:
+                cvt.s64.s32 %rd4, %r6;
+                shl.b64 %rd5, %rd4, 2;
+                add.u64 %rd6, %rd3, %rd5;
+                st.global.f32 [%rd6], %f1;
+
+            END:
+                ret;
+            }
+            "#,
+        )
+    }
+
+    // ==========================================================================
+    // Metal Backend Implementation
+    // ==========================================================================
+
+    #[cfg(feature = "gpu-metal")]
+    fn metal_batch_cosine_distance(
+        &self,
+        query: &[f32],
+        vectors: &[Vec<f32>],
+    ) -> Result<Vec<f32>, String> {
+        let device = MetalDevice::system_default()
+            .ok_or_else(|| "No Metal device found".to_string())?;
+
+        let dim = query.len();
+        let n_vectors = vectors.len();
+        let flat_vectors: Vec<f32> = vectors.iter().flatten().copied().collect();
+
+        // Create buffers
+        let query_buffer = device.new_buffer_with_data(
+            query.as_ptr() as *const _,
+            (query.len() * std::mem::size_of::<f32>()) as u64,
+            MTLResourceOptions::StorageModeShared,
+        );
+        let vectors_buffer = device.new_buffer_with_data(
+            flat_vectors.as_ptr() as *const _,
+            (flat_vectors.len() * std::mem::size_of::<f32>()) as u64,
+            MTLResourceOptions::StorageModeShared,
+        );
+        let results_buffer = device.new_buffer(
+            (n_vectors * std::mem::size_of::<f32>()) as u64,
+            MTLResourceOptions::StorageModeShared,
+        );
+
+        // Compile shader
+        let library = device
+            .new_library_with_source(Self::METAL_COSINE_SHADER, &metal::CompileOptions::new())
+            .map_err(|e| format!("Metal compile error: {}", e))?;
+        let kernel = library
+            .get_function("cosine_distance_kernel", None)
+            .map_err(|e| format!("Metal function not found: {}", e))?;
+        let pipeline = device
+            .new_compute_pipeline_state_with_function(&kernel)
+            .map_err(|e| format!("Metal pipeline error: {}", e))?;
+
+        // Create command queue and buffer
+        let command_queue = device.new_command_queue();
+        let command_buffer = command_queue.new_command_buffer();
+        let encoder = command_buffer.new_compute_command_encoder();
+
+        encoder.set_compute_pipeline_state(&pipeline);
+        encoder.set_buffer(0, Some(&query_buffer), 0);
+        encoder.set_buffer(1, Some(&vectors_buffer), 0);
+        encoder.set_buffer(2, Some(&results_buffer), 0);
+
+        let dim_data = [dim as u32, n_vectors as u32];
+        encoder.set_bytes(
+            3,
+            std::mem::size_of_val(&dim_data) as u64,
+            dim_data.as_ptr() as *const _,
+        );
+
+        let thread_group_size = MTLSize::new(256, 1, 1);
+        let grid_size = MTLSize::new(((n_vectors + 255) / 256 * 256) as u64, 1, 1);
+        encoder.dispatch_threads(grid_size, thread_group_size);
+        encoder.end_encoding();
+
+        command_buffer.commit();
+        command_buffer.wait_until_completed();
+
+        // Read results
+        let results_ptr = results_buffer.contents() as *const f32;
+        let results: Vec<f32> = unsafe { std::slice::from_raw_parts(results_ptr, n_vectors).to_vec() };
+
+        Ok(results)
+    }
+
+    #[cfg(feature = "gpu-metal")]
+    fn metal_batch_euclidean_distance(
+        &self,
+        query: &[f32],
+        vectors: &[Vec<f32>],
+    ) -> Result<Vec<f32>, String> {
+        // Similar implementation to cosine, using euclidean shader
+        let device = MetalDevice::system_default()
+            .ok_or_else(|| "No Metal device found".to_string())?;
+
+        let dim = query.len();
+        let n_vectors = vectors.len();
+        let flat_vectors: Vec<f32> = vectors.iter().flatten().copied().collect();
+
+        let query_buffer = device.new_buffer_with_data(
+            query.as_ptr() as *const _,
+            (query.len() * std::mem::size_of::<f32>()) as u64,
+            MTLResourceOptions::StorageModeShared,
+        );
+        let vectors_buffer = device.new_buffer_with_data(
+            flat_vectors.as_ptr() as *const _,
+            (flat_vectors.len() * std::mem::size_of::<f32>()) as u64,
+            MTLResourceOptions::StorageModeShared,
+        );
+        let results_buffer = device.new_buffer(
+            (n_vectors * std::mem::size_of::<f32>()) as u64,
+            MTLResourceOptions::StorageModeShared,
+        );
+
+        let library = device
+            .new_library_with_source(Self::METAL_EUCLIDEAN_SHADER, &metal::CompileOptions::new())
+            .map_err(|e| format!("Metal compile error: {}", e))?;
+        let kernel = library
+            .get_function("euclidean_distance_kernel", None)
+            .map_err(|e| format!("Metal function not found: {}", e))?;
+        let pipeline = device
+            .new_compute_pipeline_state_with_function(&kernel)
+            .map_err(|e| format!("Metal pipeline error: {}", e))?;
+
+        let command_queue = device.new_command_queue();
+        let command_buffer = command_queue.new_command_buffer();
+        let encoder = command_buffer.new_compute_command_encoder();
+
+        encoder.set_compute_pipeline_state(&pipeline);
+        encoder.set_buffer(0, Some(&query_buffer), 0);
+        encoder.set_buffer(1, Some(&vectors_buffer), 0);
+        encoder.set_buffer(2, Some(&results_buffer), 0);
+
+        let dim_data = [dim as u32, n_vectors as u32];
+        encoder.set_bytes(
+            3,
+            std::mem::size_of_val(&dim_data) as u64,
+            dim_data.as_ptr() as *const _,
+        );
+
+        let thread_group_size = MTLSize::new(256, 1, 1);
+        let grid_size = MTLSize::new(((n_vectors + 255) / 256 * 256) as u64, 1, 1);
+        encoder.dispatch_threads(grid_size, thread_group_size);
+        encoder.end_encoding();
+
+        command_buffer.commit();
+        command_buffer.wait_until_completed();
+
+        let results_ptr = results_buffer.contents() as *const f32;
+        let results: Vec<f32> = unsafe { std::slice::from_raw_parts(results_ptr, n_vectors).to_vec() };
+
+        Ok(results)
+    }
+
+    #[cfg(feature = "gpu-metal")]
+    fn metal_batch_dot_product(
+        &self,
+        query: &[f32],
+        vectors: &[Vec<f32>],
+    ) -> Result<Vec<f32>, String> {
+        let device = MetalDevice::system_default()
+            .ok_or_else(|| "No Metal device found".to_string())?;
+
+        let dim = query.len();
+        let n_vectors = vectors.len();
+        let flat_vectors: Vec<f32> = vectors.iter().flatten().copied().collect();
+
+        let query_buffer = device.new_buffer_with_data(
+            query.as_ptr() as *const _,
+            (query.len() * std::mem::size_of::<f32>()) as u64,
+            MTLResourceOptions::StorageModeShared,
+        );
+        let vectors_buffer = device.new_buffer_with_data(
+            flat_vectors.as_ptr() as *const _,
+            (flat_vectors.len() * std::mem::size_of::<f32>()) as u64,
+            MTLResourceOptions::StorageModeShared,
+        );
+        let results_buffer = device.new_buffer(
+            (n_vectors * std::mem::size_of::<f32>()) as u64,
+            MTLResourceOptions::StorageModeShared,
+        );
+
+        let library = device
+            .new_library_with_source(Self::METAL_DOT_PRODUCT_SHADER, &metal::CompileOptions::new())
+            .map_err(|e| format!("Metal compile error: {}", e))?;
+        let kernel = library
+            .get_function("dot_product_kernel", None)
+            .map_err(|e| format!("Metal function not found: {}", e))?;
+        let pipeline = device
+            .new_compute_pipeline_state_with_function(&kernel)
+            .map_err(|e| format!("Metal pipeline error: {}", e))?;
+
+        let command_queue = device.new_command_queue();
+        let command_buffer = command_queue.new_command_buffer();
+        let encoder = command_buffer.new_compute_command_encoder();
+
+        encoder.set_compute_pipeline_state(&pipeline);
+        encoder.set_buffer(0, Some(&query_buffer), 0);
+        encoder.set_buffer(1, Some(&vectors_buffer), 0);
+        encoder.set_buffer(2, Some(&results_buffer), 0);
+
+        let dim_data = [dim as u32, n_vectors as u32];
+        encoder.set_bytes(
+            3,
+            std::mem::size_of_val(&dim_data) as u64,
+            dim_data.as_ptr() as *const _,
+        );
+
+        let thread_group_size = MTLSize::new(256, 1, 1);
+        let grid_size = MTLSize::new(((n_vectors + 255) / 256 * 256) as u64, 1, 1);
+        encoder.dispatch_threads(grid_size, thread_group_size);
+        encoder.end_encoding();
+
+        command_buffer.commit();
+        command_buffer.wait_until_completed();
+
+        let results_ptr = results_buffer.contents() as *const f32;
+        let results: Vec<f32> = unsafe { std::slice::from_raw_parts(results_ptr, n_vectors).to_vec() };
+
+        Ok(results)
+    }
+
+    #[cfg(feature = "gpu-metal")]
+    const METAL_COSINE_SHADER: &'static str = r#"
+        #include <metal_stdlib>
+        using namespace metal;
+
+        kernel void cosine_distance_kernel(
+            device const float* query [[buffer(0)]],
+            device const float* vectors [[buffer(1)]],
+            device float* results [[buffer(2)]],
+            constant uint2& dims [[buffer(3)]],
+            uint id [[thread_position_in_grid]]
+        ) {
+            uint dim = dims.x;
+            uint n_vectors = dims.y;
+
+            if (id >= n_vectors) return;
+
+            float dot = 0.0;
+            float norm_a = 0.0;
+            float norm_b = 0.0;
+
+            uint offset = id * dim;
+            for (uint i = 0; i < dim; i++) {
+                float q = query[i];
+                float v = vectors[offset + i];
+                dot += q * v;
+                norm_a += q * q;
+                norm_b += v * v;
+            }
+
+            float denom = sqrt(norm_a) * sqrt(norm_b);
+            results[id] = (denom > 0.0) ? (1.0 - dot / denom) : 1.0;
+        }
+    "#;
+
+    #[cfg(feature = "gpu-metal")]
+    const METAL_EUCLIDEAN_SHADER: &'static str = r#"
+        #include <metal_stdlib>
+        using namespace metal;
+
+        kernel void euclidean_distance_kernel(
+            device const float* query [[buffer(0)]],
+            device const float* vectors [[buffer(1)]],
+            device float* results [[buffer(2)]],
+            constant uint2& dims [[buffer(3)]],
+            uint id [[thread_position_in_grid]]
+        ) {
+            uint dim = dims.x;
+            uint n_vectors = dims.y;
+
+            if (id >= n_vectors) return;
+
+            float sum = 0.0;
+            uint offset = id * dim;
+
+            for (uint i = 0; i < dim; i++) {
+                float d = query[i] - vectors[offset + i];
+                sum += d * d;
+            }
+
+            results[id] = sqrt(sum);
+        }
+    "#;
+
+    #[cfg(feature = "gpu-metal")]
+    const METAL_DOT_PRODUCT_SHADER: &'static str = r#"
+        #include <metal_stdlib>
+        using namespace metal;
+
+        kernel void dot_product_kernel(
+            device const float* query [[buffer(0)]],
+            device const float* vectors [[buffer(1)]],
+            device float* results [[buffer(2)]],
+            constant uint2& dims [[buffer(3)]],
+            uint id [[thread_position_in_grid]]
+        ) {
+            uint dim = dims.x;
+            uint n_vectors = dims.y;
+
+            if (id >= n_vectors) return;
+
+            float dot = 0.0;
+            uint offset = id * dim;
+
+            for (uint i = 0; i < dim; i++) {
+                dot += query[i] * vectors[offset + i];
+            }
+
+            results[id] = dot;
+        }
+    "#;
 
     /// Reset metrics
     pub fn reset_metrics(&self) {
@@ -1074,6 +1971,8 @@ fn euclidean_distance_simd(a: &[f32], b: &[f32]) -> f32 {
     sum.sqrt()
 }
 
+/// Standard cosine distance (used when query norm is not pre-computed)
+#[allow(dead_code)]
 fn cosine_distance_simd(a: &[f32], b: &[f32]) -> f32 {
     let dot = dot_product_simd(a, b);
     let norm_a = dot_product_simd(a, a).sqrt();
@@ -1084,6 +1983,63 @@ fn cosine_distance_simd(a: &[f32], b: &[f32]) -> f32 {
     } else {
         1.0 - (dot / (norm_a * norm_b))
     }
+}
+
+/// Optimized cosine distance with precomputed query norm
+fn cosine_distance_simd_precomputed(a: &[f32], b: &[f32], a_norm: f32) -> f32 {
+    let dot = dot_product_simd(a, b);
+    let norm_b = dot_product_simd(b, b).sqrt();
+
+    if a_norm == 0.0 || norm_b == 0.0 {
+        1.0
+    } else {
+        1.0 - (dot / (a_norm * norm_b))
+    }
+}
+
+/// Efficient partial sort for top-k selection
+fn partial_sort_top_k(distances: Vec<f32>, k: usize) -> Vec<(usize, f32)> {
+    use std::cmp::Ordering;
+    use std::collections::BinaryHeap;
+
+    #[derive(PartialEq)]
+    struct MaxHeapItem(usize, f32);
+
+    impl Eq for MaxHeapItem {}
+
+    impl PartialOrd for MaxHeapItem {
+        fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+            Some(self.cmp(other))
+        }
+    }
+
+    impl Ord for MaxHeapItem {
+        fn cmp(&self, other: &Self) -> Ordering {
+            // Reverse ordering for max-heap (we want smallest k)
+            other
+                .1
+                .partial_cmp(&self.1)
+                .unwrap_or(Ordering::Equal)
+                .reverse()
+        }
+    }
+
+    let mut heap: BinaryHeap<MaxHeapItem> = BinaryHeap::with_capacity(k + 1);
+
+    for (idx, dist) in distances.into_iter().enumerate() {
+        if heap.len() < k {
+            heap.push(MaxHeapItem(idx, dist));
+        } else if let Some(top) = heap.peek() {
+            if dist < top.1 {
+                heap.pop();
+                heap.push(MaxHeapItem(idx, dist));
+            }
+        }
+    }
+
+    let mut results: Vec<(usize, f32)> = heap.into_iter().map(|item| (item.0, item.1)).collect();
+    results.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(Ordering::Equal));
+    results
 }
 
 fn normalize_vector_simd(v: &mut [f32]) {
@@ -1383,5 +2339,170 @@ mod tests {
         assert_eq!(DataType::Float64.size_bytes(), 8);
         assert_eq!(DataType::Int8.size_bytes(), 1);
         assert_eq!(DataType::Int32.size_bytes(), 4);
+    }
+
+    #[test]
+    fn test_parallel_batch_cosine_large() {
+        let gpu = GpuAccelerator::with_cpu_fallback(GpuConfig::default());
+
+        // Create large batch to trigger parallel processing
+        let query = vec![1.0; 128];
+        let vectors: Vec<Vec<f32>> = (0..500)
+            .map(|i| {
+                let mut v = vec![0.0; 128];
+                v[i % 128] = 1.0;
+                v
+            })
+            .collect();
+
+        let distances = gpu.batch_cosine_distance(&query, &vectors).unwrap();
+
+        assert_eq!(distances.len(), 500);
+        // All distances should be valid (between 0 and 2 for cosine)
+        for d in &distances {
+            assert!(*d >= 0.0 && *d <= 2.0, "Invalid cosine distance: {}", d);
+        }
+    }
+
+    #[test]
+    fn test_parallel_fused_search_large() {
+        let gpu = GpuAccelerator::with_cpu_fallback(GpuConfig::default());
+
+        let query = vec![1.0; 64];
+        let vectors: Vec<Vec<f32>> = (0..1000)
+            .map(|i| {
+                let mut v = vec![0.1; 64];
+                v[0] = (i as f32) / 1000.0;
+                v
+            })
+            .collect();
+
+        let results = gpu
+            .fused_search(&query, &vectors, 10, DistanceType::Cosine)
+            .unwrap();
+
+        assert_eq!(results.len(), 10);
+        // Results should be sorted by distance
+        for i in 1..results.len() {
+            assert!(
+                results[i - 1].1 <= results[i].1,
+                "Results not sorted: {} > {}",
+                results[i - 1].1,
+                results[i].1
+            );
+        }
+    }
+
+    #[test]
+    fn test_batch_fused_search() {
+        let gpu = GpuAccelerator::with_cpu_fallback(GpuConfig::default());
+
+        let queries = vec![
+            vec![1.0, 0.0, 0.0],
+            vec![0.0, 1.0, 0.0],
+            vec![0.0, 0.0, 1.0],
+        ];
+        let vectors = vec![
+            vec![1.0, 0.0, 0.0],
+            vec![0.0, 1.0, 0.0],
+            vec![0.0, 0.0, 1.0],
+            vec![0.5, 0.5, 0.0],
+        ];
+
+        let results = gpu
+            .batch_fused_search(&queries, &vectors, 2, DistanceType::Cosine)
+            .unwrap();
+
+        assert_eq!(results.len(), 3);
+        // Each query should find its matching vector first
+        assert_eq!(results[0][0].0, 0);
+        assert_eq!(results[1][0].0, 1);
+        assert_eq!(results[2][0].0, 2);
+    }
+
+    #[test]
+    fn test_parallel_matmul_large() {
+        let gpu = GpuAccelerator::with_cpu_fallback(GpuConfig::default());
+
+        // Create larger matrices to trigger parallel processing
+        let a: Vec<Vec<f32>> = (0..200).map(|i| vec![(i as f32) * 0.01; 50]).collect();
+        let b: Vec<Vec<f32>> = (0..50).map(|i| vec![(i as f32) * 0.01; 30]).collect();
+
+        let c = gpu.matmul(&a, &b).unwrap();
+
+        assert_eq!(c.len(), 200);
+        assert_eq!(c[0].len(), 30);
+    }
+
+    #[test]
+    fn test_parallel_kmeans_large() {
+        let gpu = GpuAccelerator::with_cpu_fallback(GpuConfig::default());
+
+        // Large dataset
+        let vectors: Vec<Vec<f32>> = (0..500)
+            .map(|i| {
+                if i < 250 {
+                    vec![0.0 + (i as f32) * 0.001, 0.0]
+                } else {
+                    vec![10.0 + ((i - 250) as f32) * 0.001, 10.0]
+                }
+            })
+            .collect();
+
+        let centroids = vec![vec![0.0, 0.0], vec![10.0, 10.0]];
+
+        let assignments = gpu.kmeans_assign(&vectors, &centroids).unwrap();
+
+        assert_eq!(assignments.len(), 500);
+        // First half should be assigned to cluster 0
+        assert!(assignments[0..250].iter().all(|&a| a == 0));
+        // Second half should be assigned to cluster 1
+        assert!(assignments[250..500].iter().all(|&a| a == 1));
+    }
+
+    #[test]
+    fn test_parallel_normalize_large() {
+        let gpu = GpuAccelerator::with_cpu_fallback(GpuConfig::default());
+
+        let mut vectors: Vec<Vec<f32>> = (0..500)
+            .map(|i| vec![1.0, 2.0, 3.0, (i as f32) * 0.1])
+            .collect();
+
+        gpu.batch_normalize(&mut vectors).unwrap();
+
+        // All vectors should be unit length
+        for v in &vectors {
+            let norm: f32 = v.iter().map(|x| x * x).sum::<f32>().sqrt();
+            assert!(
+                (norm - 1.0).abs() < 1e-5,
+                "Vector not normalized: norm = {}",
+                norm
+            );
+        }
+    }
+
+    #[test]
+    fn test_partial_sort_top_k() {
+        let distances = vec![0.5, 0.1, 0.8, 0.3, 0.2, 0.9, 0.15];
+        let top_k = partial_sort_top_k(distances, 3);
+
+        assert_eq!(top_k.len(), 3);
+        assert_eq!(top_k[0].0, 1); // 0.1
+        assert_eq!(top_k[1].0, 6); // 0.15
+        assert_eq!(top_k[2].0, 4); // 0.2
+    }
+
+    #[test]
+    fn test_cosine_distance_precomputed() {
+        let a = vec![1.0, 0.0, 0.0];
+        let b = vec![1.0, 0.0, 0.0];
+        let a_norm = 1.0;
+
+        let dist = cosine_distance_simd_precomputed(&a, &b, a_norm);
+        assert!((dist - 0.0).abs() < 1e-6);
+
+        let c = vec![0.0, 1.0, 0.0];
+        let dist2 = cosine_distance_simd_precomputed(&a, &c, a_norm);
+        assert!((dist2 - 1.0).abs() < 1e-6);
     }
 }
