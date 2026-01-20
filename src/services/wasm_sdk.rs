@@ -119,54 +119,63 @@ pub struct BrowserConfigBuilder {
 
 impl BrowserConfigBuilder {
     /// Set collection name.
+    #[must_use]
     pub fn name(mut self, name: impl Into<String>) -> Self {
         self.inner.name = name.into();
         self
     }
 
     /// Set dimensions.
+    #[must_use]
     pub fn dimensions(mut self, d: usize) -> Self {
         self.inner.dimensions = d;
         self
     }
 
     /// Set distance function.
+    #[must_use]
     pub fn distance(mut self, d: DistanceFunction) -> Self {
         self.inner.distance = d;
         self
     }
 
     /// Set persistence backend.
+    #[must_use]
     pub fn persistence(mut self, p: PersistenceBackend) -> Self {
         self.inner.persistence = p;
         self
     }
 
     /// Set HNSW M parameter.
+    #[must_use]
     pub fn m(mut self, m: usize) -> Self {
         self.inner.m = m;
         self
     }
 
     /// Set ef_construction.
+    #[must_use]
     pub fn ef_construction(mut self, ef: usize) -> Self {
         self.inner.ef_construction = ef;
         self
     }
 
     /// Set default ef_search.
+    #[must_use]
     pub fn ef_search(mut self, ef: usize) -> Self {
         self.inner.ef_search = ef;
         self
     }
 
     /// Enable quantization for reduced memory usage.
+    #[must_use]
     pub fn enable_quantization(mut self, enable: bool) -> Self {
         self.inner.enable_quantization = enable;
         self
     }
 
     /// Set auto-compaction threshold.
+    #[must_use]
     pub fn auto_compact_threshold(mut self, threshold: usize) -> Self {
         self.inner.auto_compact_threshold = Some(threshold);
         self

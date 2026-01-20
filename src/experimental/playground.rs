@@ -352,24 +352,28 @@ impl Default for PlaygroundConfig {
 
 impl PlaygroundConfig {
     /// Set initial dataset
+    #[must_use]
     pub fn with_dataset(mut self, dataset: Dataset) -> Self {
         self.initial_dataset = Some(dataset);
         self
     }
 
     /// Set active tutorial
+    #[must_use]
     pub fn with_tutorial(mut self, tutorial: Tutorial) -> Self {
         self.active_tutorial = Some(tutorial);
         self
     }
 
     /// Set theme
+    #[must_use]
     pub fn with_theme(mut self, theme: Theme) -> Self {
         self.theme = theme;
         self
     }
 
     /// Disable visualizations
+    #[must_use]
     pub fn without_visualizations(mut self) -> Self {
         self.enable_visualizations = false;
         self

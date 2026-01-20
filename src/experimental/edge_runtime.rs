@@ -165,18 +165,21 @@ impl EdgeConfig {
     }
 
     /// Builder: set maximum vectors in memory
+    #[must_use]
     pub fn with_max_vectors(mut self, count: usize) -> Self {
         self.max_vectors_in_memory = count;
         self
     }
 
     /// Builder: enable/disable lazy loading
+    #[must_use]
     pub fn with_lazy_loading(mut self, enabled: bool) -> Self {
         self.lazy_loading = enabled;
         self
     }
 
     /// Builder: set segment size
+    #[must_use]
     pub fn with_segment_size(mut self, size: usize) -> Self {
         self.segment_size = size;
         self
@@ -1266,6 +1269,7 @@ impl ColdStartOptimizer {
     }
 
     /// Set the warmup strategy (builder pattern)
+    #[must_use]
     pub fn with_strategy(mut self, strategy: WarmupStrategy) -> Self {
         self.warmup_strategy = strategy;
         self
@@ -1515,18 +1519,21 @@ impl EdgeRuntimeBuilder {
     }
 
     /// Set the edge config
+    #[must_use]
     pub fn with_config(mut self, config: EdgeConfig) -> Self {
         self.config = config;
         self
     }
 
     /// Set the warmup strategy
+    #[must_use]
     pub fn with_warmup(mut self, strategy: WarmupStrategy) -> Self {
         self.warmup_strategy = strategy;
         self
     }
 
     /// Set cache parameters
+    #[must_use]
     pub fn with_cache(mut self, max_entries: usize, ttl: Duration) -> Self {
         self.cache_max_entries = max_entries;
         self.cache_ttl = ttl;
@@ -1534,6 +1541,7 @@ impl EdgeRuntimeBuilder {
     }
 
     /// Set maximum loaded segments
+    #[must_use]
     pub fn with_max_segments(mut self, n: usize) -> Self {
         self.max_segments = n;
         self

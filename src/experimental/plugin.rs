@@ -149,6 +149,7 @@ impl PluginManifest {
     }
 
     /// Add dependency names.
+    #[must_use]
     pub fn with_dependencies(mut self, deps: Vec<String>) -> Self {
         self.dependencies = deps;
         self

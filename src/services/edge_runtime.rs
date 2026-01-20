@@ -118,36 +118,42 @@ pub struct EdgeConfigBuilder {
 
 impl EdgeConfigBuilder {
     /// Set target platform.
+    #[must_use]
     pub fn platform(mut self, p: EdgePlatform) -> Self {
         self.inner.platform = p;
         self
     }
 
     /// Set data file path.
+    #[must_use]
     pub fn data_path(mut self, path: impl Into<String>) -> Self {
         self.inner.data_path = Some(path.into());
         self
     }
 
     /// Set memory budget in MB.
+    #[must_use]
     pub fn max_memory_mb(mut self, mb: usize) -> Self {
         self.inner.max_memory_mb = mb;
         self
     }
 
     /// Enable prewarming.
+    #[must_use]
     pub fn prewarm(mut self, enable: bool) -> Self {
         self.inner.prewarm = enable;
         self
     }
 
     /// Enable quantization.
+    #[must_use]
     pub fn use_quantization(mut self, enable: bool) -> Self {
         self.inner.use_quantization = enable;
         self
     }
 
     /// Set ef_search override for edge.
+    #[must_use]
     pub fn ef_search(mut self, ef: usize) -> Self {
         self.inner.ef_search = ef;
         self

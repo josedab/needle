@@ -55,18 +55,21 @@ impl Default for ClusteringConfig {
 
 impl ClusteringConfig {
     /// Use cosine distance
+    #[must_use]
     pub fn with_cosine(mut self) -> Self {
         self.distance = DistanceFunction::Cosine;
         self
     }
 
     /// Set max iterations
+    #[must_use]
     pub fn with_max_iterations(mut self, max_iter: usize) -> Self {
         self.max_iterations = max_iter;
         self
     }
 
     /// Set random seed
+    #[must_use]
     pub fn with_seed(mut self, seed: u64) -> Self {
         self.seed = Some(seed);
         self

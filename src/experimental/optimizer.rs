@@ -488,6 +488,7 @@ impl QueryOptimizer {
     }
 
     /// Set custom cost model.
+    #[must_use]
     pub fn with_cost_model(mut self, model: CostModel) -> Self {
         self.cost_model = model;
         self
@@ -922,12 +923,14 @@ impl AdaptiveOptimizer {
     }
 
     /// Create with a custom cost model.
+    #[must_use]
     pub fn with_cost_model(mut self, model: CostModel) -> Self {
         self.cost_model = model;
         self
     }
 
     /// Create with a custom EMA alpha for feedback.
+    #[must_use]
     pub fn with_feedback_alpha(mut self, alpha: f64) -> Self {
         self.feedback = FeedbackCollector::new(alpha);
         self

@@ -606,18 +606,21 @@ impl<'a> LlmCacheQueryBuilder<'a> {
     }
 
     /// Set query embedding for semantic matching
+    #[must_use]
     pub fn with_embedding(mut self, embedding: Vec<f32>) -> Self {
         self.embedding = Some(embedding);
         self
     }
 
     /// Disable semantic matching (exact only)
+    #[must_use]
     pub fn exact_only(mut self) -> Self {
         self.allow_semantic = false;
         self
     }
 
     /// Set minimum similarity threshold
+    #[must_use]
     pub fn min_similarity(mut self, threshold: f32) -> Self {
         self.min_similarity = Some(threshold);
         self
@@ -1030,6 +1033,7 @@ impl OpenAIProxy {
     }
 
     /// Enable adaptive thresholds
+    #[must_use]
     pub fn with_adaptive_threshold(mut self, config: AdaptiveThresholdConfig) -> Self {
         self.cache = self.cache.with_adaptive_threshold(config);
         self

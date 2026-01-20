@@ -89,24 +89,28 @@ impl DistributedHnswConfig {
     }
 
     /// Set HNSW configuration
+    #[must_use]
     pub fn with_hnsw(mut self, config: HnswConfig) -> Self {
         self.hnsw_config = config;
         self
     }
 
     /// Set distance function
+    #[must_use]
     pub fn with_distance(mut self, distance: DistanceFunction) -> Self {
         self.distance_function = distance;
         self
     }
 
     /// Set virtual nodes
+    #[must_use]
     pub fn with_virtual_nodes(mut self, nodes: u32) -> Self {
         self.virtual_nodes = nodes;
         self
     }
 
     /// Set rebalance threshold
+    #[must_use]
     pub fn with_rebalance_threshold(mut self, threshold: f64) -> Self {
         self.rebalance_threshold = threshold;
         self
@@ -636,18 +640,21 @@ impl<'a> DistributedQueryBuilder<'a> {
     }
 
     /// Set number of results
+    #[must_use]
     pub fn k(mut self, k: usize) -> Self {
         self.k = k;
         self
     }
 
     /// Set metadata filter
+    #[must_use]
     pub fn filter(mut self, filter: Filter) -> Self {
         self.filter = Some(filter);
         self
     }
 
     /// Query specific shards only
+    #[must_use]
     pub fn shards(mut self, shards: Vec<ShardId>) -> Self {
         self.specific_shards = Some(shards);
         self

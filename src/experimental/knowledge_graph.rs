@@ -965,6 +965,7 @@ impl<'a> EntityLinker<'a> {
     }
 
     /// Set preference weights for entity types
+    #[must_use]
     pub fn with_type_preferences(mut self, prefs: HashMap<String, f32>) -> Self {
         self.type_preferences = prefs;
         self

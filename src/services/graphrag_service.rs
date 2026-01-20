@@ -124,12 +124,14 @@ impl Relation {
     }
 
     /// Set edge weight.
+    #[must_use]
     pub fn with_weight(mut self, w: f32) -> Self {
         self.weight = w;
         self
     }
 
     /// Set edge metadata.
+    #[must_use]
     pub fn with_metadata(mut self, meta: Value) -> Self {
         self.metadata = Some(meta);
         self
