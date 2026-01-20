@@ -9,3 +9,6 @@ contact_links:
   - name: Security Vulnerabilities
     url: https://github.com/anthropics/needle/blob/main/SECURITY.md
     about: Report security vulnerabilities (do not use public issues)
+  - name: Good First Issues
+    url: https://github.com/anthropics/needle/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22
+    about: Browse beginner-friendly issues to start contributing
