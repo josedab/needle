@@ -1,0 +1,82 @@
+# Feature Matrix CI — Tests key feature flag combinations
+name: Feature Matrix
+
+on:
+  push:
+    branches: [main]
+    paths: ['src/**', 'Cargo.toml', 'Cargo.lock']
+  pull_request:
+    branches: [main]
+    paths: ['src/**', 'Cargo.toml', 'Cargo.lock']
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  feature-matrix:
+    name: Features (${{ matrix.features }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        features:
+          - ""                    # default (no features)
+          - "server"             # HTTP REST API
+          - "hybrid"             # BM25 + vector search
+          - "metrics"            # Prometheus metrics
+          - "encryption"         # ChaCha20-Poly1305
+          - "server,metrics"     # Server with monitoring
+          - "server,hybrid"      # Server with hybrid search
+          - "full"               # All stable features
+
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache
+        uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6 # v2.7.8
+        with:
+          key: features-${{ matrix.features }}
+
+      - name: Check (features=${{ matrix.features }})
+        run: |
+          if [ -z "${{ matrix.features }}" ]; then
+            cargo check --lib
+          else
+            cargo check --lib --features "${{ matrix.features }}"
+          fi
+
+      - name: Test (features=${{ matrix.features }})
+        run: |
+          if [ -z "${{ matrix.features }}" ]; then
+            cargo test --lib
+          else
+            cargo test --lib --features "${{ matrix.features }}"
+          fi
+
+  # Ensure default features compile on all targets
+  cross-compile-check:
+    name: Cross-compile (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - x86_64-unknown-linux-gnu
+          - aarch64-unknown-linux-gnu
+          - x86_64-apple-darwin
+          - aarch64-apple-darwin
+
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Check
+        run: cargo check --lib --target ${{ matrix.target }}
