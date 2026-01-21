@@ -32,3 +32,27 @@ pub mod streaming_protocol;
 pub mod sync_engine;
 pub mod vector_transactions;
 pub mod wasm_browser;
+
+// ── Next-Gen v3 Services ─────────────────────────────────────────────────────
+pub mod agentic_memory_protocol;
+pub mod graph_knowledge_service;
+pub mod live_replication;
+pub mod llm_cache_middleware;
+pub mod multimodal_collection;
+pub mod plugin_ecosystem;
+pub mod query_optimizer;
+pub mod text_to_vector;
+pub mod transactional_api;
+pub mod wasm_persistence;
+
+// ── Next-Gen v4 Services ─────────────────────────────────────────────────────
+pub mod collection_bundle;
+pub mod collection_federation;
+pub mod collection_rbac;
+pub mod drift_monitor;
+pub mod materialized_views;
+pub mod otel_tracing;
+pub mod query_replay;
+pub mod smart_auto_embed;
+pub mod snapshot_time_travel;
+pub mod vector_pipeline;
