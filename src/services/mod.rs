@@ -80,3 +80,15 @@ pub mod managed_cloud;
 pub mod multi_writer;
 pub mod realtime_streaming;
 pub mod vector_lineage;
+
+// ── Next-Gen v7 Services ─────────────────────────────────────────────────────
+pub mod benchmark_runner;
+pub mod cluster_bootstrap;
+pub mod evidence_collector;
+pub mod model_downloader;
+pub mod pricing;
+pub mod rag_sdk;
+pub mod triage_report;
+pub mod unwrap_audit;
+pub mod vscode_extension;
+pub mod ws_protocol;
