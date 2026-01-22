@@ -320,6 +320,153 @@ impl BenchmarkSuite {
     }
 }
 
+/// Generate a comparison report across multiple benchmark results.
+pub fn comparison_report(results: &[BenchmarkResult]) -> String {
+    let mut report = String::new();
+    report.push_str("┌─────────────────────────────────────────────────────────────────────┐\n");
+    report.push_str("│ ANN Benchmark Comparison Report                                    │\n");
+    report.push_str("├──────────────────┬──────────┬──────────┬──────────┬─────────────────┤\n");
+    report.push_str("│ Algorithm        │ Recall@K │ QPS      │ Latency  │ Memory          │\n");
+    report.push_str("├──────────────────┼──────────┼──────────┼──────────┼─────────────────┤\n");
+
+    for r in results {
+        let mem_mb = r.index_memory_bytes as f64 / (1024.0 * 1024.0);
+        report.push_str(&format!(
+            "│ {:<16} │ {:<8.4} │ {:<8.0} │ {:<8.2}ms│ {:<13.1}MB │\n",
+            truncate_str(&r.algorithm, 16),
+            r.recall_at_k,
+            r.qps,
+            r.avg_latency_ms,
+            mem_mb,
+        ));
+    }
+
+    report.push_str("└──────────────────┴──────────┴──────────┴──────────┴─────────────────┘\n");
+
+    // Find Pareto-optimal points (highest recall for given QPS range)
+    if results.len() > 1 {
+        report.push_str("\nPareto Analysis:\n");
+        let mut by_recall = results.to_vec();
+        by_recall.sort_by(|a, b| b.recall_at_k.partial_cmp(&a.recall_at_k).unwrap_or(std::cmp::Ordering::Equal));
+        let best_recall_name = by_recall[0].algorithm.clone();
+        let best_recall_val = by_recall[0].recall_at_k;
+        by_recall.sort_by(|a, b| b.qps.partial_cmp(&a.qps).unwrap_or(std::cmp::Ordering::Equal));
+        let best_qps_name = by_recall[0].algorithm.clone();
+        let best_qps_val = by_recall[0].qps;
+        report.push_str(&format!("  Best Recall: {} ({:.4})\n", best_recall_name, best_recall_val));
+        report.push_str(&format!("  Best QPS:    {} ({:.0})\n", best_qps_name, best_qps_val));
+    }
+
+    report
+}
+
+fn truncate_str(s: &str, max: usize) -> String {
+    if s.len() <= max { s.to_string() } else { format!("{}…", &s[..max - 1]) }
+}
+
+/// Generate a Python ann-benchmarks harness definition file.
+/// This produces the YAML config that ann-benchmarks uses to define an algorithm.
+pub fn generate_harness_definition(algorithm_name: &str) -> String {
+    format!(
+        r#"# ann-benchmarks harness definition for Needle
+# Place in ann_benchmarks/algorithms/{algo}/config.yml
+
+{algo}:
+  docker-tag: needle-ann-bench
+  module: ann_benchmarks.algorithms.{algo}
+  constructor: NeedleHNSW
+  base-args: ["@metric"]
+  run-groups:
+    base:
+      args: [[16, 32]]
+      query-args: [[10, 20, 50, 100, 200, 500]]
+"#,
+        algo = algorithm_name
+    )
+}
+
+/// Generate a Python module stub for ann-benchmarks integration.
+pub fn generate_python_module(algorithm_name: &str) -> String {
+    format!(
+        r#""""ann-benchmarks algorithm module for Needle Vector Database."""
+
+from ann_benchmarks.algorithms.base import BaseANN
+import subprocess
+import json
+import tempfile
+import os
+
+
+class {class_name}(BaseANN):
+    def __init__(self, metric, m=16):
+        self.metric = metric
+        self.m = m
+        self._name = "needle-hnsw"
+        self._db_path = None
+
+    def fit(self, X):
+        self._db_path = tempfile.mktemp(suffix=".needle")
+        # Use needle CLI to build index
+        data = [{{"id": f"v{{i}}", "vector": row.tolist()}} for i, row in enumerate(X)]
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.jsonl', delete=False) as f:
+            for d in data:
+                f.write(json.dumps(d) + '\n')
+            jsonl_path = f.name
+        subprocess.run([
+            "needle", "create", self._db_path,
+        ], check=True)
+        subprocess.run([
+            "needle", "create-collection", self._db_path,
+            "-n", "bench", "-d", str(X.shape[1]),
+            "--distance", "cosine" if self.metric == "angular" else "euclidean",
+        ], check=True)
+        subprocess.run([
+            "needle", "import", self._db_path, "-c", "bench", "-f", jsonl_path,
+        ], check=True)
+        os.unlink(jsonl_path)
+
+    def query(self, v, n):
+        query_str = ",".join(str(x) for x in v.tolist())
+        result = subprocess.run([
+            "needle", "search", self._db_path,
+            "-c", "bench", "-q", query_str, "-k", str(n),
+            "--output", "json",
+        ], capture_output=True, text=True, check=True)
+        ids = [int(r["id"].lstrip("v")) for r in json.loads(result.stdout)]
+        return ids
+
+    def __str__(self):
+        return f"Needle(m={{self.m}})"
+"#,
+        class_name = algorithm_name
+            .chars()
+            .enumerate()
+            .map(|(i, c)| if i == 0 {{ c.to_uppercase().next().unwrap() }} else {{ c }})
+            .collect::<String>()
+    )
+}
+
+/// All supported standard datasets with their configurations.
+pub fn standard_datasets() -> Vec<DatasetConfig> {
+    vec![
+        DatasetConfig::sift_1m(),
+        DatasetConfig::glove_200(),
+        DatasetConfig::fashion_mnist(),
+        DatasetConfig {
+            name: "nytimes-256-angular".into(),
+            dimensions: 256,
+            distance: "angular".into(),
+            k: 10,
+        },
+        DatasetConfig {
+            name: "random-128-euclidean".into(),
+            dimensions: 128,
+            distance: "euclidean".into(),
+            k: 10,
+        },
+    ]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -416,5 +563,52 @@ mod tests {
     fn test_empty_data_error() {
         let suite = BenchmarkSuite::new(BenchmarkConfig::default());
         assert!(suite.run().is_err());
+    }
+
+    #[test]
+    fn test_comparison_report() {
+        let r1 = BenchmarkResult {
+            algorithm: "needle-hnsw".into(),
+            params: BenchmarkParams { m: 16, ef_construction: 200, ef_search: 50, k: 10 },
+            recall_at_k: 0.95, qps: 1000.0, build_time_secs: 1.5,
+            index_memory_bytes: 1_000_000, avg_latency_ms: 1.0, p99_latency_ms: 3.0,
+            num_queries: 100, num_vectors: 10000,
+        };
+        let r2 = BenchmarkResult {
+            algorithm: "brute-force".into(),
+            params: BenchmarkParams { m: 0, ef_construction: 0, ef_search: 0, k: 10 },
+            recall_at_k: 1.0, qps: 100.0, build_time_secs: 0.0,
+            index_memory_bytes: 0, avg_latency_ms: 10.0, p99_latency_ms: 15.0,
+            num_queries: 100, num_vectors: 10000,
+        };
+
+        let report = comparison_report(&[r1, r2]);
+        assert!(report.contains("needle-hnsw"));
+        assert!(report.contains("brute-force"));
+        assert!(report.contains("Recall"));
+    }
+
+    #[test]
+    fn test_harness_definition() {
+        let yaml = generate_harness_definition("needle_hnsw");
+        assert!(yaml.contains("needle_hnsw"));
+        assert!(yaml.contains("docker-tag"));
+        assert!(yaml.contains("run-groups"));
+    }
+
+    #[test]
+    fn test_python_module() {
+        let py = generate_python_module("needle_hnsw");
+        assert!(py.contains("BaseANN"));
+        assert!(py.contains("def fit"));
+        assert!(py.contains("def query"));
+    }
+
+    #[test]
+    fn test_standard_datasets() {
+        let datasets = standard_datasets();
+        assert!(datasets.len() >= 5);
+        assert!(datasets.iter().any(|d| d.name.contains("sift")));
+        assert!(datasets.iter().any(|d| d.name.contains("glove")));
     }
 }
