@@ -517,6 +517,55 @@ impl CollectionExplorer {
         self.vectors.len()
     }
 
+    /// Compare two search queries side by side on the same data.
+    /// Returns (results_a, results_b, overlap_count).
+    pub fn compare_queries(
+        &self,
+        query_a: &[f32],
+        query_b: &[f32],
+        k: usize,
+    ) -> (Vec<(String, f32)>, Vec<(String, f32)>, usize) {
+        let score = |q: &[f32], v: &[f32]| -> f32 { euclidean_distance(q, v) };
+
+        let mut scored_a: Vec<(String, f32)> = self
+            .vectors
+            .iter()
+            .map(|(id, v)| (id.clone(), score(query_a, v)))
+            .collect();
+        scored_a.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+        scored_a.truncate(k);
+
+        let mut scored_b: Vec<(String, f32)> = self
+            .vectors
+            .iter()
+            .map(|(id, v)| (id.clone(), score(query_b, v)))
+            .collect();
+        scored_b.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+        scored_b.truncate(k);
+
+        let ids_a: std::collections::HashSet<&str> =
+            scored_a.iter().map(|(id, _)| id.as_str()).collect();
+        let ids_b: std::collections::HashSet<&str> =
+            scored_b.iter().map(|(id, _)| id.as_str()).collect();
+        let overlap = ids_a.intersection(&ids_b).count();
+
+        (scored_a, scored_b, overlap)
+    }
+
+    /// Export the explorer state as a serializable summary.
+    pub fn export_summary(&self) -> ExplorerSummary {
+        let stats = self.viz_stats();
+        let projection = self.project(ProjectionMethod::PCA);
+        ExplorerSummary {
+            vector_count: self.vectors.len(),
+            dimensions: stats.dimensions,
+            avg_norm: stats.avg_norm,
+            avg_pairwise_distance: stats.avg_pairwise_distance,
+            query_count: self.query_log.len(),
+            projection_bounds: projection.bounds,
+        }
+    }
+
     // ── Projection Implementations ───────────────────────────────────────
 
     fn project_pca(&self) -> Vec<ProjectedPoint> {
@@ -697,6 +746,23 @@ impl CollectionExplorer {
     }
 }
 
+/// Serializable summary of an explorer session.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExplorerSummary {
+    /// Number of vectors.
+    pub vector_count: usize,
+    /// Vector dimensions.
+    pub dimensions: usize,
+    /// Average vector norm.
+    pub avg_norm: f32,
+    /// Average pairwise distance (sampled).
+    pub avg_pairwise_distance: f32,
+    /// Number of queries logged.
+    pub query_count: usize,
+    /// Bounding box of PCA projection.
+    pub projection_bounds: (f32, f32, f32, f32),
+}
+
 fn euclidean_distance(a: &[f32], b: &[f32]) -> f32 {
     a.iter()
         .zip(b.iter())
@@ -828,5 +894,30 @@ mod tests {
         let (min_x, min_y, max_x, max_y) = proj.bounds;
         assert!(max_x >= min_x);
         assert!(max_y >= min_y);
+    }
+
+    #[test]
+    fn test_compare_queries() {
+        let explorer =
+            CollectionExplorer::from_vectors(sample_vectors(), ExplorerConfig::default());
+        let q_a = vec![1.0, 0.0, 0.0, 0.0];
+        let q_b = vec![0.0, 1.0, 0.0, 0.0];
+        let (a, b, overlap) = explorer.compare_queries(&q_a, &q_b, 3);
+        assert_eq!(a.len(), 3);
+        assert_eq!(b.len(), 3);
+        // Different queries should produce different top results
+        assert_ne!(a[0].0, b[0].0);
+        // Some overlap expected in small dataset
+        assert!(overlap <= 3);
+    }
+
+    #[test]
+    fn test_export_summary() {
+        let explorer =
+            CollectionExplorer::from_vectors(sample_vectors(), ExplorerConfig::default());
+        let summary = explorer.export_summary();
+        assert_eq!(summary.vector_count, 5);
+        assert_eq!(summary.dimensions, 4);
+        assert!(summary.avg_norm > 0.0);
     }
 }
