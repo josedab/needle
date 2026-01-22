@@ -82,14 +82,59 @@ pub struct AdaptiveSelector {
     observations: Vec<WorkloadProfile>,
     current_strategy: Option<IndexStrategy>,
     max_observations: usize,
+    memory_budget_bytes: Option<usize>,
+    latency_target_ms: Option<f64>,
+    latency_samples: Vec<f64>,
 }
 
 impl AdaptiveSelector {
-    pub fn new() -> Self { Self { observations: Vec::new(), current_strategy: None, max_observations: 10_000 } }
+    pub fn new() -> Self { Self { observations: Vec::new(), current_strategy: None, max_observations: 10_000, memory_budget_bytes: None, latency_target_ms: None, latency_samples: Vec::new() } }
+
+    /// Set a memory budget constraint.
+    #[must_use]
+    pub fn with_memory_budget(mut self, bytes: usize) -> Self { self.memory_budget_bytes = Some(bytes); self }
+
+    /// Set a latency target in milliseconds.
+    #[must_use]
+    pub fn with_latency_target(mut self, ms: f64) -> Self { self.latency_target_ms = Some(ms); self }
 
     pub fn observe_query(&mut self, profile: WorkloadProfile) {
         if self.observations.len() >= self.max_observations { self.observations.remove(0); }
         self.observations.push(profile);
+    }
+
+    /// Record a query latency sample for tracking.
+    pub fn record_latency(&mut self, latency_ms: f64) {
+        self.latency_samples.push(latency_ms);
+        if self.latency_samples.len() > 1000 {
+            self.latency_samples.remove(0);
+        }
+    }
+
+    /// Get latency statistics: (p50, p95, p99).
+    pub fn latency_stats(&self) -> Option<(f64, f64, f64)> {
+        if self.latency_samples.is_empty() {
+            return None;
+        }
+        let mut sorted = self.latency_samples.clone();
+        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let n = sorted.len();
+        let p50 = sorted[n / 2];
+        let p95 = sorted[(n as f64 * 0.95) as usize % n];
+        let p99 = sorted[(n as f64 * 0.99) as usize % n];
+        Some((p50, p95, p99))
+    }
+
+    /// Check whether a migration should be triggered autonomously.
+    /// Returns `Some(SelectionResult)` if the current strategy is suboptimal.
+    pub fn should_migrate(&self, vector_count: usize, dimensions: usize) -> Option<SelectionResult> {
+        let current = self.current_strategy?;
+        let rec = self.recommend(vector_count, dimensions);
+        if rec.strategy != current && rec.confidence > 0.6 {
+            Some(rec)
+        } else {
+            None
+        }
     }
 
     pub fn recommend(&self, vector_count: usize, dimensions: usize) -> SelectionResult {
@@ -131,6 +176,33 @@ impl AdaptiveSelector {
         if mem_gb > 4.0 {
             *scores.entry(IndexStrategy::HnswQuantized).or_default() += 2.0;
             rationale.push(format!("Memory {:.1}GB: quantization reduces by 4×", mem_gb));
+        }
+
+        // Memory budget constraint
+        if let Some(budget) = self.memory_budget_bytes {
+            let estimated_bytes = vector_count * dimensions * 4;
+            if estimated_bytes > budget {
+                *scores.entry(IndexStrategy::HnswQuantized).or_default() += 3.0;
+                *scores.entry(IndexStrategy::DiskAnn).or_default() += 2.0;
+                rationale.push(format!(
+                    "Exceeds memory budget ({:.0}MB > {:.0}MB): prefer quantized/disk",
+                    estimated_bytes as f64 / 1_048_576.0,
+                    budget as f64 / 1_048_576.0,
+                ));
+            }
+        }
+
+        // Latency target constraint
+        if let Some(target) = self.latency_target_ms {
+            if let Some((p50, _, _)) = self.latency_stats() {
+                if p50 > target {
+                    *scores.entry(IndexStrategy::Hnsw).or_default() += 1.5;
+                    rationale.push(format!(
+                        "Latency p50 {:.1}ms > target {:.1}ms: prefer low-latency index",
+                        p50, target
+                    ));
+                }
+            }
         }
 
         let mut sorted: Vec<(IndexStrategy, f32)> = scores.into_iter().collect();
@@ -207,5 +279,47 @@ mod tests {
         let s = AdaptiveSelector::new();
         let r = s.recommend(50_000, 384);
         assert!(r.confidence > 0.0 && r.confidence <= 1.0);
+    }
+
+    #[test]
+    fn test_memory_budget_constraint() {
+        let s = AdaptiveSelector::new().with_memory_budget(100 * 1024 * 1024); // 100MB
+        // 1M * 384 * 4 bytes = ~1.5GB → exceeds budget
+        let r = s.recommend(1_000_000, 384);
+        assert!(matches!(
+            r.strategy,
+            IndexStrategy::HnswQuantized | IndexStrategy::DiskAnn
+        ));
+    }
+
+    #[test]
+    fn test_latency_tracking() {
+        let mut s = AdaptiveSelector::new();
+        for i in 0..100 {
+            s.record_latency(i as f64 * 0.1);
+        }
+        let (p50, p95, p99) = s.latency_stats().unwrap();
+        assert!(p50 > 0.0);
+        assert!(p95 >= p50);
+        assert!(p99 >= p50);
+    }
+
+    #[test]
+    fn test_autonomous_should_migrate() {
+        let mut s = AdaptiveSelector::new();
+        s.set_current(IndexStrategy::BruteForce);
+        // Very large dataset should strongly recommend migrating away from BruteForce
+        let rec = s.should_migrate(5_000_000, 384);
+        assert!(rec.is_some());
+        assert_ne!(rec.unwrap().strategy, IndexStrategy::BruteForce);
+    }
+
+    #[test]
+    fn test_no_migrate_when_optimal() {
+        let mut s = AdaptiveSelector::new();
+        s.set_current(IndexStrategy::Hnsw);
+        // Medium dataset is good for HNSW
+        let rec = s.should_migrate(50_000, 128);
+        assert!(rec.is_none());
     }
 }
