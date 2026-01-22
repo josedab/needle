@@ -193,7 +193,7 @@ pub use services::{
 };
 
 // ── Next-Gen v8 Services ─────────────────────────────────────────────────────
-pub use services::hnsw_compactor;
+pub use services::{hnsw_compactor, wasm_plugin_runtime};
 
 // ── Experimental / Advanced ──────────────────────────────────────────────────
 // Features under active development. APIs may change without notice.

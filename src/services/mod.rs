@@ -95,3 +95,4 @@ pub mod ws_protocol;
 
 // ── Next-Gen v8 Services ─────────────────────────────────────────────────────
 pub mod hnsw_compactor;
+pub mod wasm_plugin_runtime;
