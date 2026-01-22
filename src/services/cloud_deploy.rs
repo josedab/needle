@@ -30,6 +30,8 @@ pub enum Platform {
     Railway,
     Render,
     Docker,
+    AwsEcs,
+    GcpCloudRun,
 }
 
 impl std::fmt::Display for Platform {
@@ -39,6 +41,8 @@ impl std::fmt::Display for Platform {
             Self::Railway => write!(f, "railway"),
             Self::Render => write!(f, "render"),
             Self::Docker => write!(f, "docker"),
+            Self::AwsEcs => write!(f, "aws-ecs"),
+            Self::GcpCloudRun => write!(f, "gcp-cloud-run"),
         }
     }
 }
@@ -156,6 +160,8 @@ impl DeployGenerator {
             Platform::Railway => self.generate_railway(),
             Platform::Render => self.generate_render(),
             Platform::Docker => self.generate_docker(),
+            Platform::AwsEcs => self.generate_aws_ecs(),
+            Platform::GcpCloudRun => self.generate_gcp_cloud_run(),
         }
     }
 
@@ -181,7 +187,7 @@ impl DeployGenerator {
 
     /// List all supported platforms.
     pub fn platforms() -> Vec<Platform> {
-        vec![Platform::FlyIo, Platform::Railway, Platform::Render, Platform::Docker]
+        vec![Platform::FlyIo, Platform::Railway, Platform::Render, Platform::Docker, Platform::AwsEcs, Platform::GcpCloudRun]
     }
 
     fn generate_fly(&self) -> GeneratedConfig {
@@ -343,6 +349,126 @@ volumes:
             additional_files: Vec::new(),
         }
     }
+
+    fn generate_aws_ecs(&self) -> GeneratedConfig {
+        let content = format!(
+            r#"AWSTemplateFormatVersion: '2010-09-09'
+Description: Needle Vector DB on AWS ECS Fargate
+
+Resources:
+  Cluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: {app}-cluster
+
+  TaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: {app}
+      Cpu: '{cpus}024'
+      Memory: '{mem}'
+      NetworkMode: awsvpc
+      RequiresCompatibilities: [FARGATE]
+      ContainerDefinitions:
+        - Name: needle
+          Image: ghcr.io/anthropics/needle:latest
+          PortMappings:
+            - ContainerPort: {port}
+          Environment:
+            - Name: NEEDLE_DB_PATH
+              Value: {db}
+            - Name: NEEDLE_PORT
+              Value: '{port}'
+          HealthCheck:
+            Command: ["CMD-SHELL", "curl -f http://localhost:{port}{health} || exit 1"]
+            Interval: 10
+            Timeout: 5
+            Retries: 3
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: /ecs/{app}
+              awslogs-region: {region}
+              awslogs-stream-prefix: needle
+
+  Service:
+    Type: AWS::ECS::Service
+    Properties:
+      Cluster: !Ref Cluster
+      TaskDefinition: !Ref TaskDefinition
+      DesiredCount: {min}
+      LaunchType: FARGATE
+"#,
+            app = self.config.app_name,
+            cpus = self.config.cpus,
+            mem = self.config.memory_mb,
+            port = self.config.port,
+            db = self.config.db_path,
+            health = self.config.health_path,
+            region = self.config.region,
+            min = self.config.min_instances,
+        );
+
+        GeneratedConfig {
+            platform: "aws-ecs".into(),
+            filename: "cloudformation.yaml".into(),
+            content,
+            additional_files: Vec::new(),
+        }
+    }
+
+    fn generate_gcp_cloud_run(&self) -> GeneratedConfig {
+        let content = format!(
+            r#"apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: {app}
+spec:
+  template:
+    metadata:
+      annotations:
+        autoscaling.knative.dev/minScale: "{min}"
+        autoscaling.knative.dev/maxScale: "{max}"
+        run.googleapis.com/memory: "{mem}Mi"
+        run.googleapis.com/cpu: "{cpus}"
+    spec:
+      containers:
+        - image: ghcr.io/anthropics/needle:latest
+          ports:
+            - containerPort: {port}
+          env:
+            - name: NEEDLE_DB_PATH
+              value: {db}
+            - name: NEEDLE_PORT
+              value: "{port}"
+          livenessProbe:
+            httpGet:
+              path: {health}
+              port: {port}
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            limits:
+              memory: {mem}Mi
+              cpu: "{cpus}"
+"#,
+            app = self.config.app_name,
+            min = self.config.min_instances,
+            max = self.config.max_instances,
+            mem = self.config.memory_mb,
+            cpus = self.config.cpus,
+            port = self.config.port,
+            db = self.config.db_path,
+            health = self.config.health_path,
+        );
+
+        GeneratedConfig {
+            platform: "gcp-cloud-run".into(),
+            filename: "service.yaml".into(),
+            content,
+            additional_files: Vec::new(),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -402,6 +528,24 @@ mod tests {
     #[test]
     fn test_all_platforms() {
         let platforms = DeployGenerator::platforms();
-        assert_eq!(platforms.len(), 4);
+        assert_eq!(platforms.len(), 6);
+    }
+
+    #[test]
+    fn test_aws_ecs_generation() {
+        let gen = DeployGenerator::new(DeployConfig::default());
+        let config = gen.generate(Platform::AwsEcs);
+        assert_eq!(config.filename, "cloudformation.yaml");
+        assert!(config.content.contains("ECS"));
+        assert!(config.content.contains("Fargate"));
+    }
+
+    #[test]
+    fn test_gcp_cloud_run_generation() {
+        let gen = DeployGenerator::new(DeployConfig::default());
+        let config = gen.generate(Platform::GcpCloudRun);
+        assert_eq!(config.filename, "service.yaml");
+        assert!(config.content.contains("knative"));
+        assert!(config.content.contains("needle-db"));
     }
 }
