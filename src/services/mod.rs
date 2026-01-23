@@ -99,5 +99,6 @@ pub mod matryoshka_service;
 pub mod wasm_plugin_runtime;
 
 // ── Next-Gen v9 Services ─────────────────────────────────────────────────────
+pub mod change_stream;
 pub mod client_sdk;
 pub mod grpc_schema;
