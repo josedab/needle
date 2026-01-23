@@ -83,6 +83,15 @@ const sidebars: SidebarsConfig = {
       id: 'faq',
       label: 'FAQ',
     },
+    {
+      type: 'category',
+      label: 'Community',
+      collapsed: true,
+      items: [
+        'contributing',
+        'changelog',
+      ],
+    },
   ],
 };
 
