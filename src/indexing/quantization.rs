@@ -701,6 +701,49 @@ fn euclidean_distance_squared(a: &[f32], b: &[f32]) -> f32 {
         .sum()
 }
 
+// ── Quantized Index Persistence ─────────────────────────────────────────────
+
+/// Envelope for persisting any quantized index alongside its type tag.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum QuantizedIndex {
+    /// Scalar quantization (4× compression)
+    Scalar(ScalarQuantizer),
+    /// Product quantization (8-32× compression)
+    Product(ProductQuantizer),
+    /// Binary quantization (32× compression)
+    Binary(BinaryQuantizer),
+}
+
+impl QuantizedIndex {
+    /// Serialize the quantized index to bytes (JSON format).
+    pub fn to_bytes(&self) -> Vec<u8> {
+        serde_json::to_vec(self).unwrap_or_default()
+    }
+
+    /// Deserialize a quantized index from bytes.
+    pub fn from_bytes(data: &[u8]) -> std::result::Result<Self, String> {
+        serde_json::from_slice(data).map_err(|e| format!("Failed to deserialize quantized index: {}", e))
+    }
+
+    /// Returns the compression ratio description.
+    pub fn compression_label(&self) -> &'static str {
+        match self {
+            Self::Scalar(_) => "4x (scalar u8)",
+            Self::Product(_) => "8-32x (product)",
+            Self::Binary(_) => "32x (binary)",
+        }
+    }
+
+    /// Returns the number of dimensions this quantizer was trained for.
+    pub fn dimensions(&self) -> usize {
+        match self {
+            Self::Scalar(q) => q.dimensions(),
+            Self::Product(q) => q.num_subvectors() * q.subvector_dim(),
+            Self::Binary(q) => q.thresholds.len(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
