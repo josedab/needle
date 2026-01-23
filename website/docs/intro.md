@@ -22,6 +22,43 @@ Needle fills the gap by providing:
 - **High performance**: HNSW indexing with sub-10ms search latency
 - **Rich features**: Metadata filtering, hybrid search, quantization, and more
 
+## Architecture Overview
+
+```mermaid
+flowchart TB
+    subgraph Application["Your Application"]
+        APP[Application Code]
+    end
+
+    subgraph Needle["Needle Vector Database"]
+        API[Simple API]
+        subgraph Core["Core Components"]
+            COLL[Collections]
+            HNSW[HNSW Index]
+            META[Metadata Store]
+        end
+        subgraph Storage["Storage Layer"]
+            MMAP[Memory-Mapped I/O]
+            FILE[Single .needle File]
+        end
+    end
+
+    APP -->|"insert/search/filter"| API
+    API --> COLL
+    COLL --> HNSW
+    COLL --> META
+    HNSW --> MMAP
+    META --> MMAP
+    MMAP --> FILE
+
+    style Needle fill:#1e1b4b,stroke:#6366f1,color:#fff
+    style Core fill:#312e81,stroke:#818cf8,color:#fff
+    style Storage fill:#312e81,stroke:#818cf8,color:#fff
+    style Application fill:#0f172a,stroke:#64748b,color:#fff
+```
+
+Needle's embedded architecture means your application links directly to the database—no network calls, no separate processes. All data is stored in a single `.needle` file that you can easily backup, copy, or distribute.
+
 ## Key Features
 
 ### Core Capabilities
