@@ -271,7 +271,7 @@ impl BitSet {
     pub fn contains(&self, id: &usize) -> bool {
         let word_idx = *id / 64;
         let bit_idx = *id % 64;
-        self.bits.get(word_idx).map_or(false, |word| (word >> bit_idx) & 1 == 1)
+        self.bits.get(word_idx).is_some_and(|word| (word >> bit_idx) & 1 == 1)
     }
 
     /// Insert an ID into the set, returns true if it was newly inserted
@@ -1029,7 +1029,7 @@ mod tests {
                 .enumerate()
                 .map(|(id, v)| (id, DistanceFunction::Euclidean.compute(query, v)))
                 .collect();
-            brute_force.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+            brute_force.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
             let brute_force_results: HashSet<_> =
                 brute_force.iter().take(k).map(|(id, _)| *id).collect();
 

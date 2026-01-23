@@ -358,7 +358,7 @@ impl AuthConfig {
             .map_err(|_| AuthError::InvalidToken("Invalid secret".into()))?;
         mac.update(format!("{}.{}", header_b64, payload_b64).as_bytes());
         let sig = mac.finalize().into_bytes();
-        let sig_b64 = URL_SAFE_NO_PAD.encode(&sig);
+        let sig_b64 = URL_SAFE_NO_PAD.encode(sig);
 
         Ok(format!("{}.{}.{}", header_b64, payload_b64, sig_b64))
     }

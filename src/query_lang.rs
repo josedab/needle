@@ -436,8 +436,7 @@ impl Lexer {
                     Ok(Token::Parameter(name))
                 }
             }
-            Some('\'' | '"') => {
-                let quote = self.peek().unwrap();
+            Some(quote @ ('\'' | '"')) => {
                 let s = self.read_string(quote)?;
                 Ok(Token::StringLit(s))
             }
@@ -1705,6 +1704,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::approx_constant)]
     fn test_lexer_literals() {
         let mut lexer = Lexer::new("'hello' \"world\" 42 3.14 true false");
         assert_eq!(lexer.next_token().unwrap(), Token::StringLit("hello".to_string()));

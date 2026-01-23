@@ -819,12 +819,10 @@ mod tests {
 
     #[test]
     fn test_hierarchical_clustering() {
-        let vectors = vec![
-            vec![0.0, 0.0],
+        let vectors = [vec![0.0, 0.0],
             vec![0.1, 0.1],
             vec![5.0, 5.0],
-            vec![5.1, 5.1],
-        ];
+            vec![5.1, 5.1]];
         let refs: Vec<&[f32]> = vectors.iter().map(|v| v.as_slice()).collect();
 
         let hc = HierarchicalClustering::fit(&refs, Linkage::Single, DistanceFunction::Euclidean);

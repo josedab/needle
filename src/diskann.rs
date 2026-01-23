@@ -906,10 +906,12 @@ mod tests {
     #[test]
     fn test_build_and_search() {
         let dir = TempDir::new().unwrap();
-        let mut config = DiskAnnConfig::default();
-        config.max_degree = 4;
-        config.build_list_size = 10;
-        config.search_list_size = 10;
+        let config = DiskAnnConfig {
+            max_degree: 4,
+            build_list_size: 10,
+            search_list_size: 10,
+            ..Default::default()
+        };
 
         let mut index = DiskAnnIndex::create(dir.path(), 4, config).unwrap();
 
@@ -1000,11 +1002,13 @@ mod tests {
     #[test]
     fn test_larger_index() {
         let dir = TempDir::new().unwrap();
-        let mut config = DiskAnnConfig::default();
-        config.max_degree = 8;
-        config.build_list_size = 20;
-        config.search_list_size = 20;
-        config.cache_size = 50;
+        let config = DiskAnnConfig {
+            max_degree: 8,
+            build_list_size: 20,
+            search_list_size: 20,
+            cache_size: 50,
+            ..Default::default()
+        };
 
         let mut index = DiskAnnIndex::create(dir.path(), 16, config).unwrap();
 
@@ -1046,9 +1050,11 @@ mod tests {
     #[test]
     fn test_cache_eviction() {
         let dir = TempDir::new().unwrap();
-        let mut config = DiskAnnConfig::default();
-        config.cache_size = 5;
-        config.max_degree = 4;
+        let config = DiskAnnConfig {
+            cache_size: 5,
+            max_degree: 4,
+            ..Default::default()
+        };
 
         let mut index = DiskAnnIndex::create(dir.path(), 4, config).unwrap();
 

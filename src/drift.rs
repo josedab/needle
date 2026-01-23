@@ -712,6 +712,7 @@ impl Default for DriftConfigBuilder {
 }
 
 #[cfg(test)]
+#[allow(clippy::field_reassign_with_default)]
 mod tests {
     use super::*;
 
@@ -755,8 +756,10 @@ mod tests {
 
     #[test]
     fn test_no_drift_same_distribution() {
-        let mut config = DriftConfig::default();
-        config.min_samples = 10;
+        let config = DriftConfig {
+            min_samples: 10,
+            ..Default::default()
+        };
 
         let mut detector = DriftDetector::new(4, config);
 
@@ -824,11 +827,9 @@ mod tests {
         let mut detector = DriftDetector::new(4, config);
 
         // Baseline
-        detector.add_baseline(&vec![
-            vec![0.0, 0.0, 0.0, 0.0],
+        detector.add_baseline(&[vec![0.0, 0.0, 0.0, 0.0],
             vec![0.1, 0.1, 0.1, 0.1],
-            vec![-0.1, -0.1, -0.1, -0.1],
-        ]).unwrap();
+            vec![-0.1, -0.1, -0.1, -0.1]]).unwrap();
 
         // Check vectors where only dimension 0 is shifted
         for _ in 0..10 {
@@ -838,7 +839,7 @@ mod tests {
             if let Some(dims) = &report.dimension_drift {
                 // Dimension 0 should have highest drift
                 let max_drift_dim = dims.iter()
-                    .max_by(|a, b| a.drift_score.partial_cmp(&b.drift_score).unwrap())
+                    .max_by(|a, b| a.drift_score.partial_cmp(&b.drift_score).unwrap_or(std::cmp::Ordering::Equal))
                     .unwrap();
                 assert_eq!(max_drift_dim.dimension, 0);
             }

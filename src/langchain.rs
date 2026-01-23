@@ -1210,7 +1210,7 @@ mod tests {
             .with_id("test-id")
             .with_metadata(json!({"key": "value"}));
 
-        store.add_documents(&[doc.clone()], &[embedding]).unwrap();
+        store.add_documents(std::slice::from_ref(&doc), &[embedding]).unwrap();
 
         let retrieved = store.get("test-id").unwrap();
         assert_eq!(retrieved.id, "test-id");
