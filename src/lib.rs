@@ -203,6 +203,9 @@ pub use services::{
     notebook, query_cache_middleware, readiness_probe, tenant_router,
 };
 
+// ── Next-Gen v10 Services ────────────────────────────────────────────────────
+pub use services::{embedding_router, webhook_delivery};
+
 // ── Experimental / Advanced ──────────────────────────────────────────────────
 // Features under active development. APIs may change without notice.
 // Enable experimental modules with: --features experimental
