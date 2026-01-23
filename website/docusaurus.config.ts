@@ -20,9 +20,7 @@ const config: Config = {
   onBrokenLinks: 'throw',
 
   markdown: {
-    hooks: {
-      onBrokenMarkdownLinks: 'warn',
-    },
+    mermaid: true,
   },
 
   i18n: {
@@ -55,6 +53,7 @@ const config: Config = {
   ],
 
   themes: [
+    '@docusaurus/theme-mermaid',
     [
       require.resolve("@easyops-cn/docusaurus-search-local"),
       {
