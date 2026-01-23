@@ -250,6 +250,31 @@ impl CloudControlPlane {
     pub fn list_tenants(&self) -> Vec<&Tenant> {
         self.tenants.values().collect()
     }
+
+    /// Generate a dashboard overview for a tenant.
+    pub fn dashboard(&self, tenant_id: &str) -> Result<DashboardOverview> {
+        let tenant = self.tenants.get(tenant_id)
+            .ok_or_else(|| NeedleError::NotFound(format!("Tenant '{tenant_id}'")))?;
+        let usage = self.usage.get(tenant_id).cloned().unwrap_or_default();
+        let billing = self.estimate_billing(tenant_id)?;
+
+        Ok(DashboardOverview {
+            tenant_id: tenant_id.into(),
+            plan: tenant.plan,
+            status: tenant.status,
+            usage,
+            billing,
+            collections: Vec::new(),
+            recent_activity: Vec::new(),
+        })
+    }
+
+    /// Calculate per-query billing for a tenant.
+    pub fn per_query_billing(&self, tenant_id: &str, pricing: &PerQueryPricing) -> Result<f64> {
+        let usage = self.usage.get(tenant_id)
+            .ok_or_else(|| NeedleError::NotFound(format!("Tenant '{tenant_id}'")))?;
+        Ok(pricing.calculate(usage.total_searches))
+    }
 }
 
 /// Monthly billing estimate.
@@ -265,6 +290,253 @@ pub struct BillingEstimate {
     pub insert_cost: f64,
     /// Total estimated monthly cost.
     pub total: f64,
+}
+
+// ── Per-Query Billing ────────────────────────────────────────────────────────
+
+/// Per-query billing model with tiered pricing.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PerQueryPricing {
+    /// Price tiers (sorted by threshold ascending).
+    pub tiers: Vec<PricingTier>,
+    /// Free tier monthly query allowance.
+    pub free_tier_queries: u64,
+}
+
+/// A single pricing tier.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PricingTier {
+    /// Queries up to this count use this tier's price.
+    pub up_to_queries: u64,
+    /// Cost per query in this tier.
+    pub cost_per_query: f64,
+}
+
+impl Default for PerQueryPricing {
+    fn default() -> Self {
+        Self {
+            free_tier_queries: 10_000,
+            tiers: vec![
+                PricingTier { up_to_queries: 100_000, cost_per_query: 0.000_10 },
+                PricingTier { up_to_queries: 1_000_000, cost_per_query: 0.000_05 },
+                PricingTier { up_to_queries: u64::MAX, cost_per_query: 0.000_02 },
+            ],
+        }
+    }
+}
+
+impl PerQueryPricing {
+    /// Calculate cost for a given number of queries.
+    pub fn calculate(&self, total_queries: u64) -> f64 {
+        if total_queries <= self.free_tier_queries {
+            return 0.0;
+        }
+        let billable = total_queries - self.free_tier_queries;
+        let mut remaining = billable;
+        let mut cost = 0.0;
+        let mut prev_boundary = 0u64;
+
+        for tier in &self.tiers {
+            let tier_capacity = tier.up_to_queries.saturating_sub(prev_boundary);
+            let queries_in_tier = remaining.min(tier_capacity);
+            cost += queries_in_tier as f64 * tier.cost_per_query;
+            remaining -= queries_in_tier;
+            prev_boundary = tier.up_to_queries;
+            if remaining == 0 {
+                break;
+            }
+        }
+        cost
+    }
+}
+
+// ── CLI Deploy Command ───────────────────────────────────────────────────────
+
+/// CLI deploy command specification.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeployCommand {
+    /// Target deployment platform.
+    pub target: DeployTarget,
+    /// Region to deploy in.
+    pub region: String,
+    /// Instance size.
+    pub instance_size: InstanceSize,
+    /// Path to the .needle database file.
+    pub database_path: String,
+    /// Whether to enable auto-scaling.
+    pub auto_scale: bool,
+    /// Environment variables to set.
+    pub env_vars: HashMap<String, String>,
+}
+
+/// Supported deployment targets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DeployTarget {
+    /// Docker container on the local machine.
+    Docker,
+    /// Fly.io serverless.
+    FlyIo,
+    /// Railway platform.
+    Railway,
+    /// Render.com.
+    Render,
+    /// AWS ECS Fargate.
+    AwsEcs,
+    /// Google Cloud Run.
+    GcpCloudRun,
+}
+
+/// Instance size for cloud deployments.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum InstanceSize {
+    /// 256MB RAM, 0.25 vCPU.
+    Micro,
+    /// 512MB RAM, 0.5 vCPU.
+    Small,
+    /// 1GB RAM, 1 vCPU.
+    Medium,
+    /// 4GB RAM, 2 vCPU.
+    Large,
+    /// 16GB RAM, 4 vCPU.
+    XLarge,
+}
+
+/// Result of a deploy command.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeployResult {
+    /// Deployment ID.
+    pub deployment_id: String,
+    /// Public endpoint URL.
+    pub endpoint: String,
+    /// Current deployment status.
+    pub status: DeployStatus,
+    /// Target platform.
+    pub target: DeployTarget,
+}
+
+/// Deployment status.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DeployStatus {
+    /// Deployment is being prepared.
+    Building,
+    /// Deployment is starting up.
+    Deploying,
+    /// Deployment is live and accepting traffic.
+    Running,
+    /// Deployment failed.
+    Failed,
+    /// Deployment was stopped.
+    Stopped,
+}
+
+impl DeployCommand {
+    /// Validate the deploy command parameters.
+    pub fn validate(&self) -> Result<()> {
+        if self.database_path.is_empty() {
+            return Err(NeedleError::InvalidArgument(
+                "database_path is required".into(),
+            ));
+        }
+        if self.region.is_empty() {
+            return Err(NeedleError::InvalidArgument("region is required".into()));
+        }
+        Ok(())
+    }
+
+    /// Generate a deployment manifest for the target platform.
+    pub fn generate_manifest(&self) -> Result<DeployManifest> {
+        self.validate()?;
+        let (cpu_millicores, memory_mb) = match self.instance_size {
+            InstanceSize::Micro => (250, 256),
+            InstanceSize::Small => (500, 512),
+            InstanceSize::Medium => (1000, 1024),
+            InstanceSize::Large => (2000, 4096),
+            InstanceSize::XLarge => (4000, 16_384),
+        };
+        Ok(DeployManifest {
+            target: self.target,
+            region: self.region.clone(),
+            cpu_millicores,
+            memory_mb,
+            auto_scale: self.auto_scale,
+            env_vars: self.env_vars.clone(),
+            health_check_path: "/health".into(),
+            port: 8080,
+        })
+    }
+}
+
+/// Generated deployment manifest.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeployManifest {
+    pub target: DeployTarget,
+    pub region: String,
+    pub cpu_millicores: u32,
+    pub memory_mb: u32,
+    pub auto_scale: bool,
+    pub env_vars: HashMap<String, String>,
+    pub health_check_path: String,
+    pub port: u16,
+}
+
+// ── Dashboard Schema ─────────────────────────────────────────────────────────
+
+/// Dashboard overview for a tenant.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DashboardOverview {
+    /// Tenant ID.
+    pub tenant_id: String,
+    /// Current plan.
+    pub plan: Plan,
+    /// Tenant status.
+    pub status: TenantStatus,
+    /// Usage summary.
+    pub usage: UsageMetrics,
+    /// Current billing estimate.
+    pub billing: BillingEstimate,
+    /// Collection summaries.
+    pub collections: Vec<DashboardCollection>,
+    /// Recent activity log.
+    pub recent_activity: Vec<ActivityEntry>,
+}
+
+/// Collection info for the dashboard.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DashboardCollection {
+    /// Collection name.
+    pub name: String,
+    /// Number of vectors.
+    pub vector_count: u64,
+    /// Dimensionality.
+    pub dimensions: u32,
+    /// Storage size in bytes.
+    pub storage_bytes: u64,
+    /// Average query latency (ms).
+    pub avg_query_latency_ms: f64,
+}
+
+/// Activity log entry for audit trail.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ActivityEntry {
+    /// Timestamp (Unix seconds).
+    pub timestamp: u64,
+    /// Activity type.
+    pub action: ActivityAction,
+    /// Human-readable description.
+    pub description: String,
+}
+
+/// Types of dashboard activity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ActivityAction {
+    CollectionCreated,
+    CollectionDeleted,
+    VectorsInserted,
+    VectorsDeleted,
+    PlanChanged,
+    ApiKeyRotated,
+    DeploymentStarted,
+    DeploymentStopped,
 }
 
 impl Default for CloudControlPlane {
@@ -370,5 +642,133 @@ mod tests {
         cp.provision(ProvisionRequest { tenant_id: "t2".into(), plan: Plan::Pro, region: "eu".into(), config: TenantConfig::default() }).unwrap();
 
         assert_eq!(cp.list_tenants().len(), 2);
+    }
+
+    #[test]
+    fn test_per_query_pricing_free_tier() {
+        let pricing = PerQueryPricing::default();
+        assert_eq!(pricing.calculate(0), 0.0);
+        assert_eq!(pricing.calculate(10_000), 0.0);
+    }
+
+    #[test]
+    fn test_per_query_pricing_tiered() {
+        let pricing = PerQueryPricing::default();
+        // 20K queries: 10K free + 10K at $0.0001
+        let cost = pricing.calculate(20_000);
+        let expected = 10_000.0 * 0.000_10;
+        assert!((cost - expected).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_per_query_pricing_multi_tier() {
+        let pricing = PerQueryPricing::default();
+        // 210K queries: 10K free + 100K at tier1($0.0001) + 100K at tier2($0.00005)
+        let cost = pricing.calculate(210_000);
+        let tier1 = 100_000.0 * 0.000_10;
+        let tier2 = 100_000.0 * 0.000_05;
+        let expected = tier1 + tier2;
+        assert!((cost - expected).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_deploy_command_validate() {
+        let cmd = DeployCommand {
+            target: DeployTarget::FlyIo,
+            region: "us-east-1".into(),
+            instance_size: InstanceSize::Small,
+            database_path: "my.needle".into(),
+            auto_scale: true,
+            env_vars: HashMap::new(),
+        };
+        assert!(cmd.validate().is_ok());
+
+        let bad = DeployCommand {
+            database_path: String::new(),
+            ..cmd.clone()
+        };
+        assert!(bad.validate().is_err());
+    }
+
+    #[test]
+    fn test_deploy_manifest_generation() {
+        let cmd = DeployCommand {
+            target: DeployTarget::AwsEcs,
+            region: "eu-west-1".into(),
+            instance_size: InstanceSize::Large,
+            database_path: "prod.needle".into(),
+            auto_scale: false,
+            env_vars: [("RUST_LOG".into(), "info".into())].into_iter().collect(),
+        };
+        let manifest = cmd.generate_manifest().unwrap();
+        assert_eq!(manifest.cpu_millicores, 2000);
+        assert_eq!(manifest.memory_mb, 4096);
+        assert_eq!(manifest.port, 8080);
+        assert_eq!(manifest.health_check_path, "/health");
+        assert!(!manifest.auto_scale);
+    }
+
+    #[test]
+    fn test_dashboard_overview() {
+        let mut cp = CloudControlPlane::new();
+        cp.provision(ProvisionRequest {
+            tenant_id: "t1".into(), plan: Plan::Pro, region: "us".into(),
+            config: TenantConfig::for_plan(Plan::Pro),
+        }).unwrap();
+        cp.record_usage("t1", UsageEvent::Search { vectors_scanned: 5000 });
+
+        let dashboard = cp.dashboard("t1").unwrap();
+        assert_eq!(dashboard.plan, Plan::Pro);
+        assert_eq!(dashboard.status, TenantStatus::Active);
+        assert_eq!(dashboard.usage.total_searches, 1);
+        assert!(dashboard.billing.total > 0.0);
+    }
+
+    #[test]
+    fn test_dashboard_not_found() {
+        let cp = CloudControlPlane::new();
+        assert!(cp.dashboard("nonexistent").is_err());
+    }
+
+    #[test]
+    fn test_per_query_billing_integration() {
+        let mut cp = CloudControlPlane::new();
+        cp.provision(ProvisionRequest {
+            tenant_id: "t1".into(), plan: Plan::Starter, region: "us".into(),
+            config: TenantConfig::default(),
+        }).unwrap();
+        for _ in 0..50 {
+            cp.record_usage("t1", UsageEvent::Search { vectors_scanned: 100 });
+        }
+        let pricing = PerQueryPricing::default();
+        let cost = cp.per_query_billing("t1", &pricing).unwrap();
+        assert_eq!(cost, 0.0); // 50 queries < 10K free tier
+    }
+
+    #[test]
+    fn test_deploy_target_serde() {
+        let targets = vec![
+            DeployTarget::Docker, DeployTarget::FlyIo, DeployTarget::Railway,
+            DeployTarget::Render, DeployTarget::AwsEcs, DeployTarget::GcpCloudRun,
+        ];
+        for t in targets {
+            let s = serde_json::to_string(&t).unwrap();
+            let d: DeployTarget = serde_json::from_str(&s).unwrap();
+            assert_eq!(t, d);
+        }
+    }
+
+    #[test]
+    fn test_activity_action_variants() {
+        let actions = vec![
+            ActivityAction::CollectionCreated, ActivityAction::CollectionDeleted,
+            ActivityAction::VectorsInserted, ActivityAction::PlanChanged,
+            ActivityAction::ApiKeyRotated, ActivityAction::DeploymentStarted,
+        ];
+        for a in actions {
+            let s = serde_json::to_string(&a).unwrap();
+            let d: ActivityAction = serde_json::from_str(&s).unwrap();
+            assert_eq!(a, d);
+        }
     }
 }
