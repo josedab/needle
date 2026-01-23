@@ -199,8 +199,8 @@ pub use services::{
 
 // ── Next-Gen v9 Services ─────────────────────────────────────────────────────
 pub use services::{
-    auto_embed_endpoint, backup_command, change_stream, client_sdk, grpc_schema,
-    query_cache_middleware, readiness_probe, tenant_router,
+    auto_embed_endpoint, backup_command, change_stream, client_sdk, format_validator, grpc_schema,
+    notebook, query_cache_middleware, readiness_probe, tenant_router,
 };
 
 // ── Experimental / Advanced ──────────────────────────────────────────────────
