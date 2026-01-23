@@ -401,6 +401,45 @@ impl<'a> CollectionRef<'a> {
             .search_with_filter_explain_internal(&self.name, query, k, filter)
     }
 
+    /// Two-phase Matryoshka search with dimensional reduction.
+    ///
+    /// Performs a coarse search on truncated dimensions, then re-ranks with
+    /// full dimensions. Works with Matryoshka-trained embeddings (e.g.,
+    /// OpenAI text-embedding-3, Nomic embed) where prefix truncation
+    /// preserves semantic meaning.
+    ///
+    /// # Arguments
+    ///
+    /// * `query` - Full-dimension query vector
+    /// * `k` - Number of results to return
+    /// * `coarse_dims` - Truncated dimension count for coarse search
+    /// * `oversample` - Multiplier for candidate set size (default: 4)
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use needle::Database;
+    ///
+    /// let db = Database::in_memory();
+    /// db.create_collection("docs", 128)?;
+    /// let coll = db.collection("docs")?;
+    /// coll.insert("v1", &vec![0.1; 128], None)?;
+    ///
+    /// // Search with 64-dim coarse pass, 4x oversampling
+    /// let results = coll.search_matryoshka(&vec![0.1; 128], 10, 64, 4)?;
+    /// # Ok::<(), needle::NeedleError>(())
+    /// ```
+    pub fn search_matryoshka(
+        &self,
+        query: &[f32],
+        k: usize,
+        coarse_dims: usize,
+        oversample: usize,
+    ) -> Result<Vec<SearchResult>> {
+        self.db
+            .search_matryoshka_internal(&self.name, query, k, coarse_dims, oversample)
+    }
+
     /// Find all vectors within a given distance from the query.
     ///
     /// Unlike top-k search which returns exactly k results regardless of distance,
