@@ -1,0 +1,8 @@
+needle-team:
+  name: Needle Team
+  title: Core Contributors
+  url: https://github.com/anthropics/needle
+  image_url: https://github.com/anthropics.png
+  page: true
+  socials:
+    github: anthropics
