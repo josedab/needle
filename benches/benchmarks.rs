@@ -7,10 +7,15 @@ use needle::quantization::{BinaryQuantizer, ProductQuantizer, ScalarQuantizer};
 use needle::rag::{RagPipeline, RagConfig, ChunkingStrategy, MockEmbedder};
 use needle::temporal::{TemporalIndex, TemporalConfig, DecayFunction};
 use needle::encryption::{VectorEncryptor, EncryptionConfig, KeyManager};
+use needle::{QueryAnalyzer, VisualQueryBuilder, CollectionProfile};
+use needle::{Federation, FederationConfig, InstanceConfig, RoutingStrategy, MergeStrategy};
+use needle::{DriftDetector, DriftConfig};
+use needle::{BackupManager, BackupConfig};
 use rand::Rng;
 use serde_json::json;
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 
 // ============================================================================
 // Helper Functions
@@ -25,6 +30,7 @@ fn random_vectors(n: usize, dim: usize) -> Vec<Vec<f32>> {
     (0..n).map(|_| random_vector(dim)).collect()
 }
 
+#[allow(dead_code)]
 fn normalized_vector(dim: usize) -> Vec<f32> {
     let mut v = random_vector(dim);
     let norm: f32 = v.iter().map(|x| x * x).sum::<f32>().sqrt();
@@ -563,7 +569,7 @@ fn bench_rag_pipeline(c: &mut Criterion) {
     let embedder = MockEmbedder::new(dim);
 
     // Ingest documents
-    let documents = vec![
+    let documents = [
         "Machine learning is a subset of artificial intelligence focused on building systems that learn from data.",
         "Deep learning uses neural networks with many layers to model complex patterns in large amounts of data.",
         "Natural language processing enables computers to understand, interpret, and generate human language.",
@@ -756,6 +762,396 @@ fn bench_encryption_overhead(c: &mut Criterion) {
                 enc.encrypt(&format!("doc{}", i), black_box(vec), HashMap::new()).unwrap();
             }
         })
+    });
+
+    group.finish();
+}
+
+// ============================================================================
+// Advanced Features - Query Builder Performance
+// ============================================================================
+
+fn bench_query_builder(c: &mut Criterion) {
+    let mut group = c.benchmark_group("query_builder");
+
+    // Query Analyzer benchmarks
+    let analyzer = QueryAnalyzer::new();
+
+    group.bench_function("analyze_semantic_query", |bencher| {
+        bencher.iter(|| analyzer.analyze(black_box("find similar documents about machine learning")))
+    });
+
+    group.bench_function("analyze_filter_query", |bencher| {
+        bencher.iter(|| analyzer.analyze(black_box("category = 'books' AND price < 50")))
+    });
+
+    group.bench_function("analyze_hybrid_query", |bencher| {
+        bencher.iter(|| analyzer.analyze(black_box("search for AI documents where category = 'tech' AND year > 2020")))
+    });
+
+    group.bench_function("analyze_complex_query", |bencher| {
+        bencher.iter(|| analyzer.analyze(black_box(
+            "find all documents similar to 'neural networks' where status = 'active' AND category IN ('ml', 'ai', 'data') AND score >= 0.8"
+        )))
+    });
+
+    // Visual Query Builder benchmarks
+    let small_profile = CollectionProfile::new("small", 128, 1_000);
+    let medium_profile = CollectionProfile::new("medium", 384, 100_000);
+    let large_profile = CollectionProfile::new("large", 768, 1_000_000);
+
+    let small_builder = VisualQueryBuilder::new(small_profile);
+    let medium_builder = VisualQueryBuilder::new(medium_profile);
+    let large_builder = VisualQueryBuilder::new(large_profile);
+
+    group.bench_function("build_simple_query_small", |bencher| {
+        bencher.iter(|| small_builder.build(black_box("find similar documents")))
+    });
+
+    group.bench_function("build_simple_query_large", |bencher| {
+        bencher.iter(|| large_builder.build(black_box("find similar documents")))
+    });
+
+    group.bench_function("build_filtered_query", |bencher| {
+        bencher.iter(|| medium_builder.build(black_box("find products where price < 100 AND category = 'electronics'")))
+    });
+
+    group.bench_function("build_complex_query", |bencher| {
+        bencher.iter(|| large_builder.build(black_box(
+            "find all active documents similar to 'deep learning' where category IN ('ml', 'ai') AND score > 0.7 ORDER BY date DESC LIMIT 50"
+        )))
+    });
+
+    group.finish();
+}
+
+// ============================================================================
+// Advanced Features - Federated Search Configuration
+// ============================================================================
+
+fn bench_federated_search(c: &mut Criterion) {
+    let mut group = c.benchmark_group("federated_search");
+
+    // Federation configuration benchmarks
+    group.bench_function("create_federation_default", |bencher| {
+        bencher.iter(|| {
+            let config = FederationConfig::default();
+            Federation::new(config)
+        })
+    });
+
+    group.bench_function("create_federation_configured", |bencher| {
+        bencher.iter(|| {
+            let config = FederationConfig::default()
+                .with_routing(RoutingStrategy::LatencyAware)
+                .with_merge(MergeStrategy::ReciprocalRankFusion)
+                .with_timeout(Duration::from_millis(5000));
+            Federation::new(config)
+        })
+    });
+
+    // Instance registration benchmarks
+    let config = FederationConfig::default();
+    let federation = Federation::new(config);
+
+    group.bench_function("register_instance", |bencher| {
+        let mut i = 0;
+        bencher.iter(|| {
+            i += 1;
+            federation.register_instance(InstanceConfig::new(
+                format!("instance-{}", i),
+                format!("http://localhost:{}", 8080 + i)
+            ))
+        })
+    });
+
+    // Health check benchmarks
+    for count in [5, 10, 20] {
+        let fed = Federation::new(FederationConfig::default());
+        for i in 0..count {
+            fed.register_instance(InstanceConfig::new(
+                format!("inst-{}", i),
+                format!("http://localhost:{}", 9000 + i)
+            ));
+        }
+
+        group.bench_with_input(
+            BenchmarkId::new("health_check", count),
+            &count,
+            |bencher, _| {
+                bencher.iter(|| fed.health())
+            },
+        );
+    }
+
+    // Stats collection benchmarks
+    group.bench_function("collect_stats", |bencher| {
+        let fed = Federation::new(FederationConfig::default());
+        for i in 0..10 {
+            fed.register_instance(InstanceConfig::new(
+                format!("stats-inst-{}", i),
+                format!("http://localhost:{}", 7000 + i)
+            ));
+        }
+        bencher.iter(|| fed.stats())
+    });
+
+    group.finish();
+}
+
+// ============================================================================
+// Advanced Features - Drift Detection Performance
+// ============================================================================
+
+fn bench_drift_detection(c: &mut Criterion) {
+    let mut group = c.benchmark_group("drift_detection");
+    group.sample_size(30);
+
+    let dim = 128;
+
+    // Baseline creation benchmarks
+    for &baseline_size in &[50, 100, 500, 1000] {
+        let baseline: Vec<Vec<f32>> = (0..baseline_size).map(|_| random_vector(dim)).collect();
+
+        group.bench_with_input(
+            BenchmarkId::new("add_baseline", baseline_size),
+            &baseline_size,
+            |bencher, _| {
+                bencher.iter(|| {
+                    let config = DriftConfig::default();
+                    let mut detector = DriftDetector::new(dim, config);
+                    detector.add_baseline(black_box(&baseline)).unwrap()
+                })
+            },
+        );
+    }
+
+    // Drift check latency
+    let baseline: Vec<Vec<f32>> = (0..100).map(|_| random_vector(dim)).collect();
+    let config = DriftConfig::default();
+    let mut detector = DriftDetector::new(dim, config);
+    detector.add_baseline(&baseline).unwrap();
+
+    group.bench_function("check_single_vector", |bencher| {
+        let query = random_vector(dim);
+        bencher.iter(|| detector.check(black_box(&query)))
+    });
+
+    // Batch drift checking
+    for &batch_size in &[10, 50, 100, 500] {
+        let vectors: Vec<Vec<f32>> = (0..batch_size).map(|_| random_vector(dim)).collect();
+
+        group.bench_with_input(
+            BenchmarkId::new("check_batch", batch_size),
+            &batch_size,
+            |bencher, _| {
+                bencher.iter(|| {
+                    for v in &vectors {
+                        let _ = detector.check(black_box(v));
+                    }
+                })
+            },
+        );
+    }
+
+    // Drift detection at different dimensions
+    for &d in &[64, 128, 256, 384] {
+        let baseline: Vec<Vec<f32>> = (0..100).map(|_| random_vector(d)).collect();
+        let config = DriftConfig::default();
+        let mut det = DriftDetector::new(d, config);
+        det.add_baseline(&baseline).unwrap();
+        let query = random_vector(d);
+
+        group.bench_with_input(
+            BenchmarkId::new("check_by_dimension", d),
+            &d,
+            |bencher, _| {
+                bencher.iter(|| det.check(black_box(&query)))
+            },
+        );
+    }
+
+    group.finish();
+}
+
+// ============================================================================
+// Advanced Features - Backup/Restore Performance
+// ============================================================================
+
+fn bench_backup_restore(c: &mut Criterion) {
+    let mut group = c.benchmark_group("backup_restore");
+    group.sample_size(10);
+
+    let dim = 128;
+
+    // Backup creation benchmarks at different sizes
+    for &n in &[100, 500, 1000, 5000] {
+        group.bench_with_input(
+            BenchmarkId::new("create_backup", n),
+            &n,
+            |bencher, &size| {
+                bencher.iter_batched(
+                    || {
+                        let temp_dir = tempfile::tempdir().unwrap();
+                        let backup_dir = temp_dir.path().join("backups");
+
+                        let db = Database::in_memory();
+                        db.create_collection("bench", dim).unwrap();
+                        let coll = db.collection("bench").unwrap();
+
+                        for i in 0..size {
+                            coll.insert(format!("vec_{}", i), &random_vector(dim), None).unwrap();
+                        }
+
+                        let config = BackupConfig::default();
+                        let manager = BackupManager::new(&backup_dir, config);
+                        (db, manager, temp_dir)
+                    },
+                    |(db, manager, _temp)| {
+                        manager.create_backup(black_box(&db)).unwrap()
+                    },
+                    criterion::BatchSize::SmallInput,
+                )
+            },
+        );
+    }
+
+    // Backup with compression vs without
+    let n = 1000;
+    group.bench_function("backup_uncompressed", |bencher| {
+        bencher.iter_batched(
+            || {
+                let temp_dir = tempfile::tempdir().unwrap();
+                let backup_dir = temp_dir.path().join("backups");
+
+                let db = Database::in_memory();
+                db.create_collection("bench", dim).unwrap();
+                let coll = db.collection("bench").unwrap();
+
+                for i in 0..n {
+                    coll.insert(format!("vec_{}", i), &random_vector(dim), None).unwrap();
+                }
+
+                let config = BackupConfig { compression: false, ..Default::default() };
+                let manager = BackupManager::new(&backup_dir, config);
+                (db, manager, temp_dir)
+            },
+            |(db, manager, _temp)| {
+                manager.create_backup(black_box(&db)).unwrap()
+            },
+            criterion::BatchSize::SmallInput,
+        )
+    });
+
+    group.bench_function("backup_compressed", |bencher| {
+        bencher.iter_batched(
+            || {
+                let temp_dir = tempfile::tempdir().unwrap();
+                let backup_dir = temp_dir.path().join("backups");
+
+                let db = Database::in_memory();
+                db.create_collection("bench", dim).unwrap();
+                let coll = db.collection("bench").unwrap();
+
+                for i in 0..n {
+                    coll.insert(format!("vec_{}", i), &random_vector(dim), None).unwrap();
+                }
+
+                let config = BackupConfig { compression: true, ..Default::default() };
+                let manager = BackupManager::new(&backup_dir, config);
+                (db, manager, temp_dir)
+            },
+            |(db, manager, _temp)| {
+                manager.create_backup(black_box(&db)).unwrap()
+            },
+            criterion::BatchSize::SmallInput,
+        )
+    });
+
+    // Backup verification
+    group.bench_function("verify_backup", |bencher| {
+        bencher.iter_batched(
+            || {
+                let temp_dir = tempfile::tempdir().unwrap();
+                let backup_dir = temp_dir.path().join("backups");
+
+                let db = Database::in_memory();
+                db.create_collection("bench", dim).unwrap();
+                let coll = db.collection("bench").unwrap();
+
+                for i in 0..500 {
+                    coll.insert(format!("vec_{}", i), &random_vector(dim), None).unwrap();
+                }
+
+                let config = BackupConfig { verify: true, ..Default::default() };
+                let manager = BackupManager::new(&backup_dir, config);
+                let metadata = manager.create_backup(&db).unwrap();
+                (manager, metadata.id, temp_dir)
+            },
+            |(manager, backup_id, _temp)| {
+                manager.verify_backup(black_box(&backup_id)).unwrap()
+            },
+            criterion::BatchSize::SmallInput,
+        )
+    });
+
+    // Restore benchmarks
+    group.bench_function("restore_backup_1000", |bencher| {
+        bencher.iter_batched(
+            || {
+                let temp_dir = tempfile::tempdir().unwrap();
+                let backup_dir = temp_dir.path().join("backups");
+
+                let db = Database::in_memory();
+                db.create_collection("bench", dim).unwrap();
+                let coll = db.collection("bench").unwrap();
+
+                for i in 0..1000 {
+                    coll.insert(format!("vec_{}", i), &random_vector(dim), None).unwrap();
+                }
+
+                let config = BackupConfig::default();
+                let manager = BackupManager::new(&backup_dir, config);
+                let metadata = manager.create_backup(&db).unwrap();
+                (manager, metadata.id, temp_dir)
+            },
+            |(manager, backup_id, _temp)| {
+                manager.restore_backup(black_box(&backup_id)).unwrap()
+            },
+            criterion::BatchSize::SmallInput,
+        )
+    });
+
+    // List backups
+    group.bench_function("list_backups", |bencher| {
+        bencher.iter_batched(
+            || {
+                let temp_dir = tempfile::tempdir().unwrap();
+                let backup_dir = temp_dir.path().join("backups");
+
+                let db = Database::in_memory();
+                db.create_collection("bench", dim).unwrap();
+                let coll = db.collection("bench").unwrap();
+
+                for i in 0..100 {
+                    coll.insert(format!("vec_{}", i), &random_vector(dim), None).unwrap();
+                }
+
+                let config = BackupConfig::default();
+                let manager = BackupManager::new(&backup_dir, config);
+
+                // Create multiple backups
+                for _ in 0..5 {
+                    manager.create_backup(&db).unwrap();
+                }
+
+                (manager, temp_dir)
+            },
+            |(manager, _temp)| {
+                manager.list_backups().unwrap()
+            },
+            criterion::BatchSize::SmallInput,
+        )
     });
 
     group.finish();
@@ -1287,6 +1683,14 @@ criterion_group!(
 );
 
 criterion_group!(
+    next_gen_benches,
+    bench_query_builder,
+    bench_federated_search,
+    bench_drift_detection,
+    bench_backup_restore,
+);
+
+criterion_group!(
     supplementary_benches,
     bench_quantization_extended,
     bench_distance_by_dimension,
@@ -1318,6 +1722,7 @@ criterion_main!(
     write_benches,
     index_benches,
     advanced_benches,
+    next_gen_benches,
     supplementary_benches,
     optimization_benches,
     index_comparison_benches,
