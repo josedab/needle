@@ -55,6 +55,8 @@ pub enum SourceConfig {
     Kafka(KafkaSourceConfig),
     /// Tail a PostgreSQL logical replication slot.
     Postgres(PostgresSourceConfig),
+    /// Receive records via WebSocket connection (real-time push).
+    WebSocket(WebSocketSourceConfig),
     /// Generic pull-based connector.
     Custom(CustomSourceConfig),
 }
@@ -119,6 +121,50 @@ pub struct PostgresSourceConfig {
     pub slot_name: String,
     /// Publication name.
     pub publication: String,
+}
+
+/// WebSocket source configuration for real-time push ingestion.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WebSocketSourceConfig {
+    /// WebSocket URL (ws:// or wss://).
+    pub url: String,
+    /// Reconnect interval on disconnect (ms).
+    pub reconnect_interval_ms: u64,
+    /// Maximum reconnect attempts before giving up (0 = unlimited).
+    pub max_reconnect_attempts: u32,
+    /// Ping interval for keepalive (ms).
+    pub ping_interval_ms: u64,
+    /// Maximum message size in bytes.
+    pub max_message_bytes: usize,
+    /// Optional authentication token sent in the initial handshake.
+    pub auth_token: Option<String>,
+    /// Message format expected from the WebSocket.
+    pub message_format: WebSocketMessageFormat,
+}
+
+/// Format of messages received over WebSocket.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum WebSocketMessageFormat {
+    /// JSON objects with vector, id, and optional metadata fields.
+    Json,
+    /// Length-prefixed binary frames (matching the streaming protocol).
+    Binary,
+    /// Newline-delimited JSON (one record per line).
+    NdJson,
+}
+
+impl Default for WebSocketSourceConfig {
+    fn default() -> Self {
+        Self {
+            url: String::new(),
+            reconnect_interval_ms: 1000,
+            max_reconnect_attempts: 0,
+            ping_interval_ms: 30_000,
+            max_message_bytes: 16 * 1024 * 1024,
+            auth_token: None,
+            message_format: WebSocketMessageFormat::Json,
+        }
+    }
 }
 
 /// Generic custom source configuration.
@@ -271,6 +317,15 @@ impl StreamingIngestConfigBuilder {
     pub fn source(mut self, src: SourceConfig) -> Self {
         self.inner.source = Some(src);
         self
+    }
+
+    /// Configure a WebSocket source for real-time push ingestion.
+    #[must_use]
+    pub fn websocket(self, url: impl Into<String>) -> Self {
+        self.source(SourceConfig::WebSocket(WebSocketSourceConfig {
+            url: url.into(),
+            ..WebSocketSourceConfig::default()
+        }))
     }
 
     /// Set the JSON field path for extracting vectors.
@@ -1043,5 +1098,100 @@ mod tests {
         assert_eq!(replayed, 1);
         assert!(pipeline.dead_letters().is_empty());
         assert_eq!(pipeline.pending_count(), 1);
+    }
+
+    #[test]
+    fn test_websocket_source_config_defaults() {
+        let config = WebSocketSourceConfig::default();
+        assert!(config.url.is_empty());
+        assert_eq!(config.reconnect_interval_ms, 1000);
+        assert_eq!(config.max_reconnect_attempts, 0);
+        assert_eq!(config.ping_interval_ms, 30_000);
+        assert_eq!(config.max_message_bytes, 16 * 1024 * 1024);
+        assert!(config.auth_token.is_none());
+        assert_eq!(config.message_format, WebSocketMessageFormat::Json);
+    }
+
+    #[test]
+    fn test_websocket_source_builder() {
+        let config = StreamingIngestConfig::builder()
+            .collection("test")
+            .websocket("ws://localhost:8080/vectors")
+            .build();
+
+        match &config.source {
+            Some(SourceConfig::WebSocket(ws)) => {
+                assert_eq!(ws.url, "ws://localhost:8080/vectors");
+                assert_eq!(ws.message_format, WebSocketMessageFormat::Json);
+            }
+            other => panic!("Expected WebSocket source, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_websocket_source_custom_config() {
+        let ws_config = WebSocketSourceConfig {
+            url: "wss://stream.example.com/ingest".into(),
+            reconnect_interval_ms: 5000,
+            max_reconnect_attempts: 10,
+            ping_interval_ms: 15_000,
+            max_message_bytes: 1024 * 1024,
+            auth_token: Some("bearer-token-123".into()),
+            message_format: WebSocketMessageFormat::NdJson,
+        };
+
+        let config = StreamingIngestConfig::builder()
+            .collection("test")
+            .source(SourceConfig::WebSocket(ws_config.clone()))
+            .batch_size(64)
+            .enable_exactly_once(true)
+            .build();
+
+        match &config.source {
+            Some(SourceConfig::WebSocket(ws)) => {
+                assert_eq!(ws.url, "wss://stream.example.com/ingest");
+                assert_eq!(ws.reconnect_interval_ms, 5000);
+                assert_eq!(ws.max_reconnect_attempts, 10);
+                assert_eq!(ws.message_format, WebSocketMessageFormat::NdJson);
+                assert_eq!(ws.auth_token.as_deref(), Some("bearer-token-123"));
+            }
+            other => panic!("Expected WebSocket source, got {other:?}"),
+        }
+        assert_eq!(config.batch_size, 64);
+        assert_eq!(config.delivery, DeliveryGuarantee::ExactlyOnce);
+    }
+
+    #[test]
+    fn test_websocket_pipeline_ingest() {
+        let db = test_db();
+        let config = StreamingIngestConfig::builder()
+            .collection("test")
+            .websocket("ws://localhost:9090/v1/ingest")
+            .batch_size(10)
+            .build();
+
+        let mut pipeline = StreamingIngestPipeline::new(&db, config).unwrap();
+
+        let record = IngestRecord::new("ws-1", vec![1.0, 2.0, 3.0, 4.0])
+            .with_metadata(serde_json::json!({"source": "websocket", "channel": "live"}));
+        pipeline.push(record).unwrap();
+
+        let stats = pipeline.flush().unwrap();
+        assert_eq!(stats.records_flushed, 1);
+    }
+
+    #[test]
+    fn test_websocket_message_format_serde() {
+        let formats = vec![
+            WebSocketMessageFormat::Json,
+            WebSocketMessageFormat::Binary,
+            WebSocketMessageFormat::NdJson,
+        ];
+        for fmt in formats {
+            let serialized = serde_json::to_string(&fmt).unwrap();
+            let deserialized: WebSocketMessageFormat =
+                serde_json::from_str(&serialized).unwrap();
+            assert_eq!(fmt, deserialized);
+        }
     }
 }
