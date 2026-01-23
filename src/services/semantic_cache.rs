@@ -455,6 +455,174 @@ impl SemanticCache {
     }
 }
 
+// ── LLM Middleware ───────────────────────────────────────────────────────────
+
+/// An LLM provider that can be wrapped with caching middleware.
+pub trait LlmProvider {
+    /// Generate a response for the given prompt.
+    fn generate(&self, prompt: &str, model: Option<&str>) -> Result<String>;
+
+    /// Embed a text string into a vector.
+    fn embed(&self, text: &str) -> Result<Vec<f32>>;
+}
+
+/// Cache middleware that wraps any `LlmProvider` with semantic caching.
+///
+/// Intercepts LLM calls, checks the cache, and only calls the underlying
+/// provider on cache miss. Designed for integration with LangChain,
+/// LlamaIndex, or any custom LLM pipeline.
+pub struct CacheMiddleware<P: LlmProvider> {
+    /// The underlying LLM provider.
+    provider: P,
+    /// The semantic cache.
+    cache: SemanticCache,
+    /// Model name for cache namespace isolation.
+    model_name: Option<String>,
+}
+
+impl<P: LlmProvider> CacheMiddleware<P> {
+    /// Create a new cache middleware wrapping the given provider.
+    pub fn new(provider: P, cache_config: CacheConfig) -> Self {
+        Self {
+            provider,
+            cache: SemanticCache::new(cache_config),
+            model_name: None,
+        }
+    }
+
+    /// Set the model name for cache namespace isolation.
+    #[must_use]
+    pub fn with_model(mut self, model: impl Into<String>) -> Self {
+        self.model_name = Some(model.into());
+        self
+    }
+
+    /// Generate a response, using cache when possible.
+    ///
+    /// 1. Embeds the prompt
+    /// 2. Checks the semantic cache
+    /// 3. On hit: returns cached response
+    /// 4. On miss: calls the underlying provider, caches the result
+    pub fn generate(&mut self, prompt: &str) -> Result<CachedResponse> {
+        let embedding = self.provider.embed(prompt)?;
+
+        // Check cache
+        if let Some(hit) = self.cache.get(&embedding, None)? {
+            // If model isolation is configured, verify the model matches
+            if let Some(ref expected_model) = self.model_name {
+                if hit.model.as_deref() != Some(expected_model.as_str()) {
+                    // Different model — treat as miss
+                    let response = self.provider.generate(prompt, self.model_name.as_deref())?;
+                    self.cache
+                        .put(&embedding, prompt, &response, self.model_name.as_deref())?;
+                    return Ok(CachedResponse {
+                        response,
+                        from_cache: false,
+                        distance: None,
+                    });
+                }
+            }
+            return Ok(CachedResponse {
+                response: hit.response,
+                from_cache: true,
+                distance: Some(hit.distance),
+            });
+        }
+
+        // Cache miss — call provider
+        let response = self.provider.generate(prompt, self.model_name.as_deref())?;
+        self.cache
+            .put(&embedding, prompt, &response, self.model_name.as_deref())?;
+
+        Ok(CachedResponse {
+            response,
+            from_cache: false,
+            distance: None,
+        })
+    }
+
+    /// Access the underlying cache for analytics, warming, etc.
+    pub fn cache(&self) -> &SemanticCache {
+        &self.cache
+    }
+
+    /// Access the underlying cache mutably.
+    pub fn cache_mut(&mut self) -> &mut SemanticCache {
+        &mut self.cache
+    }
+
+    /// Access the underlying provider.
+    pub fn provider(&self) -> &P {
+        &self.provider
+    }
+}
+
+/// Response from the cache middleware.
+#[derive(Debug, Clone)]
+pub struct CachedResponse {
+    /// The generated (or cached) response.
+    pub response: String,
+    /// Whether this was a cache hit.
+    pub from_cache: bool,
+    /// Similarity distance (only present for cache hits).
+    pub distance: Option<f32>,
+}
+
+// ── Batch Cache Warming ──────────────────────────────────────────────────────
+
+/// Configuration for batch cache warming from a dataset.
+#[derive(Debug, Clone)]
+pub struct WarmUpConfig {
+    /// Maximum number of entries to warm.
+    pub max_entries: usize,
+    /// Model name to associate with warmed entries.
+    pub model: Option<String>,
+}
+
+impl Default for WarmUpConfig {
+    fn default() -> Self {
+        Self {
+            max_entries: 10_000,
+            model: None,
+        }
+    }
+}
+
+/// Batch warm-up from query-response pairs with an embedding provider.
+pub fn warm_cache_from_pairs<P: LlmProvider>(
+    cache: &mut SemanticCache,
+    provider: &P,
+    pairs: &[(&str, &str)],
+    config: &WarmUpConfig,
+) -> Result<WarmUpResult> {
+    let mut embedded = 0;
+    let mut failed = 0;
+    let limit = config.max_entries.min(pairs.len());
+
+    for (query, response) in pairs.iter().take(limit) {
+        match provider.embed(query) {
+            Ok(embedding) => {
+                cache.put(&embedding, query, response, config.model.as_deref())?;
+                embedded += 1;
+            }
+            Err(_) => {
+                failed += 1;
+            }
+        }
+    }
+
+    Ok(WarmUpResult { embedded, failed })
+}
+
+/// Result of a cache warming operation.
+#[derive(Debug, Clone)]
+pub struct WarmUpResult {
+    /// Number of entries successfully warmed.
+    pub embedded: usize,
+    /// Number of entries that failed to embed.
+    pub failed: usize,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -603,5 +771,156 @@ mod tests {
         assert!(metrics.contains("needle_cache_lookups_total 1"));
         assert!(metrics.contains("needle_cache_hits_total 1"));
         assert!(metrics.contains("needle_cache_entries 1"));
+    }
+
+    // ── Middleware Tests ──
+
+    /// Mock LLM provider for testing.
+    struct MockLlm {
+        response: String,
+        dimensions: usize,
+    }
+
+    impl MockLlm {
+        fn new(response: &str, dims: usize) -> Self {
+            Self {
+                response: response.into(),
+                dimensions: dims,
+            }
+        }
+    }
+
+    impl LlmProvider for MockLlm {
+        fn generate(&self, _prompt: &str, _model: Option<&str>) -> Result<String> {
+            Ok(self.response.clone())
+        }
+
+        fn embed(&self, text: &str) -> Result<Vec<f32>> {
+            // Simple deterministic embedding based on first char
+            let seed = text.bytes().next().unwrap_or(0) as f32 / 255.0;
+            Ok(vec![seed; self.dimensions])
+        }
+    }
+
+    #[test]
+    fn test_middleware_cache_miss() {
+        let provider = MockLlm::new("Hello!", 8);
+        let config = CacheConfig::new(8);
+        let mut mw = CacheMiddleware::new(provider, config);
+
+        let resp = mw.generate("test query").unwrap();
+        assert_eq!(resp.response, "Hello!");
+        assert!(!resp.from_cache);
+        assert!(resp.distance.is_none());
+        assert_eq!(mw.cache().len(), 1);
+    }
+
+    #[test]
+    fn test_middleware_cache_hit() {
+        let provider = MockLlm::new("Hello!", 8);
+        let config = CacheConfig::new(8).with_threshold(0.5);
+        let mut mw = CacheMiddleware::new(provider, config);
+
+        // First call: miss
+        mw.generate("test query").unwrap();
+
+        // Second call with same query: hit
+        let resp = mw.generate("test query").unwrap();
+        assert!(resp.from_cache);
+        assert!(resp.distance.is_some());
+        assert_eq!(resp.response, "Hello!");
+    }
+
+    #[test]
+    fn test_middleware_with_model() {
+        let provider = MockLlm::new("model response", 8);
+        let config = CacheConfig::new(8);
+        let mut mw = CacheMiddleware::new(provider, config).with_model("gpt-4");
+
+        let resp = mw.generate("hello").unwrap();
+        assert!(!resp.from_cache);
+
+        // Model-namespaced cache
+        assert_eq!(mw.cache().len(), 1);
+    }
+
+    #[test]
+    fn test_middleware_analytics() {
+        let provider = MockLlm::new("resp", 8);
+        let config = CacheConfig::new(8).with_threshold(0.5);
+        let mut mw = CacheMiddleware::new(provider, config);
+
+        mw.generate("query1").unwrap();
+        mw.generate("query1").unwrap(); // hit
+        mw.generate("query1").unwrap(); // hit
+
+        let analytics = mw.cache().analytics();
+        assert_eq!(analytics.total_hits, 2);
+        assert_eq!(analytics.total_misses, 1);
+        assert!(analytics.hit_rate() > 0.5);
+    }
+
+    #[test]
+    fn test_warm_cache_from_pairs() {
+        let provider = MockLlm::new("", 8);
+        let config = CacheConfig::new(8);
+        let mut cache = SemanticCache::new(config);
+
+        let pairs = vec![
+            ("what is rust?", "A systems programming language"),
+            ("what is python?", "A high-level scripting language"),
+            ("what is java?", "A cross-platform language"),
+        ];
+
+        let warm_config = WarmUpConfig {
+            max_entries: 10,
+            model: Some("test-model".into()),
+        };
+
+        let result = warm_cache_from_pairs(&mut cache, &provider, &pairs, &warm_config).unwrap();
+        assert_eq!(result.embedded, 3);
+        assert_eq!(result.failed, 0);
+        assert_eq!(cache.len(), 3);
+    }
+
+    #[test]
+    fn test_warm_cache_max_entries() {
+        let provider = MockLlm::new("", 8);
+        let config = CacheConfig::new(8);
+        let mut cache = SemanticCache::new(config);
+
+        let pairs = vec![
+            ("q1", "r1"),
+            ("q2", "r2"),
+            ("q3", "r3"),
+        ];
+
+        let warm_config = WarmUpConfig {
+            max_entries: 2,
+            model: None,
+        };
+
+        let result = warm_cache_from_pairs(&mut cache, &provider, &pairs, &warm_config).unwrap();
+        assert_eq!(result.embedded, 2);
+        assert_eq!(cache.len(), 2);
+    }
+
+    #[test]
+    fn test_cached_response_fields() {
+        let hit = CachedResponse {
+            response: "test".into(),
+            from_cache: true,
+            distance: Some(0.05),
+        };
+        assert!(hit.from_cache);
+        assert_eq!(hit.distance, Some(0.05));
+
+        let miss = CachedResponse {
+            response: "test".into(),
+            from_cache: false,
+            distance: None,
+        };
+        assert!(!miss.from_cache);
+        assert!(miss.distance.is_none());
     }
 }
