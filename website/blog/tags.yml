@@ -1,0 +1,34 @@
+release:
+  label: Release
+  permalink: /release
+  description: New Needle releases and updates
+
+tutorial:
+  label: Tutorial
+  permalink: /tutorial
+  description: Step-by-step tutorials and guides
+
+performance:
+  label: Performance
+  permalink: /performance
+  description: Performance tips and benchmarks
+
+rust:
+  label: Rust
+  permalink: /rust
+  description: Rust-related content
+
+vector-search:
+  label: Vector Search
+  permalink: /vector-search
+  description: Vector search concepts and techniques
+
+rag:
+  label: RAG
+  permalink: /rag
+  description: Retrieval-Augmented Generation
+
+announcement:
+  label: Announcement
+  permalink: /announcement
+  description: Project announcements
