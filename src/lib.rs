@@ -69,9 +69,11 @@
 //! ```
 
 pub mod anomaly;
+pub mod autoscaling;
 pub mod backup;
 pub mod cloud_storage;
 pub mod clustering;
+pub mod collaborative_search;
 pub mod collection;
 pub mod database;
 pub mod dedup;
@@ -79,8 +81,13 @@ pub mod dimreduce;
 pub mod diskann;
 pub mod distance;
 pub mod drift;
+pub mod edge_partitioning;
+pub mod edge_runtime;
+pub mod embeddings_gateway;
 pub mod encryption;
 pub mod error;
+pub mod federated;
+pub mod finetuning;
 pub mod float16;
 pub mod gpu;
 pub mod graph;
@@ -88,9 +95,12 @@ pub mod hnsw;
 pub mod ivf;
 pub mod knowledge_graph;
 pub mod metadata;
+pub mod migrations;
 pub mod multivec;
 pub mod namespace;
+pub mod platform_adapters;
 pub mod quantization;
+pub mod query_builder;
 pub mod query_lang;
 pub mod raft;
 pub mod rag;
@@ -109,13 +119,14 @@ pub mod rebalance;
 // These modules are truly internal
 pub(crate) mod langchain;
 pub(crate) mod lineage;
-pub(crate) mod nl_filter;
+pub mod nl_filter;
 pub(crate) mod storage;
 #[cfg(feature = "server")]
 pub mod streaming;
 pub mod telemetry;
 pub mod temporal;
 pub mod tiered;
+pub mod time_travel;
 pub mod tuning;
 pub mod versioning;
 pub mod wal;
@@ -158,10 +169,10 @@ pub mod uniffi_bindings;
 uniffi::setup_scaffolding!();
 
 // Re-export main types at crate root
-pub use collection::{Collection, CollectionConfig, CollectionIter, CollectionStats, SearchExplain, SearchResult};
+pub use collection::{Collection, CollectionConfig, CollectionIter, CollectionStats, QueryCacheConfig, QueryCacheStats, SearchExplain, SearchResult};
 pub use database::{CollectionRef, Database, DatabaseConfig, ExportEntry};
 pub use distance::DistanceFunction;
-pub use error::{NeedleError, Result};
+pub use error::{ErrorCode, NeedleError, Recoverable, RecoveryHint, Result};
 pub use hnsw::{HnswConfig, HnswIndex, HnswStats, SearchStats};
 pub use metadata::{Filter, MetadataStore};
 pub use multivec::{MultiVector, MultiVectorConfig, MultiVectorIndex, MultiVectorSearchResult};
@@ -199,8 +210,24 @@ pub use streaming::{
 pub use diskann::{DiskAnnConfig, DiskAnnIndex, DiskAnnResult};
 pub use drift::{DriftConfig, DriftDetector, DriftReport};
 pub use encryption::{EncryptedVector, EncryptionConfig, KeyManager, VectorEncryptor};
+pub use federated::{
+    Federation, FederationConfig, FederationError, FederationHealth, FederationResult,
+    FederatedSearchResult, FederatedSearchResponse, HealthCheckResult, HealthMonitor, HealthStatus,
+    InstanceConfig, InstanceInfo, InstanceRegistry, MergeStrategy, ResultMerger, RoutingStrategy,
+};
+pub use finetuning::{
+    ContrastivePair, EmbeddingStore, FineTuneConfig, FineTuner, FineTunerState, FineTunerStats,
+    Interaction, InteractionType, LinearTransform, LossFunction, SharedFineTuner, TrainingBatch,
+    TrainingResult, Triplet,
+};
 pub use gpu::{DataType, DistanceType, GpuAccelerator, GpuBackend, GpuConfig, GpuDevice, GpuMetrics};
 pub use knowledge_graph::{Entity, KnowledgeGraph, KnowledgeGraphConfig, Relation};
+pub use query_builder::{
+    AlternativeQuery, CollectionProfile, CollectionStats as QueryCollectionStats, CostEstimate,
+    FieldProfile, FieldSuggestion, FieldType, HintCategory, HintImpact, HintSeverity, IndexProfile,
+    OptimizationHint, QueryAnalysis, QueryAnalyzer, QueryBuildResult, QueryClass, QueryComplexity,
+    QueryExplanation, QuerySuggestion, SuggestionType, VisualQueryBuilder,
+};
 pub use query_lang::{
     Query, QueryContext, QueryError, QueryExecutor, QueryParser, QueryPlan, QueryResponse,
     QueryResult, QueryValidator,
@@ -210,8 +237,55 @@ pub use raft::{Command, NodeId, RaftConfig, RaftNode, RaftState, RaftStorage};
 pub use rag::{Chunk, ChunkingStrategy, RagConfig, RagPipeline};
 pub use telemetry::{Metric, MetricValue, Span, SpanStatus, Telemetry, TelemetryConfig, TraceContext};
 pub use temporal::{DecayFunction, TemporalConfig, TemporalIndex, VectorVersion};
+pub use time_travel::{
+    DateTimeComponents, GcResult, MetadataDiff, MvccConfig, NamedTime, Snapshot,
+    TimeExpression, TimeTravelIndex, TimeTravelQueryBuilder, TimeTravelSearchResult,
+    TimeTravelStats, VectorDiff as TimeTravelVectorDiff, VectorVersion as MvccVectorVersion,
+};
+pub use autoscaling::{
+    AutoScaler, MetricPoint, ScalingAction, ScalingConfig, ScalingDecision, ScalingReason,
+    ScheduledScaling, SeasonalityPattern, ShardMetrics, SharedAutoScaler,
+};
 pub use tiered::{StorageTier, TierPolicy, TieredStorage, VectorMetadata as TieredVectorMetadata};
 pub use versioning::{Branch, ChangeType, Commit, VectorDiff, VectorRepo};
+
+// Serverless Edge Runtime
+pub use edge_runtime::{
+    EdgeCacheConfig, EdgeConfig, EdgeHnswConfig, EdgeManifest, EdgeRuntime, EdgeRuntimeStats,
+    EdgeStorage, IndexSegment, InMemoryEdgeStorage, Platform, SearchCache, SegmentMetadata,
+};
+pub use edge_partitioning::{
+    ClusterPartitioner, HashPartitioner, HierarchicalPartitioner, PartitionConfig, PartitionId,
+    PartitionManager, PartitionManifest, PartitionMetadata, PartitionRouter,
+};
+pub use platform_adapters::{
+    ChunkedEdgeStorage, CloudflareKvAdapter, CloudflareR2Adapter, DenoKvAdapter,
+    TieredEdgeStorage, VercelBlobAdapter, VercelEdgeConfigAdapter,
+};
+
+// Universal Embeddings Gateway
+pub use embeddings_gateway::{
+    EmbeddingResult, EmbeddingsGateway, GatewayConfig, GatewayMetrics, ProviderConfig,
+    ProviderMetrics, ProviderRouter, ProviderStatus, ProviderType, RoutingStrategy as GatewayRoutingStrategy,
+    SemanticCache, BatchEmbeddingResult,
+};
+
+// Real-Time Collaborative Search
+pub use collaborative_search::{
+    Annotation, AnnotationDelta, AnnotationMergeResult, CollaborativeCollection,
+    CollaborativeCollectionStats, CollaborativeDelta, CollaborativeEvent, CollaborativeMergeResult,
+    CollaborativeSearchResult, CollaborativeVector, EventReceiver, LiveQuery, LiveQueryConfig,
+    Presence, PresenceEvent, PresenceStatus, PresenceTracker, Session, SessionAccess, SessionInfo,
+    SessionManager, SharedSearch, SyncManager, SyncStats,
+};
+
+// Schema versioning and migrations
+pub use migrations::{
+    CompatibilityResult, IndexType as MigrationIndexType, IssueSeverity, Migration,
+    MigrationContext, MigrationError, MigrationManager, MigrationOperation, MigrationPreview,
+    MigrationRecord, MigrationResult, MigrationStatus, SchemaVersion, ValidationIssue,
+    built_in_migrations,
+};
 
 // New features: IVF indexing, reranking, and half-precision floats
 pub use float16::{Bf16, Bf16Vector, F16, F16Vector, HalfPrecision};
@@ -239,7 +313,11 @@ pub use cloud_storage::{
 };
 
 #[cfg(feature = "hybrid")]
-pub use hybrid::{Bm25Index, HybridSearchResult, RrfConfig, reciprocal_rank_fusion};
+pub use hybrid::{
+    AdaptiveFusion, AdaptiveFusionStats, Bm25Index, HybridConfig, HybridSearchResult,
+    LearnedWeightStats, QueryFeatures, QueryType, RrfConfig, SearchFeedback,
+    reciprocal_rank_fusion,
+};
 
 #[cfg(feature = "server")]
 pub use server::{ServerConfig, serve};
