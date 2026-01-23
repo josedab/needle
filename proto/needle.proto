@@ -1,0 +1,248 @@
+// Needle Vector Database — gRPC Service Definitions
+//
+// These Protobuf definitions mirror the REST API and can be used to
+// generate typed clients for Go, Java, C#, Python, and other languages.
+//
+// Usage:
+//   protoc --go_out=. --go-grpc_out=. proto/needle.proto
+//   protoc --java_out=. --grpc-java_out=. proto/needle.proto
+//
+// The tonic gRPC server is available behind --features grpc.
+
+syntax = "proto3";
+
+package needle.v1;
+
+option go_package = "github.com/anthropics/needle/proto/needlev1";
+option java_package = "com.anthropic.needle.v1";
+
+// ── Vector Database Service ─────────────────────────────────────────────────
+
+service NeedleService {
+  // Collection management
+  rpc CreateCollection(CreateCollectionRequest) returns (CreateCollectionResponse);
+  rpc ListCollections(ListCollectionsRequest) returns (ListCollectionsResponse);
+  rpc GetCollectionInfo(GetCollectionInfoRequest) returns (CollectionInfo);
+  rpc DeleteCollection(DeleteCollectionRequest) returns (DeleteCollectionResponse);
+
+  // Vector operations
+  rpc Insert(InsertRequest) returns (InsertResponse);
+  rpc BatchInsert(BatchInsertRequest) returns (BatchInsertResponse);
+  rpc Get(GetRequest) returns (GetResponse);
+  rpc Delete(DeleteRequest) returns (DeleteResponse);
+
+  // Search
+  rpc Search(SearchRequest) returns (SearchResponse);
+  rpc BatchSearch(BatchSearchRequest) returns (BatchSearchResponse);
+  rpc StreamingInsert(stream InsertRequest) returns (BatchInsertResponse);
+
+  // Text operations (auto-embed)
+  rpc InsertText(InsertTextRequest) returns (InsertTextResponse);
+  rpc SearchText(SearchTextRequest) returns (SearchResponse);
+
+  // Database operations
+  rpc Save(SaveRequest) returns (SaveResponse);
+  rpc Health(HealthRequest) returns (HealthResponse);
+}
+
+// ── Agentic Memory Service ──────────────────────────────────────────────────
+
+service MemoryService {
+  rpc Remember(RememberRequest) returns (RememberResponse);
+  rpc Recall(RecallRequest) returns (RecallResponse);
+  rpc Forget(ForgetRequest) returns (ForgetResponse);
+}
+
+// ── Messages ────────────────────────────────────────────────────────────────
+
+message CreateCollectionRequest {
+  string name = 1;
+  uint32 dimensions = 2;
+  string distance = 3; // cosine, euclidean, dot_product, manhattan
+}
+
+message CreateCollectionResponse {
+  bool created = 1;
+  string name = 2;
+}
+
+message ListCollectionsRequest {}
+
+message ListCollectionsResponse {
+  repeated CollectionInfo collections = 1;
+}
+
+message CollectionInfo {
+  string name = 1;
+  uint32 dimensions = 2;
+  uint64 vector_count = 3;
+  uint64 memory_bytes = 4;
+}
+
+message GetCollectionInfoRequest {
+  string name = 1;
+}
+
+message DeleteCollectionRequest {
+  string name = 1;
+}
+
+message DeleteCollectionResponse {
+  bool deleted = 1;
+}
+
+message Vector {
+  string id = 1;
+  repeated float values = 2;
+  bytes metadata_json = 3; // JSON-encoded metadata
+}
+
+message InsertRequest {
+  string collection = 1;
+  Vector vector = 2;
+}
+
+message InsertResponse {
+  bool inserted = 1;
+}
+
+message BatchInsertRequest {
+  string collection = 1;
+  repeated Vector vectors = 2;
+}
+
+message BatchInsertResponse {
+  uint64 inserted = 1;
+  uint64 errors = 2;
+}
+
+message GetRequest {
+  string collection = 1;
+  string id = 2;
+}
+
+message GetResponse {
+  Vector vector = 1;
+  bool found = 2;
+}
+
+message DeleteRequest {
+  string collection = 1;
+  string id = 2;
+}
+
+message DeleteResponse {
+  bool deleted = 1;
+}
+
+message SearchRequest {
+  string collection = 1;
+  repeated float vector = 2;
+  uint32 k = 3;
+  bytes filter_json = 4; // MongoDB-style JSON filter
+  bool explain = 5;
+  bool include_vectors = 6;
+}
+
+message SearchResult {
+  string id = 1;
+  float distance = 2;
+  float score = 3;
+  bytes metadata_json = 4;
+  repeated float vector = 5;
+}
+
+message SearchResponse {
+  repeated SearchResult results = 1;
+}
+
+message BatchSearchRequest {
+  string collection = 1;
+  repeated SearchQuery queries = 2;
+}
+
+message SearchQuery {
+  repeated float vector = 1;
+  uint32 k = 2;
+}
+
+message BatchSearchResponse {
+  repeated SearchResponse results = 1;
+}
+
+message InsertTextRequest {
+  string collection = 1;
+  string id = 2;
+  string text = 3;
+  bytes metadata_json = 4;
+}
+
+message InsertTextResponse {
+  bool inserted = 1;
+  string embed_method = 2;
+  uint32 dimensions = 3;
+}
+
+message SearchTextRequest {
+  string collection = 1;
+  string text = 2;
+  uint32 k = 3;
+  bytes filter_json = 4;
+}
+
+message SaveRequest {}
+message SaveResponse {
+  bool saved = 1;
+}
+
+message HealthRequest {}
+message HealthResponse {
+  string status = 1;
+  string version = 2;
+}
+
+// ── Memory Messages ─────────────────────────────────────────────────────────
+
+message RememberRequest {
+  string collection = 1;
+  string content = 2;
+  repeated float vector = 3;
+  string tier = 4; // episodic, semantic, procedural
+  float importance = 5;
+  string session_id = 6;
+}
+
+message RememberResponse {
+  string memory_id = 1;
+  bool stored = 2;
+}
+
+message RecallRequest {
+  string collection = 1;
+  repeated float vector = 2;
+  uint32 k = 3;
+  string tier = 4;
+  float min_importance = 5;
+}
+
+message Memory {
+  string memory_id = 1;
+  float distance = 2;
+  float relevance_score = 3;
+  string content = 4;
+  string tier = 5;
+  float importance = 6;
+}
+
+message RecallResponse {
+  repeated Memory memories = 1;
+}
+
+message ForgetRequest {
+  string collection = 1;
+  string memory_id = 2;
+}
+
+message ForgetResponse {
+  bool forgotten = 1;
+}
