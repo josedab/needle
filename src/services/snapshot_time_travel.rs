@@ -327,6 +327,57 @@ impl VersionedStore {
         self.log.len()
     }
 
+    /// Find the version that was current at a given Unix timestamp.
+    pub fn version_at_timestamp(&self, timestamp: u64) -> Option<u64> {
+        self.log
+            .iter()
+            .rev()
+            .find(|entry| entry.timestamp <= timestamp)
+            .map(|entry| entry.version)
+    }
+
+    /// Search at a given Unix timestamp (NeedleQL AT TIMESTAMP support).
+    pub fn search_at_timestamp(
+        &self,
+        query: &[f32],
+        k: usize,
+        timestamp: u64,
+    ) -> Result<Vec<(String, f32)>> {
+        let version = self.version_at_timestamp(timestamp)
+            .ok_or_else(|| NeedleError::InvalidArgument(
+                format!("No data at timestamp {timestamp}")
+            ))?;
+
+        let snap = self.at_version(version)?;
+        Ok(snap.search(query, k))
+    }
+
+    /// Parse and execute a NeedleQL-style AT TIMESTAMP query.
+    /// Format: "AT TIMESTAMP <unix_epoch>"
+    pub fn parse_at_timestamp(clause: &str) -> Option<u64> {
+        let clause = clause.trim().to_uppercase();
+        if let Some(ts_str) = clause.strip_prefix("AT TIMESTAMP") {
+            ts_str.trim().trim_matches('\'').trim_matches('"').parse().ok()
+        } else {
+            None
+        }
+    }
+
+    /// Get a summary of all versions with timestamps.
+    pub fn version_timeline(&self) -> Vec<(u64, u64, String)> {
+        self.log
+            .iter()
+            .map(|entry| {
+                let op_type = match &entry.operation {
+                    VersionOp::Insert { id, .. } => format!("insert:{id}"),
+                    VersionOp::Update { id, .. } => format!("update:{id}"),
+                    VersionOp::Delete { id } => format!("delete:{id}"),
+                };
+                (entry.version, entry.timestamp, op_type)
+            })
+            .collect()
+    }
+
     fn enforce_retention(&mut self) {
         while self.log.len() > self.retention.max_versions {
             self.log.remove(0);
@@ -439,5 +490,36 @@ mod tests {
             store.insert(&format!("v{i}"), vec![i as f32; 4], None);
         }
         assert!(store.log_len() <= 3);
+    }
+
+    #[test]
+    fn test_search_at_timestamp() {
+        let mut store = VersionedStore::new();
+        store.insert("a", vec![1.0, 0.0, 0.0, 0.0], None);
+        // All entries get `now_secs()` as timestamp, so searching at current time should work
+        let ts = now_secs();
+        let results = store.search_at_timestamp(&[1.0, 0.0, 0.0, 0.0], 5, ts).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].0, "a");
+    }
+
+    #[test]
+    fn test_parse_at_timestamp() {
+        assert_eq!(VersionedStore::parse_at_timestamp("AT TIMESTAMP 1700000000"), Some(1700000000));
+        assert_eq!(VersionedStore::parse_at_timestamp("at timestamp '1700000000'"), Some(1700000000));
+        assert_eq!(VersionedStore::parse_at_timestamp("invalid"), None);
+    }
+
+    #[test]
+    fn test_version_timeline() {
+        let mut store = VersionedStore::new();
+        store.insert("a", vec![1.0; 4], None);
+        store.insert("b", vec![2.0; 4], None);
+        store.delete("a");
+
+        let timeline = store.version_timeline();
+        assert_eq!(timeline.len(), 3);
+        assert!(timeline[0].2.starts_with("insert:"));
+        assert!(timeline[2].2.starts_with("delete:"));
     }
 }
