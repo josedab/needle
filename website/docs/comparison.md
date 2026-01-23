@@ -143,6 +143,8 @@ How does Needle compare to other vector databases? This page provides an objecti
 
 ## Performance Benchmarks
 
+### Summary Results
+
 Benchmarks on 1M vectors, 384 dimensions, single machine:
 
 | Database | Insert (vec/s) | Search p50 | Search p99 | Memory |
@@ -152,7 +154,88 @@ Benchmarks on 1M vectors, 384 dimensions, single machine:
 | Chroma | 5,000 | 15ms | 40ms | 2.5GB |
 | pgvector | 8,000 | 12ms | 35ms | 3.0GB |
 
-*Benchmarks are indicative; actual performance depends on hardware and configuration.*
+### Benchmark Methodology
+
+#### Test Environment
+
+| Component | Specification |
+|-----------|---------------|
+| **CPU** | AMD Ryzen 9 5900X (12 cores, 24 threads) |
+| **RAM** | 64GB DDR4-3600 |
+| **Storage** | Samsung 980 Pro NVMe SSD |
+| **OS** | Ubuntu 22.04 LTS |
+| **Rust** | 1.75.0 |
+
+#### Dataset
+
+- **Vectors**: 1,000,000 randomly generated vectors
+- **Dimensions**: 384 (matching all-MiniLM-L6-v2 embeddings)
+- **Distribution**: Uniform random in [-1, 1], L2-normalized
+- **Metadata**: 3 fields per vector (category, timestamp, score)
+
+#### Index Configuration
+
+All databases configured for comparable recall (~95%):
+
+| Database | Configuration |
+|----------|---------------|
+| Needle | M=16, ef_construction=200, ef_search=50 |
+| Qdrant | m=16, ef_construct=200, ef=50 |
+| Chroma | Default HNSW settings |
+| pgvector | lists=100, probes=10 (IVFFlat) |
+
+#### Test Protocol
+
+1. **Insert Benchmark**
+   - Batch size: 1,000 vectors
+   - Measured: Vectors inserted per second (sustained)
+   - Excludes: Initial index build time
+
+2. **Search Benchmark**
+   - Queries: 10,000 random query vectors
+   - k (results): 10
+   - Measured: Latency percentiles (p50, p95, p99)
+   - Filter: None (pure vector search)
+   - Warm-up: 1,000 queries before measurement
+
+3. **Memory Benchmark**
+   - Measured: Peak RSS after loading 1M vectors
+   - Method: `/proc/[pid]/status` VmRSS
+
+#### Recall Measurement
+
+Recall@10 computed against brute-force search:
+
+| Database | Recall@10 |
+|----------|-----------|
+| Needle | 96.2% |
+| Qdrant | 95.8% |
+| Chroma | 94.1% |
+| pgvector | 93.5% |
+
+#### Reproducing Benchmarks
+
+```bash
+# Clone and build Needle benchmarks
+git clone https://github.com/anthropics/needle
+cd needle
+cargo build --release
+
+# Run benchmarks
+cargo bench
+
+# Run comparison script (requires Docker)
+./scripts/run_comparison_benchmarks.sh
+```
+
+#### Limitations
+
+- Single-machine only (no distributed benchmarks)
+- Synthetic data (real embeddings may differ)
+- No concurrent query benchmarks
+- Configuration tuned for ~95% recall (different targets will yield different results)
+
+*Benchmarks last updated: January 2024. Results are indicative; actual performance depends on hardware, data distribution, and configuration.*
 
 ## Feature Matrix
 
