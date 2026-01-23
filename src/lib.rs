@@ -193,7 +193,7 @@ pub use services::{
 };
 
 // ── Next-Gen v8 Services ─────────────────────────────────────────────────────
-pub use services::{hnsw_compactor, wasm_plugin_runtime};
+pub use services::{hnsw_compactor, matryoshka_service, wasm_plugin_runtime};
 
 // ── Next-Gen v9 Services ─────────────────────────────────────────────────────
 pub use services::{client_sdk, grpc_schema};
