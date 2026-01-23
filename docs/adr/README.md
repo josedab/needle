@@ -38,6 +38,18 @@ An Architecture Decision Record captures a single architectural decision along w
 | [0026](0026-needleql-query-language.md) | NeedleQL Query Language | Accepted | SQL-like DSL for vector operations |
 | [0027](0027-namespace-based-multi-tenancy.md) | Namespace-Based Multi-Tenancy | Accepted | Logical tenant isolation with resource quotas |
 | [0028](0028-semantic-knowledge-graph.md) | Semantic Knowledge Graph | Accepted | Entity-relationship overlay for structured knowledge |
+| [0029](0029-rbac-and-audit-logging-security-model.md) | RBAC and Audit Logging Security Model | Accepted | Role-based access control with comprehensive audit logging |
+| [0030](0030-two-stage-retrieval-with-external-rerankers.md) | Two-Stage Retrieval with External Rerankers | Accepted | Cross-encoder reranking via Cohere/HuggingFace for improved relevance |
+| [0031](0031-crdt-based-edge-sync-for-offline-first.md) | CRDT-Based Edge Sync for Offline-First | Accepted | Conflict-free replication with Hybrid Logical Clocks |
+| [0032](0032-backup-and-point-in-time-recovery.md) | Backup and Point-in-Time Recovery | Accepted | Full/incremental backups with security-hardened path handling |
+| [0033](0033-consistent-hashing-for-horizontal-sharding.md) | Consistent Hashing for Horizontal Sharding | Accepted | Hash-based shard routing with state machine for migrations |
+| [0034](0034-schema-versioning-and-migrations.md) | Schema Versioning and Migrations | Accepted | Semantic versioning with forward/backward migration support |
+| [0035](0035-searchable-vector-encryption.md) | Searchable Vector Encryption | Accepted | AES-256-GCM/ChaCha20 with order-preserving search capability |
+| [0036](0036-langchain-compatible-vectorstore-interface.md) | LangChain-Compatible VectorStore Interface | Accepted | Drop-in LangChain integration with Document abstraction |
+| [0037](0037-multi-vector-colbert-style-retrieval.md) | Multi-Vector ColBERT-Style Retrieval | Accepted | Late interaction retrieval with MaxSim scoring |
+| [0038](0038-sparse-vector-and-inverted-index-support.md) | Sparse Vector and Inverted Index Support | Accepted | TF-IDF/SPLADE sparse vectors with inverted index |
+| [0039](0039-cross-platform-bindings-architecture.md) | Cross-Platform Bindings Architecture | Accepted | PyO3/wasm-bindgen/UniFFI for Python/JS/Swift/Kotlin |
+| [0040](0040-diskann-and-ivf-alternative-index-types.md) | DiskANN and IVF Alternative Index Types | Accepted | Disk-based and clustering indices for billion-scale search |
 
 ## Reading Order
 
@@ -84,6 +96,26 @@ For new team members, we recommend reading the ADRs in this order to understand 
 26. **ADR-0026** — NeedleQL: SQL-like query language
 27. **ADR-0027** — Namespace-based multi-tenancy
 28. **ADR-0028** — Semantic knowledge graph overlay
+
+### Security & Operations
+29. **ADR-0029** — RBAC and audit logging for enterprise security
+30. **ADR-0032** — Backup and point-in-time recovery
+31. **ADR-0034** — Schema versioning and migrations
+32. **ADR-0035** — Searchable vector encryption
+
+### Retrieval Quality
+33. **ADR-0030** — Two-stage retrieval with external rerankers
+34. **ADR-0037** — Multi-vector ColBERT-style retrieval
+35. **ADR-0038** — Sparse vector and inverted index support
+
+### Distributed Systems
+36. **ADR-0031** — CRDT-based edge sync for offline-first
+37. **ADR-0033** — Consistent hashing for horizontal sharding
+
+### Platform & Integration
+38. **ADR-0036** — LangChain-compatible VectorStore interface
+39. **ADR-0039** — Cross-platform bindings (Python, JS, Swift, Kotlin)
+40. **ADR-0040** — DiskANN and IVF alternative index types
 
 ## ADR Format
 
