@@ -245,21 +245,19 @@ fn test_very_long_id() {
 fn test_special_characters_in_id() {
     let mut collection = Collection::with_dimensions("test", 4);
 
-    let special_ids = vec![
-        "path/to/file",
+    let special_ids = ["path/to/file",
         "id with spaces",
         "id\twith\ttabs",
         "id\nwith\nnewlines",
         "id\"with\"quotes",
         "id'with'quotes",
         "id<with>brackets",
-        "id&with&ampersand",
-    ];
+        "id&with&ampersand"];
 
     for (i, id) in special_ids.iter().enumerate() {
         let vec = vec![i as f32, 0.0, 0.0, 0.0];
         collection.insert(*id, &vec, None).unwrap();
-        assert!(collection.contains(*id));
+        assert!(collection.contains(id));
     }
 }
 
@@ -827,7 +825,7 @@ fn test_concurrent_operations() {
 
     // Verify some data was inserted
     let collection = db.collection("concurrent").unwrap();
-    assert!(collection.len() > 0, "Some vectors should have been inserted");
+    assert!(!collection.is_empty(), "Some vectors should have been inserted");
 }
 
 /// Test update with dimension mismatch
@@ -961,9 +959,8 @@ fn test_compact_after_heavy_operations() {
     assert_eq!(collection.len(), 50);
 
     // Compact should work
-    let removed = collection.compact().unwrap();
-    // Compact should have removed the deleted vectors from internal storage
-    assert!(removed >= 0); // May not remove if not needed
+    let _removed = collection.compact().unwrap();
+    // Compact may have removed deleted vectors from internal storage
 
     // Remaining vectors should still work
     for i in 50..100 {
@@ -973,6 +970,7 @@ fn test_compact_after_heavy_operations() {
 
 /// Test JSON metadata with all types
 #[test]
+#[allow(clippy::approx_constant)]
 fn test_metadata_all_json_types() {
     let mut collection = Collection::with_dimensions("test", 4);
 
@@ -1693,6 +1691,7 @@ fn test_iteration_safety() {
 
 /// Test serialization round-trip preserves data integrity
 #[test]
+#[allow(clippy::approx_constant)]
 fn test_serialization_roundtrip_integrity() {
     use tempfile::tempdir;
 
