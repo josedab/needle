@@ -120,7 +120,7 @@ fn main() -> needle::Result<()> {
     println!("\n=== Parsed from JSON: price $30-$100 ===");
     let filter = Filter::parse(&json!({
         "price": { "$gte": 30, "$lte": 100 }
-    })).map_err(|e| needle::NeedleError::InvalidInput(e))?;
+    })).map_err(needle::NeedleError::InvalidInput)?;
     let results = collection.search_with_filter(&query, 5, &filter)?;
     for r in &results {
         let name = r.metadata.as_ref().unwrap()["name"].as_str().unwrap();

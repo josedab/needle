@@ -734,9 +734,9 @@ mod tests {
     fn test_changes_in_range() {
         let mut index = create_test_index();
 
-        index.insert("doc1", &vec![1.0; 8], 1000, None).unwrap();
-        index.insert("doc2", &vec![2.0; 8], 2000, None).unwrap();
-        index.insert("doc3", &vec![3.0; 8], 3000, None).unwrap();
+        index.insert("doc1", &[1.0; 8], 1000, None).unwrap();
+        index.insert("doc2", &[2.0; 8], 2000, None).unwrap();
+        index.insert("doc3", &[3.0; 8], 3000, None).unwrap();
 
         let changes = index.get_changes_in_range(1500, 2500);
         assert_eq!(changes.len(), 1);

@@ -779,7 +779,7 @@ mod tests {
         let scores = forest.score(&refs);
 
         assert_eq!(scores.len(), vectors.len());
-        assert!(scores.iter().all(|&s| s >= 0.0 && s <= 1.0));
+        assert!(scores.iter().all(|&s| (0.0..=1.0).contains(&s)));
     }
 
     #[test]
@@ -839,7 +839,7 @@ mod tests {
         let scores = ensemble.scores();
 
         assert_eq!(scores.len(), vectors.len());
-        assert!(scores.iter().all(|&s| s >= 0.0 && s <= 1.0));
+        assert!(scores.iter().all(|&s| (0.0..=1.0).contains(&s)));
     }
 
     #[test]
