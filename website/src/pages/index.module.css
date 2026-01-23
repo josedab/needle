@@ -1,0 +1,213 @@
+/**
+ * Needle Landing Page Styles
+ */
+
+.heroBanner {
+  padding: 6rem 0 4rem;
+  text-align: center;
+  position: relative;
+  overflow: hidden;
+}
+
+.installCommand {
+  background: rgba(0, 0, 0, 0.3);
+  border-radius: 8px;
+  padding: 0.75rem 1.5rem;
+  display: inline-block;
+  margin: 1.5rem 0 2rem;
+  font-family: var(--ifm-font-family-monospace);
+  font-size: 1.1rem;
+}
+
+.installCommand code {
+  background: transparent;
+  padding: 0;
+  color: inherit;
+}
+
+.buttons {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 1rem;
+}
+
+@media screen and (max-width: 996px) {
+  .heroBanner {
+    padding: 3rem 1rem;
+  }
+
+  .buttons {
+    flex-direction: column;
+  }
+}
+
+/* Quick Example Section */
+.quickExample {
+  padding: 4rem 0;
+  background: var(--ifm-background-surface-color);
+}
+
+.quickExample h2 {
+  margin-bottom: 1rem;
+}
+
+.featureList {
+  list-style: none;
+  padding: 0;
+  margin: 1.5rem 0 0;
+}
+
+.featureList li {
+  padding: 0.5rem 0;
+  padding-left: 1.5rem;
+  position: relative;
+}
+
+.featureList li::before {
+  content: "✓";
+  position: absolute;
+  left: 0;
+  color: var(--ifm-color-primary);
+  font-weight: bold;
+}
+
+/* Use Cases Section */
+.useCases {
+  padding: 4rem 0;
+}
+
+.useCases h2 {
+  margin-bottom: 0.5rem;
+}
+
+.useCases > .container > p {
+  margin-bottom: 2rem;
+  color: var(--ifm-color-emphasis-600);
+}
+
+.useCaseCard {
+  padding: 1.5rem;
+  border-radius: var(--ifm-global-radius);
+  background: var(--ifm-background-surface-color);
+  border: 1px solid rgba(99, 102, 241, 0.1);
+  height: 100%;
+  transition: all 0.2s ease;
+}
+
+.useCaseCard:hover {
+  border-color: var(--ifm-color-primary);
+  transform: translateY(-2px);
+  box-shadow: var(--ifm-global-shadow-md);
+}
+
+.useCaseCard h3 {
+  font-size: 1.1rem;
+  margin-bottom: 0.75rem;
+}
+
+.useCaseCard p {
+  font-size: 0.9rem;
+  color: var(--ifm-color-emphasis-600);
+  margin-bottom: 1rem;
+}
+
+.useCaseCard a {
+  font-size: 0.9rem;
+  font-weight: 500;
+}
+
+/* Language Bindings Section */
+.bindings {
+  padding: 4rem 0;
+  background: var(--ifm-background-surface-color);
+}
+
+.bindings h2 {
+  margin-bottom: 0.5rem;
+}
+
+.bindings > .container > p {
+  margin-bottom: 2rem;
+  color: var(--ifm-color-emphasis-600);
+}
+
+.bindingGrid {
+  display: flex;
+  justify-content: center;
+  gap: 1.5rem;
+  flex-wrap: wrap;
+}
+
+.bindingCard {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 1.5rem 2.5rem;
+  border-radius: var(--ifm-global-radius);
+  background: var(--ifm-background-color);
+  border: 1px solid rgba(99, 102, 241, 0.1);
+  transition: all 0.2s ease;
+  text-decoration: none;
+  color: inherit;
+}
+
+.bindingCard:hover {
+  border-color: var(--ifm-color-primary);
+  transform: translateY(-2px);
+  box-shadow: var(--ifm-global-shadow-md);
+  text-decoration: none;
+  color: inherit;
+}
+
+.bindingIcon {
+  font-size: 2rem;
+  margin-bottom: 0.5rem;
+}
+
+/* Benchmarks Section */
+.benchmarks {
+  padding: 4rem 0;
+  background: linear-gradient(135deg, var(--ifm-color-primary-darkest) 0%, var(--ifm-color-primary-dark) 100%);
+  color: white;
+}
+
+.stat {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.statNumber {
+  font-size: 3rem;
+  font-weight: 800;
+  line-height: 1;
+  margin-bottom: 0.5rem;
+}
+
+.statLabel {
+  font-size: 1rem;
+  opacity: 0.9;
+}
+
+@media screen and (max-width: 768px) {
+  .useCaseCard {
+    margin-bottom: 1rem;
+  }
+
+  .bindingGrid {
+    gap: 1rem;
+  }
+
+  .bindingCard {
+    padding: 1rem 1.5rem;
+  }
+
+  .statNumber {
+    font-size: 2rem;
+  }
+
+  .stat {
+    margin-bottom: 1.5rem;
+  }
+}
