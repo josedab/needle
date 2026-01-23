@@ -1,0 +1,8 @@
+User-agent: *
+Allow: /
+
+# Sitemap location (Docusaurus generates this automatically)
+Sitemap: https://needle.dev/sitemap.xml
+
+# Disallow admin/internal paths if any
+Disallow: /search-index.json
