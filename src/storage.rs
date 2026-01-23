@@ -1,6 +1,71 @@
 // Allow dead_code for this internal storage module - some methods used only in specific features
 #![allow(dead_code)]
 
+//! Storage Layer - File I/O and Memory-Mapped Storage
+//!
+//! Low-level storage primitives for the Needle database file format.
+//! Implements single-file storage with automatic memory mapping for large files.
+//!
+//! # File Format
+//!
+//! Needle uses a custom binary format with a fixed 4KB header:
+//!
+//! ```text
+//! ┌────────────────────────────────────────────────────────────┐
+//! │                    Header (4096 bytes)                      │
+//! ├────────────────────────────────────────────────────────────┤
+//! │  Magic: "NEEDLE01" (8 bytes)                                │
+//! │  Version: u32                                               │
+//! │  Dimensions: u32                                            │
+//! │  Vector Count: u64                                          │
+//! │  Index Offset: u64                                          │
+//! │  Vector Offset: u64                                         │
+//! │  Metadata Offset: u64                                       │
+//! │  Checksum: u32 (CRC32)                                      │
+//! │  State Size: u64                                            │
+//! │  State Checksum: u32                                        │
+//! │  [Reserved padding to 4096 bytes]                           │
+//! ├────────────────────────────────────────────────────────────┤
+//! │                    State Data                               │
+//! │  (Serialized collections, indices, metadata)                │
+//! └────────────────────────────────────────────────────────────┘
+//! ```
+//!
+//! # Memory Mapping
+//!
+//! Files larger than `MMAP_THRESHOLD` (10MB) are automatically memory-mapped
+//! for efficient random access without loading the entire file into memory.
+//!
+//! # Constants
+//!
+//! - `MAGIC`: File magic number "NEEDLE01"
+//! - `VERSION`: Current file format version (1)
+//! - `HEADER_SIZE`: Fixed header size (4096 bytes)
+//! - `MMAP_THRESHOLD`: Size threshold for memory mapping (10MB)
+//!
+//! # Example
+//!
+//! ```rust,ignore
+//! use needle::storage::{Header, MAGIC, VERSION, HEADER_SIZE};
+//!
+//! // Create a new header
+//! let header = Header::default();
+//!
+//! // Serialize to bytes
+//! let bytes = header.to_bytes();
+//! assert_eq!(&bytes[..8], MAGIC);
+//!
+//! // Parse from bytes
+//! let parsed = Header::from_bytes(&bytes)?;
+//! assert_eq!(parsed.version, VERSION);
+//! ```
+//!
+//! # Integrity Checks
+//!
+//! The storage layer includes CRC32 checksums for both the header and state data
+//! to detect corruption during reads. Invalid checksums result in a
+//! `NeedleError::CorruptedDatabase` error.
+
 use crate::error::{NeedleError, Result};
 use memmap2::{Mmap, MmapMut};
 use serde::{Deserialize, Serialize};
@@ -448,8 +513,7 @@ impl StorageEngine {
                 format!("read range [{}, {}) exceeds mmap size {}", start, end, mmap.len()),
             )));
         }
-        Err(NeedleError::Io(std::io::Error::new(
-            std::io::ErrorKind::Other,
+        Err(NeedleError::Io(std::io::Error::other(
             "zero-copy read requires mmap; use read_at instead",
         )))
     }
