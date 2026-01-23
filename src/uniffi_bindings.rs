@@ -111,6 +111,10 @@ pub enum NeedleError {
     ConsensusError { msg: String },
     #[error("Lock error")]
     LockError,
+    #[error("Timeout: {msg}")]
+    Timeout { msg: String },
+    #[error("Lock timeout: {msg}")]
+    LockTimeout { msg: String },
 }
 
 impl From<crate::error::NeedleError> for NeedleError {
@@ -152,6 +156,12 @@ impl From<crate::error::NeedleError> for NeedleError {
             crate::error::NeedleError::EncryptionError(msg) => NeedleError::EncryptionError { msg },
             crate::error::NeedleError::ConsensusError(msg) => NeedleError::ConsensusError { msg },
             crate::error::NeedleError::LockError => NeedleError::LockError,
+            crate::error::NeedleError::Timeout(duration) => NeedleError::Timeout {
+                msg: format!("Operation timed out after {:?}", duration)
+            },
+            crate::error::NeedleError::LockTimeout(duration) => NeedleError::LockTimeout {
+                msg: format!("Lock acquisition timed out after {:?}", duration)
+            },
         }
     }
 }
