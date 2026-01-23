@@ -6,6 +6,7 @@ use crate::metadata::parse_filter;
 use serde_json::Value;
 use std::sync::{Arc, RwLock};
 use wasm_bindgen::prelude::*;
+use wasm_bindgen::JsCast;
 
 /// Search result for JavaScript
 #[wasm_bindgen]
@@ -171,13 +172,38 @@ impl WasmCollection {
     }
 
     /// Insert multiple vectors in batch (JSON metadata array)
+    /// vectors_js should be a JS array of Float32Arrays
     #[wasm_bindgen(js_name = "insertBatch")]
     pub fn insert_batch(
         &self,
         ids: Vec<String>,
-        vectors: Vec<Vec<f32>>,
+        vectors_js: JsValue,
         metadata_json_array: Option<Vec<String>>,
     ) -> Result<(), JsValue> {
+        // Convert JsValue array of arrays to Vec<Vec<f32>>
+        let vectors: Vec<Vec<f32>> = if vectors_js.is_array() {
+            let arr = js_sys::Array::from(&vectors_js);
+            let mut result = Vec::with_capacity(arr.length() as usize);
+            for i in 0..arr.length() {
+                let inner = arr.get(i);
+                if let Some(float_arr) = inner.dyn_ref::<js_sys::Float32Array>() {
+                    result.push(float_arr.to_vec());
+                } else if inner.is_array() {
+                    // Handle regular JS array of numbers
+                    let inner_arr = js_sys::Array::from(&inner);
+                    let vec: Vec<f32> = (0..inner_arr.length())
+                        .filter_map(|j| inner_arr.get(j).as_f64().map(|n| n as f32))
+                        .collect();
+                    result.push(vec);
+                } else {
+                    return Err(JsValue::from_str("vectors must be an array of arrays or Float32Arrays"));
+                }
+            }
+            result
+        } else {
+            return Err(JsValue::from_str("vectors must be an array"));
+        };
+
         if ids.len() != vectors.len() {
             return Err(JsValue::from_str("ids and vectors must have the same length"));
         }
