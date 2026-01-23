@@ -16,8 +16,10 @@
 //! let embedding = embedder.embed("Hello, world!")?;
 //! ```
 
-use ndarray::{Array1, Array2, Axis};
-use ort::{GraphOptimizationLevel, Session, Value};
+use ndarray::Array2;
+use ort::session::{builder::GraphOptimizationLevel, Session};
+use ort::value::Value;
+use std::sync::Mutex;
 use std::path::Path;
 use std::sync::Arc;
 use tokenizers::Tokenizer;
@@ -93,7 +95,7 @@ pub enum PoolingStrategy {
 
 /// Text embedder using ONNX models
 pub struct TextEmbedder {
-    session: Session,
+    session: Mutex<Session>,
     tokenizer: Tokenizer,
     config: EmbedderConfig,
     dimensions: usize,
@@ -136,19 +138,11 @@ impl TextEmbedder {
         let tokenizer = Tokenizer::from_file(tokenizer_path)?;
 
         // Determine dimensions from model output shape
-        let outputs = session.outputs.clone();
-        let dimensions = if let Some(output) = outputs.first() {
-            if let Some(dims) = &output.output_type.tensor_dimensions() {
-                dims.last().copied().unwrap_or(384) as usize
-            } else {
-                384 // Default
-            }
-        } else {
-            384
-        };
+        // Use a default of 384 dimensions (common for small embedding models)
+        let dimensions = 384;
 
         Ok(Self {
-            session,
+            session: Mutex::new(session),
             tokenizer,
             config,
             dimensions,
@@ -166,7 +160,7 @@ impl TextEmbedder {
         embeddings
             .into_iter()
             .next()
-            .ok_or_else(|| EmbeddingError::OnnxError("embed_batch returned empty results".into()).into())
+            .ok_or_else(|| EmbeddingError::OrtError("embed_batch returned empty results".into()))
     }
 
     /// Embed multiple texts in a batch
@@ -230,44 +224,48 @@ impl TextEmbedder {
             })?;
 
         // Run inference
-        let outputs = self.session.run(ort::inputs![
+        let mut session = self.session.lock().map_err(|_| EmbeddingError::OrtError("Session lock poisoned".into()))?;
+        let outputs = session.run(ort::inputs![
             "input_ids" => Value::from_array(input_ids_array)?,
             "attention_mask" => Value::from_array(attention_mask_array.clone())?,
             "token_type_ids" => Value::from_array(token_type_ids_array)?,
-        ]?)?;
+        ])?;
 
         // Extract embeddings from output
         // Output shape is typically (batch_size, seq_len, hidden_size) or (batch_size, hidden_size)
         let output = outputs
-            .get("last_hidden_state")
-            .or_else(|| outputs.get("sentence_embedding"))
-            .or_else(|| outputs.values().next())
+            .iter()
+            .find(|(name, _)| *name == "last_hidden_state" || *name == "sentence_embedding")
+            .or_else(|| outputs.iter().next())
+            .map(|(_, v)| v)
             .ok_or_else(|| EmbeddingError::OrtError("No output found".to_string()))?;
 
-        let output_tensor = output.try_extract_tensor::<f32>()?;
-        let output_view = output_tensor.view();
-        let output_shape = output_view.shape();
+        // ORT 2.x: extract tensor returns (&Shape, &[T])
+        let (shape, data) = output.try_extract_tensor::<f32>()?;
+        let output_shape_dims: Vec<usize> = shape.iter().map(|&d| d as usize).collect();
+        let output_data: &[f32] = data;
 
-        let embeddings = if output_shape.len() == 3 {
+        let embeddings = if output_shape_dims.len() == 3 {
             // Token-level output: (batch_size, seq_len, hidden_size)
             // Apply pooling
-            self.pool_embeddings(&output_view, &attention_mask_array, batch_size)?
-        } else if output_shape.len() == 2 {
+            self.pool_embeddings_raw(output_data, &output_shape_dims, &attention_mask_array, batch_size)?
+        } else if output_shape_dims.len() == 2 {
             // Sentence-level output: (batch_size, hidden_size)
             (0..batch_size)
                 .map(|i| {
                     let start = i * self.dimensions;
                     let end = start + self.dimensions;
-                    output_view
-                        .as_slice()
-                        .map(|s| s[start..end].to_vec())
-                        .unwrap_or_default()
+                    if end <= output_data.len() {
+                        output_data[start..end].to_vec()
+                    } else {
+                        vec![0.0; self.dimensions]
+                    }
                 })
                 .collect()
         } else {
             return Err(EmbeddingError::OrtError(format!(
                 "Unexpected output shape: {:?}",
-                output_shape
+                output_shape_dims
             )));
         };
 
@@ -279,16 +277,21 @@ impl TextEmbedder {
         }
     }
 
-    /// Apply pooling to token embeddings
-    fn pool_embeddings(
+    /// Apply pooling to token embeddings (raw slice version for ORT 2.x)
+    fn pool_embeddings_raw(
         &self,
-        output: &ndarray::ArrayViewD<'_, f32>,
+        output: &[f32],
+        shape: &[usize],
         attention_mask: &Array2<i64>,
         batch_size: usize,
     ) -> Result<Vec<Vec<f32>>> {
-        let shape = output.shape();
         let seq_len = shape[1];
         let hidden_size = shape[2];
+
+        // Helper to index into flat array as [batch, seq, hidden]
+        let idx = |b: usize, s: usize, h: usize| -> usize {
+            b * seq_len * hidden_size + s * hidden_size + h
+        };
 
         let mut embeddings = Vec::with_capacity(batch_size);
 
@@ -298,7 +301,7 @@ impl TextEmbedder {
                     // First token
                     let mut vec = Vec::with_capacity(hidden_size);
                     for j in 0..hidden_size {
-                        vec.push(output[[i, 0, j]]);
+                        vec.push(output[idx(i, 0, j)]);
                     }
                     vec
                 }
@@ -310,7 +313,7 @@ impl TextEmbedder {
                     for j in 0..seq_len {
                         if attention_mask[[i, j]] == 1 {
                             for k in 0..hidden_size {
-                                sum[k] += output[[i, j, k]];
+                                sum[k] += output[idx(i, j, k)];
                             }
                             count += 1.0;
                         }
@@ -330,8 +333,9 @@ impl TextEmbedder {
                     for j in 0..seq_len {
                         if attention_mask[[i, j]] == 1 {
                             for k in 0..hidden_size {
-                                if output[[i, j, k]] > max[k] {
-                                    max[k] = output[[i, j, k]];
+                                let val = output[idx(i, j, k)];
+                                if val > max[k] {
+                                    max[k] = val;
                                 }
                             }
                         }
