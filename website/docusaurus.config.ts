@@ -66,7 +66,7 @@ const config: Config = {
   ],
 
   themeConfig: {
-    image: 'img/needle-social-card.png',
+    image: 'img/needle-social-card.svg',
     colorMode: {
       defaultMode: 'dark',
       respectPrefersColorScheme: true,

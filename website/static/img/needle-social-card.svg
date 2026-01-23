@@ -1,0 +1,91 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630" width="1200" height="630">
+  <defs>
+    <linearGradient id="bgGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#0f172a"/>
+      <stop offset="50%" style="stop-color:#1e1b4b"/>
+      <stop offset="100%" style="stop-color:#0f172a"/>
+    </linearGradient>
+    <linearGradient id="needleGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#a5b4fc"/>
+      <stop offset="50%" style="stop-color:#818cf8"/>
+      <stop offset="100%" style="stop-color:#6366f1"/>
+    </linearGradient>
+    <linearGradient id="textGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#ffffff"/>
+      <stop offset="100%" style="stop-color:#c7d2fe"/>
+    </linearGradient>
+    <filter id="glow">
+      <feGaussianBlur stdDeviation="3" result="coloredBlur"/>
+      <feMerge>
+        <feMergeNode in="coloredBlur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <!-- Background -->
+  <rect width="1200" height="630" fill="url(#bgGradient)"/>
+
+  <!-- Decorative vector dots scattered across -->
+  <circle cx="100" cy="100" r="8" fill="#818cf8" opacity="0.3"/>
+  <circle cx="200" cy="180" r="6" fill="#818cf8" opacity="0.2"/>
+  <circle cx="1050" cy="150" r="10" fill="#818cf8" opacity="0.25"/>
+  <circle cx="1100" cy="80" r="5" fill="#818cf8" opacity="0.2"/>
+  <circle cx="950" cy="550" r="7" fill="#818cf8" opacity="0.25"/>
+  <circle cx="1080" cy="480" r="6" fill="#818cf8" opacity="0.2"/>
+  <circle cx="150" cy="500" r="8" fill="#818cf8" opacity="0.2"/>
+  <circle cx="80" cy="400" r="5" fill="#818cf8" opacity="0.15"/>
+  <circle cx="300" cy="550" r="6" fill="#818cf8" opacity="0.2"/>
+
+  <!-- Connection lines (faded, representing vector relationships) -->
+  <line x1="100" y1="100" x2="200" y2="180" stroke="#818cf8" stroke-width="1" opacity="0.1"/>
+  <line x1="1050" y1="150" x2="1100" y2="80" stroke="#818cf8" stroke-width="1" opacity="0.1"/>
+  <line x1="950" y1="550" x2="1080" y2="480" stroke="#818cf8" stroke-width="1" opacity="0.1"/>
+
+  <!-- Large decorative needle logo on the left -->
+  <g transform="translate(120, 165)">
+    <!-- Outer ring -->
+    <circle cx="150" cy="150" r="140" fill="none" stroke="url(#needleGrad)" stroke-width="3" opacity="0.2"/>
+
+    <!-- Vector dots -->
+    <circle cx="50" cy="80" r="12" fill="#818cf8" opacity="0.5"/>
+    <circle cx="250" cy="60" r="12" fill="#818cf8" opacity="0.5"/>
+    <circle cx="260" cy="220" r="12" fill="#818cf8" opacity="0.5"/>
+    <circle cx="60" cy="240" r="12" fill="#818cf8" opacity="0.5"/>
+    <circle cx="220" cy="270" r="10" fill="#818cf8" opacity="0.4"/>
+
+    <!-- Main needle -->
+    <path d="M150 20 L180 150 L150 280 L120 150 Z" fill="url(#needleGrad)" filter="url(#glow)"/>
+
+    <!-- Center hub -->
+    <circle cx="150" cy="150" r="24" fill="url(#needleGrad)"/>
+    <circle cx="150" cy="150" r="12" fill="#ffffff"/>
+  </g>
+
+  <!-- Title "Needle" -->
+  <text x="520" y="260" font-family="system-ui, -apple-system, sans-serif" font-size="120" font-weight="800" fill="url(#textGrad)">Needle</text>
+
+  <!-- Tagline -->
+  <text x="520" y="340" font-family="system-ui, -apple-system, sans-serif" font-size="42" font-weight="500" fill="#94a3b8">SQLite for Vectors</text>
+
+  <!-- Description -->
+  <text x="520" y="420" font-family="system-ui, -apple-system, sans-serif" font-size="28" fill="#64748b">An embedded vector database written in Rust</text>
+
+  <!-- Features row -->
+  <g transform="translate(520, 480)">
+    <rect x="0" y="0" width="140" height="36" rx="18" fill="#818cf8" opacity="0.2"/>
+    <text x="70" y="24" font-family="system-ui, sans-serif" font-size="16" font-weight="600" fill="#a5b4fc" text-anchor="middle">Sub-10ms</text>
+
+    <rect x="160" y="0" width="120" height="36" rx="18" fill="#818cf8" opacity="0.2"/>
+    <text x="220" y="24" font-family="system-ui, sans-serif" font-size="16" font-weight="600" fill="#a5b4fc" text-anchor="middle">HNSW</text>
+
+    <rect x="300" y="0" width="140" height="36" rx="18" fill="#818cf8" opacity="0.2"/>
+    <text x="370" y="24" font-family="system-ui, sans-serif" font-size="16" font-weight="600" fill="#a5b4fc" text-anchor="middle">Single File</text>
+
+    <rect x="460" y="0" width="180" height="36" rx="18" fill="#818cf8" opacity="0.2"/>
+    <text x="550" y="24" font-family="system-ui, sans-serif" font-size="16" font-weight="600" fill="#a5b4fc" text-anchor="middle">Zero Config</text>
+  </g>
+
+  <!-- Bottom bar -->
+  <rect x="0" y="610" width="1200" height="20" fill="url(#needleGrad)" opacity="0.8"/>
+</svg>
