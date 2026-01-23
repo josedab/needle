@@ -1,3 +1,71 @@
+//! Error Types and Handling
+//!
+//! Comprehensive error types for the Needle vector database with structured
+//! error codes for programmatic handling and detailed error messages for debugging.
+//!
+//! # Error Categories
+//!
+//! Errors are organized into categories with numeric codes:
+//!
+//! | Range | Category | Examples |
+//! |-------|----------|----------|
+//! | 1xxx | I/O errors | Read, Write, Permission, DiskFull |
+//! | 2xxx | Serialization | Serialize, Deserialize, InvalidFormat |
+//! | 3xxx | Collection | NotFound, AlreadyExists, Corrupted |
+//! | 4xxx | Vector | NotFound, DimensionMismatch, Invalid |
+//! | 5xxx | Database | Invalid, Corrupted, Locked |
+//! | 6xxx | Index | Error, Corrupted, BuildFailed |
+//! | 7xxx | Configuration | Invalid, Missing |
+//! | 8xxx | Resource | Capacity, Quota, Memory |
+//! | 9xxx | Operational | Timeout, Lock, Conflict |
+//! | 10xxx | Security | Encryption, Decryption, Auth |
+//! | 11xxx | Distributed | Consensus, Replication, Network |
+//! | 12xxx | Backup | Failed, Restore, Corrupted |
+//! | 13xxx | State | InvalidOperation, InvalidState |
+//!
+//! # Example
+//!
+//! ```rust
+//! use needle::error::{NeedleError, Result, ErrorCode};
+//!
+//! fn example_operation() -> Result<()> {
+//!     // Use Result<T> which is an alias for std::result::Result<T, NeedleError>
+//!     Err(NeedleError::CollectionNotFound("my_collection".to_string()))
+//! }
+//!
+//! fn handle_error(err: NeedleError) {
+//!     // Get the error code for programmatic handling
+//!     let code = err.code();
+//!     println!("Error code: {:?} ({})", code, code.code());
+//!
+//!     // Match on specific error variants
+//!     match err {
+//!         NeedleError::CollectionNotFound(name) => {
+//!             println!("Collection '{}' not found", name);
+//!         }
+//!         NeedleError::DimensionMismatch { expected, got } => {
+//!             println!("Expected {} dimensions, got {}", expected, got);
+//!         }
+//!         _ => println!("Other error: {}", err),
+//!     }
+//! }
+//! ```
+//!
+//! # Error Propagation
+//!
+//! Use the `?` operator to propagate errors:
+//!
+//! ```rust,ignore
+//! use needle::{Database, Result};
+//!
+//! fn load_and_search(path: &str, query: &[f32]) -> Result<Vec<String>> {
+//!     let db = Database::open(path)?;  // Propagates IoError, etc.
+//!     let coll = db.collection("docs")?;  // Propagates CollectionNotFound
+//!     let results = coll.search(query, 10)?;  // Propagates DimensionMismatch, etc.
+//!     Ok(results.iter().map(|r| r.id.clone()).collect())
+//! }
+//! ```
+
 use thiserror::Error;
 
 /// Error code categories for programmatic error handling
@@ -64,6 +132,11 @@ pub enum ErrorCode {
     BackupFailed = 12001,
     RestoreFailed = 12002,
     BackupCorrupted = 12003,
+
+    // State/Operation errors (13xxx)
+    InvalidOperation = 13001,
+    InvalidState = 13002,
+    Unauthorized = 13003,
 }
 
 impl ErrorCode {
@@ -87,6 +160,7 @@ impl ErrorCode {
             ErrorCode::EncryptionError | ErrorCode::DecryptionError | ErrorCode::AuthenticationFailed => "Security",
             ErrorCode::ConsensusError | ErrorCode::ReplicationError | ErrorCode::NetworkError => "Distributed",
             ErrorCode::BackupFailed | ErrorCode::RestoreFailed | ErrorCode::BackupCorrupted => "Backup",
+            ErrorCode::InvalidOperation | ErrorCode::InvalidState | ErrorCode::Unauthorized => "State",
         }
     }
 }
@@ -224,6 +298,15 @@ pub enum NeedleError {
 
     #[error("Lock acquisition timed out after {0:?}")]
     LockTimeout(std::time::Duration),
+
+    #[error("Invalid operation: {0}")]
+    InvalidOperation(String),
+
+    #[error("Invalid state: {0}")]
+    InvalidState(String),
+
+    #[error("Unauthorized: {0}")]
+    Unauthorized(String),
 }
 
 impl Recoverable for NeedleError {
@@ -259,6 +342,9 @@ impl Recoverable for NeedleError {
             NeedleError::LockError => ErrorCode::DatabaseLocked,
             NeedleError::Timeout(_) => ErrorCode::Timeout,
             NeedleError::LockTimeout(_) => ErrorCode::LockTimeout,
+            NeedleError::InvalidOperation(_) => ErrorCode::InvalidOperation,
+            NeedleError::InvalidState(_) => ErrorCode::InvalidState,
+            NeedleError::Unauthorized(_) => ErrorCode::Unauthorized,
         }
     }
 
@@ -431,6 +517,24 @@ impl Recoverable for NeedleError {
                 RecoveryHint::new("Another process may be holding the lock"),
                 RecoveryHint::new("Retry after a short delay"),
                 RecoveryHint::new("Consider using shorter lock hold times"),
+            ],
+
+            NeedleError::InvalidOperation(msg) => vec![
+                RecoveryHint::new(format!("Invalid operation: {}", msg)),
+                RecoveryHint::new("Check the operation preconditions"),
+                RecoveryHint::new("Ensure the current state allows this operation"),
+            ],
+
+            NeedleError::InvalidState(msg) => vec![
+                RecoveryHint::new(format!("Invalid state: {}", msg)),
+                RecoveryHint::new("The system is in an unexpected state"),
+                RecoveryHint::new("Try reinitializing the component"),
+            ],
+
+            NeedleError::Unauthorized(msg) => vec![
+                RecoveryHint::new(format!("Unauthorized: {}", msg)),
+                RecoveryHint::new("Check your credentials and permissions"),
+                RecoveryHint::new("Ensure you have access to the requested resource"),
             ],
         }
     }
