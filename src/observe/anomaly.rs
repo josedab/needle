@@ -74,7 +74,7 @@ impl LocalOutlierFactor {
         for i in 0..n {
             let mut dists: Vec<(usize, f32)> = (0..n)
                 .filter(|&j| j != i)
-                .map(|j| (j, distance.compute(vectors[i], vectors[j])))
+                .map(|j| (j, distance.compute(vectors[i], vectors[j]).unwrap_or(f32::MAX)))
                 .collect();
 
             dists.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
@@ -163,7 +163,7 @@ impl LocalOutlierFactor {
             .vectors
             .iter()
             .enumerate()
-            .map(|(i, v)| (i, self.distance.compute(vector, v)))
+            .map(|(i, v)| (i, self.distance.compute(vector, v).unwrap_or(f32::MAX)))
             .collect();
 
         dists.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
@@ -193,7 +193,7 @@ impl LocalOutlierFactor {
                         .enumerate()
                         .filter(|(i, _)| *i != *j)
                         .map(|(i, v)| {
-                            let d = self.distance.compute(&self.vectors[*j], v);
+                            let d = self.distance.compute(&self.vectors[*j], v).unwrap_or(f32::MAX);
                             d.max(self.k_distances[i])
                         })
                         .take(self.k)
@@ -466,7 +466,7 @@ impl DistanceOutlierDetector {
             .map(|i| {
                 let mut dists: Vec<f32> = (0..n)
                     .filter(|&j| j != i)
-                    .map(|j| self.distance.compute(&self.vectors[i], &self.vectors[j]))
+                    .map(|j| self.distance.compute(&self.vectors[i], &self.vectors[j]).unwrap_or(f32::MAX))
                     .collect();
 
                 dists.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
