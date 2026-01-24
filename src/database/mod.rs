@@ -2214,6 +2214,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "experimental")]
     fn test_embedding_router_integration() {
         use crate::services::embedding_router::{EmbeddingRouter, RouterConfig, ProviderEntry};
 
@@ -2240,6 +2241,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "experimental")]
     fn test_webhook_service() {
         use crate::services::webhook_delivery::{
             WebhookService, WebhookConfig, WebhookSubscription, EventFilter

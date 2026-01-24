@@ -39,6 +39,7 @@ pub mod wasm_sdk;
 pub mod inference_engine;
 #[cfg(feature = "experimental")]
 pub mod plugin_api;
+#[cfg(feature = "experimental")]
 pub mod semantic_cache;
 #[cfg(feature = "experimental")]
 pub mod streaming_protocol;
@@ -194,7 +195,9 @@ pub mod readiness_probe;
 pub mod tenant_router;
 
 // ── Next-Gen v10 Services ────────────────────────────────────────────────────
+#[cfg(feature = "experimental")]
 pub mod embedding_router;
+#[cfg(feature = "experimental")]
 pub mod webhook_delivery;
 
 // ── Next-Gen v11 Services ────────────────────────────────────────────────────

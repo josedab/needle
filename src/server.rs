@@ -3226,6 +3226,7 @@ struct CacheStoreRequest {
     ttl_seconds: Option<u64>,
 }
 
+#[cfg(feature = "experimental")]
 async fn cache_lookup_handler(
     State(state): State<Arc<AppState>>,
     Path(collection): Path<String>,
@@ -3261,6 +3262,14 @@ async fn cache_lookup_handler(
             "misses": analytics.total_misses,
         }
     })))
+}
+
+#[cfg(not(feature = "experimental"))]
+async fn cache_lookup_handler(
+    Path(_collection): Path<String>,
+    Json(_body): Json<CacheLookupRequest>,
+) -> impl IntoResponse {
+    (StatusCode::NOT_IMPLEMENTED, Json(json!({ "error": "Requires 'experimental' feature" })))
 }
 
 async fn cache_store_handler(
@@ -4085,6 +4094,7 @@ struct CreateWebhookRequest {
     event_types: Vec<String>,
 }
 
+#[cfg(feature = "experimental")]
 async fn create_webhook_handler(
     Json(body): Json<CreateWebhookRequest>,
 ) -> impl IntoResponse {
@@ -4115,6 +4125,16 @@ async fn create_webhook_handler(
     })))
 }
 
+#[cfg(not(feature = "experimental"))]
+async fn create_webhook_handler(
+    Json(body): Json<CreateWebhookRequest>,
+) -> impl IntoResponse {
+    (StatusCode::NOT_IMPLEMENTED, Json(json!({
+        "error": "Requires 'experimental' feature",
+        "url": body.url,
+    })))
+}
+
 async fn list_webhooks_handler() -> impl IntoResponse {
     (StatusCode::OK, Json(json!({
         "webhooks": [],
@@ -4133,6 +4153,7 @@ async fn delete_webhook_handler(
 
 // ── Feature: Embedding Model Router Status ──────────────────────────────────
 
+#[cfg(feature = "experimental")]
 async fn embedding_router_status_handler() -> impl IntoResponse {
     use crate::services::embedding_router::RoutingStrategy;
 
@@ -4150,6 +4171,11 @@ async fn embedding_router_status_handler() -> impl IntoResponse {
         },
         "note": "Configure providers via environment variables or server config. Use /collections/:name/texts for auto-embed."
     })))
+}
+
+#[cfg(not(feature = "experimental"))]
+async fn embedding_router_status_handler() -> impl IntoResponse {
+    (StatusCode::NOT_IMPLEMENTED, Json(json!({ "error": "Requires 'experimental' feature" })))
 }
 
 #[cfg(test)]
