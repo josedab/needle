@@ -117,36 +117,43 @@ impl MultiModalDocBuilder {
         }
     }
 
+    #[must_use]
     pub fn with_text_embedding(mut self, embedding: Vec<f32>) -> Self {
         self.embeddings.insert(Modality::Text, embedding);
         self
     }
 
+    #[must_use]
     pub fn with_image_embedding(mut self, embedding: Vec<f32>) -> Self {
         self.embeddings.insert(Modality::Image, embedding);
         self
     }
 
+    #[must_use]
     pub fn with_audio_embedding(mut self, embedding: Vec<f32>) -> Self {
         self.embeddings.insert(Modality::Audio, embedding);
         self
     }
 
+    #[must_use]
     pub fn with_video_embedding(mut self, embedding: Vec<f32>) -> Self {
         self.embeddings.insert(Modality::Video, embedding);
         self
     }
 
+    #[must_use]
     pub fn with_code_embedding(mut self, embedding: Vec<f32>) -> Self {
         self.embeddings.insert(Modality::Code, embedding);
         self
     }
 
+    #[must_use]
     pub fn with_embedding(mut self, modality: Modality, embedding: Vec<f32>) -> Self {
         self.embeddings.insert(modality, embedding);
         self
     }
 
+    #[must_use]
     pub fn with_metadata(mut self, metadata: Value) -> Self {
         self.metadata = Some(metadata);
         self
@@ -279,7 +286,7 @@ impl ModalityIndex {
         }
 
         let all_vecs: Vec<Vec<f32>> = self.vectors.iter().map(|(_, v)| v.clone()).collect();
-        let raw = self.hnsw.search(query, k, &all_vecs);
+        let raw = self.hnsw.search(query, k, &all_vecs)?;
 
         Ok(raw
             .into_iter()

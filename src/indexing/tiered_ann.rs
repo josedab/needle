@@ -746,18 +746,21 @@ impl<'a> TieredQueryBuilder<'a> {
     }
 
     /// Set number of results
+    #[must_use]
     pub fn k(mut self, k: usize) -> Self {
         self.k = k;
         self
     }
 
     /// Set metadata filter
+    #[must_use]
     pub fn filter(mut self, filter: Filter) -> Self {
         self.filter = Some(filter);
         self
     }
 
     /// Search hot tier only
+    #[must_use]
     pub fn hot_only(mut self) -> Self {
         self.hot_only = true;
         self.cold_only = false;
@@ -765,6 +768,7 @@ impl<'a> TieredQueryBuilder<'a> {
     }
 
     /// Search cold tier only
+    #[must_use]
     pub fn cold_only(mut self) -> Self {
         self.cold_only = true;
         self.hot_only = false;

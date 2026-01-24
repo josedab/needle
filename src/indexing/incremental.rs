@@ -99,48 +99,56 @@ pub struct IncrementalConfigBuilder {
 
 impl IncrementalConfigBuilder {
     /// Set delta threshold (vectors buffered before merge)
+    #[must_use]
     pub fn delta_threshold(mut self, threshold: usize) -> Self {
         self.config.delta_threshold = threshold;
         self
     }
 
     /// Set compaction threshold (deleted ratio trigger)
+    #[must_use]
     pub fn compaction_threshold(mut self, threshold: f64) -> Self {
         self.config.compaction_threshold = threshold.clamp(0.0, 1.0);
         self
     }
 
     /// Set maximum fragmentation before forced optimization
+    #[must_use]
     pub fn max_fragmentation(mut self, ratio: f64) -> Self {
         self.config.max_fragmentation = ratio.clamp(0.0, 1.0);
         self
     }
 
     /// Enable or disable background optimization
+    #[must_use]
     pub fn background_optimization(mut self, enabled: bool) -> Self {
         self.config.background_optimization = enabled;
         self
     }
 
     /// Set optimization check interval
+    #[must_use]
     pub fn optimization_interval(mut self, interval: Duration) -> Self {
         self.config.optimization_interval = interval;
         self
     }
 
     /// Set maximum time for optimization pass
+    #[must_use]
     pub fn max_optimization_time(mut self, time: Duration) -> Self {
         self.config.max_optimization_time = time;
         self
     }
 
     /// Enable or disable connection rebalancing
+    #[must_use]
     pub fn enable_rebalancing(mut self, enabled: bool) -> Self {
         self.config.enable_rebalancing = enabled;
         self
     }
 
     /// Set batch size for incremental merges
+    #[must_use]
     pub fn merge_batch_size(mut self, size: usize) -> Self {
         self.config.merge_batch_size = size.max(1);
         self
@@ -555,7 +563,7 @@ impl IncrementalIndex {
         let mut results = {
             let index = self.index.read();
             let vectors = self.vectors.read();
-            index.search(query, k, vectors.as_slice())
+            index.search(query, k, vectors.as_slice())?
         };
 
         // Also search delta buffer (linear scan)
@@ -601,7 +609,7 @@ impl IncrementalIndex {
         let mut heap: BinaryHeap<(OrderedFloat<f32>, usize)> = BinaryHeap::new();
 
         for (idx, (_, vector, _)) in buffer.vectors.iter().enumerate() {
-            let distance = self.distance.compute(query, vector);
+            let distance = self.distance.compute(query, vector)?;
             if heap.len() < k {
                 heap.push((OrderedFloat(distance), idx));
             } else if let Some(&(top_dist, _)) = heap.peek() {

@@ -89,6 +89,7 @@ impl MultiVectorConfig {
     }
 
     /// Use dot product distance
+    #[must_use]
     pub fn with_dot_product(mut self) -> Self {
         self.distance = DistanceFunction::DotProduct;
         self
@@ -218,15 +219,15 @@ impl MultiVectorIndex {
         match self.config.distance {
             DistanceFunction::Cosine => {
                 // Cosine similarity = 1 - cosine_distance
-                1.0 - self.config.distance.compute(a, b)
+                1.0 - self.config.distance.compute(a, b).unwrap_or(0.0)
             }
             DistanceFunction::DotProduct => {
                 // Dot product (negated distance)
-                -self.config.distance.compute(a, b)
+                -self.config.distance.compute(a, b).unwrap_or(0.0)
             }
             _ => {
                 // For Euclidean/Manhattan, convert to similarity
-                1.0 / (1.0 + self.config.distance.compute(a, b))
+                1.0 / (1.0 + self.config.distance.compute(a, b).unwrap_or(0.0))
             }
         }
     }

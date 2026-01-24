@@ -392,7 +392,7 @@ impl GraphVectorFusion {
         let mut visited: HashSet<String> = HashSet::new();
 
         for (id, node) in &self.nodes {
-            let dist = self.config.distance.compute(query, &node.vector);
+            let dist = self.config.distance.compute(query, &node.vector)?;
             candidates.push(ScoredNode {
                 id: id.clone(),
                 score: dist * self.config.vector_weight,
@@ -463,14 +463,11 @@ impl GraphVectorFusion {
             });
         }
 
-        let mut scored: Vec<(String, f32)> = self
-            .nodes
-            .iter()
-            .map(|(id, node)| {
-                let dist = self.config.distance.compute(query, &node.vector);
-                (id.clone(), dist)
-            })
-            .collect();
+        let mut scored: Vec<(String, f32)> = Vec::new();
+        for (id, node) in &self.nodes {
+            let dist = self.config.distance.compute(query, &node.vector)?;
+            scored.push((id.clone(), dist));
+        }
 
         scored.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(Ordering::Equal));
         scored.truncate(k);
@@ -543,7 +540,7 @@ impl GraphVectorFusion {
                 visited.insert(entry.target.clone());
 
                 if let Some(node) = self.nodes.get(&entry.target) {
-                    let vector_dist = self.config.distance.compute(query, &node.vector);
+                    let vector_dist = self.config.distance.compute(query, &node.vector).unwrap_or(f32::MAX);
                     let hop = seed.hops + 1;
                     let graph_dist = 1.0 / (entry.weight * self.config.hop_decay.powi(hop as i32));
                     let fused_score = vector_dist * self.config.vector_weight

@@ -162,36 +162,43 @@ pub struct GraphVectorConfigBuilder {
 }
 
 impl GraphVectorConfigBuilder {
+    #[must_use]
     pub fn vector_weight(mut self, weight: f32) -> Self {
         self.config.vector_weight = weight.clamp(0.0, 1.0);
         self
     }
 
+    #[must_use]
     pub fn graph_weight(mut self, weight: f32) -> Self {
         self.config.graph_weight = weight.clamp(0.0, 1.0);
         self
     }
 
+    #[must_use]
     pub fn max_hops(mut self, hops: usize) -> Self {
         self.config.max_hops = hops;
         self
     }
 
+    #[must_use]
     pub fn distance_decay(mut self, decay: f32) -> Self {
         self.config.distance_decay = decay.clamp(0.0, 1.0);
         self
     }
 
+    #[must_use]
     pub fn bidirectional(mut self, enabled: bool) -> Self {
         self.config.bidirectional = enabled;
         self
     }
 
+    #[must_use]
     pub fn auto_similarity_edges(mut self, enabled: bool) -> Self {
         self.config.auto_similarity_edges = enabled;
         self
     }
 
+    #[must_use]
     pub fn similarity_threshold(mut self, threshold: f32) -> Self {
         self.config.similarity_threshold = threshold;
         self
@@ -558,7 +565,7 @@ impl GraphVectorIndex {
         let results = {
             let index = self.index.read();
             let vectors = self.vectors.read();
-            index.search(query, k, vectors.as_slice())
+            index.search(query, k, vectors.as_slice())?
         };
 
         let reverse_map = self.reverse_id_map.read();
@@ -617,7 +624,7 @@ impl GraphVectorIndex {
         let vector_results = {
             let index = self.index.read();
             let vectors = self.vectors.read();
-            index.search(query, fetch_k, vectors.as_slice())
+            index.search(query, fetch_k, vectors.as_slice())?
         };
 
         let reverse_map = self.reverse_id_map.read();

@@ -809,12 +809,14 @@ impl<'a> DiskAnnQueryBuilder<'a> {
     }
 
     /// Set the number of results to return.
+    #[must_use]
     pub fn k(mut self, k: usize) -> Self {
         self.k = k;
         self
     }
 
     /// Set the search list size (beam width).
+    #[must_use]
     pub fn search_list_size(mut self, size: usize) -> Self {
         self.search_list_size = Some(size);
         self

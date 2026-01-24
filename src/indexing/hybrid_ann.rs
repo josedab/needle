@@ -327,7 +327,7 @@ impl<'a> HybridSearch<'a> {
                 }
             }
 
-            let distance = distance_fn.compute(query, &vector);
+            let distance = distance_fn.compute(query, &vector)?;
             all_distances.push((id.to_string(), distance));
         }
 

@@ -374,7 +374,7 @@ impl MultiModalFusion {
                     .unwrap_or(DistanceFunction::Cosine);
 
                 if query_vec.len() == doc_vec.len() {
-                    let dist = distance_fn.compute(query_vec, doc_vec);
+                    let dist = distance_fn.compute(query_vec, doc_vec).unwrap_or(f32::MAX);
 
                     let weight = query
                         .modality_weights
