@@ -160,8 +160,11 @@ pub use services::{
     inference_engine, plugin_api, streaming_protocol, sync_engine,
     vector_transactions, wasm_browser,
 };
+#[cfg(feature = "experimental")]
 pub use services::semantic_cache;
+#[cfg(feature = "experimental")]
 pub use search::cost_estimator;
+#[cfg(feature = "experimental")]
 pub use indexing::{graph_vector_fusion, multimodal_fusion};
 
 // ── Next-Gen v3 Services ─────────────────────────────────────────────────────
@@ -214,7 +217,9 @@ pub use services::{
 };
 
 // ── Next-Gen v10 Services ────────────────────────────────────────────────────
+#[cfg(feature = "experimental")]
 pub use services::{embedding_router, webhook_delivery};
+
 
 // ── Experimental / Advanced ──────────────────────────────────────────────────
 // Features under active development. APIs may change without notice.

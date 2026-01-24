@@ -2943,7 +2943,7 @@ fn diff_command(path: &str, source: &str, target: &str, limit: usize) -> Result<
 }
 
 fn estimate_command(path: &str, collection: &str, k: usize, with_filter: bool) -> Result<()> {
-    use needle::cost_estimator::{CostEstimator, CollectionStatistics};
+    use needle::search::cost_estimator::{CostEstimator, CollectionStatistics};
 
     let db = Database::open(path)?;
     let coll = db.collection(collection)?;
