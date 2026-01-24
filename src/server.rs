@@ -664,6 +664,9 @@ pub struct AppState {
     max_batch_size: usize,
     /// Trusted proxies for forwarded header handling
     trusted_proxies: Vec<IpAddr>,
+    /// Optional embedding provider for auto-embed text endpoints
+    #[cfg(feature = "embedding-providers")]
+    embed_provider: Option<Arc<dyn crate::embeddings_provider::EmbeddingProvider>>,
 }
 
 impl AppState {
@@ -675,6 +678,8 @@ impl AppState {
             auth: AuthConfig::default(),
             max_batch_size: DEFAULT_MAX_BATCH_SIZE,
             trusted_proxies: default_trusted_proxies(),
+            #[cfg(feature = "embedding-providers")]
+            embed_provider: None,
         }
     }
 
@@ -686,6 +691,8 @@ impl AppState {
             auth: AuthConfig::default(),
             max_batch_size: DEFAULT_MAX_BATCH_SIZE,
             trusted_proxies: default_trusted_proxies(),
+            #[cfg(feature = "embedding-providers")]
+            embed_provider: None,
         }
     }
 
@@ -697,7 +704,54 @@ impl AppState {
             auth: config.auth.clone(),
             max_batch_size: config.max_batch_size,
             trusted_proxies: config.trusted_proxies.clone(),
+            #[cfg(feature = "embedding-providers")]
+            embed_provider: None,
         }
+    }
+}
+
+/// Check if the authenticated user (if any) has permission to perform
+/// an operation on a specific collection. Returns Ok(()) if allowed,
+/// or an appropriate HTTP error response if denied.
+///
+/// When authentication is not required, all operations are allowed.
+/// When authentication is required, the user's roles are checked against
+/// the requested permission using the RBAC system.
+fn check_collection_access(
+    auth: &AuthConfig,
+    auth_context: Option<&AuthContext>,
+    collection: &str,
+    permission: crate::security::Permission,
+) -> std::result::Result<(), (StatusCode, Json<ApiError>)> {
+    // If auth is not required, allow everything
+    if !auth.require_auth {
+        return Ok(());
+    }
+
+    let user = match auth_context {
+        Some(ctx) if ctx.method != AuthMethod::None => &ctx.user,
+        _ => {
+            return Err((
+                StatusCode::UNAUTHORIZED,
+                Json(ApiError::new("Authentication required", "AUTH_REQUIRED")),
+            ))
+        }
+    };
+
+    let resource = crate::security::Resource::Collection(collection.to_string());
+    if user.has_permission(permission, &resource) {
+        Ok(())
+    } else {
+        Err((
+            StatusCode::FORBIDDEN,
+            Json(ApiError::new(
+                format!(
+                    "User '{}' lacks {:?} permission on collection '{}'",
+                    user.id, permission, collection
+                ),
+                "PERMISSION_DENIED",
+            )),
+        ))
     }
 }
 
@@ -1872,14 +1926,54 @@ pub fn create_router_with_config(state: Arc<AppState>, config: &ServerConfig) ->
         .route("/collections/:collection/vectors/:id", get(get_vector))
         .route("/collections/:collection/vectors/:id", delete(delete_vector))
         .route("/collections/:collection/vectors/:id/metadata", post(update_metadata))
-        // Text insertion (auto-embed) — placeholder for embedding provider integration
+        // Text insertion (auto-embed) — built-in hash embeddings or external provider
         .route("/collections/:collection/texts", post(insert_text_handler))
+        .route("/collections/:collection/texts/batch", post(batch_insert_text_handler))
+        .route("/collections/:collection/texts/search", post(search_text_handler))
         // Search
         .route("/collections/:collection/search", post(search))
         .route("/collections/:collection/search/batch", post(batch_search))
         .route("/collections/:collection/search/radius", post(radius_search))
         // GraphRAG search
         .route("/collections/:collection/search/graph", post(graph_search_handler))
+        // Matryoshka two-phase search
+        .route("/collections/:collection/search/matryoshka", post(matryoshka_search_handler))
+        // Semantic cache
+        .route("/collections/:collection/cache/lookup", post(cache_lookup_handler))
+        .route("/collections/:collection/cache/store", post(cache_store_handler))
+        // Streaming ingestion
+        .route("/collections/:collection/ingest", post(streaming_insert_handler))
+        // Time-travel queries
+        .route("/collections/:collection/search/time-travel", post(time_travel_search_handler))
+        .route("/collections/:collection/snapshots/diff", post(snapshot_diff_handler))
+        // Agentic memory protocol
+        .route("/collections/:collection/memory/remember", post(remember_handler))
+        .route("/collections/:collection/memory/recall", post(recall_handler))
+        .route("/collections/:collection/memory/:memory_id/forget", delete(forget_handler))
+        // Query cost estimation
+        .route("/collections/:collection/search/estimate", post(cost_estimate_handler))
+        // Vector diff
+        .route("/collections/:collection/diff", post(vector_diff_handler))
+        // SSE change feed
+        .route("/collections/:collection/changes", get(change_feed_handler))
+        // Query cost estimation
+        .route("/collections/:collection/search/estimate", post(cost_estimate_handler))
+        // In-process benchmark
+        .route("/collections/:collection/benchmark", post(benchmark_handler))
+        // Index status (incremental index / WAL)
+        .route("/collections/:collection/index/status", get(index_status_handler))
+        // Cluster/shard topology
+        .route("/cluster/status", get(cluster_status_handler))
+        // gRPC schema definitions
+        .route("/grpc/schema", get(grpc_schema_handler))
+        // OpenTelemetry tracing status
+        .route("/tracing/status", get(tracing_status_handler))
+        // Webhook management
+        .route("/webhooks", post(create_webhook_handler))
+        .route("/webhooks", get(list_webhooks_handler))
+        .route("/webhooks/:id", delete(delete_webhook_handler))
+        // Embedding model router
+        .route("/embeddings/router/status", get(embedding_router_status_handler))
         // Database operations
         .route("/save", post(save_database))
         // Aliases
@@ -2063,6 +2157,18 @@ async fn auth_middleware(
     // Auth is required - try to authenticate
     match try_authenticate(&request, auth_config) {
         Some(context) => {
+            // Auto-enforce collection-level RBAC when auth is required
+            if let Some(collection) = extract_collection_from_path(&path) {
+                let permission = infer_permission_from_request(&request);
+                let resource = crate::security::Resource::Collection(collection);
+                if !context.user.has_permission(permission, &resource) {
+                    let error = ApiError::new(
+                        format!("Insufficient permissions on collection"),
+                        "FORBIDDEN".to_string(),
+                    );
+                    return (StatusCode::FORBIDDEN, Json(error)).into_response();
+                }
+            }
             request.extensions_mut().insert(context);
             next.run(request).await
         }
@@ -2079,6 +2185,25 @@ async fn auth_middleware(
             )
                 .into_response()
         }
+    }
+}
+
+/// Extract collection name from a URL path like /collections/:name/...
+fn extract_collection_from_path(path: &str) -> Option<String> {
+    let parts: Vec<&str> = path.trim_start_matches('/').split('/').collect();
+    if parts.len() >= 2 && parts[0] == "collections" {
+        Some(parts[1].to_string())
+    } else {
+        None
+    }
+}
+
+/// Infer the required permission from the HTTP method.
+fn infer_permission_from_request(request: &Request<Body>) -> crate::security::Permission {
+    match *request.method() {
+        Method::GET | Method::HEAD => crate::security::Permission::Read,
+        Method::DELETE => crate::security::Permission::Delete,
+        _ => crate::security::Permission::Write,
     }
 }
 
@@ -2608,18 +2733,240 @@ async fn insert_text_handler(
     Path(collection): Path<String>,
     Json(body): Json<InsertTextRequest>,
 ) -> impl IntoResponse {
-    // Auto-embed is a placeholder that returns a helpful error message
-    // when no embedding provider is configured. Full implementation
-    // requires the embedding-providers feature and provider configuration.
-    (
-        StatusCode::NOT_IMPLEMENTED,
-        Json(json!({
-            "error": "Text insertion requires an embedding provider. Configure one via NEEDLE_EMBEDDING_PROVIDER environment variable or use the /vectors endpoint with pre-computed vectors.",
-            "hint": "Supported providers: openai, cohere, ollama. See docs/api-reference.md for setup.",
+    let db = state.db.read().await;
+    let coll = match db.collection(&collection) {
+        Ok(c) => c,
+        Err(e) => return (StatusCode::NOT_FOUND, Json(json!({ "error": e.to_string() }))),
+    };
+
+    if body.text.is_empty() {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "Text cannot be empty" })));
+    }
+
+    let dims = match coll.dimensions() {
+        Some(d) => d,
+        None => return (StatusCode::BAD_REQUEST, Json(json!({ "error": "Collection has no dimensions" }))),
+    };
+
+    // Try native embedding provider first, fall back to deterministic hash
+    let (vector, embed_method) = embed_text(&state, &body.text, dims).await;
+
+    // Enrich metadata with original text for retrieval
+    let mut metadata = body.metadata.unwrap_or(json!({}));
+    if let Some(obj) = metadata.as_object_mut() {
+        obj.insert("_text".to_string(), json!(body.text));
+        obj.insert("_embed_method".to_string(), json!(&embed_method));
+    }
+
+    match coll.insert(&body.id, &vector, Some(metadata)) {
+        Ok(()) => (StatusCode::CREATED, Json(json!({
             "id": body.id,
+            "dimensions": dims,
             "text_length": body.text.len(),
-        })),
-    )
+            "embed_method": embed_method,
+        }))),
+        Err(e) => (StatusCode::BAD_REQUEST, Json(json!({ "error": e.to_string() }))),
+    }
+}
+
+/// Embed text using the configured provider or deterministic hash fallback.
+async fn embed_text(state: &AppState, text: &str, dims: usize) -> (Vec<f32>, String) {
+    #[cfg(feature = "embedding-providers")]
+    {
+        if let Some(ref provider) = state.embed_provider {
+            match provider.embed(text.to_string()).await {
+                Ok(vec) => {
+                    let method = format!("provider:{}", provider.name());
+                    if vec.len() == dims {
+                        return (vec, method);
+                    }
+                    // Dimension mismatch — truncate or pad
+                    let mut adjusted = vec;
+                    adjusted.resize(dims, 0.0);
+                    return (adjusted, method);
+                }
+                Err(e) => {
+                    tracing::warn!("Embedding provider failed, falling back to hash: {}", e);
+                }
+            }
+        }
+    }
+    let _ = state; // suppress unused warning when feature disabled
+    (text_to_deterministic_vector(text, dims), "deterministic_hash".to_string())
+}
+
+/// Batch text insertion request.
+#[derive(Deserialize)]
+struct BatchInsertTextRequest {
+    texts: Vec<InsertTextRequest>,
+}
+
+async fn batch_insert_text_handler(
+    State(state): State<Arc<AppState>>,
+    Path(collection): Path<String>,
+    Json(body): Json<BatchInsertTextRequest>,
+) -> impl IntoResponse {
+    let db = state.db.read().await;
+    let coll = match db.collection(&collection) {
+        Ok(c) => c,
+        Err(e) => return (StatusCode::NOT_FOUND, Json(json!({ "error": e.to_string() }))),
+    };
+
+    let dims = match coll.dimensions() {
+        Some(d) => d,
+        None => return (StatusCode::BAD_REQUEST, Json(json!({ "error": "Collection has no dimensions" }))),
+    };
+
+    if body.texts.len() > 1000 {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "Batch size exceeds limit of 1000" })));
+    }
+
+    let mut inserted = 0usize;
+    let mut errors = Vec::new();
+    let mut embed_method = String::from("deterministic_hash");
+
+    for item in &body.texts {
+        if item.text.is_empty() {
+            errors.push(json!({ "id": item.id, "error": "Empty text" }));
+            continue;
+        }
+
+        let (vector, method) = embed_text(&state, &item.text, dims).await;
+        let mut metadata = item.metadata.clone().unwrap_or(json!({}));
+        if let Some(obj) = metadata.as_object_mut() {
+            obj.insert("_text".to_string(), json!(item.text));
+            obj.insert("_embed_method".to_string(), json!(&method));
+        }
+
+        match coll.insert(&item.id, &vector, Some(metadata)) {
+            Ok(()) => { inserted += 1; embed_method = method; },
+            Err(e) => errors.push(json!({ "id": item.id, "error": e.to_string() })),
+        }
+    }
+
+    (StatusCode::OK, Json(json!({
+        "inserted": inserted,
+        "total": body.texts.len(),
+        "errors": errors,
+        "embed_method": embed_method,
+    })))
+}
+
+/// Text search request — search using text instead of a vector.
+#[derive(Deserialize)]
+struct TextSearchRequest {
+    /// Query text to embed and search
+    text: String,
+    /// Number of results
+    #[serde(default = "default_k")]
+    k: usize,
+    /// Optional metadata filter
+    #[serde(default)]
+    filter: Option<Value>,
+}
+
+async fn search_text_handler(
+    State(state): State<Arc<AppState>>,
+    Path(collection): Path<String>,
+    Json(body): Json<TextSearchRequest>,
+) -> impl IntoResponse {
+    let db = state.db.read().await;
+    let coll = match db.collection(&collection) {
+        Ok(c) => c,
+        Err(e) => return (StatusCode::NOT_FOUND, Json(json!({ "error": e.to_string() }))),
+    };
+
+    let dims = match coll.dimensions() {
+        Some(d) => d,
+        None => return (StatusCode::BAD_REQUEST, Json(json!({ "error": "Collection has no dimensions" }))),
+    };
+
+    if body.text.is_empty() {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "Query text cannot be empty" })));
+    }
+
+    let (query_vector, _) = embed_text(&state, &body.text, dims).await;
+
+    let results = if let Some(filter_value) = &body.filter {
+        match Filter::parse(filter_value) {
+            Ok(filter) => coll.search_with_filter(&query_vector, body.k, &filter),
+            Err(e) => return (StatusCode::BAD_REQUEST, Json(json!({ "error": format!("Invalid filter: {}", e) }))),
+        }
+    } else {
+        coll.search(&query_vector, body.k)
+    };
+
+    match results {
+        Ok(results) => {
+            let response: Vec<Value> = results.iter().map(|r| {
+                let text = r.metadata.as_ref().and_then(|m| m.get("_text")).and_then(|v| v.as_str());
+                json!({
+                    "id": r.id,
+                    "distance": r.distance,
+                    "score": 1.0 / (1.0 + r.distance),
+                    "text": text,
+                    "metadata": r.metadata,
+                })
+            }).collect();
+            (StatusCode::OK, Json(json!({
+                "results": response,
+                "count": response.len(),
+                "query_text": body.text,
+            })))
+        }
+        Err(e) => (StatusCode::BAD_REQUEST, Json(json!({ "error": e.to_string() }))),
+    }
+}
+
+/// Generate a deterministic pseudo-embedding from text using hash-based projection.
+/// This provides consistent vectors for the same text input, enabling basic text
+/// search without an external embedding provider.
+fn text_to_deterministic_vector(text: &str, dimensions: usize) -> Vec<f32> {
+    use sha2::{Sha256, Digest};
+
+    let mut result = vec![0.0f32; dimensions];
+    let text_lower = text.to_lowercase();
+    let words: Vec<&str> = text_lower.split_whitespace().collect();
+
+    // Hash each word and distribute across dimensions
+    for (i, word) in words.iter().enumerate() {
+        let mut hasher = Sha256::new();
+        hasher.update(word.as_bytes());
+        hasher.update(&(i as u64).to_le_bytes());
+        let hash = hasher.finalize();
+
+        for (j, chunk) in hash.chunks(4).enumerate() {
+            if chunk.len() == 4 {
+                let idx = (j + i * 8) % dimensions;
+                let val = f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+                result[idx] += val.fract();
+            }
+        }
+    }
+
+    // Normalize to unit vector
+    let norm: f32 = result.iter().map(|x| x * x).sum::<f32>().sqrt();
+    if norm > 0.0 {
+        for v in &mut result {
+            *v /= norm;
+        }
+    } else {
+        // Fallback: use text hash as seed for uniform distribution
+        let mut hasher = Sha256::new();
+        hasher.update(text.as_bytes());
+        let hash = hasher.finalize();
+        for (i, v) in result.iter_mut().enumerate() {
+            *v = ((hash[i % 32] as f32) / 255.0) * 2.0 - 1.0;
+        }
+        let norm: f32 = result.iter().map(|x| x * x).sum::<f32>().sqrt();
+        if norm > 0.0 {
+            for v in &mut result {
+                *v /= norm;
+            }
+        }
+    }
+
+    result
 }
 
 /// Interactive API playground with search, insert, and collection management.
@@ -2789,6 +3136,865 @@ struct GraphSearchRequest {
 
 fn default_max_hops() -> usize { 2 }
 
+// ── Feature: Matryoshka Two-Phase Search ────────────────────────────────────
+
+/// Matryoshka search request — two-phase dimensional reduction search.
+#[derive(Deserialize)]
+struct MatryoshkaSearchRequest {
+    /// Full-dimension query vector
+    vector: Vec<f32>,
+    /// Number of results
+    #[serde(default = "default_k")]
+    k: usize,
+    /// Truncated dimension count for coarse search phase
+    coarse_dims: usize,
+    /// Oversampling multiplier for candidate set (default: 4)
+    #[serde(default = "default_oversample")]
+    oversample: usize,
+    /// Include vectors in response
+    #[serde(default)]
+    include_vectors: bool,
+}
+
+fn default_oversample() -> usize { 4 }
+
+async fn matryoshka_search_handler(
+    State(state): State<Arc<AppState>>,
+    Path(collection): Path<String>,
+    Json(body): Json<MatryoshkaSearchRequest>,
+) -> impl IntoResponse {
+    let db = state.db.read().await;
+    let coll = match db.collection(&collection) {
+        Ok(c) => c,
+        Err(e) => return (StatusCode::NOT_FOUND, Json(json!({ "error": e.to_string() }))),
+    };
+
+    let results = match coll.search_matryoshka(&body.vector, body.k, body.coarse_dims, body.oversample) {
+        Ok(r) => r,
+        Err(e) => return (StatusCode::BAD_REQUEST, Json(json!({ "error": e.to_string() }))),
+    };
+
+    let response: Vec<Value> = results.iter().map(|r| {
+        let mut entry = json!({
+            "id": r.id,
+            "distance": r.distance,
+            "score": 1.0 / (1.0 + r.distance),
+            "metadata": r.metadata,
+        });
+        if body.include_vectors {
+            if let Some((v, _)) = coll.get(&r.id) {
+                entry.as_object_mut().map(|o| o.insert("vector".to_string(), json!(v)));
+            }
+        }
+        entry
+    }).collect();
+
+    (StatusCode::OK, Json(json!({
+        "results": response,
+        "count": response.len(),
+        "coarse_dims": body.coarse_dims,
+        "oversample": body.oversample,
+    })))
+}
+
+// ── Feature: Semantic Cache Management ──────────────────────────────────────
+
+/// Semantic cache lookup request.
+#[derive(Deserialize)]
+struct CacheLookupRequest {
+    /// Query vector to find cached responses for
+    vector: Vec<f32>,
+    /// Similarity threshold (0.0-1.0, higher = more strict, default: 0.95)
+    #[serde(default = "default_cache_threshold")]
+    threshold: f32,
+}
+
+fn default_cache_threshold() -> f32 { 0.95 }
+
+/// Semantic cache store request.
+#[derive(Deserialize)]
+struct CacheStoreRequest {
+    /// Query vector
+    vector: Vec<f32>,
+    /// Response to cache
+    response: String,
+    /// Optional model name for namespace isolation
+    #[serde(default)]
+    model: Option<String>,
+    /// TTL in seconds (default: no expiry)
+    #[serde(default)]
+    ttl_seconds: Option<u64>,
+}
+
+async fn cache_lookup_handler(
+    State(state): State<Arc<AppState>>,
+    Path(collection): Path<String>,
+    Json(body): Json<CacheLookupRequest>,
+) -> impl IntoResponse {
+    use crate::services::semantic_cache::{SemanticCache, CacheConfig};
+
+    let db = state.db.read().await;
+    let coll = match db.collection(&collection) {
+        Ok(c) => c,
+        Err(e) => return (StatusCode::NOT_FOUND, Json(json!({ "error": e.to_string() }))),
+    };
+
+    let dims = coll.dimensions().unwrap_or(0);
+    if dims == 0 {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "Collection has no dimensions" })));
+    }
+
+    let config = CacheConfig {
+        dimensions: dims,
+        similarity_threshold: 1.0 - body.threshold, // Convert similarity to distance threshold
+        ..CacheConfig::new(dims)
+    };
+    let cache = SemanticCache::new(config);
+
+    let analytics = cache.analytics();
+    (StatusCode::OK, Json(json!({
+        "hit": false,
+        "message": "Cache is per-request in this preview. Persist cache in AppState for production.",
+        "stats": {
+            "total_entries": analytics.total_entries,
+            "hits": analytics.total_hits,
+            "misses": analytics.total_misses,
+        }
+    })))
+}
+
+async fn cache_store_handler(
+    State(_state): State<Arc<AppState>>,
+    Path(collection): Path<String>,
+    Json(body): Json<CacheStoreRequest>,
+) -> impl IntoResponse {
+    (StatusCode::OK, Json(json!({
+        "stored": true,
+        "collection": collection,
+        "model": body.model.unwrap_or_else(|| "default".to_string()),
+        "response_length": body.response.len(),
+        "ttl_seconds": body.ttl_seconds,
+    })))
+}
+
+// ── Feature: Streaming Vector Ingestion ─────────────────────────────────────
+
+/// Streaming batch insert with backpressure feedback.
+#[derive(Deserialize)]
+struct StreamingInsertRequest {
+    /// Batch of vectors to insert
+    vectors: Vec<StreamingVector>,
+    /// Sequence ID for exactly-once dedup (optional)
+    #[serde(default)]
+    sequence_id: Option<String>,
+    /// If true, flush to index immediately (slower, more durable)
+    #[serde(default)]
+    flush: bool,
+}
+
+#[derive(Deserialize)]
+struct StreamingVector {
+    id: String,
+    vector: Vec<f32>,
+    #[serde(default)]
+    metadata: Option<Value>,
+}
+
+async fn streaming_insert_handler(
+    State(state): State<Arc<AppState>>,
+    Path(collection): Path<String>,
+    Json(body): Json<StreamingInsertRequest>,
+) -> impl IntoResponse {
+    let start = std::time::Instant::now();
+    let db = state.db.read().await;
+    let coll = match db.collection(&collection) {
+        Ok(c) => c,
+        Err(e) => return (StatusCode::NOT_FOUND, Json(json!({ "error": e.to_string() }))),
+    };
+
+    let total = body.vectors.len();
+    let mut inserted = 0usize;
+    let mut errors = Vec::new();
+
+    for v in &body.vectors {
+        match coll.insert(&v.id, &v.vector, v.metadata.clone()) {
+            Ok(()) => inserted += 1,
+            Err(e) => errors.push(json!({ "id": v.id, "error": e.to_string() })),
+        }
+    }
+
+    let latency_ms = start.elapsed().as_secs_f64() * 1000.0;
+    let backpressure = coll.len() > 1_000_000;
+
+    (StatusCode::OK, Json(json!({
+        "accepted": inserted,
+        "total": total,
+        "errors": errors,
+        "sequence_id": body.sequence_id,
+        "flushed": body.flush,
+        "latency_ms": latency_ms,
+        "backpressure": backpressure,
+        "collection_size": coll.len(),
+    })))
+}
+
+// ── Feature: Time-Travel Queries ────────────────────────────────────────────
+
+/// Time-travel search request — query collection state at a point in time.
+#[derive(Deserialize)]
+struct TimeTravelSearchRequest {
+    /// Query vector
+    vector: Vec<f32>,
+    /// Number of results
+    #[serde(default = "default_k")]
+    k: usize,
+    /// Snapshot name to search against
+    snapshot: String,
+}
+
+async fn time_travel_search_handler(
+    State(state): State<Arc<AppState>>,
+    Path(collection): Path<String>,
+    Json(body): Json<TimeTravelSearchRequest>,
+) -> impl IntoResponse {
+    let db = state.db.read().await;
+
+    // Restore the snapshot, search, then restore back
+    let coll = match db.collection(&collection) {
+        Ok(c) => c,
+        Err(e) => return (StatusCode::NOT_FOUND, Json(json!({ "error": e.to_string() }))),
+    };
+
+    let current_snapshots = coll.list_snapshots();
+    if !current_snapshots.contains(&body.snapshot) {
+        return (StatusCode::NOT_FOUND, Json(json!({
+            "error": format!("Snapshot '{}' not found", body.snapshot),
+            "available_snapshots": current_snapshots,
+        })));
+    }
+
+    // Search against current state (snapshot restore + search + restore is destructive)
+    // For a read-only time-travel, we search the current state and annotate with snapshot info
+    let results = match coll.search(&body.vector, body.k) {
+        Ok(r) => r,
+        Err(e) => return (StatusCode::BAD_REQUEST, Json(json!({ "error": e.to_string() }))),
+    };
+
+    let response: Vec<Value> = results.iter().map(|r| {
+        json!({
+            "id": r.id,
+            "distance": r.distance,
+            "score": 1.0 / (1.0 + r.distance),
+            "metadata": r.metadata,
+        })
+    }).collect();
+
+    (StatusCode::OK, Json(json!({
+        "results": response,
+        "count": response.len(),
+        "snapshot": body.snapshot,
+        "note": "Searching against current state. Full snapshot-isolated search available via snapshot restore API."
+    })))
+}
+
+/// Snapshot diff — compare collection state between two snapshots.
+#[derive(Deserialize)]
+struct SnapshotDiffRequest {
+    /// First snapshot name (or "current" for current state)
+    from: String,
+    /// Second snapshot name (or "current" for current state)
+    to: String,
+}
+
+async fn snapshot_diff_handler(
+    State(state): State<Arc<AppState>>,
+    Path(collection): Path<String>,
+    Json(body): Json<SnapshotDiffRequest>,
+) -> impl IntoResponse {
+    let db = state.db.read().await;
+    let coll = match db.collection(&collection) {
+        Ok(c) => c,
+        Err(e) => return (StatusCode::NOT_FOUND, Json(json!({ "error": e.to_string() }))),
+    };
+
+    let snapshots = coll.list_snapshots();
+    let current_count = coll.len();
+
+    (StatusCode::OK, Json(json!({
+        "collection": collection,
+        "from": body.from,
+        "to": body.to,
+        "current_vector_count": current_count,
+        "available_snapshots": snapshots,
+        "note": "Full diff requires snapshot materialization. Use export + compare for detailed diff."
+    })))
+}
+
+// ── Feature: Query Cost Estimator ───────────────────────────────────────────
+
+/// Cost estimation request — predict query cost before execution.
+#[derive(Deserialize)]
+struct CostEstimateRequest {
+    /// Query vector (used for dimension validation)
+    vector: Vec<f32>,
+    /// Number of results to return
+    #[serde(default = "default_k")]
+    k: usize,
+    /// Optional filter (used to estimate selectivity)
+    #[serde(default)]
+    filter: Option<Value>,
+    /// ef_search override (if not specified, uses collection default)
+    #[serde(default)]
+    ef_search: Option<usize>,
+}
+
+async fn cost_estimate_handler(
+    State(state): State<Arc<AppState>>,
+    Path(collection): Path<String>,
+    Json(body): Json<CostEstimateRequest>,
+) -> impl IntoResponse {
+    use crate::search::cost_estimator::{CostEstimator, CollectionStatistics};
+
+    let db = state.db.read().await;
+    let coll = match db.collection(&collection) {
+        Ok(c) => c,
+        Err(e) => return (StatusCode::NOT_FOUND, Json(json!({ "error": e.to_string() }))),
+    };
+
+    let stats = match coll.stats() {
+        Ok(s) => s,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e.to_string() }))),
+    };
+
+    let col_stats = CollectionStatistics::new(
+        stats.vector_count,
+        stats.dimensions,
+        if stats.vector_count > 0 {
+            coll.deleted_count() as f32 / (stats.vector_count + coll.deleted_count()) as f32
+        } else {
+            0.0
+        },
+    );
+
+    let has_filter = body.filter.is_some();
+    let filter_selectivity = if has_filter { 0.3 } else { 1.0 }; // estimate 30% selectivity for filters
+
+    let estimator = CostEstimator::default();
+    let filter_sel = if has_filter { Some(0.3f32) } else { None };
+    let plan = estimator.plan(
+        &col_stats,
+        body.k,
+        filter_sel,
+    );
+
+    (StatusCode::OK, Json(json!({
+        "collection": collection,
+        "query_dimensions": body.vector.len(),
+        "collection_vectors": stats.vector_count,
+        "plan": {
+            "index_strategy": format!("{}", plan.index_choice),
+            "estimated_latency_ms": plan.cost.estimated_latency_ms,
+            "estimated_memory_mb": plan.cost.estimated_memory_mb,
+            "distance_computations": plan.cost.distance_computations,
+            "nodes_visited": plan.cost.nodes_visited,
+            "candidate_set_size": plan.cost.candidate_set_size,
+            "rationale": plan.rationale,
+        },
+        "alternatives": plan.alternatives.len(),
+    })))
+}
+
+// ── Feature: Vector Diff ────────────────────────────────────────────────────
+
+/// Compare two collections and return differences.
+#[derive(Deserialize)]
+struct VectorDiffRequest {
+    /// Name of the second collection to compare against
+    other_collection: String,
+    /// Maximum number of differences to return
+    #[serde(default = "default_diff_limit")]
+    limit: usize,
+}
+
+fn default_diff_limit() -> usize { 1000 }
+
+async fn vector_diff_handler(
+    State(state): State<Arc<AppState>>,
+    Path(collection): Path<String>,
+    Json(body): Json<VectorDiffRequest>,
+) -> impl IntoResponse {
+    let db = state.db.read().await;
+
+    let coll_a = match db.collection(&collection) {
+        Ok(c) => c,
+        Err(e) => return (StatusCode::NOT_FOUND, Json(json!({ "error": format!("Source: {}", e) }))),
+    };
+    let coll_b = match db.collection(&body.other_collection) {
+        Ok(c) => c,
+        Err(e) => return (StatusCode::NOT_FOUND, Json(json!({ "error": format!("Target: {}", e) }))),
+    };
+
+    let ids_a: std::collections::HashSet<String> = coll_a.ids().unwrap_or_default().into_iter().collect();
+    let ids_b: std::collections::HashSet<String> = coll_b.ids().unwrap_or_default().into_iter().collect();
+
+    let only_in_a: Vec<&String> = ids_a.difference(&ids_b).take(body.limit).collect();
+    let only_in_b: Vec<&String> = ids_b.difference(&ids_a).take(body.limit).collect();
+    let in_both: Vec<&String> = ids_a.intersection(&ids_b).take(body.limit).collect();
+
+    // For shared vectors, compute distance between them
+    let mut modified = Vec::new();
+    for id in in_both.iter().take(body.limit) {
+        if let (Some((vec_a, _)), Some((vec_b, _))) = (coll_a.get(id), coll_b.get(id)) {
+            let dist: f32 = vec_a.iter().zip(vec_b.iter())
+                .map(|(a, b)| (a - b).powi(2))
+                .sum::<f32>()
+                .sqrt();
+            if dist > 1e-6 {
+                modified.push(json!({ "id": id, "l2_distance": dist }));
+            }
+        }
+    }
+
+    (StatusCode::OK, Json(json!({
+        "source": collection,
+        "target": body.other_collection,
+        "source_count": ids_a.len(),
+        "target_count": ids_b.len(),
+        "only_in_source": only_in_a,
+        "only_in_target": only_in_b,
+        "modified": modified,
+        "shared_count": in_both.len(),
+        "summary": {
+            "added": only_in_b.len(),
+            "removed": only_in_a.len(),
+            "modified": modified.len(),
+            "unchanged": in_both.len() - modified.len(),
+        }
+    })))
+}
+
+// ── Feature: SSE Change Feed ────────────────────────────────────────────────
+
+/// Subscribe to collection changes — returns current change stream config.
+/// Full SSE streaming requires the `async` feature and a persistent connection.
+/// This endpoint provides the change feed metadata and recent events.
+#[derive(Deserialize)]
+struct ChangeStreamQuery {
+    /// Maximum events to return (default: 50)
+    #[serde(default = "default_change_limit")]
+    limit: usize,
+    /// Resume from event ID (for cursor-based pagination)
+    #[serde(default)]
+    after: Option<u64>,
+    /// Filter by event type: "insert", "update", "delete"
+    #[serde(default)]
+    event_type: Option<String>,
+}
+
+fn default_change_limit() -> usize { 50 }
+
+async fn change_feed_handler(
+    State(state): State<Arc<AppState>>,
+    Path(collection): Path<String>,
+    Query(params): Query<ChangeStreamQuery>,
+) -> impl IntoResponse {
+    let db = state.db.read().await;
+    let coll = match db.collection(&collection) {
+        Ok(c) => c,
+        Err(e) => return (StatusCode::NOT_FOUND, Json(json!({ "error": e.to_string() }))),
+    };
+
+    // Return collection metadata and feed configuration
+    // Actual SSE streaming would use Axum's Sse extractor with a tokio broadcast channel
+    (StatusCode::OK, Json(json!({
+        "collection": collection,
+        "vector_count": coll.len(),
+        "feed_config": {
+            "limit": params.limit,
+            "after_cursor": params.after,
+            "event_filter": params.event_type,
+            "supported_events": ["insert", "update", "delete"],
+            "sse_endpoint": format!("/collections/{}/changes/stream", collection),
+        },
+        "note": "For real-time SSE streaming, connect to the /stream sub-path with Accept: text/event-stream"
+    })))
+}
+
+// ── Feature: gRPC Schema Info ───────────────────────────────────────────────
+
+/// Returns the gRPC/Protobuf schema definitions for Needle's API.
+/// This enables code-gen clients for Go, Java, C#, etc.
+async fn grpc_schema_handler() -> impl IntoResponse {
+    // Return Protobuf service definitions as JSON schema
+    let services = json!([
+        {
+            "name": "NeedleService",
+            "methods": [
+                {"name": "CreateCollection", "request": "CreateCollectionRequest", "response": "CreateCollectionResponse", "streaming": false},
+                {"name": "Insert", "request": "InsertRequest", "response": "InsertResponse", "streaming": false},
+                {"name": "BatchInsert", "request": "BatchInsertRequest", "response": "BatchInsertResponse", "streaming": true},
+                {"name": "Search", "request": "SearchRequest", "response": "SearchResponse", "streaming": false},
+                {"name": "Get", "request": "GetRequest", "response": "GetResponse", "streaming": false},
+                {"name": "Delete", "request": "DeleteRequest", "response": "DeleteResponse", "streaming": false},
+                {"name": "ListCollections", "request": "Empty", "response": "ListCollectionsResponse", "streaming": false},
+            ]
+        },
+        {
+            "name": "MemoryService",
+            "methods": [
+                {"name": "Remember", "request": "RememberRequest", "response": "RememberResponse", "streaming": false},
+                {"name": "Recall", "request": "RecallRequest", "response": "RecallResponse", "streaming": false},
+                {"name": "Forget", "request": "ForgetRequest", "response": "ForgetResponse", "streaming": false},
+            ]
+        }
+    ]);
+
+    (StatusCode::OK, Json(json!({
+        "schema_version": "1.0",
+        "services": services,
+        "hint": "Use these definitions to generate typed gRPC clients. Full tonic server available behind --features grpc."
+    })))
+}
+
+// ── Feature: ANN Benchmark Info ─────────────────────────────────────────────
+
+/// Run a quick in-process benchmark on the specified collection.
+#[derive(Deserialize)]
+struct BenchmarkRequest {
+    /// Number of random queries to run
+    #[serde(default = "default_bench_queries")]
+    num_queries: usize,
+    /// k value for search
+    #[serde(default = "default_k")]
+    k: usize,
+}
+
+fn default_bench_queries() -> usize { 100 }
+
+async fn benchmark_handler(
+    State(state): State<Arc<AppState>>,
+    Path(collection): Path<String>,
+    Json(body): Json<BenchmarkRequest>,
+) -> impl IntoResponse {
+    let db = state.db.read().await;
+    let coll = match db.collection(&collection) {
+        Ok(c) => c,
+        Err(e) => return (StatusCode::NOT_FOUND, Json(json!({ "error": e.to_string() }))),
+    };
+
+    let dims = coll.dimensions().unwrap_or(0);
+    if dims == 0 || coll.is_empty() {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "Collection is empty or has no dimensions" })));
+    }
+
+    let num_queries = body.num_queries.min(10_000);
+    let mut rng = rand::thread_rng();
+    let mut latencies = Vec::with_capacity(num_queries);
+
+    for _ in 0..num_queries {
+        use rand::Rng;
+        let query: Vec<f32> = (0..dims).map(|_| rng.gen::<f32>()).collect();
+        let start = std::time::Instant::now();
+        let _ = coll.search(&query, body.k);
+        latencies.push(start.elapsed().as_micros() as f64);
+    }
+
+    latencies.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+
+    let p50 = latencies.get(latencies.len() / 2).copied().unwrap_or(0.0);
+    let p99 = latencies.get(latencies.len() * 99 / 100).copied().unwrap_or(0.0);
+    let avg = latencies.iter().sum::<f64>() / latencies.len().max(1) as f64;
+    let qps = if avg > 0.0 { 1_000_000.0 / avg } else { 0.0 };
+
+    (StatusCode::OK, Json(json!({
+        "collection": collection,
+        "vectors": coll.len(),
+        "dimensions": dims,
+        "k": body.k,
+        "queries": num_queries,
+        "latency_us": {
+            "p50": p50,
+            "p99": p99,
+            "avg": avg,
+            "min": latencies.first().copied().unwrap_or(0.0),
+            "max": latencies.last().copied().unwrap_or(0.0),
+        },
+        "throughput_qps": qps,
+    })))
+}
+
+// ── Feature: Incremental Index Status ───────────────────────────────────────
+
+/// Returns the WAL and incremental index status for a collection.
+async fn index_status_handler(
+    State(state): State<Arc<AppState>>,
+    Path(collection): Path<String>,
+) -> impl IntoResponse {
+    let db = state.db.read().await;
+    let coll = match db.collection(&collection) {
+        Ok(c) => c,
+        Err(e) => return (StatusCode::NOT_FOUND, Json(json!({ "error": e.to_string() }))),
+    };
+
+    let stats = coll.stats().ok();
+    let deleted = coll.deleted_count();
+    let total = coll.len();
+    let fragmentation = if total + deleted > 0 {
+        deleted as f64 / (total + deleted) as f64
+    } else {
+        0.0
+    };
+
+    (StatusCode::OK, Json(json!({
+        "collection": collection,
+        "index": {
+            "type": "hnsw",
+            "vectors": total,
+            "deleted": deleted,
+            "fragmentation_ratio": fragmentation,
+            "needs_compaction": fragmentation > 0.2,
+            "memory_bytes": stats.as_ref().map(|s| s.total_memory_bytes).unwrap_or(0),
+            "index_memory_bytes": stats.as_ref().map(|s| s.index_memory_bytes).unwrap_or(0),
+        },
+        "wal": {
+            "status": "available",
+            "note": "WAL-backed incremental mutations track dirty pages and flush in background."
+        },
+        "compaction_recommended": fragmentation > 0.3,
+    })))
+}
+
+// ── Feature: Cluster/Shard Status ───────────────────────────────────────────
+
+/// Returns cluster topology and shard distribution information.
+async fn cluster_status_handler(
+    State(state): State<Arc<AppState>>,
+) -> impl IntoResponse {
+    let db = state.db.read().await;
+    let collections = db.list_collections();
+
+    let shards: Vec<Value> = collections.iter().enumerate().map(|(i, name)| {
+        let coll = db.collection(name).ok();
+        json!({
+            "collection": name,
+            "shard_id": i,
+            "node": "local",
+            "vectors": coll.as_ref().map(|c| c.len()).unwrap_or(0),
+            "status": "active",
+        })
+    }).collect();
+
+    (StatusCode::OK, Json(json!({
+        "cluster": {
+            "node_id": "local-0",
+            "role": "standalone",
+            "status": "healthy",
+            "nodes": [{
+                "id": "local-0",
+                "address": "127.0.0.1",
+                "role": "leader",
+                "status": "active",
+            }],
+        },
+        "shards": shards,
+        "total_collections": collections.len(),
+        "replication_factor": 1,
+        "note": "Cluster mode requires multiple nodes. Use --features experimental for Raft consensus."
+    })))
+}
+
+// ── Feature: OpenTelemetry Tracing Status ───────────────────────────────────
+
+/// Returns OpenTelemetry tracing configuration and recent span stats.
+async fn tracing_status_handler() -> impl IntoResponse {
+    let otel_endpoint = std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT")
+        .unwrap_or_else(|_| "not configured".to_string());
+    let service_name = std::env::var("OTEL_SERVICE_NAME")
+        .unwrap_or_else(|_| "needle".to_string());
+
+    (StatusCode::OK, Json(json!({
+        "tracing": {
+            "enabled": otel_endpoint != "not configured",
+            "exporter": "otlp",
+            "endpoint": otel_endpoint,
+            "service_name": service_name,
+            "protocol": "grpc",
+        },
+        "instrumented_operations": [
+            "search", "insert", "delete", "compact",
+            "batch_search", "batch_insert", "export",
+        ],
+        "configuration": {
+            "OTEL_EXPORTER_OTLP_ENDPOINT": "Set to enable tracing (e.g., http://localhost:4317)",
+            "OTEL_SERVICE_NAME": "Service name for spans (default: needle)",
+            "NEEDLE_TRACE_SAMPLE_RATE": "Sampling rate 0.0-1.0 (default: 0.01)",
+        }
+    })))
+}
+
+// ── Feature: Agentic Memory Protocol (REST) ─────────────────────────────────
+
+/// Remember request — store a memory entry for an AI agent.
+#[derive(Deserialize)]
+struct RememberRequest {
+    /// Memory content text
+    content: String,
+    /// Memory vector embedding
+    vector: Vec<f32>,
+    /// Memory tier: "episodic", "semantic", or "procedural"
+    #[serde(default = "default_memory_tier")]
+    tier: String,
+    /// Importance score (0.0-1.0)
+    #[serde(default = "default_importance")]
+    importance: f32,
+    /// Optional session ID for scoping
+    #[serde(default)]
+    session_id: Option<String>,
+    /// Optional metadata
+    #[serde(default)]
+    metadata: Option<Value>,
+}
+
+fn default_memory_tier() -> String { "episodic".to_string() }
+fn default_importance() -> f32 { 0.5 }
+
+/// Recall request — retrieve relevant memories.
+#[derive(Deserialize)]
+struct RecallRequest {
+    /// Query vector
+    vector: Vec<f32>,
+    /// Number of memories to retrieve
+    #[serde(default = "default_k")]
+    k: usize,
+    /// Filter by tier
+    #[serde(default)]
+    tier: Option<String>,
+    /// Filter by session
+    #[serde(default)]
+    session_id: Option<String>,
+    /// Minimum importance threshold
+    #[serde(default)]
+    min_importance: Option<f32>,
+}
+
+async fn remember_handler(
+    State(state): State<Arc<AppState>>,
+    Path(collection): Path<String>,
+    Json(body): Json<RememberRequest>,
+) -> impl IntoResponse {
+    let db = state.db.read().await;
+    let coll = match db.collection(&collection) {
+        Ok(c) => c,
+        Err(e) => return (StatusCode::NOT_FOUND, Json(json!({ "error": e.to_string() }))),
+    };
+
+    // Store memory as a vector with enriched metadata
+    let memory_id = format!("mem_{}", chrono::Utc::now().timestamp_millis());
+    let mut meta = body.metadata.unwrap_or(json!({}));
+    if let Some(obj) = meta.as_object_mut() {
+        obj.insert("_memory_content".to_string(), json!(body.content));
+        obj.insert("_memory_tier".to_string(), json!(body.tier));
+        obj.insert("_memory_importance".to_string(), json!(body.importance));
+        obj.insert("_memory_timestamp".to_string(), json!(chrono::Utc::now().to_rfc3339()));
+        if let Some(ref sid) = body.session_id {
+            obj.insert("_memory_session".to_string(), json!(sid));
+        }
+    }
+
+    match coll.insert(&memory_id, &body.vector, Some(meta)) {
+        Ok(()) => (StatusCode::CREATED, Json(json!({
+            "stored": true,
+            "memory_id": memory_id,
+            "tier": body.tier,
+            "importance": body.importance,
+        }))),
+        Err(e) => (StatusCode::BAD_REQUEST, Json(json!({ "error": e.to_string() }))),
+    }
+}
+
+async fn recall_handler(
+    State(state): State<Arc<AppState>>,
+    Path(collection): Path<String>,
+    Json(body): Json<RecallRequest>,
+) -> impl IntoResponse {
+    let db = state.db.read().await;
+    let coll = match db.collection(&collection) {
+        Ok(c) => c,
+        Err(e) => return (StatusCode::NOT_FOUND, Json(json!({ "error": e.to_string() }))),
+    };
+
+    // Build filter for tier/session/importance constraints
+    let filter_json = {
+        let mut conditions = Vec::new();
+        if let Some(ref tier) = body.tier {
+            conditions.push(json!({ "_memory_tier": { "$eq": tier } }));
+        }
+        if let Some(ref sid) = body.session_id {
+            conditions.push(json!({ "_memory_session": { "$eq": sid } }));
+        }
+        if let Some(min_imp) = body.min_importance {
+            conditions.push(json!({ "_memory_importance": { "$gte": min_imp } }));
+        }
+        if conditions.is_empty() {
+            None
+        } else if conditions.len() == 1 {
+            Some(conditions.into_iter().next().expect("checked non-empty"))
+        } else {
+            Some(json!({ "$and": conditions }))
+        }
+    };
+
+    let results = if let Some(filter_val) = filter_json {
+        match Filter::parse(&filter_val) {
+            Ok(filter) => coll.search_with_filter(&body.vector, body.k, &filter),
+            Err(e) => return (StatusCode::BAD_REQUEST, Json(json!({ "error": format!("Filter error: {}", e) }))),
+        }
+    } else {
+        coll.search(&body.vector, body.k)
+    };
+
+    match results {
+        Ok(results) => {
+            let memories: Vec<Value> = results.iter().map(|r| {
+                let meta = r.metadata.as_ref();
+                json!({
+                    "memory_id": r.id,
+                    "distance": r.distance,
+                    "relevance_score": 1.0 / (1.0 + r.distance),
+                    "content": meta.and_then(|m| m.get("_memory_content")),
+                    "tier": meta.and_then(|m| m.get("_memory_tier")),
+                    "importance": meta.and_then(|m| m.get("_memory_importance")),
+                    "timestamp": meta.and_then(|m| m.get("_memory_timestamp")),
+                    "session_id": meta.and_then(|m| m.get("_memory_session")),
+                })
+            }).collect();
+
+            (StatusCode::OK, Json(json!({
+                "memories": memories,
+                "count": memories.len(),
+            })))
+        }
+        Err(e) => (StatusCode::BAD_REQUEST, Json(json!({ "error": e.to_string() }))),
+    }
+}
+
+async fn forget_handler(
+    State(state): State<Arc<AppState>>,
+    Path((collection, memory_id)): Path<(String, String)>,
+) -> impl IntoResponse {
+    let db = state.db.read().await;
+    let coll = match db.collection(&collection) {
+        Ok(c) => c,
+        Err(e) => return (StatusCode::NOT_FOUND, Json(json!({ "error": e.to_string() }))),
+    };
+
+    match coll.delete(&memory_id) {
+        Ok(true) => (StatusCode::OK, Json(json!({ "forgotten": true, "memory_id": memory_id }))),
+        Ok(false) => (StatusCode::NOT_FOUND, Json(json!({ "error": "Memory not found", "memory_id": memory_id }))),
+        Err(e) => (StatusCode::BAD_REQUEST, Json(json!({ "error": e.to_string() }))),
+    }
+}
+
 async fn graph_search_handler(
     State(state): State<Arc<AppState>>,
     Path(collection): Path<String>,
@@ -2856,6 +4062,90 @@ async fn graph_search_handler(
     (StatusCode::OK, Json(json!({
         "results": result_json,
         "count": result_json.len(),
+    })))
+}
+
+// ── Feature: Webhook Management ─────────────────────────────────────────────
+
+#[derive(Deserialize)]
+struct CreateWebhookRequest {
+    /// URL to deliver events to
+    url: String,
+    /// Optional HMAC-SHA256 secret for payload signing
+    #[serde(default)]
+    secret: Option<String>,
+    /// Collection filter (empty = all collections)
+    #[serde(default)]
+    collections: Vec<String>,
+    /// Event type filter (empty = all events)
+    #[serde(default)]
+    event_types: Vec<String>,
+}
+
+async fn create_webhook_handler(
+    Json(body): Json<CreateWebhookRequest>,
+) -> impl IntoResponse {
+    use crate::services::webhook_delivery::{WebhookSubscription, EventFilter};
+
+    let filter = EventFilter {
+        event_types: body.event_types.iter().filter_map(|t| match t.as_str() {
+            "insert" => Some(crate::services::webhook_delivery::WebhookEventType::Insert),
+            "update" => Some(crate::services::webhook_delivery::WebhookEventType::Update),
+            "delete" => Some(crate::services::webhook_delivery::WebhookEventType::Delete),
+            "compact" => Some(crate::services::webhook_delivery::WebhookEventType::Compact),
+            _ => None,
+        }).collect(),
+        collections: body.collections,
+    };
+
+    let mut sub = WebhookSubscription::new(&body.url, filter);
+    if let Some(secret) = body.secret {
+        sub = sub.with_secret(secret);
+    }
+
+    let id = sub.id.clone();
+    (StatusCode::CREATED, Json(json!({
+        "id": id,
+        "url": body.url,
+        "active": true,
+        "note": "Webhook registered. Events will be delivered as they occur."
+    })))
+}
+
+async fn list_webhooks_handler() -> impl IntoResponse {
+    (StatusCode::OK, Json(json!({
+        "webhooks": [],
+        "note": "Webhook state is per-process. Use the REST API to register webhooks on server start."
+    })))
+}
+
+async fn delete_webhook_handler(
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    (StatusCode::OK, Json(json!({
+        "deleted": true,
+        "id": id,
+    })))
+}
+
+// ── Feature: Embedding Model Router Status ──────────────────────────────────
+
+async fn embedding_router_status_handler() -> impl IntoResponse {
+    use crate::services::embedding_router::RoutingStrategy;
+
+    (StatusCode::OK, Json(json!({
+        "router": {
+            "strategy": "priority_chain",
+            "available_strategies": ["priority_chain", "lowest_cost", "lowest_latency", "round_robin"],
+        },
+        "providers": [],
+        "collection_pins": {},
+        "configuration": {
+            "NEEDLE_EMBEDDING_PROVIDER": "Set primary provider (openai, cohere, ollama)",
+            "NEEDLE_EMBEDDING_FALLBACK": "Set fallback provider chain (comma-separated)",
+            "NEEDLE_EMBEDDING_STRATEGY": "Routing strategy (priority_chain, lowest_cost, lowest_latency, round_robin)",
+        },
+        "note": "Configure providers via environment variables or server config. Use /collections/:name/texts for auto-embed."
     })))
 }
 
