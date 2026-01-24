@@ -926,6 +926,94 @@ impl AgentMemory {
         }
         dot / (norm_a * norm_b)
     }
+
+    /// Enhanced recall with temporal context.
+    ///
+    /// Retrieves memories weighted by both semantic similarity and temporal
+    /// proximity. More recent memories get a boost, decaying over time.
+    pub fn recall_with_context(
+        &self,
+        query_embedding: &[f32],
+        limit: usize,
+        time_weight: f64,
+    ) -> Result<Vec<RecallResult>> {
+        let start = Instant::now();
+        let time_weight = time_weight.clamp(0.0, 1.0);
+        let sim_weight = 1.0 - time_weight;
+
+        let mut candidates: Vec<RecallResult> = Vec::new();
+        let now_secs = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+
+        // Scan all memories
+        for store in [&self.short_term, &self.long_term] {
+            let memories = store.read();
+            for memory in memories.values() {
+                let similarity = self.compute_similarity(query_embedding, &memory.embedding);
+                if similarity < self.config.recall_threshold {
+                    continue;
+                }
+
+                let eff_importance = memory.effective_importance(&self.config.decay_function);
+                let age_hours = (now_secs.saturating_sub(memory.created_at)) as f64 / 3600.0;
+                let recency_score = self.config.decay_function.decay_factor(age_hours);
+
+                let relevance = sim_weight * similarity as f64 * eff_importance
+                    + time_weight * recency_score;
+
+                candidates.push(RecallResult {
+                    memory: memory.clone(),
+                    similarity,
+                    effective_importance: eff_importance,
+                    relevance,
+                });
+            }
+        }
+
+        candidates.sort_by(|a, b| OrderedFloat(b.relevance).cmp(&OrderedFloat(a.relevance)));
+        candidates.truncate(limit);
+
+        // Update stats and mark accessed
+        for result in &candidates {
+            self.mark_accessed(&result.memory.id);
+            self.add_to_working(&result.memory.id);
+        }
+
+        let elapsed_us = start.elapsed().as_micros() as u64;
+        let mut stats = self.stats.write();
+        stats.total_recalls += 1;
+        if !candidates.is_empty() {
+            stats.recall_hits += 1;
+        }
+        stats.avg_recall_time_us =
+            (stats.avg_recall_time_us * (stats.total_recalls - 1) + elapsed_us) / stats.total_recalls;
+
+        Ok(candidates)
+    }
+
+    /// Run a full maintenance cycle: expire old memories, consolidate, and merge similar.
+    pub fn maintenance(&self) -> MaintenanceResult {
+        let expired = self.clear_expired();
+        let consolidated = self.consolidate();
+        let promoted = self.promote_important(self.config.consolidation_threshold);
+        let merged = self.merge_similar(0.92);
+        MaintenanceResult { expired, consolidated, promoted, merged }
+    }
+}
+
+/// Result of a maintenance cycle.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MaintenanceResult {
+    /// Short-term memories expired.
+    pub expired: usize,
+    /// Memories consolidated (short-term → long-term).
+    pub consolidated: usize,
+    /// Memories promoted by importance.
+    pub promoted: usize,
+    /// Similar long-term memories merged.
+    pub merged: usize,
 }
 
 /// Builder for creating agent memory with fluent API
