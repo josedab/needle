@@ -552,7 +552,9 @@ impl TieredStorage {
             };
 
             if target != meta.tier {
-                let _ = self.move_to_tier(id, target);
+                if let Err(e) = self.move_to_tier(id, target) {
+                    tracing::warn!("tiered storage: failed to move {id} to {target:?}: {e}");
+                }
             }
         }
     }
