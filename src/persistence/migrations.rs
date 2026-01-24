@@ -687,7 +687,7 @@ impl MigrationManager {
             .enumerate()
             .filter(|(_, r)| r.status == MigrationStatus::Completed && r.version > target_version)
             .map(|(hist_idx, r)| {
-                let mig_idx = self.migrations.iter().position(|m| m.id == r.id);
+                let mig_idx = self.migrations.binary_search_by(|m| m.id.cmp(&r.id)).ok();
                 (r.id.clone(), hist_idx, mig_idx)
             })
             .collect::<Vec<_>>()
@@ -771,7 +771,7 @@ impl MigrationManager {
         let migration_id = self.history[last_applied_idx].id.clone();
 
         // Find the migration
-        let mig_idx = self.migrations.iter().position(|m| m.id == migration_id);
+        let mig_idx = self.migrations.binary_search_by(|m| m.id.cmp(&migration_id)).ok();
 
         let mig_idx = match mig_idx {
             Some(idx) => idx,
