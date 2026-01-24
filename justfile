@@ -13,9 +13,9 @@ fmt:
 fmt-check:
     cargo fmt -- --check
 
-# Run clippy linter with all features
+# Run clippy linter with all features (matches CI's -D warnings)
 lint:
-    cargo clippy --features full
+    cargo clippy --features full -- -D warnings
 
 # Run all tests
 test:
@@ -28,6 +28,10 @@ test-unit:
 # Run integration tests only
 test-integration:
     cargo test --tests --features full
+
+# Continuous check on save (requires: cargo install cargo-watch)
+watch:
+    cargo watch -x 'check --features full'
 
 # Full pre-commit check: format, lint, test
 check: fmt-check lint test

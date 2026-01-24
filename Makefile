@@ -2,7 +2,7 @@
 # Usage: make <recipe>
 
 .PHONY: help quick check build build-all build-release test test-unit test-integration \
-        fmt fmt-check lint serve demo doctor doc bench clean playground
+        fmt fmt-check lint watch serve demo doctor doc bench clean playground
 
 help:
 	@echo "Available recipes:"
@@ -16,6 +16,7 @@ help:
 	@echo "  make fmt           — Format code"
 	@echo "  make fmt-check     — Check formatting"
 	@echo "  make lint          — Run clippy linter"
+	@echo "  make watch         — Continuous check on file changes (requires cargo-watch)"
 	@echo "  make serve         — Run HTTP server locally"
 	@echo "  make demo          — Run quickstart demo"
 	@echo "  make doctor        — Check local environment"
@@ -55,7 +56,11 @@ fmt-check:
 	cargo fmt -- --check
 
 lint:
-	cargo clippy --features full
+	cargo clippy --features full -- -D warnings
+
+# Continuous check on save (requires: cargo install cargo-watch)
+watch:
+	cargo watch -x 'check --features full'
 
 serve:
 	cargo run --features server -- serve -a 127.0.0.1:8080

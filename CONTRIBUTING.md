@@ -12,6 +12,7 @@ Thank you for your interest in contributing to Needle! This document provides gu
 - [Code Style](#code-style)
 - [Pull Request Process](#pull-request-process)
 - [Architecture Overview](#architecture-overview)
+- [CI Architecture](#ci-architecture)
 - [Troubleshooting](#troubleshooting)
 
 ---
@@ -340,9 +341,23 @@ cargo clippy --features full -- -D warnings
 
 ### Before Submitting
 
+Run the quick check (format + lint + unit tests):
+
+```bash
+make quick         # Fast iteration (~2 min)
+```
+
+Before your final push, run the full suite:
+
+```bash
+make check         # Full pre-commit: format + lint + all tests
+```
+
+Or run the individual commands if you prefer:
+
 1. Ensure all tests pass: `cargo test --features full`
 2. Run formatter: `cargo fmt`
-3. Run linter: `cargo clippy --features full`
+3. Run linter: `cargo clippy --features full -- -D warnings`
 4. Update documentation if needed
 5. Add tests for new functionality
 
@@ -439,6 +454,22 @@ let guard = self.inner.read();
 // Write lock (exclusive access)
 let mut guard = self.inner.write();
 ```
+
+---
+
+## CI Architecture
+
+Our CI pipeline is structured in stages so fast checks gate slower ones:
+
+1. **Quick Check (~2 min)** — Format, clippy, unit tests. Gates all other jobs. Mirrors `make quick` locally.
+2. **Parallel jobs (~5-10 min)** — Test matrix (OS × Rust version), full lint, docs, benchmarks, examples, coverage, MSRV.
+3. **Feature Matrix (~10 min)** — Tests 8 feature-flag combinations and cross-compile targets (separate workflow: `feature-matrix.yml`).
+
+**Informational / advisory:**
+- Security scans (`security.yml`): cargo-audit, cargo-deny, semver checks (advisory until v1.0).
+- Coverage uploads to Codecov.
+
+Run `make quick` locally before pushing — it mirrors the fast gate and catches most issues in under 2 minutes.
 
 ---
 
