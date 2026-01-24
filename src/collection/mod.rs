@@ -298,7 +298,7 @@ impl<'a> SearchBuilder<'a> {
         }
 
         let fetch_count = self.calculate_fetch_count();
-        let raw_results = self.fetch_raw_results(fetch_count);
+        let raw_results = self.fetch_raw_results(fetch_count)?;
         let non_expired = self.filter_expired(raw_results);
         let post_filter_factor = if self.post_filter.is_some() {
             self.post_filter_factor
@@ -344,7 +344,7 @@ impl<'a> SearchBuilder<'a> {
     }
 
     /// Fetch raw results from the HNSW index.
-    fn fetch_raw_results(&self, fetch_count: usize) -> Vec<(VectorId, f32)> {
+    fn fetch_raw_results(&self, fetch_count: usize) -> Result<Vec<(VectorId, f32)>> {
         if let Some(ef) = self.ef_search {
             self.collection.index.search_with_ef(
                 self.query,
@@ -523,10 +523,10 @@ pub struct Collection {
     index: HnswIndex,
     /// Metadata storage
     metadata: MetadataStore,
-    /// Query result cache (wrapped in Mutex for interior mutability)
+    /// Query result cache (sharded for reduced lock contention)
     /// Skipped during serialization - cache is rebuilt on load
     #[serde(skip)]
-    query_cache: Option<Mutex<QueryCache>>,
+    query_cache: Option<ShardedQueryCache>,
     /// TTL expiration tracking: internal_id -> expiration timestamp (Unix epoch seconds)
     /// Vectors with expired timestamps are filtered out during search (lazy)
     /// or removed during explicit sweep operations.
@@ -539,6 +539,93 @@ struct QueryCache {
     cache: LruCache<QueryCacheKey, CachedSearchResult>,
     hits: u64,
     misses: u64,
+}
+
+/// Number of shards for the query cache to reduce lock contention.
+const CACHE_SHARD_COUNT: usize = 16;
+
+/// Sharded query cache that distributes entries across multiple LRU shards.
+/// Each shard is independently locked, reducing contention for concurrent searches.
+struct ShardedQueryCache {
+    shards: Vec<Mutex<QueryCache>>,
+    capacity: usize,
+}
+
+impl std::fmt::Debug for ShardedQueryCache {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let (total_size, total_hits, total_misses) = self.aggregate_stats();
+        f.debug_struct("ShardedQueryCache")
+            .field("shards", &CACHE_SHARD_COUNT)
+            .field("total_size", &total_size)
+            .field("total_hits", &total_hits)
+            .field("total_misses", &total_misses)
+            .finish()
+    }
+}
+
+impl ShardedQueryCache {
+    fn new(capacity: NonZeroUsize) -> Self {
+        let per_shard = NonZeroUsize::new(
+            (capacity.get() / CACHE_SHARD_COUNT).max(1),
+        )
+        .expect("per-shard capacity must be non-zero");
+
+        let shards = (0..CACHE_SHARD_COUNT)
+            .map(|_| Mutex::new(QueryCache::new(per_shard)))
+            .collect();
+
+        Self {
+            shards,
+            capacity: capacity.get(),
+        }
+    }
+
+    fn shard_for(&self, key: &QueryCacheKey) -> &Mutex<QueryCache> {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        key.hash(&mut hasher);
+        let idx = (hasher.finish() as usize) % CACHE_SHARD_COUNT;
+        &self.shards[idx]
+    }
+
+    fn get(&self, key: &QueryCacheKey) -> Option<CachedSearchResult> {
+        let mut shard = self.shard_for(key).lock();
+        shard.get(key).cloned()
+    }
+
+    fn put(&self, key: QueryCacheKey, value: CachedSearchResult) {
+        let mut shard = self.shard_for(&key).lock();
+        shard.put(key, value);
+    }
+
+    fn clear(&self) {
+        for shard in &self.shards {
+            shard.lock().clear();
+        }
+    }
+
+    fn aggregate_stats(&self) -> (usize, u64, u64) {
+        let mut total_size = 0;
+        let mut total_hits = 0;
+        let mut total_misses = 0;
+        for shard in &self.shards {
+            let s = shard.lock();
+            total_size += s.cache.len();
+            total_hits += s.hits;
+            total_misses += s.misses;
+        }
+        (total_size, total_hits, total_misses)
+    }
+
+    fn stats(&self, capacity: usize) -> QueryCacheStats {
+        let (size, hits, misses) = self.aggregate_stats();
+        QueryCacheStats {
+            hits,
+            misses,
+            size,
+            capacity,
+        }
+    }
 }
 
 impl std::fmt::Debug for QueryCache {
@@ -603,7 +690,7 @@ impl Collection {
     pub fn new(config: CollectionConfig) -> Self {
         let query_cache = if config.query_cache.is_enabled() {
             NonZeroUsize::new(config.query_cache.capacity)
-                .map(|cap| Mutex::new(QueryCache::new(cap)))
+                .map(|cap| ShardedQueryCache::new(cap))
         } else {
             None
         };
@@ -715,7 +802,7 @@ impl Collection {
     /// ```
     pub fn enable_query_cache(&mut self, capacity: usize) {
         if let Some(cap) = NonZeroUsize::new(capacity) {
-            self.query_cache = Some(Mutex::new(QueryCache::new(cap)));
+            self.query_cache = Some(ShardedQueryCache::new(cap));
             self.config.query_cache = QueryCacheConfig::new(capacity);
         }
     }
@@ -748,7 +835,7 @@ impl Collection {
     /// No-op if caching is disabled.
     pub fn clear_query_cache(&self) {
         if let Some(ref cache) = self.query_cache {
-            cache.lock().clear();
+            cache.clear();
         }
     }
 
@@ -767,10 +854,10 @@ impl Collection {
     /// collection.insert("v1", &[0.0; 128], None).unwrap();
     ///
     /// // First search - cache miss
-    /// let _ = collection.search(&[0.0; 128], 10);
+    /// let _results = collection.search(&[0.0; 128], 10);
     ///
     /// // Second search - cache hit
-    /// let _ = collection.search(&[0.0; 128], 10);
+    /// let _results = collection.search(&[0.0; 128], 10);
     ///
     /// let stats = collection.query_cache_stats().unwrap();
     /// assert_eq!(stats.hits, 1);
@@ -779,14 +866,14 @@ impl Collection {
     pub fn query_cache_stats(&self) -> Option<QueryCacheStats> {
         self.query_cache
             .as_ref()
-            .map(|cache| cache.lock().stats(self.config.query_cache.capacity))
+            .map(|cache| cache.stats(self.config.query_cache.capacity))
     }
 
     /// Helper to invalidate the query cache.
     /// Called automatically on mutations (insert, update, delete).
     fn invalidate_cache(&self) {
         if let Some(ref cache) = self.query_cache {
-            cache.lock().clear();
+            cache.clear();
         }
     }
 
@@ -799,26 +886,20 @@ impl Collection {
             let cache_key = QueryCacheKey::new(query, k);
 
             // Try to get from cache
-            {
-                let mut cache_guard = cache.lock();
-                if let Some(cached) = cache_guard.get(&cache_key) {
-                    return Ok(cached.results.clone());
-                }
+            if let Some(cached) = cache.get(&cache_key) {
+                return Ok(cached.results.clone());
             }
 
             // Cache miss - compute result
             let results = compute()?;
 
             // Store in cache
-            {
-                let mut cache_guard = cache.lock();
-                cache_guard.put(
-                    cache_key,
-                    CachedSearchResult {
-                        results: results.clone(),
-                    },
-                );
-            }
+            cache.put(
+                cache_key,
+                CachedSearchResult {
+                    results: results.clone(),
+                },
+            );
 
             Ok(results)
         } else {
@@ -1139,7 +1220,7 @@ impl Collection {
 
         // Use cache if enabled
         let results = self.search_with_cache(query, k, || {
-            let raw_results = self.index.search(query, k, self.vectors.as_slice());
+            let raw_results = self.index.search(query, k, self.vectors.as_slice())?;
 
             // Apply lazy expiration filtering if enabled
             let filtered_results = if self.config.lazy_expiration {
@@ -1222,7 +1303,7 @@ impl Collection {
             self.config.distance,
         );
         // Use the primary index's HNSW graph for traversal but with truncated distance computation
-        let candidates = self.index.search(truncated_query, candidate_k, &truncated_vectors);
+        let candidates = self.index.search(truncated_query, candidate_k, &truncated_vectors)?;
 
         // Phase 2: Re-rank with full dimensions
         let distance_fn = self.config.distance;
@@ -1231,7 +1312,7 @@ impl Collection {
             .filter(|(id, _)| !self.index.is_deleted(*id) && !self.is_expired(*id))
             .filter_map(|(id, _)| {
                 let full_vec = self.vectors.get(*id)?;
-                let full_dist = distance_fn.compute(query, full_vec);
+                let full_dist = distance_fn.compute(query, full_vec).ok()?;
                 Some((*id, full_dist))
             })
             .collect();
@@ -1286,7 +1367,7 @@ impl Collection {
             }
 
             // Compute distance with the specified function
-            let dist = params.distance_fn.compute(params.query, vector);
+            let dist = params.distance_fn.compute(params.query, vector)?;
 
             // Add to heap
             heap.push((Reverse(OrderedFloat(dist)), internal_id));
@@ -1400,7 +1481,7 @@ impl Collection {
         let index_start = Instant::now();
         let (raw_results, hnsw_stats) =
             self.index
-                .search_with_stats(query, effective_k, self.vectors.as_slice());
+                .search_with_stats(query, effective_k, self.vectors.as_slice())?;
         let index_time = index_start.elapsed();
 
         let candidates_before_filter = raw_results.len();
@@ -1491,7 +1572,7 @@ impl Collection {
             query,
             effective_k * FILTER_CANDIDATE_MULTIPLIER,
             self.vectors.as_slice(),
-        );
+        )?;
         let index_time = index_start.elapsed();
 
         let candidates_before_filter = candidates.len();
@@ -1548,7 +1629,7 @@ impl Collection {
             return Ok(Vec::new());
         }
 
-        let results = self.index.search(query, k, self.vectors.as_slice());
+        let results = self.index.search(query, k, self.vectors.as_slice())?;
 
         results
             .into_iter()
@@ -1586,7 +1667,7 @@ impl Collection {
             return Ok(Vec::new());
         }
 
-        let results = self.index.search(query, k, self.vectors.as_slice());
+        let results = self.index.search(query, k, self.vectors.as_slice())?;
 
         results
             .into_iter()
@@ -1618,7 +1699,7 @@ impl Collection {
         let results: Vec<Result<Vec<SearchResult>>> = queries
             .par_iter()
             .map(|query| {
-                let raw_results = self.index.search(query, k, self.vectors.as_slice());
+                let raw_results = self.index.search(query, k, self.vectors.as_slice())?;
                 self.enrich_results(raw_results)
             })
             .collect();
@@ -1673,7 +1754,7 @@ impl Collection {
                     query,
                     k * FILTER_CANDIDATE_MULTIPLIER,
                     self.vectors.as_slice(),
-                );
+                )?;
                 let filtered: Vec<(VectorId, f32)> = candidates
                     .into_iter()
                     .filter(|(id, _)| {
@@ -1765,12 +1846,21 @@ impl Collection {
             return Ok(Vec::new());
         }
 
+        // Bloom filter pre-check: if any equality condition references a
+        // field+value that definitely doesn't exist, return early.
+        let eq_conditions = filter.equality_conditions();
+        for (field, value_str) in &eq_conditions {
+            if !self.metadata.bloom_might_contain(field, value_str) {
+                return Ok(Vec::new());
+            }
+        }
+
         // For filtered search, we need to retrieve more candidates and filter
         let candidates = self.index.search(
             query,
             k * FILTER_CANDIDATE_MULTIPLIER,
             self.vectors.as_slice(),
-        );
+        )?;
 
         let filtered: Vec<(VectorId, f32)> = candidates
             .into_iter()
@@ -1871,7 +1961,7 @@ impl Collection {
         }
 
         // Search for up to limit candidates
-        let candidates = self.index.search(query, limit, self.vectors.as_slice());
+        let candidates = self.index.search(query, limit, self.vectors.as_slice())?;
 
         // Filter to only include results within max_distance
         let within_range: Vec<(VectorId, f32)> = candidates
@@ -1949,7 +2039,7 @@ impl Collection {
         let fetch_count = limit * FILTER_CANDIDATE_MULTIPLIER;
         let candidates = self
             .index
-            .search(query, fetch_count, self.vectors.as_slice());
+            .search(query, fetch_count, self.vectors.as_slice())?;
 
         // Filter by distance first (can stop early), then by metadata
         let within_range: Vec<(VectorId, f32)> = candidates
@@ -3168,10 +3258,10 @@ mod tests {
         let query = random_vector(32);
 
         // Search with k=5
-        let _ = collection.search(&query, 5).unwrap();
+        let _results = collection.search(&query, 5).unwrap();
 
         // Search with k=3 (different k, should miss)
-        let _ = collection.search(&query, 3).unwrap();
+        let _results = collection.search(&query, 3).unwrap();
 
         let stats = collection.query_cache_stats().unwrap();
         assert_eq!(stats.misses, 2); // Both were misses due to different k
@@ -3193,7 +3283,7 @@ mod tests {
         let query = random_vector(32);
 
         // Cache the query
-        let _ = collection.search(&query, 5).unwrap();
+        let _results = collection.search(&query, 5).unwrap();
         assert_eq!(collection.query_cache_stats().unwrap().size, 1);
 
         // Insert a new vector - should invalidate cache
@@ -3216,7 +3306,7 @@ mod tests {
         let query = random_vector(32);
 
         // Cache the query
-        let _ = collection.search(&query, 5).unwrap();
+        let _results = collection.search(&query, 5).unwrap();
         assert_eq!(collection.query_cache_stats().unwrap().size, 1);
 
         // Delete a vector - should invalidate cache
@@ -3239,7 +3329,7 @@ mod tests {
         let query = random_vector(32);
 
         // Cache the query
-        let _ = collection.search(&query, 5).unwrap();
+        let _results = collection.search(&query, 5).unwrap();
         assert_eq!(collection.query_cache_stats().unwrap().size, 1);
 
         // Update a vector - should invalidate cache
@@ -3265,7 +3355,7 @@ mod tests {
                 .unwrap();
         }
         let query = random_vector(32);
-        let _ = collection.search(&query, 5).unwrap();
+        let _results = collection.search(&query, 5).unwrap();
 
         let stats = collection.query_cache_stats().unwrap();
         assert_eq!(stats.capacity, 100);
@@ -3291,7 +3381,7 @@ mod tests {
         // Cache some queries
         for _ in 0..10 {
             let query = random_vector(32);
-            let _ = collection.search(&query, 5).unwrap();
+            let _results = collection.search(&query, 5).unwrap();
         }
 
         assert!(collection.query_cache_stats().unwrap().size > 0);
@@ -3319,11 +3409,11 @@ mod tests {
         let query = random_vector(32);
 
         // 1 miss
-        let _ = collection.search(&query, 5).unwrap();
+        let _results = collection.search(&query, 5).unwrap();
 
         // 4 hits
         for _ in 0..4 {
-            let _ = collection.search(&query, 5).unwrap();
+            let _results = collection.search(&query, 5).unwrap();
         }
 
         let stats = collection.query_cache_stats().unwrap();
