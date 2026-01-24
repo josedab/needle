@@ -415,10 +415,10 @@ impl MatryoshkaIndex {
                 let distance = self
                     .config
                     .distance_function
-                    .compute(&search_query, &embedding);
-                (id.clone(), distance)
+                    .compute(&search_query, &embedding)?;
+                Ok((id.clone(), distance))
             })
-            .collect();
+            .collect::<Result<Vec<_>>>()?;
 
         // Sort by distance
         results.sort_by(|a, b| OrderedFloat(a.1).cmp(&OrderedFloat(b.1)));
@@ -474,10 +474,10 @@ impl MatryoshkaIndex {
                 let distance = self
                     .config
                     .distance_function
-                    .compute(&coarse_query, &embedding);
-                (id.clone(), distance, mrl.clone())
+                    .compute(&coarse_query, &embedding)?;
+                Ok((id.clone(), distance, mrl.clone()))
             })
-            .collect();
+            .collect::<Result<Vec<_>>>()?;
 
         coarse_results.sort_by(|a, b| OrderedFloat(a.1).cmp(&OrderedFloat(b.1)));
         coarse_results.truncate(candidates);
@@ -490,10 +490,10 @@ impl MatryoshkaIndex {
                 let fine_dist = self
                     .config
                     .distance_function
-                    .compute(&fine_query, &fine_embedding);
-                (id, coarse_dist, fine_dist)
+                    .compute(&fine_query, &fine_embedding)?;
+                Ok((id, coarse_dist, fine_dist))
             })
-            .collect();
+            .collect::<Result<Vec<_>>>()?;
 
         fine_results.sort_by(|a, b| OrderedFloat(a.2).cmp(&OrderedFloat(b.2)));
         fine_results.truncate(k);
