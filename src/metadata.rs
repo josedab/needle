@@ -60,6 +60,7 @@ use crate::error::{NeedleError, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
 
 /// Metadata entry for a vector
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -77,6 +78,72 @@ pub struct MetadataStore {
     entries: HashMap<usize, MetadataEntry>,
     /// Mapping from external ID to internal ID
     id_map: HashMap<String, usize>,
+    /// Per-field bloom filters for fast pre-check on equality filters.
+    /// Key is field name; value is the bit-vector bloom filter.
+    #[serde(skip)]
+    field_blooms: HashMap<String, BloomFilter>,
+}
+
+/// Simple bit-array bloom filter for metadata field values.
+///
+/// Used as a pre-check to skip vectors that definitely don't contain a
+/// particular field value, avoiding expensive `HashMap` lookups during search.
+#[derive(Debug, Clone)]
+pub struct BloomFilter {
+    bits: Vec<u64>,
+    num_bits: usize,
+    num_hashes: u8,
+}
+
+impl Default for BloomFilter {
+    fn default() -> Self {
+        Self::new(8192, 3)
+    }
+}
+
+impl BloomFilter {
+    /// Create a bloom filter with `num_bits` capacity and `num_hashes` hash functions.
+    pub fn new(num_bits: usize, num_hashes: u8) -> Self {
+        let words = (num_bits + 63) / 64;
+        Self {
+            bits: vec![0u64; words],
+            num_bits,
+            num_hashes,
+        }
+    }
+
+    fn hash_pair(item: &str) -> (u64, u64) {
+        let mut h1 = std::collections::hash_map::DefaultHasher::new();
+        item.hash(&mut h1);
+        let a = h1.finish();
+
+        let mut h2 = std::collections::hash_map::DefaultHasher::new();
+        a.hash(&mut h2);
+        let b = h2.finish();
+
+        (a, b)
+    }
+
+    /// Insert a value into the bloom filter.
+    pub fn insert(&mut self, value: &str) {
+        let (h1, h2) = Self::hash_pair(value);
+        for i in 0..u64::from(self.num_hashes) {
+            let idx = (h1.wrapping_add(i.wrapping_mul(h2))) as usize % self.num_bits;
+            self.bits[idx / 64] |= 1 << (idx % 64);
+        }
+    }
+
+    /// Check if a value might be in the filter. `false` means definitely absent.
+    pub fn might_contain(&self, value: &str) -> bool {
+        let (h1, h2) = Self::hash_pair(value);
+        for i in 0..u64::from(self.num_hashes) {
+            let idx = (h1.wrapping_add(i.wrapping_mul(h2))) as usize % self.num_bits;
+            if self.bits[idx / 64] & (1 << (idx % 64)) == 0 {
+                return false;
+            }
+        }
+        true
+    }
 }
 
 impl MetadataStore {
@@ -85,6 +152,7 @@ impl MetadataStore {
         Self {
             entries: HashMap::new(),
             id_map: HashMap::new(),
+            field_blooms: HashMap::new(),
         }
     }
 
@@ -97,6 +165,17 @@ impl MetadataStore {
     ) -> Result<()> {
         if self.id_map.contains_key(&external_id) {
             return Err(NeedleError::VectorAlreadyExists(external_id));
+        }
+
+        // Update bloom filters with field values
+        if let Some(Value::Object(ref map)) = data {
+            for (field, value) in map {
+                let bloom = self
+                    .field_blooms
+                    .entry(field.clone())
+                    .or_insert_with(BloomFilter::default);
+                bloom.insert(&value.to_string());
+            }
         }
 
         self.id_map.insert(external_id.clone(), internal_id);
@@ -144,6 +223,20 @@ impl MetadataStore {
     /// Check if external ID exists
     pub fn contains(&self, external_id: &str) -> bool {
         self.id_map.contains_key(external_id)
+    }
+
+    /// Fast bloom-filter check: returns `false` if the given field definitely
+    /// does NOT contain the given value across any vector in the store.
+    /// Returns `true` if the value *might* exist (possible false positive).
+    pub fn bloom_might_contain(&self, field: &str, value: &str) -> bool {
+        self.field_blooms
+            .get(field)
+            .map_or(false, |bloom| bloom.might_contain(value))
+    }
+
+    /// Get the per-field bloom filter (for diagnostics).
+    pub fn field_bloom(&self, field: &str) -> Option<&BloomFilter> {
+        self.field_blooms.get(field)
     }
 
     /// Update the metadata data for an entry
@@ -332,6 +425,22 @@ impl Filter {
             Filter::And(filters) => filters.iter().all(|f| f.matches(metadata)),
             Filter::Or(filters) => filters.iter().any(|f| f.matches(metadata)),
             Filter::Not(filter) => !filter.matches(metadata),
+        }
+    }
+
+    /// Extract simple equality conditions for bloom filter pre-checks.
+    /// Returns a list of (field, value_string) pairs that must all be present
+    /// for the filter to possibly match (only from top-level AND/Eq conditions).
+    pub fn equality_conditions(&self) -> Vec<(&str, String)> {
+        match self {
+            Filter::Condition(cond) if cond.operator == FilterOperator::Eq => {
+                vec![(&cond.field, cond.value.to_string())]
+            }
+            Filter::And(filters) => filters
+                .iter()
+                .flat_map(|f| f.equality_conditions())
+                .collect(),
+            _ => vec![],
         }
     }
 
