@@ -479,3 +479,196 @@ export class NeedleDB {
 }
 
 export default NeedleDB;
+
+// ---------------------------------------------------------------------------
+// React Hooks (for React/Next.js/Remix apps)
+// ---------------------------------------------------------------------------
+
+/**
+ * React hook for vector search. Use with `useVectorSearch(db, query, k)`.
+ *
+ * @example
+ * ```tsx
+ * import { NeedleDB, useVectorSearch } from '@anthropic/needle';
+ *
+ * function SearchComponent({ db, query }: { db: NeedleDB; query: Float32Array }) {
+ *   const { results, loading, error } = useVectorSearch(db, query, 10);
+ *   if (loading) return <div>Searching...</div>;
+ *   return <ul>{results.map(r => <li key={r.id}>{r.id}: {r.score}</li>)}</ul>;
+ * }
+ * ```
+ */
+export interface UseVectorSearchResult {
+  results: SearchResult[];
+  loading: boolean;
+  error: Error | null;
+}
+
+/**
+ * Factory function that returns a React hook for vector search.
+ * This avoids a direct React dependency — pass your React import.
+ *
+ * @example
+ * ```tsx
+ * import { useState, useEffect } from 'react';
+ * import { createUseVectorSearch, NeedleDB } from '@anthropic/needle';
+ *
+ * const useVectorSearch = createUseVectorSearch({ useState, useEffect });
+ *
+ * function App() {
+ *   const { results } = useVectorSearch(db, query, 10);
+ * }
+ * ```
+ */
+export function createUseVectorSearch(react: {
+  useState: <T>(initial: T) => [T, (v: T) => void];
+  useEffect: (effect: () => void | (() => void), deps: unknown[]) => void;
+}) {
+  return function useVectorSearch(
+    db: NeedleDB | null,
+    query: Float32Array | number[] | null,
+    k: number = 10,
+  ): UseVectorSearchResult {
+    const [results, setResults] = react.useState<SearchResult[]>([]);
+    const [loading, setLoading] = react.useState(false);
+    const [error, setError] = react.useState<Error | null>(null);
+
+    react.useEffect(() => {
+      if (!db || !query) {
+        setResults([]);
+        return;
+      }
+
+      let cancelled = false;
+      setLoading(true);
+      setError(null);
+
+      db.search(query, k)
+        .then((res) => {
+          if (!cancelled) {
+            setResults(res);
+            setLoading(false);
+          }
+        })
+        .catch((err) => {
+          if (!cancelled) {
+            setError(err instanceof Error ? err : new Error(String(err)));
+            setLoading(false);
+          }
+        });
+
+      return () => { cancelled = true; };
+    }, [db, query, k]);
+
+    return { results, loading, error };
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Web Worker Message Protocol
+// ---------------------------------------------------------------------------
+
+/**
+ * Message types for communicating with a Needle Web Worker.
+ *
+ * @example Worker file (needle-worker.ts):
+ * ```ts
+ * import { NeedleDB, NeedleWorkerMessage, NeedleWorkerResponse } from '@anthropic/needle';
+ *
+ * let db: NeedleDB | null = null;
+ *
+ * self.onmessage = async (e: MessageEvent<NeedleWorkerMessage>) => {
+ *   const msg = e.data;
+ *   let response: NeedleWorkerResponse;
+ *   switch (msg.type) {
+ *     case 'init':
+ *       db = await NeedleDB.create(msg.name, { dimensions: msg.dimensions });
+ *       response = { id: msg.id, type: 'ready', success: true };
+ *       break;
+ *     case 'search':
+ *       const results = await db!.search(msg.query, msg.k);
+ *       response = { id: msg.id, type: 'results', results };
+ *       break;
+ *     // ... handle insert, delete, persist
+ *   }
+ *   self.postMessage(response);
+ * };
+ * ```
+ */
+export type NeedleWorkerMessage =
+  | { id: string; type: 'init'; name: string; dimensions: number; distance?: string }
+  | { id: string; type: 'insert'; vecId: string; vector: number[]; metadata?: Record<string, unknown> }
+  | { id: string; type: 'search'; query: number[]; k: number }
+  | { id: string; type: 'delete'; vecId: string }
+  | { id: string; type: 'persist' }
+  | { id: string; type: 'clear' }
+  | { id: string; type: 'stats' };
+
+export type NeedleWorkerResponse =
+  | { id: string; type: 'ready'; success: boolean }
+  | { id: string; type: 'inserted'; success: boolean }
+  | { id: string; type: 'results'; results: SearchResult[] }
+  | { id: string; type: 'deleted'; existed: boolean }
+  | { id: string; type: 'persisted'; stats: PersistenceStats }
+  | { id: string; type: 'cleared' }
+  | { id: string; type: 'stats'; count: number; memoryUsage: number; dirty: boolean }
+  | { id: string; type: 'error'; message: string };
+
+/**
+ * Helper to create a Web Worker client that communicates with a Needle worker.
+ *
+ * @example
+ * ```ts
+ * import { createWorkerClient } from '@anthropic/needle';
+ *
+ * const client = createWorkerClient(new Worker('./needle-worker.ts'));
+ * await client.init('docs', 384);
+ * await client.insert('doc1', [0.1, 0.2, ...], { title: 'Hello' });
+ * const results = await client.search([0.1, 0.2, ...], 10);
+ * ```
+ */
+export function createWorkerClient(worker: Worker) {
+  let idCounter = 0;
+  const pending = new Map<string, { resolve: (v: unknown) => void; reject: (e: Error) => void }>();
+
+  worker.onmessage = (e: MessageEvent<NeedleWorkerResponse>) => {
+    const resp = e.data;
+    const p = pending.get(resp.id);
+    if (p) {
+      pending.delete(resp.id);
+      if (resp.type === 'error') {
+        p.reject(new Error(resp.message));
+      } else {
+        p.resolve(resp);
+      }
+    }
+  };
+
+  function send<T>(msg: Omit<NeedleWorkerMessage, 'id'>): Promise<T> {
+    const id = `msg_${idCounter++}`;
+    return new Promise((resolve, reject) => {
+      pending.set(id, { resolve: resolve as (v: unknown) => void, reject });
+      worker.postMessage({ ...msg, id });
+    });
+  }
+
+  return {
+    init: (name: string, dimensions: number, distance?: string) =>
+      send<NeedleWorkerResponse & { type: 'ready' }>({ type: 'init', name, dimensions, distance }),
+    insert: (vecId: string, vector: number[], metadata?: Record<string, unknown>) =>
+      send<NeedleWorkerResponse & { type: 'inserted' }>({ type: 'insert', vecId, vector, metadata }),
+    search: async (query: number[], k: number): Promise<SearchResult[]> => {
+      const resp = await send<NeedleWorkerResponse & { type: 'results' }>({ type: 'search', query, k });
+      return resp.results;
+    },
+    delete: (vecId: string) =>
+      send<NeedleWorkerResponse & { type: 'deleted' }>({ type: 'delete', vecId }),
+    persist: () =>
+      send<NeedleWorkerResponse & { type: 'persisted' }>({ type: 'persist' }),
+    clear: () =>
+      send<NeedleWorkerResponse & { type: 'cleared' }>({ type: 'clear' }),
+    stats: () =>
+      send<NeedleWorkerResponse & { type: 'stats' }>({ type: 'stats' }),
+    terminate: () => worker.terminate(),
+  };
+}
