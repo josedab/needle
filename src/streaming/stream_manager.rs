@@ -264,7 +264,9 @@ impl StreamManager {
         // Send to active change streams
         let senders = self.stream_senders.read().await;
         for sender in senders.iter() {
-            let _ = sender.try_send(event.clone());
+            if sender.try_send(event.clone()).is_err() {
+                tracing::debug!("Change stream subscriber lagging, event dropped");
+            }
         }
 
         Ok(position)
@@ -279,7 +281,9 @@ impl StreamManager {
 
             let senders = self.stream_senders.read().await;
             for sender in senders.iter() {
-                let _ = sender.try_send(event.clone());
+                if sender.try_send(event.clone()).is_err() {
+                    tracing::debug!("Change stream subscriber lagging, event dropped");
+                }
             }
         }
 
@@ -321,7 +325,10 @@ impl StreamManager {
 
         // Send replayed events
         for event in events {
-            let _ = tx.send(event).await;
+            if tx.send(event).await.is_err() {
+                tracing::warn!("Failed to replay event to change stream");
+                break;
+            }
         }
 
         let mut senders = self.stream_senders.write().await;

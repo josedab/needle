@@ -371,7 +371,9 @@ impl AdaptiveIndex {
             let rec = self.analyze_workload();
             if rec.recommended != self.active_strategy && rec.recommended != IndexStrategy::DiskAnn
             {
-                let _ = self.migrate_index(rec.recommended);
+                if let Err(e) = self.migrate_index(rec.recommended) {
+                    tracing::warn!("Auto-migration to {:?} failed: {}", rec.recommended, e);
+                }
             }
         }
 

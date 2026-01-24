@@ -1284,7 +1284,9 @@ impl SessionManager {
             let sessions = self.sessions.read();
             for session in sessions.values() {
                 if session.name == name {
-                    let _ = session.join(user_id);
+                    if let Err(e) = session.join(user_id) {
+                        tracing::debug!("Failed to join session '{}': {}", name, e);
+                    }
                     return session.clone();
                 }
             }
@@ -1292,7 +1294,9 @@ impl SessionManager {
 
         // Create new session
         let session = self.create(name, user_id);
-        let _ = session.join(user_id);
+        if let Err(e) = session.join(user_id) {
+            tracing::debug!("Failed to join newly created session '{}': {}", name, e);
+        }
         session
     }
 

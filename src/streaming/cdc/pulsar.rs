@@ -229,14 +229,18 @@ impl CdcConnector for PulsarConnector {
                     }
                     Ok(None) => {
                         // Filtered out, still ack
-                        let _ = consumer.ack(&msg).await;
+                        if let Err(e) = consumer.ack(&msg).await {
+                            tracing::warn!("Failed to ack filtered Pulsar message: {}", e);
+                        }
                         Ok(None)
                     }
                     Err(e) => {
                         stats.messages_failed += 1;
                         stats.last_error = Some(e.to_string());
                         // Negative ack for redelivery
-                        let _ = consumer.nack(&msg).await;
+                        if let Err(nack_err) = consumer.nack(&msg).await {
+                            tracing::warn!("Failed to nack Pulsar message: {}", nack_err);
+                        }
                         Err(e)
                     }
                 }

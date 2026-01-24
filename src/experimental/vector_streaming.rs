@@ -1680,7 +1680,9 @@ pub mod pulsar_cdc {
                         if let Ok(vec_msg) = self.parse_message(&msg) {
                             messages.push(vec_msg);
                             if !self.config.auto_commit {
-                                let _ = consumer.ack(&msg).await;
+                                if let Err(e) = consumer.ack(&msg).await {
+                                    tracing::warn!("Failed to ack Pulsar message: {}", e);
+                                }
                             }
                         }
                     }

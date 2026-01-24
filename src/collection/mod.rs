@@ -1066,7 +1066,9 @@ impl Collection {
                 Ok(_) => inserted_ids.push(id_string),
                 Err(err) => {
                     for inserted in inserted_ids {
-                        let _ = self.delete(&inserted);
+                        if let Err(e) = self.delete(&inserted) {
+                            tracing::warn!("Failed to rollback inserted vector '{}': {}", inserted, e);
+                        }
                     }
                     return Err(err);
                 }

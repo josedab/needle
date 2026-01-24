@@ -793,14 +793,16 @@ impl AdaptiveExecutor {
         satisfied: bool,
     ) {
         if self.auto_feedback {
-            let _ = self.tuner.record_feedback(QueryFeedback {
+            if let Err(e) = self.tuner.record_feedback(QueryFeedback {
                 ef_search,
                 k,
                 latency_ms,
                 estimated_recall,
                 satisfied,
                 ..Default::default()
-            });
+            }) {
+                tracing::debug!("Failed to record query feedback: {}", e);
+            }
         }
     }
 

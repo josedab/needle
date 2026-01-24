@@ -695,7 +695,9 @@ impl RaftNode {
         }
 
         // Append no-op entry
-        let _ = self.propose(Command::Noop);
+        if let Err(e) = self.propose(Command::Noop) {
+            tracing::warn!("Failed to propose no-op entry on leader election: {:?}", e);
+        }
 
         // Send initial heartbeats
         self.send_heartbeats();
@@ -1356,7 +1358,9 @@ impl RaftStorage for FileStorage {
         // Remove all but the latest snapshot
         if snapshots.len() > 1 {
             for path in &snapshots[..snapshots.len() - 1] {
-                let _ = fs::remove_file(path);
+                if let Err(e) = fs::remove_file(path) {
+                    tracing::warn!("Failed to remove old snapshot {:?}: {}", path, e);
+                }
             }
         }
 

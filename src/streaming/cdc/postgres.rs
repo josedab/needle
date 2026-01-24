@@ -197,7 +197,10 @@ impl CdcConnector for PostgresCdcConnector {
             self.config.slot_name, self.config.slot_name
         );
 
-        let _ = client.execute(&slot_query, &[]).await;
+        // Slot may already exist; log but don't fail
+        if let Err(e) = client.execute(&slot_query, &[]).await {
+            tracing::debug!("Replication slot creation (may already exist): {}", e);
+        }
 
         Ok(())
     }

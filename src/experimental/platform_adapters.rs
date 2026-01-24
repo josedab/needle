@@ -474,7 +474,9 @@ impl<C: EdgeStorage, B: EdgeStorage> EdgeStorage for TieredEdgeStorage<C, B> {
         if let Some(value) = self.backing.get(key)? {
             // Optionally promote to cache if small enough
             if value.len() <= self.cache_threshold {
-                let _ = self.cache.put(key, &value);
+                if let Err(e) = self.cache.put(key, &value) {
+                    tracing::debug!("Failed to promote key '{}' to cache: {}", key, e);
+                }
             }
             return Ok(Some(value));
         }
@@ -495,9 +497,13 @@ impl<C: EdgeStorage, B: EdgeStorage> EdgeStorage for TieredEdgeStorage<C, B> {
     }
 
     fn delete(&self, key: &str) -> Result<()> {
-        // Delete from both tiers
-        let _ = self.cache.delete(key);
-        let _ = self.backing.delete(key);
+        // Delete from both tiers (best-effort for each)
+        if let Err(e) = self.cache.delete(key) {
+            tracing::debug!("Failed to delete key '{}' from cache tier: {}", key, e);
+        }
+        if let Err(e) = self.backing.delete(key) {
+            tracing::debug!("Failed to delete key '{}' from backing tier: {}", key, e);
+        }
         self.backing_keys.write().remove(key);
         Ok(())
     }
@@ -623,7 +629,9 @@ impl<S: EdgeStorage> EdgeStorage for ChunkedEdgeStorage<S> {
 
     fn delete(&self, key: &str) -> Result<()> {
         // Delete direct key
-        let _ = self.inner.delete(key);
+        if let Err(e) = self.inner.delete(key) {
+            tracing::debug!("Failed to delete direct key '{}': {}", key, e);
+        }
 
         // Check for chunked value
         let meta_key = self.meta_key(key);
@@ -631,7 +639,9 @@ impl<S: EdgeStorage> EdgeStorage for ChunkedEdgeStorage<S> {
             if let Ok(meta) = serde_json::from_slice::<ChunkMetadata>(&meta_bytes) {
                 // Delete all chunks
                 for i in 0..meta.chunk_count {
-                    let _ = self.inner.delete(&self.chunk_key(key, i));
+                    if let Err(e) = self.inner.delete(&self.chunk_key(key, i)) {
+                        tracing::debug!("Failed to delete chunk {} of key '{}': {}", i, key, e);
+                    }
                 }
             }
             self.inner.delete(&meta_key)?;
