@@ -117,7 +117,7 @@ use std::path::Path;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
-use tokio::sync::Mutex;
+use tokio::sync::RwLock;
 
 /// Configuration for async database operations
 #[derive(Debug, Clone)]
@@ -164,15 +164,16 @@ impl AsyncDatabaseConfig {
 
 /// Reduces `spawn_blocking` boilerplate in `AsyncDatabase` methods.
 ///
-/// Three variants:
-/// - `db_op!(self, |db| expr)` — immutable lock, returns `Result<T>`
-/// - `db_op!(self, mut |db| expr)` — mutable lock, returns `Result<T>`
-/// - `db_op!(self, default val, |db| expr)` — immutable lock, returns `T` with fallback
+/// Four variants:
+/// - `db_op!(self, |db| expr)` — read lock, returns `Result<T>`
+/// - `db_op!(self, mut |db| expr)` — write lock, returns `Result<T>`
+/// - `db_op!(self, default val, |db| expr)` — read lock, returns `T` with fallback
+/// - `db_op!(self, write default val, |db| expr)` — write lock, returns `T` with fallback
 macro_rules! db_op {
     ($s:ident, |$db:ident| $body:expr) => {{
         let inner = $s.inner.clone();
         tokio::task::spawn_blocking(move || {
-            let $db = inner.blocking_lock();
+            let $db = inner.blocking_read();
             $body
         })
         .await
@@ -181,7 +182,7 @@ macro_rules! db_op {
     ($s:ident, mut |$db:ident| $body:expr) => {{
         let inner = $s.inner.clone();
         tokio::task::spawn_blocking(move || {
-            let mut $db = inner.blocking_lock();
+            let mut $db = inner.blocking_write();
             $body
         })
         .await
@@ -190,7 +191,7 @@ macro_rules! db_op {
     ($s:ident, default $default:expr, |$db:ident| $body:expr) => {{
         let inner = $s.inner.clone();
         tokio::task::spawn_blocking(move || {
-            let $db = inner.blocking_lock();
+            let $db = inner.blocking_read();
             $body
         })
         .await
@@ -206,7 +207,7 @@ macro_rules! db_op {
 #[derive(Clone)]
 pub struct AsyncDatabase {
     /// Inner database wrapped in Arc for shared ownership
-    inner: Arc<Mutex<Database>>,
+    inner: Arc<RwLock<Database>>,
     /// Configuration for async operations
     config: AsyncDatabaseConfig,
 }
@@ -230,7 +231,7 @@ impl AsyncDatabase {
             .map_err(|e| NeedleError::Io(std::io::Error::other(e)))??;
 
         Ok(Self {
-            inner: Arc::new(Mutex::new(db)),
+            inner: Arc::new(RwLock::new(db)),
             config: AsyncDatabaseConfig::default(),
         })
     }
@@ -256,7 +257,7 @@ impl AsyncDatabase {
             .map_err(|e| NeedleError::Io(std::io::Error::other(e)))??;
 
         Ok(Self {
-            inner: Arc::new(Mutex::new(db)),
+            inner: Arc::new(RwLock::new(db)),
             config,
         })
     }
@@ -270,7 +271,7 @@ impl AsyncDatabase {
     /// ```
     pub fn in_memory() -> Self {
         Self {
-            inner: Arc::new(Mutex::new(Database::in_memory())),
+            inner: Arc::new(RwLock::new(Database::in_memory())),
             config: AsyncDatabaseConfig::default(),
         }
     }
@@ -278,7 +279,7 @@ impl AsyncDatabase {
     /// Create an in-memory database with custom async configuration
     pub fn in_memory_with_config(config: AsyncDatabaseConfig) -> Self {
         Self {
-            inner: Arc::new(Mutex::new(Database::in_memory())),
+            inner: Arc::new(RwLock::new(Database::in_memory())),
             config,
         }
     }
@@ -662,7 +663,7 @@ impl AsyncDatabase {
         let inner = self.inner.clone();
         let collection_name = collection.to_string();
         let ids = tokio::task::spawn_blocking(move || {
-            let db = inner.blocking_lock();
+            let db = inner.blocking_read();
             let coll = db.collection(&collection_name)?;
             coll.ids()
         })
@@ -782,7 +783,7 @@ impl AsyncDatabase {
     /// Get the underlying database for advanced operations
     ///
     /// Use with caution - this provides direct access to the synchronous API.
-    pub fn inner(&self) -> Arc<Mutex<Database>> {
+    pub fn inner(&self) -> Arc<RwLock<Database>> {
         self.inner.clone()
     }
 
@@ -796,7 +797,7 @@ impl AsyncDatabase {
 ///
 /// Implements `Stream` trait for async iteration over export entries.
 pub struct ExportStream {
-    inner: Arc<Mutex<Database>>,
+    inner: Arc<RwLock<Database>>,
     collection: String,
     ids: Vec<String>,
     batch_size: usize,
@@ -806,7 +807,7 @@ pub struct ExportStream {
 
 impl ExportStream {
     fn new(
-        inner: Arc<Mutex<Database>>,
+        inner: Arc<RwLock<Database>>,
         collection: String,
         ids: Vec<String>,
         batch_size: usize,
@@ -867,7 +868,7 @@ impl futures::Stream for ExportStream {
         let collection = self.collection.clone();
         let future = async move {
             tokio::task::spawn_blocking(move || {
-                let db = inner.blocking_lock();
+                let db = inner.blocking_read();
                 let coll = db.collection(&collection)?;
                 let mut entries = Vec::with_capacity(batch_ids.len());
                 for id in batch_ids {
@@ -902,7 +903,7 @@ impl futures::Stream for ExportStream {
 ///
 /// Useful for streaming through large result sets with cursor-based pagination.
 pub struct SearchStream {
-    inner: Arc<Mutex<Database>>,
+    inner: Arc<RwLock<Database>>,
     collection: String,
     query: Vec<f32>,
     filter: Option<Filter>,
@@ -916,7 +917,7 @@ pub struct SearchStream {
 impl SearchStream {
     /// Create a new search stream
     pub fn new(
-        inner: Arc<Mutex<Database>>,
+        inner: Arc<RwLock<Database>>,
         collection: String,
         query: Vec<f32>,
         filter: Option<Filter>,
@@ -1004,7 +1005,7 @@ impl futures::Stream for SearchStream {
         // Create future for fetching this batch
         let future = async move {
             tokio::task::spawn_blocking(move || {
-                let db = inner.blocking_lock();
+                let db = inner.blocking_read();
                 let coll = db.collection(&collection)?;
                 if let Some(f) = filter {
                     coll.search_with_filter(&query, k, &f)
@@ -1049,7 +1050,7 @@ impl futures::Stream for SearchStream {
 ///
 /// Provides a fluent interface for building and executing batch operations.
 pub struct BatchOperationBuilder {
-    inner: Arc<Mutex<Database>>,
+    inner: Arc<RwLock<Database>>,
     collection: String,
     inserts: Vec<(String, Vec<f32>, Option<Value>)>,
     deletes: Vec<String>,
@@ -1093,7 +1094,7 @@ impl BatchOperationBuilder {
         let deletes = self.deletes;
 
         tokio::task::spawn_blocking(move || {
-            let db = inner.blocking_lock();
+            let db = inner.blocking_read();
             let coll = db.collection(&collection)?;
 
             let mut inserted = 0;
