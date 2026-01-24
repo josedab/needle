@@ -4044,7 +4044,10 @@ async fn graph_search_handler(
         let _ = graph.add_entity(entity);
     }
 
-    let results = graph.search(&body.vector, body.k, Some(body.max_hops));
+    let results = match graph.search(&body.vector, body.k, Some(body.max_hops)) {
+        Ok(r) => r,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))),
+    };
 
     let result_json: Vec<Value> = results.iter().map(|r| {
         json!({
