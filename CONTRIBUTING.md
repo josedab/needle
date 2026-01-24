@@ -19,7 +19,7 @@ Thank you for your interest in contributing to Needle! This document provides gu
 
 ## Code of Conduct
 
-Please be respectful and constructive in all interactions. We welcome contributors of all experience levels.
+This project adheres to the [Contributor Covenant Code of Conduct](CODE_OF_CONDUCT.md). By participating, you are expected to uphold this code. Please be respectful and constructive in all interactions. We welcome contributors of all experience levels.
 
 ---
 
