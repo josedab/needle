@@ -90,6 +90,15 @@ pub enum IvfError {
 
     #[error("Empty training data")]
     EmptyTrainingData,
+
+    #[error("Distance computation error: {0}")]
+    DistanceError(String),
+}
+
+impl From<crate::error::NeedleError> for IvfError {
+    fn from(e: crate::error::NeedleError) -> Self {
+        IvfError::DistanceError(e.to_string())
+    }
 }
 
 pub type IvfResult<T> = std::result::Result<T, IvfError>;
@@ -137,18 +146,21 @@ impl IvfConfig {
     }
 
     /// Set number of clusters to probe during search
+    #[must_use]
     pub fn with_nprobe(mut self, n_probe: usize) -> Self {
         self.n_probe = n_probe;
         self
     }
 
     /// Set maximum training iterations
+    #[must_use]
     pub fn with_max_iterations(mut self, max_iterations: usize) -> Self {
         self.max_iterations = max_iterations;
         self
     }
 
     /// Enable product quantization
+    #[must_use]
     pub fn with_pq(mut self, subvectors: usize, bits: usize) -> Self {
         self.use_pq = true;
         self.pq_subvectors = subvectors;
@@ -157,6 +169,7 @@ impl IvfConfig {
     }
 
     /// Set convergence tolerance
+    #[must_use]
     pub fn with_tolerance(mut self, tolerance: f32) -> Self {
         self.tolerance = tolerance;
         self
@@ -284,7 +297,7 @@ impl IvfIndex {
         let k = self.config.n_clusters.min(n);
 
         // Initialize centroids using k-means++
-        let mut centroids = self.kmeans_pp_init(vectors, k);
+        let mut centroids = self.kmeans_pp_init(vectors, k)?;
         let mut assignments = vec![0usize; n];
 
         for _iter in 0..self.config.max_iterations {
@@ -332,6 +345,8 @@ impl IvfIndex {
                 .iter()
                 .zip(new_centroids.iter())
                 .map(|(old, new)| euclidean_distance(old, new))
+                .collect::<crate::error::Result<Vec<f32>>>()?
+                .into_iter()
                 .fold(0.0f32, |a, b| a.max(b));
 
             centroids = new_centroids;
@@ -345,7 +360,7 @@ impl IvfIndex {
     }
 
     /// K-means++ initialization
-    fn kmeans_pp_init(&self, vectors: &[&[f32]], k: usize) -> Vec<Vec<f32>> {
+    fn kmeans_pp_init(&self, vectors: &[&[f32]], k: usize) -> IvfResult<Vec<Vec<f32>>> {
         let mut rng = thread_rng();
         let n = vectors.len();
 
@@ -361,7 +376,7 @@ impl IvfIndex {
         for _ in 1..k {
             // Update distances to nearest centroid
             for (i, v) in vectors.iter().enumerate() {
-                let d = euclidean_distance(v, centroids.last().expect("centroids is non-empty"));
+                let d = euclidean_distance(v, centroids.last().expect("centroids is non-empty"))?;
                 distances[i] = distances[i].min(d);
             }
 
@@ -369,13 +384,15 @@ impl IvfIndex {
             let total: f32 = distances.iter().map(|d| d * d).sum();
             if total == 0.0 {
                 // All remaining points are at centroids
-                let remaining: Vec<usize> = (0..n)
-                    .filter(|&i| {
-                        !centroids
-                            .iter()
-                            .any(|c| euclidean_distance(vectors[i], c) < 1e-10)
-                    })
-                    .collect();
+                let mut remaining: Vec<usize> = Vec::new();
+                for i in 0..n {
+                    let is_at_centroid = centroids
+                        .iter()
+                        .any(|c| euclidean_distance(vectors[i], c).unwrap_or(f32::MAX) < 1e-10);
+                    if !is_at_centroid {
+                        remaining.push(i);
+                    }
+                }
                 if remaining.is_empty() {
                     break;
                 }
@@ -394,7 +411,7 @@ impl IvfIndex {
             }
         }
 
-        centroids
+        Ok(centroids)
     }
 
     /// Find nearest centroid index
@@ -402,7 +419,7 @@ impl IvfIndex {
         centroids
             .iter()
             .enumerate()
-            .min_by_key(|(_, c)| OrderedFloat(euclidean_distance(vector, c)))
+            .min_by_key(|(_, c)| OrderedFloat(euclidean_distance(vector, c).unwrap_or(f32::MAX)))
             .map(|(i, _)| i)
             .unwrap_or(0)
     }
@@ -468,11 +485,10 @@ impl IvfIndex {
 
         // Find n_probe nearest clusters
         let centroids: Vec<Vec<f32>> = self.clusters.iter().map(|c| c.centroid.clone()).collect();
-        let mut cluster_distances: Vec<(usize, f32)> = centroids
-            .iter()
-            .enumerate()
-            .map(|(i, c)| (i, euclidean_distance(query, c)))
-            .collect();
+        let mut cluster_distances: Vec<(usize, f32)> = Vec::new();
+        for (i, c) in centroids.iter().enumerate() {
+            cluster_distances.push((i, euclidean_distance(query, c)?));
+        }
 
         cluster_distances.sort_by_key(|(_, d)| OrderedFloat(*d));
 
@@ -497,7 +513,7 @@ impl IvfIndex {
             } else {
                 // Exact distance computation
                 for (i, vector) in cluster.vectors.iter().enumerate() {
-                    let distance = euclidean_distance(query, vector);
+                    let distance = euclidean_distance(query, vector)?;
                     let id = cluster.ids[i];
                     heap.push(Reverse((OrderedFloat(distance), id)));
                     if heap.len() > k {
