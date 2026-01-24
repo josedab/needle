@@ -29,11 +29,13 @@
 //! let b = vec![0.0, 1.0, 0.0];
 //!
 //! // Orthogonal vectors have cosine distance of 1.0
-//! let dist = cosine_distance(&a, &b);
+//! let dist = cosine_distance(&a, &b).unwrap();
 //! assert!((dist - 1.0).abs() < 1e-6);
 //! ```
 
 use serde::{Deserialize, Serialize};
+
+use crate::error::{NeedleError, Result};
 
 /// Distance function types for vector similarity
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -58,10 +60,25 @@ pub enum DistanceFunction {
     Manhattan,
 }
 
+/// Check that two vectors have the same dimensions.
+#[inline]
+fn check_dimensions(a: &[f32], b: &[f32]) -> Result<()> {
+    if a.len() != b.len() {
+        return Err(NeedleError::DimensionMismatch {
+            expected: a.len(),
+            got: b.len(),
+        });
+    }
+    Ok(())
+}
+
 impl DistanceFunction {
-    /// Compute distance between two vectors
+    /// Compute distance between two vectors.
+    ///
+    /// # Errors
+    /// Returns `NeedleError::DimensionMismatch` if vectors have different lengths.
     #[inline]
-    pub fn compute(&self, a: &[f32], b: &[f32]) -> f32 {
+    pub fn compute(&self, a: &[f32], b: &[f32]) -> Result<f32> {
         match self {
             Self::Cosine => cosine_distance(a, b),
             Self::CosineNormalized => cosine_distance_normalized(a, b),
@@ -74,24 +91,20 @@ impl DistanceFunction {
 
 /// Compute cosine distance (1 - cosine similarity)
 ///
-/// # Panics
-/// Panics if `a` and `b` have different lengths.
+/// # Errors
+/// Returns `NeedleError::DimensionMismatch` if `a` and `b` have different lengths.
 #[inline]
-pub fn cosine_distance(a: &[f32], b: &[f32]) -> f32 {
-    assert_eq!(
-        a.len(),
-        b.len(),
-        "vectors must have equal length for cosine distance"
-    );
-    let dot = dot_product(a, b);
-    let norm_a = dot_product(a, a).sqrt();
-    let norm_b = dot_product(b, b).sqrt();
+pub fn cosine_distance(a: &[f32], b: &[f32]) -> Result<f32> {
+    check_dimensions(a, b)?;
+    let dot = dot_product_inner(a, b);
+    let norm_a = dot_product_inner(a, a).sqrt();
+    let norm_b = dot_product_inner(b, b).sqrt();
 
     if norm_a == 0.0 || norm_b == 0.0 {
-        return 1.0;
+        return Ok(1.0);
     }
 
-    1.0 - (dot / (norm_a * norm_b))
+    Ok(1.0 - (dot / (norm_a * norm_b)))
 }
 
 /// Compute cosine distance for pre-normalized vectors (faster)
@@ -108,8 +121,8 @@ pub fn cosine_distance(a: &[f32], b: &[f32]) -> f32 {
 /// Using this with non-normalized vectors will produce incorrect results.
 /// Use [`normalize`] or [`normalized`] to normalize vectors first.
 ///
-/// # Panics
-/// Panics if `a` and `b` have different lengths.
+/// # Errors
+/// Returns `NeedleError::DimensionMismatch` if `a` and `b` have different lengths.
 ///
 /// # Example
 /// ```
@@ -117,54 +130,46 @@ pub fn cosine_distance(a: &[f32], b: &[f32]) -> f32 {
 ///
 /// let a = normalized(&[1.0, 2.0, 3.0]);
 /// let b = normalized(&[4.0, 5.0, 6.0]);
-/// let dist = cosine_distance_normalized(&a, &b);
+/// let dist = cosine_distance_normalized(&a, &b).unwrap();
 /// assert!(dist >= 0.0 && dist <= 2.0);
 /// ```
 #[inline]
-pub fn cosine_distance_normalized(a: &[f32], b: &[f32]) -> f32 {
-    assert_eq!(
-        a.len(),
-        b.len(),
-        "vectors must have equal length for cosine distance"
-    );
-    1.0 - dot_product(a, b)
+pub fn cosine_distance_normalized(a: &[f32], b: &[f32]) -> Result<f32> {
+    check_dimensions(a, b)?;
+    Ok(1.0 - dot_product_inner(a, b))
 }
 
 /// Compute Euclidean (L2) distance
 ///
-/// # Panics
-/// Panics if `a` and `b` have different lengths.
+/// # Errors
+/// Returns `NeedleError::DimensionMismatch` if `a` and `b` have different lengths.
 #[inline]
-pub fn euclidean_distance(a: &[f32], b: &[f32]) -> f32 {
-    euclidean_distance_squared(a, b).sqrt()
+pub fn euclidean_distance(a: &[f32], b: &[f32]) -> Result<f32> {
+    Ok(euclidean_distance_squared(a, b)?.sqrt())
 }
 
 /// Compute squared Euclidean distance (faster, for comparisons)
 ///
-/// # Panics
-/// Panics if `a` and `b` have different lengths.
+/// # Errors
+/// Returns `NeedleError::DimensionMismatch` if `a` and `b` have different lengths.
 #[inline]
-pub fn euclidean_distance_squared(a: &[f32], b: &[f32]) -> f32 {
-    assert_eq!(
-        a.len(),
-        b.len(),
-        "vectors must have equal length for euclidean distance"
-    );
+pub fn euclidean_distance_squared(a: &[f32], b: &[f32]) -> Result<f32> {
+    check_dimensions(a, b)?;
     #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
     {
         if is_x86_feature_detected!("avx2") {
-            return unsafe { simd_x86::euclidean_squared_avx2(a, b) };
+            return Ok(unsafe { simd_x86::euclidean_squared_avx2(a, b) });
         }
     }
 
     #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
     {
-        unsafe { simd_arm::euclidean_squared_neon(a, b) }
+        Ok(unsafe { simd_arm::euclidean_squared_neon(a, b) })
     }
 
     #[cfg(not(all(target_arch = "aarch64", target_feature = "neon")))]
     {
-        euclidean_squared_scalar(a, b)
+        Ok(euclidean_squared_scalar(a, b))
     }
 }
 
@@ -186,24 +191,36 @@ fn euclidean_squared_scalar(a: &[f32], b: &[f32]) -> f32 {
 
 /// Compute dot product distance (negative dot product)
 ///
-/// # Panics
-/// Panics if `a` and `b` have different lengths.
+/// # Errors
+/// Returns `NeedleError::DimensionMismatch` if `a` and `b` have different lengths.
 #[inline]
-pub fn dot_product_distance(a: &[f32], b: &[f32]) -> f32 {
-    -dot_product(a, b)
+pub fn dot_product_distance(a: &[f32], b: &[f32]) -> Result<f32> {
+    Ok(-dot_product(a, b)?)
 }
 
 /// Compute dot product of two vectors
 ///
-/// # Panics
-/// Panics if `a` and `b` have different lengths.
+/// # Errors
+/// Returns `NeedleError::DimensionMismatch` if `a` and `b` have different lengths.
 #[inline]
-pub fn dot_product(a: &[f32], b: &[f32]) -> f32 {
-    assert_eq!(
-        a.len(),
-        b.len(),
-        "vectors must have equal length for dot product"
-    );
+pub fn dot_product(a: &[f32], b: &[f32]) -> Result<f32> {
+    check_dimensions(a, b)?;
+    Ok(dot_product_inner(a, b))
+}
+
+/// Scalar fallback for dot product
+#[inline]
+#[cfg_attr(
+    all(target_arch = "aarch64", target_feature = "neon"),
+    allow(dead_code)
+)]
+fn dot_product_scalar(a: &[f32], b: &[f32]) -> f32 {
+    a.iter().zip(b.iter()).map(|(x, y)| x * y).sum()
+}
+
+/// Internal dot product without dimension check (caller must guarantee equal lengths).
+#[inline]
+fn dot_product_inner(a: &[f32], b: &[f32]) -> f32 {
     #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
     {
         if is_x86_feature_detected!("avx2") {
@@ -222,42 +239,28 @@ pub fn dot_product(a: &[f32], b: &[f32]) -> f32 {
     }
 }
 
-/// Scalar fallback for dot product
-#[inline]
-#[cfg_attr(
-    all(target_arch = "aarch64", target_feature = "neon"),
-    allow(dead_code)
-)]
-fn dot_product_scalar(a: &[f32], b: &[f32]) -> f32 {
-    a.iter().zip(b.iter()).map(|(x, y)| x * y).sum()
-}
-
 /// Compute Manhattan (L1) distance
 ///
-/// # Panics
-/// Panics if `a` and `b` have different lengths.
+/// # Errors
+/// Returns `NeedleError::DimensionMismatch` if `a` and `b` have different lengths.
 #[inline]
-pub fn manhattan_distance(a: &[f32], b: &[f32]) -> f32 {
-    assert_eq!(
-        a.len(),
-        b.len(),
-        "vectors must have equal length for manhattan distance"
-    );
+pub fn manhattan_distance(a: &[f32], b: &[f32]) -> Result<f32> {
+    check_dimensions(a, b)?;
     #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
     {
         if is_x86_feature_detected!("avx2") {
-            return unsafe { simd_x86::manhattan_avx2(a, b) };
+            return Ok(unsafe { simd_x86::manhattan_avx2(a, b) });
         }
     }
 
     #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
     {
-        unsafe { simd_arm::manhattan_neon(a, b) }
+        Ok(unsafe { simd_arm::manhattan_neon(a, b) })
     }
 
     #[cfg(not(all(target_arch = "aarch64", target_feature = "neon")))]
     {
-        manhattan_scalar(a, b)
+        Ok(manhattan_scalar(a, b))
     }
 }
 
@@ -273,8 +276,8 @@ fn manhattan_scalar(a: &[f32], b: &[f32]) -> f32 {
 
 /// Normalize a vector in-place
 pub fn normalize(vector: &mut [f32]) {
-    // Use SIMD dot product for computing squared norm
-    let norm_squared = dot_product(vector, vector);
+    // Same-vector dot product — dimensions always match
+    let norm_squared = dot_product_inner(vector, vector);
     let norm = norm_squared.sqrt();
     if norm > 0.0 {
         let inv_norm = 1.0 / norm;
@@ -559,7 +562,7 @@ mod tests {
     fn test_dot_product() {
         let a = vec![1.0, 2.0, 3.0, 4.0];
         let b = vec![5.0, 6.0, 7.0, 8.0];
-        let result = dot_product(&a, &b);
+        let result = dot_product(&a, &b).unwrap();
         assert!((result - 70.0).abs() < 1e-6);
     }
 
@@ -567,7 +570,7 @@ mod tests {
     fn test_euclidean_distance() {
         let a = vec![0.0, 0.0, 0.0];
         let b = vec![1.0, 2.0, 2.0];
-        let result = euclidean_distance(&a, &b);
+        let result = euclidean_distance(&a, &b).unwrap();
         assert!((result - 3.0).abs() < 1e-6);
     }
 
@@ -575,12 +578,12 @@ mod tests {
     fn test_cosine_distance() {
         let a = vec![1.0, 0.0];
         let b = vec![0.0, 1.0];
-        let result = cosine_distance(&a, &b);
+        let result = cosine_distance(&a, &b).unwrap();
         assert!((result - 1.0).abs() < 1e-6); // Orthogonal vectors
 
         let c = vec![1.0, 0.0];
         let d = vec![1.0, 0.0];
-        let result2 = cosine_distance(&c, &d);
+        let result2 = cosine_distance(&c, &d).unwrap();
         assert!(result2.abs() < 1e-6); // Same direction
     }
 
@@ -588,7 +591,7 @@ mod tests {
     fn test_manhattan_distance() {
         let a = vec![0.0, 0.0, 0.0];
         let b = vec![1.0, 2.0, 3.0];
-        let result = manhattan_distance(&a, &b);
+        let result = manhattan_distance(&a, &b).unwrap();
         assert!((result - 6.0).abs() < 1e-6);
     }
 
@@ -605,19 +608,19 @@ mod tests {
         // Test with pre-normalized vectors
         let a = normalized(&[1.0, 0.0]);
         let b = normalized(&[0.0, 1.0]);
-        let result = cosine_distance_normalized(&a, &b);
+        let result = cosine_distance_normalized(&a, &b).unwrap();
         assert!((result - 1.0).abs() < 1e-6); // Orthogonal vectors
 
         let c = normalized(&[1.0, 0.0]);
         let d = normalized(&[1.0, 0.0]);
-        let result2 = cosine_distance_normalized(&c, &d);
+        let result2 = cosine_distance_normalized(&c, &d).unwrap();
         assert!(result2.abs() < 1e-6); // Same direction
 
         // Verify it matches regular cosine for normalized vectors
         let v1 = normalized(&[1.0, 2.0, 3.0]);
         let v2 = normalized(&[4.0, 5.0, 6.0]);
-        let regular = cosine_distance(&v1, &v2);
-        let fast = cosine_distance_normalized(&v1, &v2);
+        let regular = cosine_distance(&v1, &v2).unwrap();
+        let fast = cosine_distance_normalized(&v1, &v2).unwrap();
         assert!(
             (regular - fast).abs() < 1e-5,
             "Normalized cosine should match regular for unit vectors"
@@ -629,8 +632,8 @@ mod tests {
         let a = normalized(&[1.0, 2.0, 3.0, 4.0]);
         let b = normalized(&[5.0, 6.0, 7.0, 8.0]);
 
-        let regular = DistanceFunction::Cosine.compute(&a, &b);
-        let fast = DistanceFunction::CosineNormalized.compute(&a, &b);
+        let regular = DistanceFunction::Cosine.compute(&a, &b).unwrap();
+        let fast = DistanceFunction::CosineNormalized.compute(&a, &b).unwrap();
 
         assert!((regular - fast).abs() < 1e-5);
     }
