@@ -331,15 +331,15 @@ impl GraphRAG {
         query_embedding: &[f32],
         k: usize,
         max_hops: Option<usize>,
-    ) -> Vec<GraphRAGResult> {
+    ) -> Result<Vec<GraphRAGResult>> {
         let hops = max_hops.unwrap_or(self.config.max_hops);
 
         if self.vectors.is_empty() {
-            return Vec::new();
+            return Ok(Vec::new());
         }
 
         // Stage 1 – ANN vector search.
-        let ann = self.hnsw.search(query_embedding, k, &self.vectors);
+        let ann = self.hnsw.search(query_embedding, k, &self.vectors)?;
 
         let mut results_map: HashMap<String, GraphRAGResult> = HashMap::new();
 
@@ -422,10 +422,8 @@ impl GraphRAG {
         let mut results: Vec<GraphRAGResult> = results_map.into_values().collect();
         results.sort_by(|a, b| OrderedFloat(b.combined_score).cmp(&OrderedFloat(a.combined_score)));
         results.truncate(k);
-        results
+        Ok(results)
     }
-
-    /// Pure graph traversal starting from a known entity.
     ///
     /// Performs BFS from `start_entity_id` up to `max_hops`, scoring each
     /// discovered entity as `1 / (1 + hop_distance)`.
@@ -588,7 +586,7 @@ impl GraphRAG {
         &self,
         query_embedding: &[f32],
         k: usize,
-    ) -> Vec<GraphRAGResult> {
+    ) -> Result<Vec<GraphRAGResult>> {
         self.search(query_embedding, k, None)
     }
 }
@@ -731,9 +729,8 @@ mod tests {
         }
 
         let query = random_vec(dim, 0); // should be closest to v0
-        let results = g.search(&query, 3, None);
+        let results = g.search(&query, 3, None).unwrap();
         assert!(!results.is_empty());
-        // The top result should be v0 itself (identical embedding).
         assert_eq!(results[0].entity.id, "v0");
     }
 
@@ -811,7 +808,7 @@ mod tests {
         assert_eq!(g.relationship_count(), 0);
         assert_eq!(g.community_count(), 0);
         let query = random_vec(32, 42);
-        let results = g.search(&query, 5, None);
+        let results = g.search(&query, 5, None).unwrap();
         assert!(results.is_empty());
     }
 
