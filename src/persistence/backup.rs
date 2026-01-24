@@ -761,12 +761,14 @@ impl IncrementalBackupManager {
     }
 
     /// Enable cloud sync
+    #[must_use]
     pub fn with_cloud_sync(mut self, config: CloudSyncConfig) -> Self {
         self.cloud_config = Some(config);
         self
     }
 
     /// Configure PITR
+    #[must_use]
     pub fn with_pitr(mut self, config: PitrConfig) -> Self {
         self.pitr_config = config;
         self
@@ -774,6 +776,7 @@ impl IncrementalBackupManager {
 
     /// Attach a replication leader. WAL entries will automatically produce
     /// replication segments on the leader when the segment threshold is reached.
+    #[must_use]
     pub fn with_replication_leader(mut self, leader: Arc<ReplicationLeader>) -> Self {
         self.replication_leader = Some(leader);
         self

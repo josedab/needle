@@ -434,6 +434,7 @@ impl MigrationManager {
     }
 
     /// Allow destructive migrations.
+    #[must_use]
     pub fn allow_destructive(mut self) -> Self {
         self.allow_destructive = true;
         self

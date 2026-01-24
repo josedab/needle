@@ -134,18 +134,21 @@ impl ShardConfig {
     }
 
     /// Set number of virtual nodes
+    #[must_use]
     pub fn with_virtual_nodes(mut self, nodes: u32) -> Self {
         self.virtual_nodes = nodes;
         self
     }
 
     /// Set replication factor
+    #[must_use]
     pub fn with_replication(mut self, factor: u32) -> Self {
         self.replication_factor = factor;
         self
     }
 
     /// Enable/disable auto rebalancing
+    #[must_use]
     pub fn with_auto_rebalance(mut self, enabled: bool) -> Self {
         self.auto_rebalance = enabled;
         self
@@ -534,24 +537,28 @@ impl CrossShardSearchConfig {
     }
 
     /// Set shard timeout
+    #[must_use]
     pub fn with_timeout(mut self, timeout: Duration) -> Self {
         self.shard_timeout = Some(timeout);
         self
     }
 
     /// Set continue on failure behavior
+    #[must_use]
     pub fn with_continue_on_failure(mut self, continue_on_failure: bool) -> Self {
         self.continue_on_failure = continue_on_failure;
         self
     }
 
     /// Set metadata filter
+    #[must_use]
     pub fn with_filter(mut self, filter: Filter) -> Self {
         self.filter = Some(filter);
         self
     }
 
     /// Set minimum shard responses required
+    #[must_use]
     pub fn with_min_responses(mut self, min: usize) -> Self {
         self.min_shard_responses = Some(min);
         self

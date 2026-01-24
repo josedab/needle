@@ -1120,6 +1120,7 @@ impl<'a> TimeTravelQueryBuilder<'a> {
         self
     }
 
+    #[must_use]
     pub fn at(mut self, time: TimeExpression) -> Self {
         self.at = Some(time);
         self
@@ -1129,6 +1130,7 @@ impl<'a> TimeTravelQueryBuilder<'a> {
         Ok(self.at(TimeExpression::parse(time)?))
     }
 
+    #[must_use]
     pub fn since(mut self, time: TimeExpression) -> Self {
         self.since = Some(time);
         self
@@ -1138,6 +1140,7 @@ impl<'a> TimeTravelQueryBuilder<'a> {
         Ok(self.since(TimeExpression::parse(time)?))
     }
 
+    #[must_use]
     pub fn until(mut self, time: TimeExpression) -> Self {
         self.until = Some(time);
         self
@@ -1147,14 +1150,17 @@ impl<'a> TimeTravelQueryBuilder<'a> {
         Ok(self.until(TimeExpression::parse(time)?))
     }
 
+    #[must_use]
     pub fn last_hours(self, hours: u64) -> Self {
         self.since(TimeExpression::RelativeSeconds(-(hours as i64 * 3600)))
     }
 
+    #[must_use]
     pub fn last_days(self, days: u64) -> Self {
         self.since(TimeExpression::RelativeSeconds(-(days as i64 * 86400)))
     }
 
+    #[must_use]
     pub fn with_filter(mut self, filter: Filter) -> Self {
         self.filter = Some(filter);
         self

@@ -131,12 +131,14 @@ impl CollectionProfile {
     }
 
     /// Add a metadata field
+    #[must_use]
     pub fn with_field(mut self, field: FieldProfile) -> Self {
         self.metadata_fields.push(field);
         self
     }
 
     /// Set index configuration
+    #[must_use]
     pub fn with_index(mut self, config: IndexProfile) -> Self {
         self.index_config = config;
         self
