@@ -220,6 +220,12 @@ pub use services::{
 #[cfg(feature = "experimental")]
 pub use services::{embedding_router, webhook_delivery};
 
+// ── Next-Gen v11 Services ────────────────────────────────────────────────────
+#[cfg(feature = "experimental")]
+pub use services::{
+    agentic_workflow, benchmark_suite, cloud_service, crdt_sync, distributed_federation,
+    needleql_executor, needleql_lsp, storage_backends, typed_schema, version_control,
+};
 
 // ── Experimental / Advanced ──────────────────────────────────────────────────
 // Features under active development. APIs may change without notice.

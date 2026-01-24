@@ -196,3 +196,25 @@ pub mod tenant_router;
 // ── Next-Gen v10 Services ────────────────────────────────────────────────────
 pub mod embedding_router;
 pub mod webhook_delivery;
+
+// ── Next-Gen v11 Services ────────────────────────────────────────────────────
+#[cfg(feature = "experimental")]
+pub mod distributed_federation;
+#[cfg(feature = "experimental")]
+pub mod needleql_executor;
+#[cfg(feature = "experimental")]
+pub mod cloud_service;
+#[cfg(feature = "experimental")]
+pub mod crdt_sync;
+#[cfg(feature = "experimental")]
+pub mod storage_backends;
+#[cfg(feature = "experimental")]
+pub mod version_control;
+#[cfg(feature = "experimental")]
+pub mod agentic_workflow;
+#[cfg(feature = "experimental")]
+pub mod benchmark_suite;
+#[cfg(feature = "experimental")]
+pub mod typed_schema;
+#[cfg(feature = "experimental")]
+pub mod needleql_lsp;
