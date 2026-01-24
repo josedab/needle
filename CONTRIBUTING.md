@@ -12,6 +12,7 @@ Thank you for your interest in contributing to Needle! This document provides gu
 - [Code Style](#code-style)
 - [Pull Request Process](#pull-request-process)
 - [Architecture Overview](#architecture-overview)
+- [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -437,6 +438,76 @@ let guard = self.inner.read();
 
 // Write lock (exclusive access)
 let mut guard = self.inner.write();
+```
+
+---
+
+## Troubleshooting
+
+### Build fails with "feature `X` required"
+
+Many modules are behind feature flags. If you see missing type or module errors:
+
+```bash
+cargo build --features full    # Enable all features
+cargo test --features full     # Test with all features
+```
+
+### Rust version mismatch
+
+Needle requires Rust 1.85+. Check your version:
+
+```bash
+rustc --version
+rustup update stable
+```
+
+### cdylib linker errors with `cargo test`
+
+The Python bindings crate (`crates/needle-python`) uses `crate-type = ["cdylib"]` which can cause linker issues. Use `--lib` or target the root package:
+
+```bash
+cargo test -p needle --lib     # Test library only
+cargo test -p needle           # Test root package
+```
+
+### `cargo clippy` warnings on clean checkout
+
+Clippy pedantic is enabled workspace-wide. Some warnings are expected in service modules. Run with the same flags CI uses:
+
+```bash
+cargo clippy --features full -- -D warnings
+```
+
+### Pre-commit hooks failing
+
+If `pre-commit` hooks fail on install:
+
+```bash
+pip install pre-commit
+pre-commit install
+pre-commit run --all-files     # Verify setup
+```
+
+### Tests fail with "database dropped with unsaved changes"
+
+This warning is expected in tests using `Database::in_memory()` and can be ignored. Tests create in-memory databases that are intentionally not saved.
+
+### Docker build fails
+
+Ensure Docker is running and you have sufficient disk space:
+
+```bash
+docker compose build --no-cache
+```
+
+### Benchmark results vary wildly
+
+Benchmarks are sensitive to system load. For reliable results:
+
+```bash
+# Close other applications, then:
+cargo bench -- --warm-up-time 3
 ```
 
 ---

@@ -557,6 +557,230 @@ impl WasmDatabase {
     }
 }
 
+// ── Sync Protocol ───────────────────────────────────────────────────────────
+
+/// Sync direction for server reconciliation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SyncDirection {
+    /// Client pushes changes to server.
+    Push,
+    /// Client pulls changes from server.
+    Pull,
+    /// Bidirectional sync.
+    Bidirectional,
+}
+
+/// A change entry for sync protocol.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SyncChange {
+    /// Operation type.
+    pub op: SyncOp,
+    /// Collection name.
+    pub collection: String,
+    /// Timestamp (epoch ms).
+    pub timestamp: u64,
+}
+
+/// Sync operation type.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum SyncOp {
+    /// Insert a new vector.
+    Insert { id: String, vector: Vec<f32>, metadata: Option<Value> },
+    /// Update an existing vector.
+    Update { id: String, vector: Vec<f32>, metadata: Option<Value> },
+    /// Delete a vector.
+    Delete { id: String },
+    /// Create a collection.
+    CreateCollection { name: String, dimensions: usize },
+    /// Delete a collection.
+    DeleteCollection { name: String },
+}
+
+/// Sync status between local and remote.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SyncState {
+    /// Local version counter.
+    pub local_version: u64,
+    /// Remote version counter.
+    pub remote_version: u64,
+    /// Pending changes to sync.
+    pub pending_changes: usize,
+    /// Last sync timestamp.
+    pub last_sync_at: Option<u64>,
+    /// Sync direction.
+    pub direction: SyncDirection,
+}
+
+/// Sync result after reconciliation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SyncResult {
+    /// Changes pushed to server.
+    pub pushed: usize,
+    /// Changes pulled from server.
+    pub pulled: usize,
+    /// Conflicts detected.
+    pub conflicts: usize,
+    /// New local version after sync.
+    pub new_version: u64,
+}
+
+// ── React Hook Types ────────────────────────────────────────────────────────
+
+/// TypeScript-compatible hook return type for useNeedleSearch.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SearchHookState {
+    /// Search results.
+    pub results: Vec<WasmSearchResult>,
+    /// Whether a search is in progress.
+    pub loading: bool,
+    /// Error message if search failed.
+    pub error: Option<String>,
+    /// Time taken in milliseconds.
+    pub latency_ms: f64,
+}
+
+impl Default for SearchHookState {
+    fn default() -> Self {
+        Self {
+            results: Vec::new(),
+            loading: false,
+            error: None,
+            latency_ms: 0.0,
+        }
+    }
+}
+
+/// TypeScript-compatible hook return type for useCollection.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CollectionHookState {
+    /// Collection information.
+    pub info: Option<CollectionInfo>,
+    /// Whether the collection is loaded.
+    pub ready: bool,
+    /// Error message if loading failed.
+    pub error: Option<String>,
+}
+
+impl Default for CollectionHookState {
+    fn default() -> Self {
+        Self {
+            info: None,
+            ready: false,
+            error: None,
+        }
+    }
+}
+
+/// TypeScript type definition export for the npm package.
+pub fn typescript_definitions() -> &'static str {
+    r#"
+export interface NeedleConfig {
+  storage?: 'memory' | 'indexeddb' | 'localstorage' | 'opfs';
+  maxCollections?: number;
+  maxVectorsPerCollection?: number;
+  compress?: boolean;
+}
+
+export interface SearchResult {
+  id: string;
+  distance: number;
+  metadata?: Record<string, unknown>;
+}
+
+export interface CollectionInfo {
+  name: string;
+  count: number;
+  dimensions: number;
+}
+
+export function useNeedleSearch(
+  collection: string,
+  query: number[],
+  k?: number
+): {
+  results: SearchResult[];
+  loading: boolean;
+  error: string | null;
+  latency_ms: number;
+};
+
+export function useCollection(
+  name: string
+): {
+  info: CollectionInfo | null;
+  ready: boolean;
+  error: string | null;
+  insert: (id: string, vector: number[], metadata?: Record<string, unknown>) => Promise<void>;
+  search: (query: number[], k?: number) => Promise<SearchResult[]>;
+  delete: (id: string) => Promise<boolean>;
+};
+"#
+}
+
+// ── IndexedDB Restore ───────────────────────────────────────────────────────
+
+impl WasmDatabase {
+    /// Restore database state from a serialized JSON (from IndexedDB/localStorage).
+    pub fn restore_state(&mut self, state: &Value) -> Result<RestoreResult> {
+        let obj = state.as_object()
+            .ok_or_else(|| NeedleError::InvalidArgument("State must be a JSON object".into()))?;
+
+        let mut restored_collections = 0usize;
+        let mut restored_vectors = 0usize;
+        let mut errors = 0usize;
+
+        for (name, coll_data) in obj {
+            let dims = coll_data.get("dimensions")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0) as usize;
+
+            if dims == 0 {
+                errors += 1;
+                continue;
+            }
+
+            if !self.collections.contains_key(name) {
+                if let Err(_) = self.create_collection(name, dims) {
+                    errors += 1;
+                    continue;
+                }
+            }
+            restored_collections += 1;
+
+            if let Some(entries) = coll_data.get("entries").and_then(|v| v.as_array()) {
+                for entry in entries {
+                    let id = entry.get("id").and_then(|v| v.as_str()).unwrap_or("");
+                    let vector: Vec<f32> = entry.get("vector")
+                        .and_then(|v| v.as_array())
+                        .map(|arr| arr.iter().filter_map(|x| x.as_f64().map(|f| f as f32)).collect())
+                        .unwrap_or_default();
+                    let metadata = entry.get("metadata").cloned();
+
+                    if !id.is_empty() && !vector.is_empty() {
+                        match self.insert(name, id, &vector, metadata) {
+                            Ok(()) => restored_vectors += 1,
+                            Err(_) => errors += 1,
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(RestoreResult { restored_collections, restored_vectors, errors })
+    }
+}
+
+/// Result of restoring state from persistence.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RestoreResult {
+    /// Number of collections restored.
+    pub restored_collections: usize,
+    /// Number of vectors restored.
+    pub restored_vectors: usize,
+    /// Number of errors encountered during restore.
+    pub errors: usize,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -755,5 +979,54 @@ mod tests {
             .unwrap();
         assert!(matches!(resp, WorkerResponse::Ok));
         assert_eq!(db.collection_count(), 0);
+    }
+
+    #[test]
+    fn test_serialize_and_restore() {
+        let mut db = WasmDatabase::new(WasmConfig::default());
+        db.create_collection("test", 4).unwrap();
+        db.insert("test", "v1", &[1.0, 2.0, 3.0, 4.0], None).unwrap();
+        db.insert("test", "v2", &[0.5; 4], Some(serde_json::json!({"tag": "x"}))).unwrap();
+
+        let state = db.serialize_state().unwrap();
+
+        let mut db2 = WasmDatabase::new(WasmConfig::default());
+        let result = db2.restore_state(&state).unwrap();
+        assert_eq!(result.restored_collections, 1);
+        assert_eq!(result.restored_vectors, 2);
+        assert_eq!(result.errors, 0);
+
+        let results = db2.search("test", &[1.0, 2.0, 3.0, 4.0], 2).unwrap();
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].id, "v1");
+    }
+
+    #[test]
+    fn test_sync_types() {
+        let state = SyncState {
+            local_version: 5,
+            remote_version: 3,
+            pending_changes: 2,
+            last_sync_at: None,
+            direction: SyncDirection::Push,
+        };
+        assert_eq!(state.pending_changes, 2);
+        assert_eq!(state.direction, SyncDirection::Push);
+    }
+
+    #[test]
+    fn test_search_hook_state_default() {
+        let state = SearchHookState::default();
+        assert!(state.results.is_empty());
+        assert!(!state.loading);
+        assert!(state.error.is_none());
+    }
+
+    #[test]
+    fn test_typescript_definitions() {
+        let defs = typescript_definitions();
+        assert!(defs.contains("useNeedleSearch"));
+        assert!(defs.contains("useCollection"));
+        assert!(defs.contains("SearchResult"));
     }
 }

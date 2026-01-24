@@ -112,6 +112,10 @@ Memory usage: ~1.7GB for 1M vectors (384 dims) with HNSW index.
 | [Operations Guide](docs/OPERATIONS.md) | Monitoring, backup, and tuning |
 | [Deployment Guide](docs/deployment.md) | Docker, Kubernetes, and cloud deployment |
 | [Distributed Operations](docs/distributed-operations.md) | Sharding, replication, and clustering |
+| [Services Architecture](docs/ARCHITECTURE_SERVICES.md) | Service module organization and dependencies |
+| [Migration Guide](docs/MIGRATION.md) | Version upgrade and migration instructions |
+| [Governance](docs/GOVERNANCE.md) | Project governance model |
+| [Support](docs/SUPPORT.md) | Getting help and support channels |
 | [Examples](examples/README.md) | Runnable example commands |
 
 ## Features

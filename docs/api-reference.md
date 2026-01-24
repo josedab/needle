@@ -23,6 +23,7 @@ For a runnable walkthrough, see [HTTP Quickstart](http-quickstart.md).
 - [Configuration](#configuration)
 - [Advanced Features](#advanced-features)
 - [Error Handling](#error-handling)
+- [MCP-Only Tools](#mcp-only-tools)
 
 ---
 
@@ -528,6 +529,38 @@ curl -X POST http://localhost:8080/collections/docs/search \
   -H "Content-Type: application/json" \
   -d '{"vector": [0.1, ...], "k": 10, "filter": {"title": "Hello"}}'
 ```
+
+---
+
+## MCP-Only Tools
+
+The following tools are available exclusively via the [Model Context Protocol (MCP)](https://modelcontextprotocol.io/)
+server and do not have HTTP REST equivalents. Start the MCP server with:
+
+```bash
+needle mcp --database vectors.needle
+```
+
+| Tool | Description |
+|------|-------------|
+| `remember` | Store a memory with content, embedding vector, tier (episodic/semantic/procedural), and importance score |
+| `recall` | Retrieve relevant memories by vector similarity, with optional tier and importance filters |
+| `forget` | Delete a specific memory by its ID |
+| `memory_consolidate` | Promote important episodic memories to semantic tier and expire low-importance entries |
+| `save_database` | Persist all in-memory changes to disk |
+
+### memory_consolidate
+
+Consolidates a memory collection by scanning episodic-tier memories and:
+- **Promoting** memories with importance ≥ `promotion_threshold` (default: 0.7) to the semantic tier
+- **Expiring** memories with importance < `expire_below` (default: 0.1)
+
+Parameters:
+- `collection` (required) — Name of the memory collection
+- `promotion_threshold` (optional, default: 0.7) — Importance threshold for promotion (0.0–1.0)
+- `expire_below` (optional, default: 0.1) — Forget memories below this importance (0.0–1.0)
+
+Response includes `scanned`, `promoted`, `forgotten`, and `errors` counts.
 
 ---
 

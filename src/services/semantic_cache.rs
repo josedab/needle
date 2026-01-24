@@ -42,6 +42,25 @@ use crate::error::{NeedleError, Result};
 
 // ── Configuration ────────────────────────────────────────────────────────────
 
+/// Eviction policy for cache entries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum EvictionPolicy {
+    /// Least Recently Used — evict entries accessed longest ago.
+    Lru,
+    /// Least Frequently Used — evict entries with fewest hits.
+    Lfu,
+    /// Time-to-Live — evict oldest entries first.
+    Ttl,
+    /// Combined: LFU weighted by recency.
+    LfuRecency,
+}
+
+impl Default for EvictionPolicy {
+    fn default() -> Self {
+        Self::Lfu
+    }
+}
+
 /// Semantic cache configuration.
 #[derive(Debug, Clone)]
 pub struct CacheConfig {
@@ -58,6 +77,8 @@ pub struct CacheConfig {
     pub distance: DistanceFunction,
     /// Whether to track hit/miss analytics.
     pub enable_analytics: bool,
+    /// Eviction policy when cache is full.
+    pub eviction_policy: EvictionPolicy,
 }
 
 impl CacheConfig {
@@ -70,6 +91,7 @@ impl CacheConfig {
             max_entries: 100_000,
             distance: DistanceFunction::Cosine,
             enable_analytics: true,
+            eviction_policy: EvictionPolicy::default(),
         }
     }
 
@@ -91,6 +113,13 @@ impl CacheConfig {
     #[must_use]
     pub fn with_max_entries(mut self, max: usize) -> Self {
         self.max_entries = max;
+        self
+    }
+
+    /// Set eviction policy.
+    #[must_use]
+    pub fn with_eviction_policy(mut self, policy: EvictionPolicy) -> Self {
+        self.eviction_policy = policy;
         self
     }
 }
@@ -373,13 +402,41 @@ impl SemanticCache {
     // ── Internal ─────────────────────────────────────────────────────────────
 
     fn evict_oldest(&mut self) {
-        // Find the entry with the lowest hit_count (LFU-style)
-        if let Some((id, _)) = self
-            .entries
-            .iter()
-            .min_by_key(|(_, e)| e.hit_count)
-        {
-            let id = id.clone();
+        let victim = match self.config.eviction_policy {
+            EvictionPolicy::Lru => {
+                // Evict the entry with the oldest last access time (approximated by created_at for now)
+                self.entries.iter()
+                    .min_by_key(|(_, e)| e.created_at)
+                    .map(|(id, _)| id.clone())
+            }
+            EvictionPolicy::Lfu => {
+                // Evict the entry with the fewest hits
+                self.entries.iter()
+                    .min_by_key(|(_, e)| e.hit_count)
+                    .map(|(id, _)| id.clone())
+            }
+            EvictionPolicy::Ttl => {
+                // Evict the entry closest to expiration, or oldest if no TTL
+                self.entries.iter()
+                    .min_by_key(|(_, e)| e.expires_at.unwrap_or(u64::MAX))
+                    .map(|(id, _)| id.clone())
+            }
+            EvictionPolicy::LfuRecency => {
+                // Combined: score = hit_count - recency_penalty
+                let now = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs();
+                self.entries.iter()
+                    .min_by(|(_, a), (_, b)| {
+                        let score_a = a.hit_count as f64 - (now.saturating_sub(a.created_at)) as f64 * 0.001;
+                        let score_b = b.hit_count as f64 - (now.saturating_sub(b.created_at)) as f64 * 0.001;
+                        score_a.partial_cmp(&score_b).unwrap_or(std::cmp::Ordering::Equal)
+                    })
+                    .map(|(id, _)| id.clone())
+            }
+        };
+        if let Some(id) = victim {
             let _ = self.collection.delete(&id);
             self.entries.remove(&id);
             self.analytics.total_evictions += 1;
@@ -409,6 +466,68 @@ impl SemanticCache {
         }
         self.analytics.total_entries = self.entries.len();
         count
+    }
+
+    /// Invalidate cache entries whose embeddings have drifted beyond a threshold.
+    ///
+    /// This checks if the cached query embeddings are still within the acceptable
+    /// distance of a reference distribution. Useful when the embedding model changes
+    /// or when the underlying data distribution has shifted.
+    pub fn invalidate_drifted(
+        &mut self,
+        reference_embeddings: &[Vec<f32>],
+        drift_threshold: f32,
+    ) -> usize {
+        if reference_embeddings.is_empty() {
+            return 0;
+        }
+
+        let stale: Vec<String> = self
+            .entries
+            .keys()
+            .cloned()
+            .filter(|id| {
+                if let Some((vec, _)) = self.collection.get(id) {
+                    // Compute min distance to any reference embedding
+                    let min_dist = reference_embeddings.iter()
+                        .map(|ref_emb| {
+                            let dot: f32 = vec.iter().zip(ref_emb.iter()).map(|(a, b)| a * b).sum();
+                            let na: f32 = vec.iter().map(|a| a * a).sum::<f32>().sqrt();
+                            let nb: f32 = ref_emb.iter().map(|b| b * b).sum::<f32>().sqrt();
+                            let denom = na * nb;
+                            if denom < f32::EPSILON { 1.0 } else { 1.0 - dot / denom }
+                        })
+                        .fold(f32::MAX, f32::min);
+                    min_dist > drift_threshold
+                } else {
+                    true // entry lost from collection, mark as stale
+                }
+            })
+            .collect();
+
+        let count = stale.len();
+        for id in stale {
+            let _ = self.collection.delete(&id);
+            self.entries.remove(&id);
+        }
+        self.analytics.total_entries = self.entries.len();
+        count
+    }
+
+    /// Get a summary of cache statistics suitable for dashboards.
+    pub fn stats_summary(&self) -> CacheStatsSummary {
+        let a = &self.analytics;
+        CacheStatsSummary {
+            entries: self.entries.len(),
+            hit_rate: a.hit_rate(),
+            total_lookups: a.total_lookups,
+            total_hits: a.total_hits,
+            total_misses: a.total_misses,
+            total_evictions: a.total_evictions,
+            avg_hit_distance: a.avg_hit_distance,
+            estimated_savings_usd: a.estimated_savings_usd(0.002),
+            eviction_policy: self.config.eviction_policy,
+        }
     }
 
     /// Warm up the cache from a list of pre-computed query-response pairs.
@@ -612,6 +731,29 @@ pub fn warm_cache_from_pairs<P: LlmProvider>(
     }
 
     Ok(WarmUpResult { embedded, failed })
+}
+
+/// Summary of cache statistics for dashboards and monitoring.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CacheStatsSummary {
+    /// Current number of cached entries.
+    pub entries: usize,
+    /// Cache hit rate (0.0–1.0).
+    pub hit_rate: f32,
+    /// Total lookups.
+    pub total_lookups: u64,
+    /// Total hits.
+    pub total_hits: u64,
+    /// Total misses.
+    pub total_misses: u64,
+    /// Total evictions.
+    pub total_evictions: u64,
+    /// Average distance for cache hits.
+    pub avg_hit_distance: f32,
+    /// Estimated cost savings in USD (at $0.002/query).
+    pub estimated_savings_usd: f32,
+    /// Active eviction policy.
+    pub eviction_policy: EvictionPolicy,
 }
 
 /// Result of a cache warming operation.
@@ -922,5 +1064,64 @@ mod tests {
         };
         assert!(!miss.from_cache);
         assert!(miss.distance.is_none());
+    }
+
+    #[test]
+    fn test_eviction_policy_lru() {
+        let config = CacheConfig::new(8)
+            .with_max_entries(2)
+            .with_eviction_policy(EvictionPolicy::Lru);
+        let mut cache = SemanticCache::new(config);
+
+        // Insert 3 entries, oldest should be evicted
+        for i in 0..3 {
+            let emb = make_embedding(i as f32 * 0.3, 8);
+            cache.put(&emb, &format!("q{i}"), &format!("r{i}"), None).unwrap();
+        }
+        assert_eq!(cache.len(), 2);
+    }
+
+    #[test]
+    fn test_eviction_policy_ttl() {
+        let config = CacheConfig::new(8)
+            .with_max_entries(2)
+            .with_eviction_policy(EvictionPolicy::Ttl)
+            .with_ttl(std::time::Duration::from_secs(3600));
+        let mut cache = SemanticCache::new(config);
+
+        for i in 0..3 {
+            let emb = make_embedding(i as f32 * 0.3, 8);
+            cache.put(&emb, &format!("q{i}"), &format!("r{i}"), None).unwrap();
+        }
+        assert_eq!(cache.len(), 2);
+    }
+
+    #[test]
+    fn test_stats_summary() {
+        let mut cache = SemanticCache::new(CacheConfig::new(8));
+        let emb = make_embedding(0.5, 8);
+        cache.put(&emb, "q", "r", None).unwrap();
+        cache.get(&emb, None).unwrap();
+
+        let summary = cache.stats_summary();
+        assert_eq!(summary.entries, 1);
+        assert_eq!(summary.total_hits, 1);
+        assert_eq!(summary.total_lookups, 1);
+        assert_eq!(summary.eviction_policy, EvictionPolicy::Lfu);
+    }
+
+    #[test]
+    fn test_invalidate_drifted() {
+        let mut cache = SemanticCache::new(CacheConfig::new(4));
+        let emb1 = vec![1.0, 0.0, 0.0, 0.0];
+        let emb2 = vec![0.0, 1.0, 0.0, 0.0];
+        cache.put(&emb1, "q1", "r1", None).unwrap();
+        cache.put(&emb2, "q2", "r2", None).unwrap();
+
+        // Reference embeddings close to emb1 but far from emb2
+        let reference = vec![vec![0.9, 0.1, 0.0, 0.0]];
+        let evicted = cache.invalidate_drifted(&reference, 0.3);
+        // emb2 should be drifted (far from reference)
+        assert!(evicted >= 1);
     }
 }

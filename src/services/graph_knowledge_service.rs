@@ -402,6 +402,206 @@ pub struct IngestResult {
     pub relations_extracted: usize,
 }
 
+// ── Community Detection ─────────────────────────────────────────────────────
+
+/// A community of related entities found via Leiden-style detection.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Community {
+    /// Community ID.
+    pub id: usize,
+    /// Member entity names.
+    pub members: Vec<String>,
+    /// Community size.
+    pub size: usize,
+    /// Representative topic/summary.
+    pub label: Option<String>,
+}
+
+/// Leiden-inspired community detection on the entity graph.
+///
+/// Groups entities into communities based on shared document co-occurrence.
+/// Uses a simplified label propagation approach: each entity starts in its
+/// own community, then adopts the most frequent community among its neighbors.
+pub fn detect_communities(
+    entities: &HashMap<String, Entity>,
+    relations: &[Relation],
+    iterations: usize,
+) -> Vec<Community> {
+    if entities.is_empty() {
+        return Vec::new();
+    }
+
+    // Build adjacency from relations
+    let mut adjacency: HashMap<String, Vec<String>> = HashMap::new();
+    for rel in relations {
+        adjacency.entry(rel.from.clone()).or_default().push(rel.to.clone());
+        adjacency.entry(rel.to.clone()).or_default().push(rel.from.clone());
+    }
+
+    // Initialize: each entity in its own community
+    let mut labels: HashMap<String, usize> = HashMap::new();
+    for (i, name) in entities.keys().enumerate() {
+        labels.insert(name.clone(), i);
+    }
+
+    // Label propagation
+    for _ in 0..iterations {
+        let mut changed = false;
+        for name in entities.keys() {
+            if let Some(neighbors) = adjacency.get(name) {
+                if neighbors.is_empty() {
+                    continue;
+                }
+                // Count community labels among neighbors
+                let mut counts: HashMap<usize, usize> = HashMap::new();
+                for n in neighbors {
+                    if let Some(&label) = labels.get(n) {
+                        *counts.entry(label).or_insert(0) += 1;
+                    }
+                }
+                // Adopt the most frequent label
+                if let Some((&best_label, _)) = counts.iter().max_by_key(|(_, &c)| c) {
+                    let current = labels.get(name).copied().unwrap_or(0);
+                    if best_label != current {
+                        labels.insert(name.clone(), best_label);
+                        changed = true;
+                    }
+                }
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+
+    // Group by label
+    let mut communities: HashMap<usize, Vec<String>> = HashMap::new();
+    for (name, label) in &labels {
+        communities.entry(*label).or_default().push(name.clone());
+    }
+
+    communities.into_iter()
+        .enumerate()
+        .map(|(i, (_, members))| {
+            let size = members.len();
+            Community { id: i, members, size, label: None }
+        })
+        .filter(|c| c.size > 0)
+        .collect()
+}
+
+// ── LLM Entity Extraction Types ─────────────────────────────────────────────
+
+/// Configuration for LLM-powered entity extraction.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LlmExtractionConfig {
+    /// LLM model name (e.g., "gpt-4", "claude-3-sonnet").
+    pub model: String,
+    /// System prompt for entity extraction.
+    pub system_prompt: String,
+    /// Maximum entities to extract per document.
+    pub max_entities: usize,
+    /// Entity types to look for.
+    pub entity_types: Vec<String>,
+    /// Relation types to extract.
+    pub relation_types: Vec<String>,
+}
+
+impl Default for LlmExtractionConfig {
+    fn default() -> Self {
+        Self {
+            model: "gpt-4".into(),
+            system_prompt: "Extract entities and relationships from the following text.".into(),
+            max_entities: 20,
+            entity_types: vec![
+                "Person".into(), "Organization".into(), "Location".into(),
+                "Concept".into(), "Event".into(), "Technology".into(),
+            ],
+            relation_types: vec![
+                "related_to".into(), "part_of".into(), "created_by".into(),
+                "uses".into(), "located_in".into(), "causes".into(),
+            ],
+        }
+    }
+}
+
+/// Result of LLM-based extraction (structured output).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LlmExtractionResult {
+    /// Extracted entities.
+    pub entities: Vec<Entity>,
+    /// Extracted relations.
+    pub relations: Vec<Relation>,
+    /// Confidence score (0.0-1.0).
+    pub confidence: f32,
+    /// Number of LLM tokens used.
+    pub tokens_used: u32,
+}
+
+// ── Property Graph Enrichment ───────────────────────────────────────────────
+
+/// Property on an entity node.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EntityProperty {
+    /// Property key.
+    pub key: String,
+    /// Property value.
+    pub value: Value,
+}
+
+impl KnowledgeService {
+    /// Detect communities in the entity graph using label propagation.
+    pub fn detect_communities(&self, iterations: usize) -> Vec<Community> {
+        detect_communities(&self.entities, &self.relations, iterations)
+    }
+
+    /// Add properties to an entity (property graph enrichment).
+    pub fn add_entity_property(&mut self, entity_name: &str, key: &str, value: Value) -> bool {
+        if let Some(entity) = self.entities.get_mut(entity_name) {
+            entity.entity_type = format!(
+                "{};{}={}",
+                entity.entity_type,
+                key,
+                serde_json::to_string(&value).unwrap_or_default()
+            );
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Get graph statistics.
+    pub fn graph_stats(&self) -> GraphStats {
+        let communities = self.detect_communities(5);
+        GraphStats {
+            total_entities: self.entities.len(),
+            total_relations: self.relations.len(),
+            total_documents: self.documents.len(),
+            community_count: communities.len(),
+            avg_community_size: if communities.is_empty() {
+                0.0
+            } else {
+                communities.iter().map(|c| c.size as f64).sum::<f64>() / communities.len() as f64
+            },
+        }
+    }
+}
+
+/// Graph statistics summary.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GraphStats {
+    /// Total entities in the graph.
+    pub total_entities: usize,
+    /// Total relations.
+    pub total_relations: usize,
+    /// Total documents indexed.
+    pub total_documents: usize,
+    /// Number of communities detected.
+    pub community_count: usize,
+    /// Average community size.
+    pub avg_community_size: f64,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -507,5 +707,64 @@ mod tests {
                 metadata: None,
             })
             .is_err());
+    }
+
+    #[test]
+    fn test_community_detection() {
+        let mut svc = KnowledgeService::new(KnowledgeConfig::new(4));
+
+        svc.ingest(Document {
+            id: "d1".into(),
+            text: "Rust Cargo Crate".into(),
+            embedding: vec![0.9, 0.1, 0.0, 0.0],
+            metadata: None,
+        }).unwrap();
+
+        svc.ingest(Document {
+            id: "d2".into(),
+            text: "Python Pip Package".into(),
+            embedding: vec![0.1, 0.9, 0.0, 0.0],
+            metadata: None,
+        }).unwrap();
+
+        let communities = svc.detect_communities(5);
+        assert!(!communities.is_empty());
+    }
+
+    #[test]
+    fn test_graph_stats() {
+        let mut svc = KnowledgeService::new(KnowledgeConfig::new(4));
+        svc.ingest(Document {
+            id: "d1".into(),
+            text: "Rust Cargo Crate".into(),
+            embedding: vec![0.5; 4],
+            metadata: None,
+        }).unwrap();
+
+        let stats = svc.graph_stats();
+        assert_eq!(stats.total_documents, 1);
+        assert!(stats.total_entities > 0);
+    }
+
+    #[test]
+    fn test_entity_property() {
+        let mut svc = KnowledgeService::new(KnowledgeConfig::new(4));
+        svc.ingest(Document {
+            id: "d1".into(),
+            text: "Rust is great".into(),
+            embedding: vec![0.5; 4],
+            metadata: None,
+        }).unwrap();
+
+        let added = svc.add_entity_property("Rust", "category", serde_json::json!("language"));
+        assert!(added);
+    }
+
+    #[test]
+    fn test_llm_extraction_config_default() {
+        let config = LlmExtractionConfig::default();
+        assert_eq!(config.model, "gpt-4");
+        assert!(!config.entity_types.is_empty());
+        assert!(!config.relation_types.is_empty());
     }
 }

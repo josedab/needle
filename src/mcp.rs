@@ -32,6 +32,11 @@
 //! | `get_vector` | Retrieve a vector by ID |
 //! | `delete_vector` | Delete a vector by ID |
 //! | `delete_collection` | Delete a collection |
+//! | `save_database` | Persist all changes to disk |
+//! | `remember` | Store a memory for an AI agent |
+//! | `recall` | Retrieve relevant memories by vector similarity |
+//! | `forget` | Delete a specific memory by ID |
+//! | `memory_consolidate` | Promote/expire episodic memories based on importance |
 
 use crate::database::Database;
 use crate::error::{NeedleError, Result};
@@ -361,6 +366,30 @@ fn tool_definitions() -> Value {
                     },
                     "required": ["collection", "memory_id"]
                 }
+            },
+            {
+                "name": "memory_consolidate",
+                "description": "Consolidate memories in a collection: promote important episodic memories to semantic tier, forget expired low-importance entries.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "collection": {
+                            "type": "string",
+                            "description": "Name of the memory collection"
+                        },
+                        "promotion_threshold": {
+                            "type": "number",
+                            "description": "Importance threshold for promotion (0.0-1.0, default: 0.7)",
+                            "default": 0.7
+                        },
+                        "expire_below": {
+                            "type": "number",
+                            "description": "Forget memories with importance below this threshold (0.0-1.0, default: 0.1)",
+                            "default": 0.1
+                        }
+                    },
+                    "required": ["collection"]
+                }
             }
         ]
     })
@@ -504,6 +533,7 @@ impl McpServer {
             "remember" => self.tool_remember(&arguments),
             "recall" => self.tool_recall(&arguments),
             "forget" => self.tool_forget(&arguments),
+            "memory_consolidate" => self.tool_memory_consolidate(&arguments),
             _ => Err(NeedleError::InvalidInput(format!("Unknown tool: {tool_name}"))),
         };
 
@@ -860,6 +890,67 @@ impl McpServer {
             "memory_id": memory_id,
         }))
     }
+
+    fn tool_memory_consolidate(&self, args: &Value) -> Result<Value> {
+        if self.read_only {
+            return Err(NeedleError::InvalidInput("Database is read-only".to_string()));
+        }
+
+        let collection = args.get("collection")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| NeedleError::InvalidInput("Missing 'collection' parameter".to_string()))?;
+        let promotion_threshold = args.get("promotion_threshold")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.7) as f32;
+        let expire_below = args.get("expire_below")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.1) as f32;
+
+        let coll = self.db.collection(collection)?;
+        let all_ids = coll.ids()?;
+        let mut promoted = 0usize;
+        let mut forgotten = 0usize;
+        let mut errors = 0usize;
+        let mut scanned = 0usize;
+
+        for id in &all_ids {
+            if let Some((vec_data, Some(meta))) = coll.get(id) {
+                let tier = meta.get("_memory_tier").and_then(|v| v.as_str());
+                let importance = meta.get("_memory_importance")
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(0.5) as f32;
+
+                if tier != Some("episodic") {
+                    continue;
+                }
+                scanned += 1;
+
+                if importance >= promotion_threshold {
+                    let mut updated_meta = meta.clone();
+                    if let Some(obj) = updated_meta.as_object_mut() {
+                        obj.insert("_memory_tier".to_string(), json!("semantic"));
+                    }
+                    match coll.update(id, &vec_data, Some(updated_meta)) {
+                        Ok(_) => promoted += 1,
+                        Err(_) => errors += 1,
+                    }
+                } else if importance < expire_below {
+                    match coll.delete(id) {
+                        Ok(_) => forgotten += 1,
+                        Err(_) => errors += 1,
+                    }
+                }
+            }
+        }
+
+        Ok(json!({
+            "consolidated": true,
+            "scanned": scanned,
+            "promoted": promoted,
+            "forgotten": forgotten,
+            "errors": errors,
+        }))
+    }
 }
 
 /// Generate a Claude Desktop configuration JSON for this MCP server.
@@ -1199,5 +1290,168 @@ mod tests {
         assert!(tools_text.contains("remember"));
         assert!(tools_text.contains("recall"));
         assert!(tools_text.contains("forget"));
+        assert!(tools_text.contains("memory_consolidate"));
+    }
+
+    /// Helper to insert a memory with specific tier and importance for consolidation tests.
+    /// Uses insert_vectors directly to avoid timestamp-based ID collisions.
+    fn insert_memory(server: &McpServer, collection: &str, id: &str, vector: Vec<f64>, tier: &str, importance: f64) {
+        let vector_f64: Vec<f64> = vector;
+        let metadata = json!({
+            "_memory_content": format!("Memory {id}"),
+            "_memory_tier": tier,
+            "_memory_importance": importance,
+            "_memory_timestamp": "2025-01-01T00:00:00Z",
+        });
+        server.handle_request(&JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            id: Some(json!(1)),
+            method: "tools/call".to_string(),
+            params: json!({
+                "name": "insert_vectors",
+                "arguments": {
+                    "collection": collection,
+                    "vectors": [{
+                        "id": id,
+                        "values": vector_f64,
+                        "metadata": metadata,
+                    }]
+                }
+            }),
+        });
+    }
+
+    #[test]
+    fn test_memory_consolidate_happy_path() {
+        let server = create_test_server();
+
+        // Create collection
+        server.handle_request(&JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            id: Some(json!(1)),
+            method: "tools/call".to_string(),
+            params: json!({
+                "name": "create_collection",
+                "arguments": { "name": "mem", "dimensions": 4 }
+            }),
+        });
+
+        // Insert episodic memories with varying importance
+        insert_memory(&server, "mem", "high", vec![1.0, 0.0, 0.0, 0.0], "episodic", 0.9);
+        insert_memory(&server, "mem", "low", vec![0.0, 1.0, 0.0, 0.0], "episodic", 0.05);
+        insert_memory(&server, "mem", "mid", vec![0.0, 0.0, 1.0, 0.0], "episodic", 0.5);
+        // Semantic memory should be untouched
+        insert_memory(&server, "mem", "sem", vec![0.0, 0.0, 0.0, 1.0], "semantic", 0.3);
+
+        // Consolidate with defaults (promote >= 0.7, expire < 0.1)
+        let resp = server.handle_request(&JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            id: Some(json!(2)),
+            method: "tools/call".to_string(),
+            params: json!({
+                "name": "memory_consolidate",
+                "arguments": { "collection": "mem" }
+            }),
+        });
+        let content = &resp.result.unwrap()["content"][0]["text"];
+        let parsed: Value = serde_json::from_str(content.as_str().unwrap()).unwrap();
+
+        assert_eq!(parsed["consolidated"], true);
+        assert_eq!(parsed["promoted"], 1);   // "high" promoted
+        assert_eq!(parsed["forgotten"], 1);  // "low" expired
+        assert_eq!(parsed["scanned"], 3);    // 3 episodic memories scanned
+        assert_eq!(parsed["errors"], 0);
+    }
+
+    #[test]
+    fn test_memory_consolidate_read_only() {
+        let db = Database::in_memory();
+        let server = McpServer::new(db, true);
+
+        let resp = server.handle_request(&JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            id: Some(json!(1)),
+            method: "tools/call".to_string(),
+            params: json!({
+                "name": "memory_consolidate",
+                "arguments": { "collection": "mem" }
+            }),
+        });
+        let content = &resp.result.unwrap()["content"][0]["text"];
+        assert!(content.as_str().unwrap().contains("read-only"));
+    }
+
+    #[test]
+    fn test_memory_consolidate_missing_collection() {
+        let server = create_test_server();
+
+        let resp = server.handle_request(&JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            id: Some(json!(1)),
+            method: "tools/call".to_string(),
+            params: json!({
+                "name": "memory_consolidate",
+                "arguments": {}
+            }),
+        });
+        let content = &resp.result.unwrap()["content"][0]["text"];
+        assert!(content.as_str().unwrap().contains("Error"));
+    }
+
+    #[test]
+    fn test_memory_consolidate_custom_thresholds() {
+        let server = create_test_server();
+
+        server.handle_request(&JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            id: Some(json!(1)),
+            method: "tools/call".to_string(),
+            params: json!({
+                "name": "create_collection",
+                "arguments": { "name": "mem2", "dimensions": 4 }
+            }),
+        });
+
+        // Insert episodic memories
+        insert_memory(&server, "mem2", "a", vec![1.0, 0.0, 0.0, 0.0], "episodic", 0.5);
+        insert_memory(&server, "mem2", "b", vec![0.0, 1.0, 0.0, 0.0], "episodic", 0.3);
+
+        // Custom thresholds: promote >= 0.4, expire < 0.35
+        let resp = server.handle_request(&JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            id: Some(json!(2)),
+            method: "tools/call".to_string(),
+            params: json!({
+                "name": "memory_consolidate",
+                "arguments": {
+                    "collection": "mem2",
+                    "promotion_threshold": 0.4,
+                    "expire_below": 0.35
+                }
+            }),
+        });
+        let content = &resp.result.unwrap()["content"][0]["text"];
+        let parsed: Value = serde_json::from_str(content.as_str().unwrap()).unwrap();
+
+        assert_eq!(parsed["promoted"], 1);  // "a" promoted (0.5 >= 0.4)
+        assert_eq!(parsed["forgotten"], 1); // "b" forgotten (0.3 < 0.35)
+        assert_eq!(parsed["errors"], 0);
+    }
+
+    #[test]
+    fn test_memory_consolidate_nonexistent_collection() {
+        let server = create_test_server();
+
+        let resp = server.handle_request(&JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            id: Some(json!(1)),
+            method: "tools/call".to_string(),
+            params: json!({
+                "name": "memory_consolidate",
+                "arguments": { "collection": "nonexistent" }
+            }),
+        });
+        let content = &resp.result.unwrap()["content"][0]["text"];
+        assert!(content.as_str().unwrap().contains("Error"));
     }
 }

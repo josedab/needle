@@ -532,6 +532,206 @@ fn now_secs() -> u64 {
         .as_secs()
 }
 
+// ── Framework Adapters ───────────────────────────────────────────────────────
+
+/// LangChain-compatible MemoryStore adapter.
+///
+/// Wraps `AgentMemory` to expose a `BaseMemory`-style interface matching
+/// LangChain's memory abstractions (add_message, get_relevant, clear).
+pub struct LangChainMemoryStore {
+    inner: AgentMemory,
+}
+
+impl LangChainMemoryStore {
+    /// Create a new LangChain memory store.
+    pub fn new(config: MemoryConfig) -> Self {
+        Self {
+            inner: AgentMemory::new(config),
+        }
+    }
+
+    /// Add a chat message as an episodic memory.
+    pub fn add_message(&mut self, role: &str, content: &str, embedding: &[f32]) -> Result<String> {
+        let entry = MemoryEntry::episodic(content, embedding)
+            .with_metadata(serde_json::json!({
+                "role": role,
+                "framework": "langchain",
+            }));
+        self.inner.remember(entry)
+    }
+
+    /// Get relevant memories for a query (LangChain `get_relevant_documents`).
+    pub fn get_relevant(&mut self, query_embedding: &[f32], k: usize) -> Result<Vec<RecallResult>> {
+        self.inner.recall(query_embedding, k, None)
+    }
+
+    /// Clear all memories (LangChain `clear`).
+    pub fn clear(&mut self) {
+        let ids: Vec<String> = self.inner.entries.keys().cloned().collect();
+        for id in ids {
+            let _ = self.inner.forget(&id);
+        }
+    }
+
+    /// Get conversation history formatted as role/content pairs.
+    pub fn load_memory_variables(&self) -> Vec<(String, String)> {
+        let mut messages: Vec<_> = self.inner.entries.values()
+            .filter(|e| e.tier == MemoryTier::Episodic)
+            .map(|e| {
+                let role = e.metadata.as_ref()
+                    .and_then(|m| m.get("role"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("user")
+                    .to_string();
+                (e.created_at, role, e.content.clone())
+            })
+            .collect();
+        messages.sort_by_key(|(ts, _, _)| *ts);
+        messages.into_iter().map(|(_, role, content)| (role, content)).collect()
+    }
+
+    /// Access the underlying memory.
+    pub fn inner(&mut self) -> &mut AgentMemory {
+        &mut self.inner
+    }
+}
+
+/// LlamaIndex-compatible ChatMemoryBuffer adapter.
+///
+/// Wraps `AgentMemory` to match LlamaIndex's `ChatMemoryBuffer` interface
+/// with sliding-window conversation memory and semantic retrieval.
+pub struct LlamaIndexMemoryBuffer {
+    inner: AgentMemory,
+    /// Maximum number of recent messages to keep in the buffer.
+    pub max_messages: usize,
+    /// Conversation history (role, content, timestamp).
+    history: Vec<(String, String, u64)>,
+}
+
+impl LlamaIndexMemoryBuffer {
+    /// Create a new LlamaIndex memory buffer.
+    pub fn new(config: MemoryConfig, max_messages: usize) -> Self {
+        Self {
+            inner: AgentMemory::new(config),
+            max_messages,
+            history: Vec::new(),
+        }
+    }
+
+    /// Put a chat message into the buffer (LlamaIndex `put`).
+    pub fn put(&mut self, role: &str, content: &str, embedding: &[f32]) -> Result<String> {
+        let now = now_secs();
+        self.history.push((role.to_string(), content.to_string(), now));
+
+        // Trim history to window size
+        if self.history.len() > self.max_messages {
+            self.history.drain(..self.history.len() - self.max_messages);
+        }
+
+        let entry = MemoryEntry::episodic(content, embedding)
+            .with_metadata(serde_json::json!({
+                "role": role,
+                "framework": "llamaindex",
+                "turn_index": self.history.len() - 1,
+            }));
+        self.inner.remember(entry)
+    }
+
+    /// Get recent messages in the buffer window (LlamaIndex `get`).
+    pub fn get(&self) -> Vec<(String, String)> {
+        self.history.iter()
+            .map(|(role, content, _)| (role.clone(), content.clone()))
+            .collect()
+    }
+
+    /// Get semantically relevant context (LlamaIndex `get_all`).
+    pub fn get_all(&mut self, query_embedding: &[f32], k: usize) -> Result<Vec<RecallResult>> {
+        self.inner.recall(query_embedding, k, None)
+    }
+
+    /// Reset the buffer.
+    pub fn reset(&mut self) {
+        self.history.clear();
+        let ids: Vec<String> = self.inner.entries.keys().cloned().collect();
+        for id in ids {
+            let _ = self.inner.forget(&id);
+        }
+    }
+
+    /// Number of messages in buffer.
+    pub fn len(&self) -> usize {
+        self.history.len()
+    }
+
+    /// Whether the buffer is empty.
+    pub fn is_empty(&self) -> bool {
+        self.history.is_empty()
+    }
+
+    /// Access the underlying memory.
+    pub fn inner(&mut self) -> &mut AgentMemory {
+        &mut self.inner
+    }
+}
+
+/// AutoGen-compatible memory provider adapter.
+///
+/// Wraps `AgentMemory` to match AutoGen's memory interfaces for
+/// multi-agent systems with shared memory pools.
+pub struct AutoGenMemoryProvider {
+    inner: AgentMemory,
+    agent_id: String,
+}
+
+impl AutoGenMemoryProvider {
+    /// Create a new AutoGen memory provider for a specific agent.
+    pub fn new(config: MemoryConfig, agent_id: impl Into<String>) -> Self {
+        Self {
+            inner: AgentMemory::new(config),
+            agent_id: agent_id.into(),
+        }
+    }
+
+    /// Store a memory scoped to this agent.
+    pub fn add(&mut self, content: &str, embedding: &[f32]) -> Result<String> {
+        let entry = MemoryEntry::episodic(content, embedding)
+            .with_metadata(serde_json::json!({
+                "agent_id": self.agent_id,
+                "framework": "autogen",
+            }));
+        self.inner.remember(entry)
+    }
+
+    /// Query memories for this agent.
+    pub fn query(&mut self, embedding: &[f32], k: usize) -> Result<Vec<RecallResult>> {
+        let mut results = self.inner.recall(embedding, k * 2, None)?;
+        results.retain(|r| {
+            self.inner.entries.get(&r.id)
+                .and_then(|e| e.metadata.as_ref())
+                .and_then(|m| m.get("agent_id"))
+                .and_then(|v| v.as_str())
+                .map_or(false, |aid| aid == self.agent_id)
+        });
+        results.truncate(k);
+        Ok(results)
+    }
+
+    /// Query memories from any agent (shared pool).
+    pub fn query_shared(&mut self, embedding: &[f32], k: usize) -> Result<Vec<RecallResult>> {
+        self.inner.recall(embedding, k, None)
+    }
+
+    /// Get this agent's ID.
+    pub fn agent_id(&self) -> &str {
+        &self.agent_id
+    }
+
+    /// Access the underlying memory.
+    pub fn inner(&mut self) -> &mut AgentMemory {
+        &mut self.inner
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -644,5 +844,52 @@ mod tests {
         assert!(tools.iter().any(|t| t.name == "memory_recall"));
         assert!(tools.iter().any(|t| t.name == "memory_forget"));
         assert!(tools.iter().any(|t| t.name == "memory_consolidate"));
+    }
+
+    #[test]
+    fn test_langchain_adapter() {
+        let mut store = LangChainMemoryStore::new(MemoryConfig::default());
+        store.add_message("user", "Hello", &emb(0.1)).unwrap();
+        store.add_message("assistant", "Hi there", &emb(0.2)).unwrap();
+
+        let results = store.get_relevant(&emb(0.1), 5).unwrap();
+        assert!(!results.is_empty());
+
+        let vars = store.load_memory_variables();
+        assert_eq!(vars.len(), 2);
+        // Both created at same second, so just verify both exist
+        let roles: Vec<&str> = vars.iter().map(|(r, _)| r.as_str()).collect();
+        assert!(roles.contains(&"user"));
+        assert!(roles.contains(&"assistant"));
+
+        store.clear();
+        assert_eq!(store.inner().total(), 0);
+    }
+
+    #[test]
+    fn test_llamaindex_adapter() {
+        let mut buf = LlamaIndexMemoryBuffer::new(MemoryConfig::default(), 3);
+        buf.put("user", "msg1", &emb(0.1)).unwrap();
+        buf.put("assistant", "msg2", &emb(0.2)).unwrap();
+        buf.put("user", "msg3", &emb(0.3)).unwrap();
+        buf.put("assistant", "msg4", &emb(0.4)).unwrap();
+
+        // Window should be 3 messages
+        assert_eq!(buf.len(), 3);
+        let history = buf.get();
+        assert_eq!(history[0].1, "msg2");
+
+        buf.reset();
+        assert!(buf.is_empty());
+    }
+
+    #[test]
+    fn test_autogen_adapter() {
+        let mut provider = AutoGenMemoryProvider::new(MemoryConfig::default(), "agent-1");
+        provider.add("fact for agent-1", &emb(0.1)).unwrap();
+        assert_eq!(provider.agent_id(), "agent-1");
+
+        let results = provider.query(&emb(0.1), 5).unwrap();
+        assert!(!results.is_empty());
     }
 }
