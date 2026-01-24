@@ -474,7 +474,7 @@ impl TimeTravelIndex {
 
         // Insert into collection (delete first if exists)
         let collection = self.db.collection(&self.collection_name)?;
-        let _ = collection.delete(id); // Ignore error if doesn't exist
+        collection.delete(id)?;
         collection.insert(id, vector, Some(meta))?;
 
         // Store version history
@@ -544,7 +544,7 @@ impl TimeTravelIndex {
 
         // Delete from collection
         let collection = self.db.collection(&self.collection_name)?;
-        let _ = collection.delete(id);
+        collection.delete(id)?;
 
         self.stats.total_tombstones += 1;
 

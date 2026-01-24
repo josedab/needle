@@ -227,7 +227,7 @@ impl TemporalIndex {
         }
 
         // Update in collection (delete and re-insert)
-        let _ = collection.delete(id); // Ignore if doesn't exist
+        collection.delete(id)?;
         collection.insert(id, vector, Some(meta.clone()))?;
 
         // Record version
