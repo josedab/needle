@@ -463,8 +463,8 @@ impl FederationService {
                 self.process_heartbeat(&node_id, load)?;
                 Ok(None)
             }
-            GossipMessage::Join { node } => { let _ = self.add_node(node); Ok(None) }
-            GossipMessage::Leave { node_id } => { let _ = self.remove_node(&node_id); Ok(None) }
+            GossipMessage::Join { node } => { if let Err(e) = self.add_node(node) { tracing::warn!("gossip: failed to add node: {e}"); } Ok(None) }
+            GossipMessage::Leave { node_id } => { if let Err(e) = self.remove_node(&node_id) { tracing::warn!("gossip: failed to remove node: {e}"); } Ok(None) }
             GossipMessage::ShardUpdate { shard_id, assigned_to, version } => {
                 if let Some(shard) = self.shards.get_mut(&shard_id) {
                     if version > shard.version {
@@ -476,7 +476,7 @@ impl FederationService {
             }
             GossipMessage::StateSync { nodes, shards } => {
                 for node in nodes {
-                    if !self.nodes.contains_key(&node.node_id) { let _ = self.add_node(node); }
+                    if !self.nodes.contains_key(&node.node_id) { if let Err(e) = self.add_node(node) { tracing::warn!("gossip: failed to add node during state sync: {e}"); } }
                 }
                 for shard in shards {
                     let entry = self.shards.entry(shard.shard_id.clone()).or_insert_with(|| shard.clone());
@@ -681,7 +681,7 @@ impl FederationService {
         for shard_id in shards_to_move {
             if let Some(new_node) = self.hash_ring.get_node(&shard_id) {
                 let new_node = new_node.to_string();
-                if new_node != leaving_node { let _ = self.initiate_rebalance(&shard_id, &new_node); }
+                if new_node != leaving_node { if let Err(e) = self.initiate_rebalance(&shard_id, &new_node) { tracing::warn!("gossip: failed to initiate rebalance for shard {shard_id}: {e}"); } }
             }
         }
     }
