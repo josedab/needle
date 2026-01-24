@@ -364,10 +364,13 @@ impl<'a> SearchBuilder<'a> {
     /// Remove expired vectors if lazy expiration is enabled.
     fn filter_expired(&self, results: Vec<(VectorId, f32)>) -> Vec<(VectorId, f32)> {
         if self.collection.config.lazy_expiration {
-            results
-                .into_iter()
-                .filter(|(id, _)| !self.collection.is_expired(*id))
-                .collect()
+            let mut filtered = Vec::with_capacity(results.len());
+            filtered.extend(
+                results
+                    .into_iter()
+                    .filter(|(id, _)| !self.collection.is_expired(*id)),
+            );
+            filtered
         } else {
             results
         }
@@ -379,19 +382,25 @@ impl<'a> SearchBuilder<'a> {
         results: Vec<(VectorId, f32)>,
         limit: usize,
     ) -> Vec<(VectorId, f32)> {
+        let capacity = limit.min(results.len());
         if let Some(filter) = self.filter {
-            results
-                .into_iter()
-                .filter(|(id, _)| {
-                    self.collection
-                        .metadata
-                        .get(*id)
-                        .map_or(false, |entry| filter.matches(entry.data.as_ref()))
-                })
-                .take(limit)
-                .collect()
+            let mut filtered = Vec::with_capacity(capacity);
+            filtered.extend(
+                results
+                    .into_iter()
+                    .filter(|(id, _)| {
+                        self.collection
+                            .metadata
+                            .get(*id)
+                            .map_or(false, |entry| filter.matches(entry.data.as_ref()))
+                    })
+                    .take(limit),
+            );
+            filtered
         } else {
-            results.into_iter().take(limit).collect()
+            let mut taken = Vec::with_capacity(capacity);
+            taken.extend(results.into_iter().take(limit));
+            taken
         }
     }
 
@@ -400,20 +409,19 @@ impl<'a> SearchBuilder<'a> {
         if self.include_metadata || self.post_filter.is_some() {
             self.collection.enrich_results(pre_filtered)
         } else {
-            pre_filtered
-                .into_iter()
-                .map(|(id, distance)| {
-                    let entry =
-                        self.collection.metadata.get(id).ok_or_else(|| {
-                            NeedleError::Index("Missing metadata for vector".into())
-                        })?;
-                    Ok(SearchResult {
-                        id: entry.external_id.clone(),
-                        distance,
-                        metadata: None,
-                    })
-                })
-                .collect::<Result<Vec<_>>>()
+            let mut results = Vec::with_capacity(pre_filtered.len());
+            for (id, distance) in pre_filtered {
+                let entry =
+                    self.collection.metadata.get(id).ok_or_else(|| {
+                        NeedleError::Index("Missing metadata for vector".into())
+                    })?;
+                results.push(SearchResult {
+                    id: entry.external_id.clone(),
+                    distance,
+                    metadata: None,
+                });
+            }
+            Ok(results)
         }
     }
 
@@ -440,7 +448,11 @@ impl<'a> SearchBuilder<'a> {
     pub fn execute_ids_only(self) -> Result<Vec<(String, f32)>> {
         self.include_metadata(false)
             .execute()
-            .map(|results| results.into_iter().map(|r| (r.id, r.distance)).collect())
+            .map(|results| {
+                let mut ids = Vec::with_capacity(results.len());
+                ids.extend(results.into_iter().map(|r| (r.id, r.distance)));
+                ids
+            })
     }
 }
 
