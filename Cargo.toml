@@ -115,6 +115,9 @@ rand = "0.8"
 # Ordered floats for comparison
 ordered-float = "4.0"
 
+# Small stack-allocated vectors for hot-path allocations
+smallvec = "1.13"
+
 # Parking lot for faster locks
 parking_lot = "0.12"
 
