@@ -512,6 +512,85 @@ impl GraphRAG {
     pub fn community_count(&self) -> usize {
         self.communities.len()
     }
+
+    /// Depth-first search traversal from a start entity.
+    ///
+    /// Returns entities reachable within `max_depth` hops, preferring deeper
+    /// paths first (useful for finding long dependency chains).
+    pub fn dfs_traverse(
+        &self,
+        start_entity_id: &str,
+        max_depth: usize,
+        k: usize,
+    ) -> Vec<GraphRAGResult> {
+        if !self.entities.contains_key(start_entity_id) {
+            return Vec::new();
+        }
+
+        let mut results: Vec<GraphRAGResult> = Vec::new();
+        let mut visited: HashSet<String> = HashSet::new();
+        visited.insert(start_entity_id.to_string());
+
+        let mut stack: Vec<(String, Vec<String>, usize)> = vec![(
+            start_entity_id.to_string(),
+            vec![start_entity_id.to_string()],
+            0,
+        )];
+
+        while let Some((current, path, depth)) = stack.pop() {
+            if depth > 0 {
+                if let Some(entity) = self.entities.get(&current) {
+                    let graph_score = 1.0 / (1.0 + depth as f32);
+                    results.push(GraphRAGResult {
+                        entity: entity.clone(),
+                        vector_score: 0.0,
+                        graph_score,
+                        combined_score: graph_score,
+                        path: path.clone(),
+                        hop_count: depth,
+                    });
+                }
+            }
+            if depth >= max_depth {
+                continue;
+            }
+            if let Some(neighbors) = self.adjacency.get(&current) {
+                for (nid, _w) in neighbors.iter().rev() {
+                    if visited.contains(nid) {
+                        continue;
+                    }
+                    visited.insert(nid.clone());
+                    let mut new_path = path.clone();
+                    new_path.push(nid.clone());
+                    stack.push((nid.clone(), new_path, depth + 1));
+                }
+            }
+        }
+
+        results.sort_by(|a, b| OrderedFloat(b.combined_score).cmp(&OrderedFloat(a.combined_score)));
+        results.truncate(k);
+        results
+    }
+
+    /// Filter relationships by type, returning matching edges.
+    pub fn filter_relationships(&self, relation_type: &RelationType) -> Vec<&Relationship> {
+        self.relationships
+            .iter()
+            .filter(|r| &r.relation_type == relation_type)
+            .collect()
+    }
+
+    /// Combined graph+vector search API.
+    ///
+    /// First performs vector ANN search for the query embedding, then expands
+    /// results via graph traversal, and fuses scores with configurable weights.
+    pub fn search_graphrag(
+        &self,
+        query_embedding: &[f32],
+        k: usize,
+    ) -> Vec<GraphRAGResult> {
+        self.search(query_embedding, k, None)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -745,5 +824,66 @@ mod tests {
         assert!((cfg.community_resolution - 1.0).abs() < 1e-6);
         assert_eq!(cfg.min_community_size, 2);
         assert_eq!(cfg.dimensions, 384);
+    }
+
+    #[test]
+    fn test_dfs_traverse() {
+        let dim = 32;
+        let mut config = GraphRAGConfig::default();
+        config.dimensions = dim;
+        let mut g = GraphRAG::new(config);
+
+        // Build a chain: A → B → C → D
+        for (i, name) in ["A", "B", "C", "D"].iter().enumerate() {
+            g.add_entity(make_entity(name, name, Some(random_vec(dim, i as u64 + 1))))
+                .unwrap();
+        }
+        g.add_relationship(Relationship {
+            source_id: "A".into(), target_id: "B".into(),
+            relation_type: RelationType::RelatedTo, weight: 1.0,
+            properties: HashMap::new(),
+        }).unwrap();
+        g.add_relationship(Relationship {
+            source_id: "B".into(), target_id: "C".into(),
+            relation_type: RelationType::RelatedTo, weight: 1.0,
+            properties: HashMap::new(),
+        }).unwrap();
+        g.add_relationship(Relationship {
+            source_id: "C".into(), target_id: "D".into(),
+            relation_type: RelationType::RelatedTo, weight: 1.0,
+            properties: HashMap::new(),
+        }).unwrap();
+
+        let results = g.dfs_traverse("A", 3, 10);
+        assert_eq!(results.len(), 3); // B, C, D
+        // All should have graph_score > 0
+        assert!(results.iter().all(|r| r.graph_score > 0.0));
+    }
+
+    #[test]
+    fn test_filter_relationships() {
+        let dim = 32;
+        let mut config = GraphRAGConfig::default();
+        config.dimensions = dim;
+        let mut g = GraphRAG::new(config);
+
+        g.add_entity(make_entity("A", "A", Some(random_vec(dim, 1)))).unwrap();
+        g.add_entity(make_entity("B", "B", Some(random_vec(dim, 2)))).unwrap();
+        g.add_entity(make_entity("C", "C", Some(random_vec(dim, 3)))).unwrap();
+
+        g.add_relationship(Relationship {
+            source_id: "A".into(), target_id: "B".into(),
+            relation_type: RelationType::PartOf, weight: 1.0,
+            properties: HashMap::new(),
+        }).unwrap();
+        g.add_relationship(Relationship {
+            source_id: "A".into(), target_id: "C".into(),
+            relation_type: RelationType::RelatedTo, weight: 1.0,
+            properties: HashMap::new(),
+        }).unwrap();
+
+        let part_of = g.filter_relationships(&RelationType::PartOf);
+        assert_eq!(part_of.len(), 1);
+        assert_eq!(part_of[0].target_id, "B");
     }
 }
