@@ -431,7 +431,7 @@ impl LlmCache {
 
     /// Compute similarity between two embeddings
     fn compute_similarity(&self, a: &[f32], b: &[f32]) -> f32 {
-        let distance = self.config.distance_function.compute(a, b);
+        let distance = self.config.distance_function.compute(a, b).unwrap_or(f32::MAX);
 
         // Convert distance to similarity (0-1)
         match self.config.distance_function {

@@ -443,7 +443,7 @@ impl AdaptiveRuntime {
         let vectors = self.vectors.read();
         let all_vecs: Vec<Vec<f32>> = vectors.iter().map(|(_, v, _)| v.clone()).collect();
 
-        let raw_results = self.hnsw_index.read().search(query, k, &all_vecs);
+        let raw_results = self.hnsw_index.read().search(query, k, &all_vecs)?;
 
         let results: Vec<SearchResult> = raw_results
             .into_iter()

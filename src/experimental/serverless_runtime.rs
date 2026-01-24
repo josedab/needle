@@ -261,7 +261,7 @@ impl ServerlessCollection {
         }
         let all_vectors: Vec<Vec<f32>> = self.vectors.values().map(|(v, _)| v.clone()).collect();
         let id_map: Vec<String> = self.vectors.keys().cloned().collect();
-        let raw_results = self.index.search(query, k, &all_vectors);
+        let raw_results = self.index.search(query, k, &all_vectors)?;
         let results = raw_results
             .into_iter()
             .filter_map(|(vid, dist)| {

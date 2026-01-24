@@ -703,7 +703,7 @@ impl GraphRagIndex {
 
         let vecs = self.vectors.read();
         let all_vecs: Vec<Vec<f32>> = vecs.iter().map(|(_, v, _)| v.clone()).collect();
-        let raw = self.hnsw.read().search(query, k, &all_vecs);
+        let raw = self.hnsw.read().search(query, k, &all_vecs)?;
 
         Ok(raw
             .into_iter()

@@ -394,13 +394,13 @@ impl AdaptiveIndex {
         let start = Instant::now();
 
         let results = match self.active_strategy {
-            IndexStrategy::BruteForce => self.brute_force_search(query, k),
+            IndexStrategy::BruteForce => self.brute_force_search(query, k)?,
             IndexStrategy::Hnsw | IndexStrategy::Auto => {
                 if let Some(ref hnsw) = self.hnsw {
-                    let raw = hnsw.search(query, k, &self.vectors);
+                    let raw = hnsw.search(query, k, &self.vectors)?;
                     self.to_search_results(&raw)
                 } else {
-                    self.brute_force_search(query, k)
+                    self.brute_force_search(query, k)?
                 }
             }
             IndexStrategy::Ivf => {
@@ -408,15 +408,15 @@ impl AdaptiveIndex {
                     let raw = ivf.search(query, k).unwrap_or_default();
                     self.to_search_results(&raw)
                 } else {
-                    self.brute_force_search(query, k)
+                    self.brute_force_search(query, k)?
                 }
             }
             IndexStrategy::DiskAnn => {
                 if let Some(ref hnsw) = self.hnsw {
-                    let raw = hnsw.search(query, k, &self.vectors);
+                    let raw = hnsw.search(query, k, &self.vectors)?;
                     self.to_search_results(&raw)
                 } else {
-                    self.brute_force_search(query, k)
+                    self.brute_force_search(query, k)?
                 }
             }
         };
@@ -448,13 +448,13 @@ impl AdaptiveIndex {
 
         let over_k = k * 4;
         let candidates = match self.active_strategy {
-            IndexStrategy::BruteForce => self.brute_force_search(query, over_k),
+            IndexStrategy::BruteForce => self.brute_force_search(query, over_k)?,
             IndexStrategy::Hnsw | IndexStrategy::Auto | IndexStrategy::DiskAnn => {
                 if let Some(ref hnsw) = self.hnsw {
-                    let raw = hnsw.search(query, over_k, &self.vectors);
+                    let raw = hnsw.search(query, over_k, &self.vectors)?;
                     self.to_search_results(&raw)
                 } else {
-                    self.brute_force_search(query, over_k)
+                    self.brute_force_search(query, over_k)?
                 }
             }
             IndexStrategy::Ivf => {
@@ -462,7 +462,7 @@ impl AdaptiveIndex {
                     let raw = ivf.search(query, over_k).unwrap_or_default();
                     self.to_search_results(&raw)
                 } else {
-                    self.brute_force_search(query, over_k)
+                    self.brute_force_search(query, over_k)?
                 }
             }
         };
@@ -696,7 +696,7 @@ impl AdaptiveIndex {
 
     // -- Helpers ----------------------------------------------------------
 
-    fn brute_force_search(&self, query: &[f32], k: usize) -> Vec<SearchResult> {
+    fn brute_force_search(&self, query: &[f32], k: usize) -> Result<Vec<SearchResult>> {
         use ordered_float::OrderedFloat;
         use std::cmp::Reverse;
         use std::collections::BinaryHeap;
@@ -704,7 +704,7 @@ impl AdaptiveIndex {
         let mut heap: BinaryHeap<Reverse<(OrderedFloat<f32>, usize)>> = BinaryHeap::new();
 
         for (i, vec) in self.vectors.iter().enumerate() {
-            let dist = self.distance.compute(query, vec);
+            let dist = self.distance.compute(query, vec)?;
             heap.push(Reverse((OrderedFloat(dist), i)));
         }
 
@@ -718,7 +718,7 @@ impl AdaptiveIndex {
                 break;
             }
         }
-        results
+        Ok(results)
     }
 
     fn to_search_results(&self, raw: &[(usize, f32)]) -> Vec<SearchResult> {

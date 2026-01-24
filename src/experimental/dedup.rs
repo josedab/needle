@@ -194,7 +194,7 @@ impl DuplicateDetector {
 
         for id in candidates {
             if let Some(stored) = self.vectors.get(&id) {
-                let distance = self.config.distance.compute(vector, stored);
+                let distance = self.config.distance.compute(vector, stored).unwrap_or(f32::MAX);
                 let similarity = 1.0 - distance.min(1.0);
 
                 if similarity >= self.config.threshold
@@ -252,7 +252,7 @@ impl DuplicateDetector {
             }
 
             if let Some(stored) = self.vectors.get(&id) {
-                let distance = self.config.distance.compute(vector, stored);
+                let distance = self.config.distance.compute(vector, stored).unwrap_or(f32::MAX);
                 let similarity = 1.0 - distance.min(1.0);
 
                 if similarity >= self.config.threshold {

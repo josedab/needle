@@ -688,7 +688,7 @@ impl AgentMemory {
     // === Private helpers ===
 
     fn compute_similarity(&self, a: &[f32], b: &[f32]) -> f32 {
-        let distance = self.config.distance_function.compute(a, b);
+        let distance = self.config.distance_function.compute(a, b).unwrap_or(f32::MAX);
         match self.config.distance_function {
             DistanceFunction::Cosine | DistanceFunction::CosineNormalized => 1.0 - distance,
             DistanceFunction::Euclidean => 1.0 / (1.0 + distance),

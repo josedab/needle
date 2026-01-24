@@ -161,7 +161,7 @@ impl SemanticGraph {
             let mut neighbors: Vec<(usize, f32)> = (0..n)
                 .filter(|&j| j != i)
                 .map(|j| {
-                    let dist = config.distance.compute(&vectors[i], &vectors[j]);
+                    let dist = config.distance.compute(&vectors[i], &vectors[j]).unwrap_or(f32::MAX);
                     (j, dist)
                 })
                 .collect();
@@ -652,7 +652,7 @@ impl SemanticGraph {
             .vectors
             .iter()
             .map(|(id, v)| {
-                let dist = self.config.distance.compute(vector, v);
+                let dist = self.config.distance.compute(vector, v).unwrap_or(f32::MAX);
                 (id.as_str(), 1.0 - dist.min(1.0))
             })
             .collect();

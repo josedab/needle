@@ -196,7 +196,7 @@ impl KMeans {
                 .iter()
                 .zip(assignments.iter())
                 .map(|(v, &c)| {
-                    let dist = config.distance.compute(v, &new_centroids[c]);
+                    let dist = config.distance.compute(v, &new_centroids[c]).unwrap_or(f32::MAX);
                     dist * dist
                 })
                 .sum();
@@ -220,7 +220,7 @@ impl KMeans {
             .iter()
             .map(|v| {
                 let c = Self::nearest_centroid(v, &centroids, &config.distance);
-                let dist = config.distance.compute(v, &centroids[c]);
+                let dist = config.distance.compute(v, &centroids[c]).unwrap_or(f32::MAX);
                 dist * dist
             })
             .sum();
@@ -255,7 +255,7 @@ impl KMeans {
                     centroids
                         .iter()
                         .map(|c| {
-                            let d = config.distance.compute(v, c);
+                            let d = config.distance.compute(v, c).unwrap_or(f32::MAX);
                             d * d
                         })
                         .fold(f32::MAX, f32::min)
@@ -297,7 +297,7 @@ impl KMeans {
         centroids
             .iter()
             .enumerate()
-            .map(|(i, c)| (i, distance.compute(vector, c)))
+            .map(|(i, c)| (i, distance.compute(vector, c).unwrap_or(f32::MAX)))
             .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
             .map(|(i, _)| i)
             .unwrap_or(0)
@@ -348,7 +348,7 @@ impl KMeans {
     pub fn distances(&self, vector: &[f32]) -> Vec<f32> {
         self.centroids
             .iter()
-            .map(|c| self.config.distance.compute(vector, c))
+            .map(|c| self.config.distance.compute(vector, c).unwrap_or(f32::MAX))
             .collect()
     }
 
@@ -500,7 +500,7 @@ impl HierarchicalClustering {
         let mut dist_matrix: Vec<Vec<f32>> = vec![vec![f32::MAX; n]; n];
         for i in 0..n {
             for j in (i + 1)..n {
-                let d = distance.compute(vectors[i], vectors[j]);
+                let d = distance.compute(vectors[i], vectors[j]).unwrap_or(f32::MAX);
                 dist_matrix[i][j] = d;
                 dist_matrix[j][i] = d;
             }
@@ -704,7 +704,7 @@ pub fn silhouette_score(vectors: &[&[f32]], labels: &[usize], distance: &Distanc
                 continue;
             }
 
-            let dist = distance.compute(vectors[i], vectors[j]);
+            let dist = distance.compute(vectors[i], vectors[j]).unwrap_or(f32::MAX);
 
             if labels[j] == label_i {
                 same_cluster_dist += dist;
