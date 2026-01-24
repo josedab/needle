@@ -621,6 +621,123 @@ pub fn compute_replication_health(leader: &ReplicationLeaderNode) -> Replication
     }
 }
 
+// ── Client-Side Read Routing ─────────────────────────────────────────────────
+
+/// Consistency level for read operations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ReadConsistency {
+    /// Read from any replica (fastest, eventually consistent).
+    Eventual,
+    /// Read from a replica that has seen your latest write.
+    ReadYourWrites,
+    /// Read from the leader only (strongest consistency).
+    Strong,
+}
+
+impl Default for ReadConsistency {
+    fn default() -> Self {
+        Self::Eventual
+    }
+}
+
+/// A node endpoint for routing purposes.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReplicaEndpoint {
+    /// Node identifier.
+    pub node_id: NodeId,
+    /// Whether this node is the current leader.
+    pub is_leader: bool,
+    /// Last known applied LSN on this replica.
+    pub applied_lsn: Lsn,
+    /// Last known latency to this node in milliseconds.
+    pub latency_ms: f64,
+    /// Whether the node is considered healthy.
+    pub healthy: bool,
+}
+
+/// Client-side read router that selects a replica based on consistency requirements.
+pub struct ReadRouter {
+    /// Known replicas.
+    replicas: Vec<ReplicaEndpoint>,
+    /// Default consistency level.
+    default_consistency: ReadConsistency,
+    /// Last write LSN (for read-your-writes).
+    last_write_lsn: Lsn,
+    /// Round-robin counter for load balancing.
+    rr_counter: std::sync::atomic::AtomicU64,
+}
+
+impl ReadRouter {
+    /// Create a new read router.
+    pub fn new(replicas: Vec<ReplicaEndpoint>, consistency: ReadConsistency) -> Self {
+        Self {
+            replicas,
+            default_consistency: consistency,
+            last_write_lsn: 0,
+            rr_counter: std::sync::atomic::AtomicU64::new(0),
+        }
+    }
+
+    /// Record a write to track read-your-writes consistency.
+    pub fn record_write(&mut self, lsn: Lsn) {
+        self.last_write_lsn = lsn;
+    }
+
+    /// Update a replica's known state.
+    pub fn update_replica(&mut self, node_id: &str, applied_lsn: Lsn, latency_ms: f64) {
+        if let Some(replica) = self.replicas.iter_mut().find(|r| r.node_id == node_id) {
+            replica.applied_lsn = applied_lsn;
+            replica.latency_ms = latency_ms;
+        }
+    }
+
+    /// Mark a replica as unhealthy (e.g., after connection failure).
+    pub fn mark_unhealthy(&mut self, node_id: &str) {
+        if let Some(replica) = self.replicas.iter_mut().find(|r| r.node_id == node_id) {
+            replica.healthy = false;
+        }
+    }
+
+    /// Select a replica for a read operation.
+    pub fn select_replica(&self, consistency: Option<ReadConsistency>) -> Option<&ReplicaEndpoint> {
+        let consistency = consistency.unwrap_or(self.default_consistency);
+        let healthy: Vec<&ReplicaEndpoint> =
+            self.replicas.iter().filter(|r| r.healthy).collect();
+
+        if healthy.is_empty() {
+            return None;
+        }
+
+        match consistency {
+            ReadConsistency::Strong => {
+                healthy.iter().find(|r| r.is_leader).copied()
+            }
+            ReadConsistency::ReadYourWrites => {
+                // Select lowest-latency replica that has seen our last write
+                let mut eligible: Vec<&&ReplicaEndpoint> = healthy
+                    .iter()
+                    .filter(|r| r.applied_lsn >= self.last_write_lsn)
+                    .collect();
+                eligible.sort_by(|a, b| {
+                    a.latency_ms
+                        .partial_cmp(&b.latency_ms)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                });
+                eligible.first().copied().copied()
+            }
+            ReadConsistency::Eventual => {
+                // Round-robin across healthy replicas
+                let idx = self
+                    .rr_counter
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                    as usize
+                    % healthy.len();
+                Some(healthy[idx])
+            }
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -927,5 +1044,78 @@ mod tests {
             let decoded: CompressionType = serde_json::from_str(&json).unwrap();
             assert_eq!(*ct, decoded);
         }
+    }
+
+    #[test]
+    fn test_read_router_strong() {
+        let replicas = vec![
+            ReplicaEndpoint {
+                node_id: "leader".into(),
+                is_leader: true,
+                applied_lsn: 100,
+                latency_ms: 1.0,
+                healthy: true,
+            },
+            ReplicaEndpoint {
+                node_id: "follower-1".into(),
+                is_leader: false,
+                applied_lsn: 95,
+                latency_ms: 0.5,
+                healthy: true,
+            },
+        ];
+        let router = ReadRouter::new(replicas, ReadConsistency::Strong);
+        let selected = router.select_replica(None).unwrap();
+        assert_eq!(selected.node_id, "leader");
+    }
+
+    #[test]
+    fn test_read_router_read_your_writes() {
+        let replicas = vec![
+            ReplicaEndpoint {
+                node_id: "leader".into(),
+                is_leader: true,
+                applied_lsn: 100,
+                latency_ms: 5.0,
+                healthy: true,
+            },
+            ReplicaEndpoint {
+                node_id: "follower-1".into(),
+                is_leader: false,
+                applied_lsn: 98,
+                latency_ms: 1.0,
+                healthy: true,
+            },
+        ];
+        let mut router = ReadRouter::new(replicas, ReadConsistency::ReadYourWrites);
+        router.record_write(99);
+        // Leader is the only one at >= 99
+        let selected = router.select_replica(None).unwrap();
+        assert_eq!(selected.node_id, "leader");
+    }
+
+    #[test]
+    fn test_read_router_eventual() {
+        let replicas = vec![
+            ReplicaEndpoint {
+                node_id: "n1".into(),
+                is_leader: false,
+                applied_lsn: 90,
+                latency_ms: 1.0,
+                healthy: true,
+            },
+            ReplicaEndpoint {
+                node_id: "n2".into(),
+                is_leader: false,
+                applied_lsn: 85,
+                latency_ms: 2.0,
+                healthy: true,
+            },
+        ];
+        let router = ReadRouter::new(replicas, ReadConsistency::Eventual);
+        // Should round-robin
+        let r1 = router.select_replica(None).unwrap().node_id.clone();
+        let r2 = router.select_replica(None).unwrap().node_id.clone();
+        assert_ne!(r1, r2);
     }
 }
