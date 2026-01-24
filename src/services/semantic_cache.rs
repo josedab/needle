@@ -36,6 +36,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use tracing::warn;
+
 use crate::collection::{Collection, CollectionConfig};
 use crate::distance::DistanceFunction;
 use crate::error::{NeedleError, Result};
@@ -309,7 +311,9 @@ impl SemanticCache {
                             self.analytics.total_expirations += 1;
                             self.analytics.total_misses += 1;
                             // Entry expired — remove it
-                            let _ = self.collection.delete(&result.id);
+                            if let Err(e) = self.collection.delete(&result.id) {
+                                warn!(entry_id = %result.id, error = %e, "failed to delete expired cache entry from collection");
+                            }
                             self.entries.remove(&result.id);
                             return Ok(None);
                         }
@@ -342,7 +346,9 @@ impl SemanticCache {
     /// Invalidate a specific cache entry.
     pub fn invalidate(&mut self, entry_id: &str) -> Result<bool> {
         if self.entries.remove(entry_id).is_some() {
-            let _ = self.collection.delete(entry_id);
+            if let Err(e) = self.collection.delete(entry_id) {
+                warn!(entry_id = %entry_id, error = %e, "failed to delete invalidated cache entry from collection");
+            }
             self.analytics.total_entries = self.entries.len();
             Ok(true)
         } else {
@@ -354,7 +360,9 @@ impl SemanticCache {
     pub fn clear(&mut self) {
         let ids: Vec<String> = self.entries.keys().cloned().collect();
         for id in ids {
-            let _ = self.collection.delete(&id);
+            if let Err(e) = self.collection.delete(&id) {
+                warn!(entry_id = %id, error = %e, "failed to delete cache entry during clear");
+            }
         }
         self.entries.clear();
         self.analytics.total_entries = 0;
@@ -391,7 +399,9 @@ impl SemanticCache {
 
         let count = expired.len();
         for id in expired {
-            let _ = self.collection.delete(&id);
+            if let Err(e) = self.collection.delete(&id) {
+                warn!(entry_id = %id, error = %e, "failed to delete expired cache entry during sweep");
+            }
             self.entries.remove(&id);
         }
         self.analytics.total_expirations += count as u64;
@@ -437,7 +447,9 @@ impl SemanticCache {
             }
         };
         if let Some(id) = victim {
-            let _ = self.collection.delete(&id);
+            if let Err(e) = self.collection.delete(&id) {
+                warn!(entry_id = %id, error = %e, "failed to delete evicted cache entry from collection");
+            }
             self.entries.remove(&id);
             self.analytics.total_evictions += 1;
         }
@@ -461,7 +473,9 @@ impl SemanticCache {
 
         let count = affected.len();
         for id in affected {
-            let _ = self.collection.delete(&id);
+            if let Err(e) = self.collection.delete(&id) {
+                warn!(entry_id = %id, error = %e, "failed to delete cache entry during vector invalidation");
+            }
             self.entries.remove(&id);
         }
         self.analytics.total_entries = self.entries.len();
@@ -507,7 +521,9 @@ impl SemanticCache {
 
         let count = stale.len();
         for id in stale {
-            let _ = self.collection.delete(&id);
+            if let Err(e) = self.collection.delete(&id) {
+                warn!(entry_id = %id, error = %e, "failed to delete drifted cache entry from collection");
+            }
             self.entries.remove(&id);
         }
         self.analytics.total_entries = self.entries.len();

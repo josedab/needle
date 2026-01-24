@@ -278,8 +278,8 @@ impl<'a> TimeTravelService<'a> {
         // Sort by distance to query
         let dist_fn = crate::distance::DistanceFunction::Cosine;
         results.sort_by(|a, b| {
-            let da = dist_fn.compute(query, &a.vector);
-            let db_dist = dist_fn.compute(query, &b.vector);
+            let da = dist_fn.compute(query, &a.vector).unwrap_or(f32::MAX);
+            let db_dist = dist_fn.compute(query, &b.vector).unwrap_or(f32::MAX);
             da.partial_cmp(&db_dist)
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
