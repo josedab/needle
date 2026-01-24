@@ -1418,6 +1418,160 @@ impl Default for EmbeddingModelRegistry {
     }
 }
 
+// ── Lazy Model Download & Caching ────────────────────────────────────────────
+
+/// Model download status.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ModelStatus {
+    /// Model not yet downloaded.
+    NotDownloaded,
+    /// Model is being downloaded.
+    Downloading { progress_pct: u8 },
+    /// Model is downloaded and ready.
+    Ready,
+    /// Download failed.
+    Failed(String),
+}
+
+/// Configuration for a pre-built model adapter.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModelAdapter {
+    /// Human-readable name.
+    pub name: String,
+    /// Model family (CLIP, SigLIP, ImageBind, Whisper).
+    pub family: String,
+    /// Supported input modalities.
+    pub modalities: Vec<Modality>,
+    /// Output embedding dimension.
+    pub dimensions: usize,
+    /// Model download URL.
+    pub download_url: Option<String>,
+    /// Expected file size in bytes.
+    pub size_bytes: u64,
+    /// Local cache directory.
+    pub cache_dir: String,
+    /// Current status.
+    pub status: ModelStatus,
+}
+
+/// Registry of pre-built model adapters with lazy download.
+pub struct ModelAdapterRegistry {
+    adapters: parking_lot::RwLock<Vec<ModelAdapter>>,
+    cache_dir: String,
+}
+
+impl ModelAdapterRegistry {
+    /// Create a new registry with default adapters.
+    pub fn new(cache_dir: &str) -> Self {
+        let registry = Self {
+            adapters: parking_lot::RwLock::new(Vec::new()),
+            cache_dir: cache_dir.into(),
+        };
+        registry.register_defaults();
+        registry
+    }
+
+    fn register_defaults(&self) {
+        let defaults = vec![
+            ModelAdapter {
+                name: "CLIP ViT-B/32".into(),
+                family: "clip".into(),
+                modalities: vec![Modality::Text, Modality::Image],
+                dimensions: 512,
+                download_url: Some("https://huggingface.co/openai/clip-vit-base-patch32".into()),
+                size_bytes: 350_000_000,
+                cache_dir: format!("{}/clip-vit-b32", self.cache_dir),
+                status: ModelStatus::NotDownloaded,
+            },
+            ModelAdapter {
+                name: "SigLIP Base".into(),
+                family: "siglip".into(),
+                modalities: vec![Modality::Text, Modality::Image],
+                dimensions: 768,
+                download_url: Some("https://huggingface.co/google/siglip-base-patch16-224".into()),
+                size_bytes: 400_000_000,
+                cache_dir: format!("{}/siglip-base", self.cache_dir),
+                status: ModelStatus::NotDownloaded,
+            },
+            ModelAdapter {
+                name: "ImageBind".into(),
+                family: "imagebind".into(),
+                modalities: vec![
+                    Modality::Text,
+                    Modality::Image,
+                    Modality::Audio,
+                    Modality::Video,
+                ],
+                dimensions: 1024,
+                download_url: Some("https://huggingface.co/facebook/imagebind".into()),
+                size_bytes: 1_200_000_000,
+                cache_dir: format!("{}/imagebind", self.cache_dir),
+                status: ModelStatus::NotDownloaded,
+            },
+            ModelAdapter {
+                name: "Whisper Base".into(),
+                family: "whisper".into(),
+                modalities: vec![Modality::Audio],
+                dimensions: 512,
+                download_url: Some("https://huggingface.co/openai/whisper-base".into()),
+                size_bytes: 140_000_000,
+                cache_dir: format!("{}/whisper-base", self.cache_dir),
+                status: ModelStatus::NotDownloaded,
+            },
+        ];
+        *self.adapters.write() = defaults;
+    }
+
+    /// List all available adapters.
+    pub fn list(&self) -> Vec<ModelAdapter> {
+        self.adapters.read().clone()
+    }
+
+    /// Find an adapter by family name.
+    pub fn find_by_family(&self, family: &str) -> Option<ModelAdapter> {
+        self.adapters
+            .read()
+            .iter()
+            .find(|a| a.family == family)
+            .cloned()
+    }
+
+    /// Find adapters that support a given modality.
+    pub fn find_for_modality(&self, modality: Modality) -> Vec<ModelAdapter> {
+        self.adapters
+            .read()
+            .iter()
+            .filter(|a| a.modalities.contains(&modality))
+            .cloned()
+            .collect()
+    }
+
+    /// Check if a model is downloaded and ready.
+    pub fn is_ready(&self, family: &str) -> bool {
+        self.adapters
+            .read()
+            .iter()
+            .any(|a| a.family == family && a.status == ModelStatus::Ready)
+    }
+
+    /// Mark a model as ready (after external download completes).
+    pub fn mark_ready(&self, family: &str) {
+        if let Some(adapter) = self
+            .adapters
+            .write()
+            .iter_mut()
+            .find(|a| a.family == family)
+        {
+            adapter.status = ModelStatus::Ready;
+        }
+    }
+
+    /// Register a custom adapter.
+    pub fn register(&self, adapter: ModelAdapter) {
+        self.adapters.write().push(adapter);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1603,5 +1757,38 @@ mod tests {
         let model = registry.find_model(&[Modality::Audio], None);
         assert!(model.is_some());
         assert_eq!(model.unwrap().model_id, "custom/my-model");
+    }
+
+    #[test]
+    fn test_model_adapter_registry() {
+        let registry = ModelAdapterRegistry::new("/tmp/needle-models");
+        let adapters = registry.list();
+        assert!(adapters.len() >= 4);
+
+        // CLIP should support text and image
+        let clip = registry.find_by_family("clip").unwrap();
+        assert!(clip.modalities.contains(&Modality::Text));
+        assert!(clip.modalities.contains(&Modality::Image));
+        assert_eq!(clip.dimensions, 512);
+
+        // Whisper should support audio
+        let whisper = registry.find_by_family("whisper").unwrap();
+        assert!(whisper.modalities.contains(&Modality::Audio));
+    }
+
+    #[test]
+    fn test_model_adapter_find_for_modality() {
+        let registry = ModelAdapterRegistry::new("/tmp/needle-models");
+        let audio_models = registry.find_for_modality(Modality::Audio);
+        assert!(audio_models.len() >= 2); // ImageBind and Whisper
+    }
+
+    #[test]
+    fn test_model_adapter_lifecycle() {
+        let registry = ModelAdapterRegistry::new("/tmp/needle-models");
+        assert!(!registry.is_ready("clip"));
+
+        registry.mark_ready("clip");
+        assert!(registry.is_ready("clip"));
     }
 }
