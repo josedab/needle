@@ -57,6 +57,8 @@ pub enum SourceConfig {
     Postgres(PostgresSourceConfig),
     /// Receive records via WebSocket connection (real-time push).
     WebSocket(WebSocketSourceConfig),
+    /// Watch a directory for new JSON/NDJSON files containing vector records.
+    FileWatch(FileWatchSourceConfig),
     /// Generic pull-based connector.
     Custom(CustomSourceConfig),
 }
@@ -163,6 +165,36 @@ impl Default for WebSocketSourceConfig {
             max_message_bytes: 16 * 1024 * 1024,
             auth_token: None,
             message_format: WebSocketMessageFormat::Json,
+        }
+    }
+}
+
+/// File-watch source configuration for directory-based ingestion.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FileWatchSourceConfig {
+    /// Directory path to watch for new files.
+    pub watch_dir: String,
+    /// File extensions to process (e.g., ["json", "ndjson"]).
+    pub extensions: Vec<String>,
+    /// Polling interval in milliseconds.
+    pub poll_interval_ms: u64,
+    /// Whether to process existing files on startup.
+    pub process_existing: bool,
+    /// Whether to delete files after successful ingestion.
+    pub delete_after_ingest: bool,
+    /// Move processed files to this directory instead of deleting (if set).
+    pub archive_dir: Option<String>,
+}
+
+impl Default for FileWatchSourceConfig {
+    fn default() -> Self {
+        Self {
+            watch_dir: String::new(),
+            extensions: vec!["json".into(), "ndjson".into()],
+            poll_interval_ms: 1000,
+            process_existing: true,
+            delete_after_ingest: false,
+            archive_dir: None,
         }
     }
 }
@@ -325,6 +357,15 @@ impl StreamingIngestConfigBuilder {
         self.source(SourceConfig::WebSocket(WebSocketSourceConfig {
             url: url.into(),
             ..WebSocketSourceConfig::default()
+        }))
+    }
+
+    /// Configure a file-watch source for directory-based ingestion.
+    #[must_use]
+    pub fn file_watch(self, dir: impl Into<String>) -> Self {
+        self.source(SourceConfig::FileWatch(FileWatchSourceConfig {
+            watch_dir: dir.into(),
+            ..FileWatchSourceConfig::default()
         }))
     }
 
@@ -916,6 +957,33 @@ impl<'a> StreamingIngestPipeline<'a> {
             vector: record.vector,
             metadata: record.metadata,
         });
+    }
+
+    /// Graceful shutdown: flush all pending records and save the database.
+    ///
+    /// Returns final pipeline statistics after draining the buffer.
+    pub fn graceful_shutdown(&mut self) -> Result<IngestStats> {
+        // Flush all remaining buffered records
+        if !self.buffer.is_empty() {
+            self.flush()?;
+        }
+
+        // Retry any remaining records one more time
+        if !self.buffer.is_empty() {
+            self.flush()?;
+        }
+
+        // Persist the database
+        self.db.save()?;
+
+        tracing::info!(
+            "Streaming pipeline shutdown: {} flushed, {} dead-lettered, {} pending",
+            self.stats.records_flushed,
+            self.stats.records_dead_lettered,
+            self.buffer.len()
+        );
+
+        Ok(self.stats.clone())
     }
 }
 
