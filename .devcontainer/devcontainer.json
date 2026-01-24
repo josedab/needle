@@ -1,7 +1,7 @@
 {
   "name": "Needle Dev",
   "image": "mcr.microsoft.com/devcontainers/rust:1",
-  "postCreateCommand": "cargo build && cargo test --lib --no-run",
+  "postCreateCommand": "cargo build && cargo test --lib",
   "forwardPorts": [8080],
   "customizations": {
     "vscode": {

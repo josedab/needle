@@ -78,3 +78,13 @@ quick: fmt-check lint test-unit
 # Interactive guided walkthrough of the HTTP API
 playground:
     ./scripts/playground.sh
+
+# First-time setup: doctor + pre-commit + build
+setup:
+    ./scripts/doctor.sh
+    (command -v pre-commit && pre-commit install) || true
+    cargo build
+
+# Run a single test with output: just test-single test_name
+test-single NAME:
+    cargo test {{NAME}} -- --nocapture

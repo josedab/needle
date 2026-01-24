@@ -116,6 +116,7 @@ Memory usage: ~1.7GB for 1M vectors (384 dims) with HNSW index.
 | [Migration Guide](docs/MIGRATION.md) | Version upgrade and migration instructions |
 | [Governance](docs/GOVERNANCE.md) | Project governance model |
 | [Support](docs/SUPPORT.md) | Getting help and support channels |
+| [Security](SECURITY.md) | Security policy and vulnerability reporting |
 | [Examples](examples/README.md) | Runnable example commands |
 
 ## Features

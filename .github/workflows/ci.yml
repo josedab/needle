@@ -73,7 +73,7 @@ jobs:
         run: cargo test --verbose
 
       - name: Run tests (all features)
-        run: cargo test --all-features --verbose
+        run: cargo test --features full --verbose
 
   lint:
     needs: quick-check
@@ -92,9 +92,10 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Run Clippy
-        run: cargo clippy --all-targets --all-features -- -D warnings
+        run: cargo clippy --all-targets --features full -- -D warnings
 
   docs:
+    needs: quick-check
     name: Documentation
     runs-on: ubuntu-latest
     steps:
@@ -108,9 +109,10 @@ jobs:
       - name: Check documentation
         env:
           RUSTDOCFLAGS: -D warnings
-        run: cargo doc --no-deps --all-features
+        run: cargo doc --no-deps --features full
 
   bench:
+    needs: quick-check
     name: Benchmarks
     runs-on: ubuntu-latest
     steps:
@@ -125,6 +127,7 @@ jobs:
         run: cargo bench --no-run
 
   examples:
+    needs: quick-check
     name: Examples
     runs-on: ubuntu-latest
     steps:
@@ -134,9 +137,10 @@ jobs:
         uses: dtolnay/rust-toolchain@b3b07ba8b418998c39fb20f53e18c1f174b91f20 # stable
 
       - name: Compile-check all examples
-        run: cargo build --examples
+        run: cargo build --examples --features full
 
   coverage:
+    needs: quick-check
     name: Code Coverage
     runs-on: ubuntu-latest
     steps:
@@ -152,7 +156,7 @@ jobs:
         uses: taiki-e/install-action@8a04e7e1b5765b8b4f1f6bef476643e1b0676f60 # cargo-llvm-cov
 
       - name: Generate coverage report
-        run: cargo llvm-cov --all-features --lcov --output-path lcov.info
+        run: cargo llvm-cov --features full --lcov --output-path lcov.info
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@18283e04ce6e62d37312384ff67231eb8fd56d24 # v5.4.3
@@ -161,6 +165,7 @@ jobs:
           fail_ci_if_error: true
 
   msrv:
+    needs: quick-check
     name: Minimum Supported Rust Version
     runs-on: ubuntu-latest
     steps:
@@ -172,4 +177,4 @@ jobs:
           toolchain: "1.85"
 
       - name: Check MSRV
-        run: cargo check --all-features
+        run: cargo check --features full

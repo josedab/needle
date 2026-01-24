@@ -2,10 +2,11 @@
 # Usage: make <recipe>
 
 .PHONY: help quick check build build-all build-release test test-unit test-integration \
-        fmt fmt-check lint watch serve demo doctor doc bench clean playground
+        fmt fmt-check lint watch serve demo doctor doc bench clean playground setup test-single
 
 help:
 	@echo "Available recipes:"
+	@echo "  make setup         — First-time setup: doctor + pre-commit + build"
 	@echo "  make quick         — Fast feedback: format check + lint + unit tests"
 	@echo "  make check         — Full pre-commit: format check + lint + all tests"
 	@echo "  make build         — Debug build (default features)"
@@ -13,6 +14,7 @@ help:
 	@echo "  make build-release — Release build (all features)"
 	@echo "  make test          — Run all tests (all features)"
 	@echo "  make test-unit     — Run unit tests only (fast)"
+	@echo "  make test-single   — Run a single test: make test-single NAME=test_name"
 	@echo "  make fmt           — Format code"
 	@echo "  make fmt-check     — Check formatting"
 	@echo "  make lint          — Run clippy linter"
@@ -82,3 +84,11 @@ playground:
 
 clean:
 	cargo clean
+
+setup:
+	./scripts/doctor.sh
+	@(command -v pre-commit > /dev/null 2>&1 && pre-commit install) || true
+	cargo build
+
+test-single:
+	cargo test $(NAME) -- --nocapture
