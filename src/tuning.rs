@@ -141,21 +141,25 @@ impl TuningConstraints {
         }
     }
 
+    #[must_use]
     pub fn with_profile(mut self, profile: PerformanceProfile) -> Self {
         self.profile = profile;
         self
     }
 
+    #[must_use]
     pub fn with_memory_budget(mut self, bytes: usize) -> Self {
         self.max_memory_bytes = Some(bytes);
         self
     }
 
+    #[must_use]
     pub fn with_target_latency(mut self, ms: f32) -> Self {
         self.target_latency_ms = Some(ms);
         self
     }
 
+    #[must_use]
     pub fn with_min_recall(mut self, recall: f32) -> Self {
         self.min_recall = recall.clamp(0.0, 1.0);
         self
@@ -467,30 +471,35 @@ impl IndexSelectionConstraints {
     }
 
     /// Set available memory in bytes
+    #[must_use]
     pub fn with_available_memory(mut self, bytes: usize) -> Self {
         self.available_memory_bytes = Some(bytes);
         self
     }
 
     /// Set available disk space in bytes
+    #[must_use]
     pub fn with_available_disk(mut self, bytes: usize) -> Self {
         self.available_disk_bytes = Some(bytes);
         self
     }
 
     /// Mark low latency as critical
+    #[must_use]
     pub fn with_low_latency_critical(mut self, critical: bool) -> Self {
         self.low_latency_critical = critical;
         self
     }
 
     /// Set target recall
+    #[must_use]
     pub fn with_target_recall(mut self, recall: f32) -> Self {
         self.target_recall = recall.clamp(0.0, 1.0);
         self
     }
 
     /// Set whether updates are frequent
+    #[must_use]
     pub fn with_frequent_updates(mut self, frequent: bool) -> Self {
         self.frequent_updates = frequent;
         self
