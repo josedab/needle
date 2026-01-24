@@ -539,6 +539,14 @@ pub struct Bookmark {
     pub created_at: u64,
 }
 
+/// Target language for code generation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CodeLanguage {
+    Rust,
+    Python,
+    JavaScript,
+}
+
 /// Playground runtime
 pub struct Playground {
     #[allow(dead_code)]
@@ -687,6 +695,40 @@ impl Playground {
     /// Get available tutorials
     pub fn available_tutorials(&self) -> Vec<TutorialInfo> {
         Tutorial::all().into_iter().map(|t| t.info()).collect()
+    }
+
+    /// Encode current state as a URL-safe shareable snippet.
+    ///
+    /// The state is serialized to JSON, compressed conceptually, and
+    /// base64url-encoded for use as a URL fragment (e.g., `#snippet=...`).
+    pub fn share_url(&self, base_url: &str) -> String {
+        let state_json = self.export_json();
+        let encoded = base64_url_encode(state_json.as_bytes());
+        format!("{}#snippet={}", base_url, encoded)
+    }
+
+    /// Load state from a URL-encoded snippet.
+    pub fn load_from_url(&self, url: &str) -> Result<(), String> {
+        let fragment = url
+            .split("#snippet=")
+            .nth(1)
+            .ok_or("No snippet fragment found in URL")?;
+        let decoded = base64_url_decode(fragment)
+            .map_err(|e| format!("Failed to decode snippet: {}", e))?;
+        let json =
+            String::from_utf8(decoded).map_err(|e| format!("Invalid UTF-8 in snippet: {}", e))?;
+        self.import_json(&json)
+    }
+
+    /// Generate code snippet in the specified language from the last executed commands.
+    pub fn generate_code(&self, language: CodeLanguage) -> String {
+        let state = self.state.read();
+        let commands: Vec<&str> = state.history.iter().map(|h| h.code.as_str()).collect();
+        match language {
+            CodeLanguage::Rust => generate_rust_code(&commands),
+            CodeLanguage::Python => generate_python_code(&commands),
+            CodeLanguage::JavaScript => generate_js_code(&commands),
+        }
     }
 
     // === Private methods ===
@@ -1336,6 +1378,85 @@ pub fn generate_playground_html(config: &PlaygroundConfig) -> String {
             Theme::HighContrast => "#1e1e1e",
         },
     )
+}
+
+// -- URL encoding helpers --
+
+fn base64_url_encode(data: &[u8]) -> String {
+    const CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    let mut result = String::new();
+    for chunk in data.chunks(3) {
+        let b0 = chunk[0] as u32;
+        let b1 = chunk.get(1).copied().unwrap_or(0) as u32;
+        let b2 = chunk.get(2).copied().unwrap_or(0) as u32;
+        let triple = (b0 << 16) | (b1 << 8) | b2;
+        result.push(CHARS[((triple >> 18) & 0x3F) as usize] as char);
+        result.push(CHARS[((triple >> 12) & 0x3F) as usize] as char);
+        if chunk.len() > 1 {
+            result.push(CHARS[((triple >> 6) & 0x3F) as usize] as char);
+        }
+        if chunk.len() > 2 {
+            result.push(CHARS[(triple & 0x3F) as usize] as char);
+        }
+    }
+    result
+}
+
+fn base64_url_decode(encoded: &str) -> std::result::Result<Vec<u8>, String> {
+    let lookup = |c: u8| -> std::result::Result<u32, String> {
+        match c {
+            b'A'..=b'Z' => Ok((c - b'A') as u32),
+            b'a'..=b'z' => Ok((c - b'a' + 26) as u32),
+            b'0'..=b'9' => Ok((c - b'0' + 52) as u32),
+            b'-' => Ok(62),
+            b'_' => Ok(63),
+            _ => Err(format!("Invalid base64url character: {}", c as char)),
+        }
+    };
+    let bytes = encoded.as_bytes();
+    let mut result = Vec::new();
+    for chunk in bytes.chunks(4) {
+        let a = lookup(chunk[0])?;
+        let b = if chunk.len() > 1 { lookup(chunk[1])? } else { 0 };
+        let c = if chunk.len() > 2 { lookup(chunk[2])? } else { 0 };
+        let d = if chunk.len() > 3 { lookup(chunk[3])? } else { 0 };
+        let triple = (a << 18) | (b << 12) | (c << 6) | d;
+        result.push(((triple >> 16) & 0xFF) as u8);
+        if chunk.len() > 2 {
+            result.push(((triple >> 8) & 0xFF) as u8);
+        }
+        if chunk.len() > 3 {
+            result.push((triple & 0xFF) as u8);
+        }
+    }
+    Ok(result)
+}
+
+// -- Code generation helpers --
+
+fn generate_rust_code(commands: &[&str]) -> String {
+    let mut code = String::from("use needle::Database;\n\nfn main() {\n    let db = Database::in_memory();\n");
+    for cmd in commands {
+        code.push_str(&format!("    // {}\n", cmd.trim()));
+    }
+    code.push_str("}\n");
+    code
+}
+
+fn generate_python_code(commands: &[&str]) -> String {
+    let mut code = String::from("import needle\n\ndb = needle.Database.in_memory()\n");
+    for cmd in commands {
+        code.push_str(&format!("# {}\n", cmd.trim()));
+    }
+    code
+}
+
+fn generate_js_code(commands: &[&str]) -> String {
+    let mut code = String::from("import { Database } from 'needle-wasm';\n\nconst db = new Database();\n");
+    for cmd in commands {
+        code.push_str(&format!("// {}\n", cmd.trim()));
+    }
+    code
 }
 
 #[cfg(test)]
