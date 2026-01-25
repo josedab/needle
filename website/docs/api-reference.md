@@ -96,6 +96,66 @@ Saves the database to disk.
 pub fn save(&self) -> Result<()>
 ```
 
+## Aliases
+
+### `Database::create_alias`
+
+Creates an alias pointing to a collection.
+
+```rust
+pub fn create_alias(&self, alias: &str, collection: &str) -> Result<()>
+```
+
+**Example:**
+```rust
+db.create_alias("prod", "docs_v2")?;
+```
+
+### `Database::update_alias`
+
+Updates an existing alias to point to a different collection.
+
+```rust
+pub fn update_alias(&self, alias: &str, collection: &str) -> Result<()>
+```
+
+**Example:**
+```rust
+db.update_alias("prod", "docs_v3")?;
+```
+
+### `Database::delete_alias`
+
+Deletes an alias. Returns `true` if it existed.
+
+```rust
+pub fn delete_alias(&self, alias: &str) -> Result<bool>
+```
+
+### `Database::list_aliases`
+
+Lists all aliases as `(alias_name, collection_name)` tuples.
+
+```rust
+pub fn list_aliases(&self) -> Vec<(String, String)>
+```
+
+### `Database::get_canonical_name`
+
+Resolves an alias to its target collection name.
+
+```rust
+pub fn get_canonical_name(&self, alias: &str) -> Option<String>
+```
+
+### `Database::aliases_for_collection`
+
+Gets all aliases pointing to a specific collection.
+
+```rust
+pub fn aliases_for_collection(&self, collection: &str) -> Vec<String>
+```
+
 ## CollectionConfig
 
 Configuration for creating collections.
@@ -107,6 +167,8 @@ pub struct CollectionConfig {
     pub hnsw_m: usize,
     pub hnsw_ef_construction: usize,
     pub quantization: Option<QuantizationType>,
+    pub default_ttl_seconds: Option<u64>,
+    pub lazy_expiration: bool,
 }
 ```
 
@@ -118,6 +180,8 @@ impl CollectionConfig {
     pub fn with_hnsw_m(self, m: usize) -> Self;
     pub fn with_hnsw_ef_construction(self, ef: usize) -> Self;
     pub fn with_quantization(self, quantization: QuantizationType) -> Self;
+    pub fn with_default_ttl_seconds(self, ttl: Option<u64>) -> Self;
+    pub fn with_lazy_expiration(self, enabled: bool) -> Self;
 }
 ```
 
@@ -126,7 +190,8 @@ impl CollectionConfig {
 let config = CollectionConfig::new(384, DistanceFunction::Cosine)
     .with_hnsw_m(32)
     .with_hnsw_ef_construction(400)
-    .with_quantization(QuantizationType::Scalar);
+    .with_quantization(QuantizationType::Scalar)
+    .with_default_ttl_seconds(Some(3600)); // 1 hour default TTL
 ```
 
 ## Collection
@@ -147,6 +212,29 @@ pub fn insert(
 **Example:**
 ```rust
 collection.insert("doc1", &embedding, json!({"title": "Hello"}))?;
+```
+
+### `Collection::insert_with_ttl`
+
+Inserts a vector with an optional time-to-live.
+
+```rust
+pub fn insert_with_ttl(
+    &self,
+    id: &str,
+    vector: &[f32],
+    metadata: Option<serde_json::Value>,
+    ttl_seconds: Option<u64>,
+) -> Result<()>
+```
+
+**Example:**
+```rust
+// Expires in 1 hour
+collection.insert_with_ttl("doc1", &embedding, Some(json!({"title": "Hello"})), Some(3600))?;
+
+// Never expires (or uses collection default)
+collection.insert_with_ttl("doc2", &embedding, None, None)?;
 ```
 
 ### `Collection::get`
@@ -228,6 +316,75 @@ pub fn batch_search(
 ) -> Result<Vec<Vec<SearchResult>>>
 ```
 
+### `Collection::search_with_options`
+
+Searches with distance override, pre-filter, and post-filter support.
+
+```rust
+pub fn search_with_options(
+    &self,
+    query: &[f32],
+    k: usize,
+    distance_override: Option<DistanceFunction>,
+    filter: Option<&Filter>,
+    post_filter: Option<&Filter>,
+    post_filter_factor: usize,
+) -> Result<Vec<SearchResult>>
+```
+
+**Example:**
+```rust
+use needle::DistanceFunction;
+
+// Override distance function (falls back to brute-force if different from index)
+let results = collection.search_with_options(
+    &query,
+    10,
+    Some(DistanceFunction::Euclidean), // Override distance
+    Some(&pre_filter),                  // Pre-filter
+    Some(&post_filter),                 // Post-filter
+    3,                                  // Post-filter factor
+)?;
+```
+
+### `Collection::search_builder`
+
+Creates a fluent search builder for complex queries.
+
+```rust
+pub fn search_builder(&self, query: &[f32]) -> SearchBuilder
+```
+
+**Example:**
+```rust
+let results = collection.search_builder(&query)
+    .k(10)
+    .filter(&pre_filter)
+    .distance(DistanceFunction::Euclidean)  // Override distance function
+    .post_filter(&post_filter)
+    .post_filter_factor(3)
+    .execute()?;
+```
+
+## SearchBuilder
+
+Fluent builder for configuring searches.
+
+```rust
+impl SearchBuilder {
+    pub fn k(self, k: usize) -> Self;
+    pub fn filter(self, filter: &Filter) -> Self;
+    pub fn distance(self, distance: DistanceFunction) -> Self;
+    pub fn post_filter(self, filter: &Filter) -> Self;
+    pub fn post_filter_factor(self, factor: usize) -> Self;
+    pub fn execute(self) -> Result<Vec<SearchResult>>;
+}
+```
+
+:::note Distance Override
+When `distance()` specifies a different function than the collection's index, Needle automatically falls back to brute-force search. This is slower but ensures correct results.
+:::
+
 ### `Collection::count`
 
 Returns the number of vectors.
@@ -254,7 +411,7 @@ pub fn clear(&self) -> Result<()>
 
 ### `Collection::compact`
 
-Reclaims space from deleted vectors.
+Reclaims space from deleted vectors. Also runs expiration sweep first.
 
 ```rust
 pub fn compact(&self) -> Result<()>
@@ -266,6 +423,56 @@ Returns collection information.
 
 ```rust
 pub fn info(&self) -> Result<CollectionInfo>
+```
+
+## TTL / Expiration
+
+### `Collection::expire_vectors`
+
+Removes all expired vectors from the collection.
+
+```rust
+pub fn expire_vectors(&self) -> Result<usize>
+```
+
+**Returns:** Number of vectors removed.
+
+**Example:**
+```rust
+let removed = collection.expire_vectors()?;
+println!("Removed {} expired vectors", removed);
+```
+
+### `Collection::ttl_stats`
+
+Returns TTL statistics for the collection.
+
+```rust
+pub fn ttl_stats(&self) -> Result<(usize, usize, Option<u64>, Option<u64>)>
+```
+
+**Returns:** Tuple of `(total_with_ttl, expired_count, nearest_expiration, furthest_expiration)`.
+
+**Example:**
+```rust
+let (total, expired, nearest, furthest) = collection.ttl_stats()?;
+println!("Total with TTL: {}, Expired: {}", total, expired);
+```
+
+### `Collection::needs_expiration_sweep`
+
+Checks if the collection has more than the given ratio of expired vectors.
+
+```rust
+pub fn needs_expiration_sweep(&self, threshold: f32) -> Result<bool>
+```
+
+**Example:**
+```rust
+// Check if more than 10% of vectors are expired
+if collection.needs_expiration_sweep(0.1)? {
+    collection.expire_vectors()?;
+}
 ```
 
 ## SearchResult
@@ -414,6 +621,9 @@ pub enum NeedleError {
     IoError(std::io::Error),
     CollectionNotFound(String),
     CollectionExists(String),
+    CollectionHasAliases(String),  // Cannot drop collection with active aliases
+    AliasNotFound(String),
+    AliasAlreadyExists(String),
     DimensionMismatch { expected: usize, got: usize },
     InvalidFilter(String),
     VectorNotFound(String),

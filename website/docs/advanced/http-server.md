@@ -137,9 +137,12 @@ Content-Type: application/json
   "metadata": {
     "title": "Hello World",
     "category": "greeting"
-  }
+  },
+  "ttl_seconds": 3600
 }
 ```
+
+The `ttl_seconds` field is optional. If provided, the vector will automatically expire after the specified number of seconds.
 
 Response:
 ```json
@@ -257,6 +260,23 @@ Content-Type: application/json
 }
 ```
 
+#### Search with Distance Override
+
+Override the distance function at query time. Falls back to brute-force search if different from the collection's index.
+
+```bash
+POST /collections/:name/search
+Content-Type: application/json
+
+{
+  "vector": [0.1, 0.2, 0.3, ...],
+  "k": 10,
+  "distance": "euclidean"
+}
+```
+
+Available distance functions: `cosine`, `euclidean`, `dot`, `manhattan`
+
 #### Search with Explain
 
 ```bash
@@ -324,6 +344,112 @@ Returns NDJSON stream:
 ```
 {"id":"doc1","vector":[0.1,...],"metadata":{"title":"Hello"}}
 {"id":"doc2","vector":[0.2,...],"metadata":{"title":"World"}}
+```
+
+### Aliases
+
+Aliases provide alternative names for collections, useful for blue-green deployments.
+
+#### Create Alias
+
+```bash
+POST /aliases
+Content-Type: application/json
+
+{
+  "alias": "prod",
+  "collection": "documents_v2"
+}
+```
+
+Response:
+```json
+{
+  "alias": "prod",
+  "collection": "documents_v2"
+}
+```
+
+#### List Aliases
+
+```bash
+GET /aliases
+```
+
+Response:
+```json
+{
+  "aliases": [
+    {"alias": "prod", "collection": "documents_v2"},
+    {"alias": "staging", "collection": "documents_v1"}
+  ]
+}
+```
+
+#### Update Alias
+
+```bash
+PUT /aliases/:alias
+Content-Type: application/json
+
+{
+  "collection": "documents_v3"
+}
+```
+
+Response:
+```json
+{
+  "alias": "prod",
+  "collection": "documents_v3"
+}
+```
+
+#### Delete Alias
+
+```bash
+DELETE /aliases/:alias
+```
+
+Response:
+```json
+{
+  "deleted": true
+}
+```
+
+#### Using Aliases
+
+Aliases work transparently with all collection endpoints:
+
+```bash
+# Query using alias (works exactly like collection name)
+POST /collections/prod/search
+Content-Type: application/json
+
+{
+  "vector": [0.1, 0.2, ...],
+  "k": 10
+}
+```
+
+### TTL / Expiration
+
+Manage automatic vector expiration.
+
+#### Expire Vectors
+
+Remove all expired vectors from a collection:
+
+```bash
+POST /collections/:name/expire
+```
+
+Response:
+```json
+{
+  "expired_count": 42
+}
 ```
 
 ## Client Examples
