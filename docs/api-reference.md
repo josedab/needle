@@ -913,3 +913,271 @@ let anomaly_scores = forest.predict(&new_vectors)?;
 let lof = LocalOutlierFactor::new(20);  // k=20 neighbors
 let outlier_scores = lof.fit_predict(&vectors)?;
 ```
+
+---
+
+## Complete Method Reference
+
+### Database Methods
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `open` | `fn open<P: AsRef<Path>>(path: P) -> Result<Self>` | Open or create a database file |
+| `open_with_config` | `fn open_with_config(config: DatabaseConfig) -> Result<Self>` | Open with custom configuration |
+| `in_memory` | `fn in_memory() -> Self` | Create an ephemeral in-memory database |
+| `path` | `fn path(&self) -> Option<&Path>` | Get database file path (None for in-memory) |
+| `create_collection` | `fn create_collection(&self, name: &str, dimensions: usize) -> Result<()>` | Create collection with default settings |
+| `create_collection_with_config` | `fn create_collection_with_config(&self, config: CollectionConfig) -> Result<()>` | Create with custom configuration |
+| `collection` | `fn collection(&self, name: &str) -> Result<CollectionRef>` | Get thread-safe collection reference |
+| `list_collections` | `fn list_collections(&self) -> Vec<String>` | List all collection names |
+| `drop_collection` | `fn drop_collection(&self, name: &str) -> Result<bool>` | Delete collection, returns true if existed |
+| `has_collection` | `fn has_collection(&self, name: &str) -> bool` | Check if collection exists |
+| `create_alias` | `fn create_alias(&self, alias: &str, collection: &str) -> Result<()>` | Create alias for collection |
+| `delete_alias` | `fn delete_alias(&self, alias: &str) -> Result<bool>` | Remove alias |
+| `update_alias` | `fn update_alias(&self, alias: &str, collection: &str) -> Result<()>` | Change alias target |
+| `list_aliases` | `fn list_aliases(&self) -> Vec<(String, String)>` | List all (alias, collection) pairs |
+| `get_canonical_name` | `fn get_canonical_name(&self, alias: &str) -> Option<String>` | Resolve alias to collection name |
+| `aliases_for_collection` | `fn aliases_for_collection(&self, collection: &str) -> Vec<String>` | Get all aliases pointing to collection |
+| `save` | `fn save(&mut self) -> Result<()>` | Persist changes to disk |
+| `is_dirty` | `fn is_dirty(&self) -> bool` | Check if there are unsaved changes |
+
+### CollectionRef Methods
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `insert` | `fn insert(&self, id: &str, vector: &[f32], metadata: Option<Value>) -> Result<()>` | Insert or update vector |
+| `insert_batch` | `fn insert_batch(&self, items: &[(&str, &[f32], Option<Value>)]) -> Result<()>` | Insert multiple vectors efficiently |
+| `insert_with_ttl` | `fn insert_with_ttl(&self, id: &str, vector: &[f32], metadata: Option<Value>, ttl: Duration) -> Result<()>` | Insert with time-to-live |
+| `get` | `fn get(&self, id: &str) -> Option<(Vec<f32>, Option<Value>)>` | Get vector and metadata by ID |
+| `get_metadata` | `fn get_metadata(&self, id: &str) -> Option<Value>` | Get only metadata by ID |
+| `contains` | `fn contains(&self, id: &str) -> bool` | Check if vector exists |
+| `delete` | `fn delete(&self, id: &str) -> Result<bool>` | Delete vector, returns true if existed |
+| `update_metadata` | `fn update_metadata(&self, id: &str, metadata: Value) -> Result<()>` | Update only metadata |
+| `search` | `fn search(&self, query: &[f32], k: usize) -> Result<Vec<SearchResult>>` | Basic k-NN search |
+| `search_with_filter` | `fn search_with_filter(&self, query: &[f32], k: usize, filter: &Filter) -> Result<Vec<SearchResult>>` | Search with metadata filter |
+| `search_with_ef` | `fn search_with_ef(&self, query: &[f32], k: usize, ef: usize) -> Result<Vec<SearchResult>>` | Search with custom ef_search |
+| `search_builder` | `fn search_builder(&self, query: &[f32]) -> SearchBuilder` | Get fluent search builder |
+| `search_explain` | `fn search_explain(&self, query: &[f32], k: usize) -> Result<(Vec<SearchResult>, SearchExplain)>` | Search with timing breakdown |
+| `batch_search` | `fn batch_search(&self, queries: &[&[f32]], k: usize) -> Result<Vec<Vec<SearchResult>>>` | Parallel multi-query search |
+| `len` | `fn len(&self) -> usize` | Number of vectors |
+| `is_empty` | `fn is_empty(&self) -> bool` | Check if collection has no vectors |
+| `dimensions` | `fn dimensions(&self) -> usize` | Vector dimensionality |
+| `stats` | `fn stats(&self) -> CollectionStats` | Get detailed statistics |
+| `iter` | `fn iter(&self) -> CollectionIter` | Iterate over all vectors |
+| `compact` | `fn compact(&self) -> Result<CompactStats>` | Reclaim space from deletions |
+| `clear` | `fn clear(&self) -> Result<()>` | Remove all vectors |
+| `export` | `fn export(&self) -> Result<Vec<ExportEntry>>` | Export all data for backup |
+
+### SearchBuilder Methods
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `k` | `fn k(self, k: usize) -> Self` | Set number of results to return |
+| `filter` | `fn filter(self, filter: &Filter) -> Self` | Set pre-filter (applied during search) |
+| `post_filter` | `fn post_filter(self, filter: &Filter) -> Self` | Set post-filter (applied after search) |
+| `post_filter_factor` | `fn post_filter_factor(self, factor: usize) -> Self` | Over-fetch factor for post-filtering |
+| `ef_search` | `fn ef_search(self, ef: usize) -> Self` | Override ef_search parameter |
+| `include_metadata` | `fn include_metadata(self, include: bool) -> Self` | Whether to include metadata in results |
+| `distance` | `fn distance(self, d: DistanceFunction) -> Self` | Override distance function (falls back to brute-force) |
+| `execute` | `fn execute(self) -> Result<Vec<SearchResult>>` | Execute the search |
+
+### Filter Construction
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `eq` | `fn eq(field: &str, value: impl Into<Value>) -> Self` | Equality: field == value |
+| `ne` | `fn ne(field: &str, value: impl Into<Value>) -> Self` | Not equal: field != value |
+| `gt` | `fn gt(field: &str, value: impl Into<Value>) -> Self` | Greater than: field > value |
+| `gte` | `fn gte(field: &str, value: impl Into<Value>) -> Self` | Greater or equal: field >= value |
+| `lt` | `fn lt(field: &str, value: impl Into<Value>) -> Self` | Less than: field < value |
+| `lte` | `fn lte(field: &str, value: impl Into<Value>) -> Self` | Less or equal: field <= value |
+| `in_values` | `fn in_values(field: &str, values: Vec<impl Into<Value>>) -> Self` | Membership: field in [...] |
+| `nin_values` | `fn nin_values(field: &str, values: Vec<impl Into<Value>>) -> Self` | Not in: field not in [...] |
+| `and` | `fn and(filters: Vec<Filter>) -> Self` | Logical AND of filters |
+| `or` | `fn or(filters: Vec<Filter>) -> Self` | Logical OR of filters |
+| `not` | `fn not(filter: Filter) -> Self` | Logical NOT of filter |
+| `parse` | `fn parse(json: &Value) -> Result<Self>` | Parse MongoDB-style JSON filter |
+| `matches` | `fn matches(&self, metadata: Option<&Value>) -> bool` | Test if metadata matches filter |
+
+### HnswConfig Builder
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `m` | `fn m(self, m: usize) -> Self` | Max connections per node (default: 16) |
+| `m_max_0` | `fn m_max_0(self, m: usize) -> Self` | Max connections at layer 0 (default: 32) |
+| `ef_construction` | `fn ef_construction(self, ef: usize) -> Self` | Build-time search width (default: 200) |
+| `ef_search` | `fn ef_search(self, ef: usize) -> Self` | Query-time search width (default: 50) |
+| `ml` | `fn ml(self, ml: f64) -> Self` | Level multiplier (default: 1/ln(M)) |
+
+### CollectionConfig Builder
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `new` | `fn new(name: &str, dimensions: usize) -> Self` | Create with name and dimensions |
+| `with_distance` | `fn with_distance(self, d: DistanceFunction) -> Self` | Set distance function |
+| `with_hnsw_config` | `fn with_hnsw_config(self, config: HnswConfig) -> Self` | Set HNSW parameters |
+| `with_m` | `fn with_m(self, m: usize) -> Self` | Shorthand for HNSW M parameter |
+| `with_ef_construction` | `fn with_ef_construction(self, ef: usize) -> Self` | Shorthand for ef_construction |
+| `with_query_cache` | `fn with_query_cache(self, config: QueryCacheConfig) -> Self` | Enable query result caching |
+| `with_lazy_expiration` | `fn with_lazy_expiration(self, enabled: bool) -> Self` | Enable lazy TTL expiration |
+
+---
+
+## Return Types
+
+### SearchResult
+
+```rust
+pub struct SearchResult {
+    /// The unique identifier of the vector
+    pub id: String,
+
+    /// Distance from the query vector.
+    /// - Cosine: 0.0 (identical) to 2.0 (opposite)
+    /// - Euclidean: 0.0 (identical) to infinity
+    /// - DotProduct: Negative (higher is more similar)
+    pub distance: f32,
+
+    /// Optional metadata associated with the vector
+    pub metadata: Option<serde_json::Value>,
+}
+```
+
+### SearchExplain
+
+```rust
+pub struct SearchExplain {
+    /// Total search time in microseconds
+    pub total_time_us: u64,
+
+    /// Time spent traversing HNSW index (microseconds)
+    pub index_time_us: u64,
+
+    /// Time spent evaluating metadata filters (microseconds)
+    pub filter_time_us: u64,
+
+    /// Time spent enriching results with metadata (microseconds)
+    pub enrich_time_us: u64,
+
+    /// Candidates before filtering
+    pub candidates_before_filter: usize,
+
+    /// Candidates after filtering
+    pub candidates_after_filter: usize,
+
+    /// HNSW traversal statistics
+    pub hnsw_stats: SearchStats,
+
+    /// Collection dimensions
+    pub dimensions: usize,
+
+    /// Total vectors in collection
+    pub collection_size: usize,
+
+    /// Requested k
+    pub requested_k: usize,
+
+    /// Actual k used (clamped to collection size)
+    pub effective_k: usize,
+
+    /// ef_search parameter used
+    pub ef_search: usize,
+
+    /// Whether a filter was applied
+    pub filter_applied: bool,
+
+    /// Distance function used
+    pub distance_function: String,
+}
+```
+
+### CollectionStats
+
+```rust
+pub struct CollectionStats {
+    /// Number of vectors (excluding deleted)
+    pub count: usize,
+
+    /// Vector dimensionality
+    pub dimensions: usize,
+
+    /// Estimated memory usage in bytes
+    pub memory_bytes: usize,
+
+    /// Number of deleted vectors pending compaction
+    pub deleted_count: usize,
+
+    /// Distance function used
+    pub distance_function: DistanceFunction,
+
+    /// HNSW index statistics
+    pub hnsw_stats: HnswStats,
+}
+```
+
+---
+
+## Error Reference
+
+### Error Categories
+
+| Code Range | Category | Description |
+|------------|----------|-------------|
+| 1xxx | I/O | File read/write errors |
+| 2xxx | Serialization | JSON/binary encoding errors |
+| 3xxx | Collection | Collection management errors |
+| 4xxx | Vector | Vector operation errors |
+| 5xxx | Database | Database-level errors |
+| 6xxx | Index | HNSW/IVF index errors |
+| 7xxx | Configuration | Invalid configuration |
+| 8xxx | Resource | Capacity/memory limits |
+| 9xxx | Operational | Timeouts, locks, conflicts |
+| 10xxx | Security | Encryption/auth errors |
+| 11xxx | Distributed | Consensus/replication errors |
+| 12xxx | Backup | Backup/restore errors |
+| 13xxx | State | Invalid operations |
+
+### Common Error Variants
+
+| Variant | Code | Description |
+|---------|------|-------------|
+| `CollectionNotFound(name)` | 3001 | Collection doesn't exist |
+| `CollectionAlreadyExists(name)` | 3002 | Collection name taken |
+| `DimensionMismatch { expected, got }` | 4003 | Vector has wrong dimensions |
+| `InvalidVector(reason)` | 4004 | Vector contains NaN/Inf |
+| `AliasNotFound(name)` | 3004 | Alias doesn't exist |
+| `AliasAlreadyExists(name)` | 3005 | Alias name taken |
+| `CollectionHasAliases(name)` | 3006 | Can't delete collection with aliases |
+| `IoError(err)` | 1001 | File system error |
+| `Corruption(msg)` | 5002 | Database file corrupted |
+
+### Error Handling Example
+
+```rust
+use needle::{Database, NeedleError, ErrorCode};
+
+fn handle_operation() -> needle::Result<()> {
+    let db = Database::open("db.needle")?;
+
+    match db.collection("nonexistent") {
+        Ok(coll) => { /* use collection */ }
+        Err(NeedleError::CollectionNotFound(name)) => {
+            // Handle specifically
+            println!("Collection '{}' not found, creating...", name);
+            db.create_collection(&name, 384)?;
+        }
+        Err(e) => {
+            // Generic handling with error code
+            let code = e.error_code();
+            println!("Error {}: {} (category: {})",
+                code.code(),
+                e,
+                code.category()
+            );
+            return Err(e);
+        }
+    }
+
+    Ok(())
+}
+```
