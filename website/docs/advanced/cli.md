@@ -38,6 +38,8 @@ cargo install --path .
 | `compact` | Reclaim deleted space |
 | `serve` | Start HTTP server |
 | `tune` | Auto-tune HNSW parameters |
+| `alias` | Manage collection aliases |
+| `ttl` | Manage vector expiration |
 
 ## Database Operations
 
@@ -226,6 +228,19 @@ needle search mydb.needle -c documents \
   --ef-search 100
 ```
 
+### Search with Distance Override
+
+Override the distance function at query time (falls back to brute-force if different from index):
+
+```bash
+needle search mydb.needle -c documents \
+  -q "[0.1, 0.2, ...]" \
+  -k 10 \
+  --distance euclidean
+```
+
+Available distance functions: `cosine`, `euclidean`, `dot`, `manhattan`
+
 ### Search from File
 
 ```bash
@@ -296,6 +311,84 @@ Recommended configuration:
   hnsw_ef_construction: 300
   estimated_recall: 98.5%
   estimated_memory: 3.2 GB
+```
+
+## Alias Management
+
+Aliases provide alternative names for collections, useful for blue-green deployments.
+
+### Create Alias
+
+```bash
+needle alias create -d mydb.needle --alias prod --collection documents_v2
+```
+
+### List Aliases
+
+```bash
+needle alias list -d mydb.needle
+```
+
+Output:
+```
+Aliases:
+  prod -> documents_v2
+  staging -> documents_v1
+```
+
+### Resolve Alias
+
+```bash
+needle alias resolve -d mydb.needle --alias prod
+```
+
+Output:
+```
+prod -> documents_v2
+```
+
+### Update Alias
+
+```bash
+needle alias update -d mydb.needle --alias prod --collection documents_v3
+```
+
+### Delete Alias
+
+```bash
+needle alias delete -d mydb.needle --alias old_alias
+```
+
+## TTL / Expiration
+
+Manage automatic expiration of vectors.
+
+### View TTL Statistics
+
+```bash
+needle ttl stats -d mydb.needle -c documents
+```
+
+Output:
+```
+TTL Statistics for 'documents':
+  Vectors with TTL: 10,000
+  Currently expired: 234
+  Nearest expiration: 2024-01-15 10:30:00 UTC
+  Furthest expiration: 2024-01-22 15:45:00 UTC
+```
+
+### Sweep Expired Vectors
+
+Remove all expired vectors from a collection:
+
+```bash
+needle ttl sweep -d mydb.needle -c documents
+```
+
+Output:
+```
+Swept 234 expired vectors from 'documents'
 ```
 
 ## HTTP Server

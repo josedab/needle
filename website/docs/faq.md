@@ -121,6 +121,50 @@ collection.delete("doc1")?;
 collection.insert("doc1", &new_vector, new_metadata)?;
 ```
 
+### What are collection aliases?
+
+Aliases are alternative names for collections that enable blue-green deployments. You can atomically switch an alias from one collection to another:
+
+```rust
+// Create v2 and point prod to it
+db.create_collection("docs_v2", 384)?;
+db.update_alias("prod", "docs_v2")?;
+
+// All queries to "prod" now use docs_v2
+let coll = db.collection("prod")?;
+```
+
+See [Collection Aliasing](/docs/concepts/aliasing) for details.
+
+### Does Needle support automatic expiration (TTL)?
+
+Yes. You can set a time-to-live on vectors so they automatically expire:
+
+```rust
+// Vector expires in 1 hour
+collection.insert_with_ttl("cache:key", &vec, None, Some(3600))?;
+
+// Expired vectors are automatically excluded from search results
+// Call expire_vectors() to permanently remove them
+collection.expire_vectors()?;
+```
+
+See [TTL/Auto-Expiration](/docs/concepts/ttl) for details.
+
+### Can I use a different distance function at query time?
+
+Yes. You can override the distance function per-query using `search_with_options` or the SearchBuilder:
+
+```rust
+// Override to Euclidean (collection was created with Cosine)
+let results = collection.search_builder(&query)
+    .k(10)
+    .distance(DistanceFunction::Euclidean)
+    .execute()?;
+```
+
+Note: When the override differs from the index's distance function, Needle falls back to brute-force search. This is slower but guarantees correct results.
+
 ### How do I backup a Needle database?
 
 The entire database is a single file. Just copy it:
@@ -221,6 +265,41 @@ match collection.get("nonexistent") {
     Ok(entry) => println!("Found: {:?}", entry),
     Err(e) => return Err(e),
 }
+```
+
+### Error: "Alias not found"
+
+The alias doesn't exist. Create it first:
+
+```rust
+db.create_alias("prod", "my_collection")?;
+```
+
+### Error: "Alias already exists"
+
+The alias name is already in use. Either delete it first or update it:
+
+```rust
+// Option 1: Update existing alias
+db.update_alias("prod", "new_collection")?;
+
+// Option 2: Delete and recreate
+db.delete_alias("prod")?;
+db.create_alias("prod", "new_collection")?;
+```
+
+### Error: "Cannot drop collection: aliases still reference it"
+
+The collection has aliases pointing to it. Remove them first:
+
+```rust
+// Find and remove all aliases for this collection
+for alias in db.aliases_for_collection("my_collection") {
+    db.delete_alias(&alias)?;
+}
+
+// Now you can drop the collection
+db.drop_collection("my_collection")?;
 ```
 
 ### Search returns no results

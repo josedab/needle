@@ -22,6 +22,8 @@ const sidebars: SidebarsConfig = {
         'concepts/hnsw-index',
         'concepts/distance-functions',
         'concepts/metadata-filtering',
+        'concepts/aliasing',
+        'concepts/ttl',
       ],
     },
     {
