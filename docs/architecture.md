@@ -545,6 +545,364 @@ pub struct NamespaceManager {
 - **Tenant configuration:** Per-tenant quotas and settings
 - **Access control integration:** Namespace-scoped permissions
 
+## Module Dependency Diagram
+
+The following diagram shows the relationships between Needle's major modules:
+
+```mermaid
+graph TB
+    subgraph "Public API Layer"
+        LIB[lib.rs<br/>Public Exports]
+        CLI[main.rs<br/>CLI Application]
+    end
+
+    subgraph "Core Data Layer"
+        DB[database.rs<br/>Database Management]
+        COLL[collection.rs<br/>Collection Operations]
+        META[metadata.rs<br/>Metadata & Filtering]
+        STORE[storage.rs<br/>Persistence Layer]
+    end
+
+    subgraph "Indexing Layer"
+        HNSW[hnsw.rs<br/>HNSW Index]
+        IVF[ivf.rs<br/>IVF Index]
+        DISKANN[diskann.rs<br/>DiskANN Index]
+        SPARSE[sparse.rs<br/>Sparse Vectors]
+        MULTI[multivec.rs<br/>Multi-Vector]
+    end
+
+    subgraph "Search & Retrieval"
+        DIST[distance.rs<br/>Distance Functions]
+        QUANT[quantization.rs<br/>Quantization]
+        HYBRID[hybrid.rs<br/>BM25 + RRF]
+        RERANK[reranker.rs<br/>Reranking]
+        QB[query_builder.rs<br/>Search Builder]
+    end
+
+    subgraph "Infrastructure"
+        WAL[wal.rs<br/>Write-Ahead Log]
+        BACKUP[backup.rs<br/>Backup/Restore]
+        CLOUD[cloud_storage.rs<br/>S3/Azure/GCS]
+        GPU[gpu.rs<br/>GPU Acceleration]
+    end
+
+    subgraph "Distributed"
+        SHARD[shard.rs<br/>Sharding]
+        ROUTE[routing.rs<br/>Query Routing]
+        RAFT[raft.rs<br/>Consensus]
+    end
+
+    subgraph "Interfaces"
+        SERVER[server.rs<br/>HTTP REST API]
+        PYTHON[python.rs<br/>Python Bindings]
+        WASM[wasm.rs<br/>WASM Bindings]
+    end
+
+    LIB --> DB
+    LIB --> COLL
+    CLI --> DB
+
+    DB --> COLL
+    DB --> STORE
+
+    COLL --> HNSW
+    COLL --> META
+    COLL --> STORE
+    COLL --> DIST
+    COLL --> QB
+
+    HNSW --> DIST
+    IVF --> DIST
+    DISKANN --> DIST
+    SPARSE --> DIST
+
+    QUANT --> DIST
+    HYBRID --> COLL
+    RERANK --> COLL
+
+    SHARD --> COLL
+    ROUTE --> SHARD
+    RAFT --> SHARD
+
+    SERVER --> DB
+    PYTHON --> DB
+    WASM --> DB
+
+    BACKUP --> DB
+    BACKUP --> CLOUD
+    WAL --> STORE
+```
+
+## Data Flow Diagrams
+
+### Insert Operation Flow
+
+```mermaid
+sequenceDiagram
+    participant App as Application
+    participant DB as Database
+    participant Coll as Collection
+    participant Store as VectorStore
+    participant Meta as MetadataStore
+    participant HNSW as HnswIndex
+
+    App->>DB: insert("doc1", vector, metadata)
+    DB->>Coll: insert_internal(...)
+    Coll->>Coll: validate_vector()
+
+    par Store Vector
+        Coll->>Store: store(id, vector)
+        Store-->>Coll: internal_id
+    and Store Metadata
+        Coll->>Meta: insert(id, metadata)
+    end
+
+    Coll->>HNSW: insert(internal_id)
+    Note over HNSW: Find entry point<br/>Navigate layers<br/>Connect neighbors
+
+    HNSW-->>Coll: success
+    Coll-->>DB: success
+    DB-->>App: Ok(())
+```
+
+### Search Operation Flow
+
+```mermaid
+sequenceDiagram
+    participant App as Application
+    participant DB as Database
+    participant Coll as Collection
+    participant HNSW as HnswIndex
+    participant Meta as MetadataStore
+    participant Dist as Distance
+
+    App->>DB: search(query, k, filter)
+    DB->>Coll: search_internal(...)
+    Coll->>Coll: validate_query_dimensions()
+
+    Coll->>HNSW: search(query, k * 10)
+    Note over HNSW: Start at entry point<br/>Greedy descent<br/>Expand at layer 0
+
+    loop For each candidate
+        HNSW->>Dist: compute(query, candidate)
+        Dist-->>HNSW: distance
+    end
+
+    HNSW-->>Coll: candidates[(id, distance)]
+
+    alt Has Filter
+        loop For each candidate
+            Coll->>Meta: get(id)
+            Meta-->>Coll: metadata
+            Coll->>Coll: filter.matches(metadata)
+        end
+    end
+
+    Coll->>Coll: take(k) best matches
+    Coll->>Meta: enrich_with_metadata()
+    Coll-->>DB: SearchResult[]
+    DB-->>App: Vec<SearchResult>
+```
+
+### Hybrid Search Flow
+
+```mermaid
+flowchart LR
+    subgraph Input
+        Q[Query]
+        QV[Query Vector]
+        QT[Query Text]
+    end
+
+    subgraph "Vector Search"
+        HNSW[HNSW Index]
+        VR[Vector Results<br/>with distances]
+    end
+
+    subgraph "Keyword Search"
+        BM25[BM25 Index]
+        KR[Keyword Results<br/>with scores]
+    end
+
+    subgraph "Fusion"
+        RRF[Reciprocal Rank<br/>Fusion]
+        FR[Final Ranked<br/>Results]
+    end
+
+    Q --> QV
+    Q --> QT
+    QV --> HNSW --> VR
+    QT --> BM25 --> KR
+    VR --> RRF
+    KR --> RRF
+    RRF --> FR
+```
+
+## Thread Safety Model
+
+Needle uses a hierarchical locking strategy to ensure thread safety without deadlocks:
+
+```mermaid
+flowchart TB
+    subgraph "Lock Hierarchy"
+        direction TB
+        L1[Database RwLock<br/>Level 1 - Coarsest]
+        L2[Collection HashMap<br/>Level 2]
+        L3[CollectionRef RwLock<br/>Level 3]
+        L4[Internal Structures<br/>Level 4 - Finest]
+
+        L1 --> L2 --> L3 --> L4
+    end
+
+    subgraph "Access Patterns"
+        R1[Multiple Readers<br/>Concurrent Access ✓]
+        W1[Single Writer<br/>Exclusive Access]
+    end
+
+    subgraph "Operations"
+        READ[search()<br/>get()<br/>iter()]
+        WRITE[insert()<br/>delete()<br/>update()]
+    end
+
+    READ --> R1
+    WRITE --> W1
+```
+
+### Lock Ordering Rules
+
+1. **Database lock** must be acquired before any **Collection lock**
+2. **Read locks** are preferred when no mutation is needed
+3. **Write locks** are held for the shortest duration possible
+4. **No lock** is held during I/O operations (acquire-release pattern)
+
+### Example: Concurrent Access
+
+```rust
+// Multiple threads can search concurrently
+let db = Arc::new(Database::open("db.needle")?);
+
+let handles: Vec<_> = (0..4).map(|i| {
+    let db = Arc::clone(&db);
+    thread::spawn(move || {
+        let coll = db.collection("docs").unwrap();
+        let query = vec![0.1; 384];
+        coll.search(&query, 10)  // Concurrent reads OK
+    })
+}).collect();
+
+// Writes are serialized automatically
+let coll = db.collection("docs")?;
+coll.insert("new_doc", &vec![0.1; 384], None)?;  // Exclusive write
+```
+
+## Feature Flag Impact
+
+The following diagram shows how feature flags affect which modules are compiled:
+
+```mermaid
+graph LR
+    subgraph "Default (No Flags)"
+        CORE[Core Modules]
+        HNSW[HNSW Index]
+        DIST[Distance Functions]
+    end
+
+    subgraph "simd Flag"
+        SIMD[SIMD Optimizations<br/>AVX2, NEON]
+    end
+
+    subgraph "server Flag"
+        SERVER[HTTP Server]
+        AXUM[Axum Framework]
+        TOKIO[Tokio Runtime]
+    end
+
+    subgraph "hybrid Flag"
+        BM25[BM25 Index]
+        RRF[RRF Fusion]
+        STEM[Stemmers]
+    end
+
+    subgraph "metrics Flag"
+        PROM[Prometheus]
+        METRICS[Metric Collectors]
+    end
+
+    subgraph "embeddings Flag"
+        ORT[ONNX Runtime]
+        TOKEN[Tokenizers]
+    end
+
+    subgraph "python Flag"
+        PYO3[PyO3 Bindings]
+    end
+
+    subgraph "wasm Flag"
+        WASM[WASM Bindgen]
+    end
+
+    subgraph "full Flag"
+        FULL[server + metrics + hybrid]
+    end
+
+    CORE --> SIMD
+    CORE --> SERVER
+    CORE --> BM25
+    CORE --> PROM
+    CORE --> ORT
+    CORE --> PYO3
+    CORE --> WASM
+```
+
+### Feature Combinations
+
+| Combination | Use Case | Adds |
+|-------------|----------|------|
+| `default` | Embedded library | Core only |
+| `simd` | Performance | AVX2/NEON distance |
+| `server` | HTTP service | REST API, Axum, Tokio |
+| `server,metrics` | Production service | + Prometheus |
+| `full` | Full-featured service | server + metrics + hybrid |
+| `python` | Python integration | PyO3 bindings |
+| `wasm` | Browser/Node.js | WASM bindings |
+
+## Error Propagation
+
+Errors flow up through the call stack with rich context:
+
+```mermaid
+flowchart BT
+    subgraph "User Code"
+        APP[Application]
+    end
+
+    subgraph "API Layer"
+        DB[Database::collection()]
+        COLL[CollectionRef::search()]
+    end
+
+    subgraph "Core Layer"
+        SEARCH[Collection::search_internal()]
+        INDEX[HnswIndex::search()]
+    end
+
+    subgraph "Error Types"
+        E1[NeedleError::CollectionNotFound]
+        E2[NeedleError::DimensionMismatch]
+        E3[NeedleError::IndexError]
+    end
+
+    INDEX -->|"Index issue"| E3
+    SEARCH -->|"Dimension check"| E2
+    DB -->|"Missing collection"| E1
+
+    E1 --> COLL
+    E2 --> COLL
+    E3 --> SEARCH --> COLL
+
+    COLL -->|"Result<Vec<SearchResult>>"| APP
+```
+
 ## Future Considerations
 
 1. **GPU acceleration:** CUDA/OpenCL distance computation
