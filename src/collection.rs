@@ -55,8 +55,10 @@ use parking_lot::Mutex;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::num::NonZeroUsize;
+use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::warn;
 
 /// Search result with metadata
@@ -198,6 +200,10 @@ pub struct SearchBuilder<'a> {
     post_filter_factor: usize,
     ef_search: Option<usize>,
     include_metadata: bool,
+    /// Override the distance function for this query.
+    /// When set to a different function than the collection's default,
+    /// search will fall back to brute-force for accuracy.
+    distance_override: Option<DistanceFunction>,
 }
 
 impl<'a> SearchBuilder<'a> {
@@ -212,6 +218,7 @@ impl<'a> SearchBuilder<'a> {
             post_filter_factor: 3,
             ef_search: None,
             include_metadata: true,
+            distance_override: None,
         }
     }
 
@@ -265,6 +272,35 @@ impl<'a> SearchBuilder<'a> {
         self
     }
 
+    /// Override the distance function for this query.
+    ///
+    /// When the distance function differs from the collection's configured function,
+    /// search falls back to brute-force linear scan for accurate results.
+    /// This allows querying with different similarity metrics without rebuilding the index.
+    ///
+    /// **Warning:** Brute-force search is O(n) and may be slow on large collections.
+    /// A warning is logged when this fallback occurs.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use needle::{Collection, DistanceFunction};
+    ///
+    /// let mut collection = Collection::with_dimensions("docs", 4);
+    /// collection.insert("v1", &[1.0, 0.0, 0.0, 0.0], None)?;
+    ///
+    /// // Query with Euclidean distance even though collection uses Cosine
+    /// let results = collection.search_builder(&[1.0, 0.0, 0.0, 0.0])
+    ///     .k(10)
+    ///     .distance(DistanceFunction::Euclidean)
+    ///     .execute()?;
+    /// # Ok::<(), needle::NeedleError>(())
+    /// ```
+    pub fn distance(mut self, distance: DistanceFunction) -> Self {
+        self.distance_override = Some(distance);
+        self
+    }
+
     /// Execute the search and return results
     pub fn execute(self) -> Result<Vec<SearchResult>> {
         if self.query.len() != self.collection.config.dimensions {
@@ -275,6 +311,27 @@ impl<'a> SearchBuilder<'a> {
         }
 
         Collection::validate_vector(self.query)?;
+
+        // Check if we need brute-force search due to distance override
+        let use_brute_force = self.distance_override
+            .map(|d| d != self.collection.config.distance)
+            .unwrap_or(false);
+
+        if use_brute_force {
+            let distance_fn = self.distance_override.unwrap();
+            warn!(
+                "Distance override ({:?}) differs from index ({:?}), using brute-force search",
+                distance_fn, self.collection.config.distance
+            );
+            return self.collection.brute_force_search(
+                self.query,
+                self.k,
+                distance_fn,
+                self.filter,
+                self.post_filter,
+                self.include_metadata,
+            );
+        }
 
         // Calculate how many candidates to fetch:
         // - Pre-filter: 10x to compensate for filtered-out results
@@ -299,9 +356,19 @@ impl<'a> SearchBuilder<'a> {
             )
         };
 
+        // Apply lazy expiration filter if enabled
+        let non_expired: Vec<(VectorId, f32)> = if self.collection.config.lazy_expiration {
+            raw_results
+                .into_iter()
+                .filter(|(id, _)| !self.collection.is_expired(*id))
+                .collect()
+        } else {
+            raw_results
+        };
+
         // Apply pre-filter if present (filter during ANN search phase)
         let pre_filtered: Vec<(VectorId, f32)> = if let Some(filter) = self.filter {
-            raw_results
+            non_expired
                 .into_iter()
                 .filter(|(id, _)| {
                     if let Some(entry) = self.collection.metadata.get(*id) {
@@ -313,7 +380,7 @@ impl<'a> SearchBuilder<'a> {
                 .take(self.k * post_filter_factor.max(1))
                 .collect()
         } else {
-            raw_results
+            non_expired
                 .into_iter()
                 .take(self.k * post_filter_factor.max(1))
                 .collect()
@@ -523,6 +590,20 @@ pub struct CollectionConfig {
     /// Query cache configuration
     #[serde(default)]
     pub query_cache: QueryCacheConfig,
+    /// Default TTL (time-to-live) for vectors in seconds.
+    /// If set, vectors without an explicit TTL will expire after this duration.
+    /// Expired vectors are automatically removed during search (lazy) or sweep operations.
+    #[serde(default)]
+    pub default_ttl_seconds: Option<u64>,
+    /// Enable lazy expiration during search operations (default: true).
+    /// When true, expired vectors are filtered out during search results.
+    /// When false, expired vectors remain until explicitly swept or compacted.
+    #[serde(default = "default_lazy_expiration")]
+    pub lazy_expiration: bool,
+}
+
+fn default_lazy_expiration() -> bool {
+    true
 }
 
 impl CollectionConfig {
@@ -539,6 +620,8 @@ impl CollectionConfig {
             hnsw: HnswConfig::default(),
             slow_query_threshold_us: None,
             query_cache: QueryCacheConfig::default(),
+            default_ttl_seconds: None,
+            lazy_expiration: true,
         }
     }
 
@@ -616,6 +699,49 @@ impl CollectionConfig {
         self.query_cache = QueryCacheConfig::new(capacity);
         self
     }
+
+    /// Set the default TTL (time-to-live) for vectors in seconds.
+    ///
+    /// When set, vectors inserted without an explicit TTL will automatically
+    /// expire after this duration. Expired vectors are filtered out during
+    /// search (if lazy_expiration is enabled) or removed during sweep operations.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use needle::CollectionConfig;
+    ///
+    /// // Vectors expire after 1 hour by default
+    /// let config = CollectionConfig::new("ephemeral", 128)
+    ///     .with_default_ttl_seconds(3600);
+    /// ```
+    pub fn with_default_ttl_seconds(mut self, ttl_seconds: u64) -> Self {
+        self.default_ttl_seconds = Some(ttl_seconds);
+        self
+    }
+
+    /// Configure lazy expiration behavior.
+    ///
+    /// When enabled (default), expired vectors are automatically filtered out
+    /// from search results without requiring an explicit sweep operation.
+    ///
+    /// When disabled, expired vectors remain visible in search results until
+    /// explicitly removed via `expire_vectors()` or `compact()`.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use needle::CollectionConfig;
+    ///
+    /// // Disable lazy expiration - vectors remain until sweep
+    /// let config = CollectionConfig::new("manual-cleanup", 128)
+    ///     .with_default_ttl_seconds(3600)
+    ///     .with_lazy_expiration(false);
+    /// ```
+    pub fn with_lazy_expiration(mut self, enabled: bool) -> Self {
+        self.lazy_expiration = enabled;
+        self
+    }
 }
 
 /// A collection of vectors with the same dimensions.
@@ -666,6 +792,11 @@ pub struct Collection {
     /// Skipped during serialization - cache is rebuilt on load
     #[serde(skip)]
     query_cache: Option<Mutex<QueryCache>>,
+    /// TTL expiration tracking: internal_id -> expiration timestamp (Unix epoch seconds)
+    /// Vectors with expired timestamps are filtered out during search (lazy)
+    /// or removed during explicit sweep operations.
+    #[serde(default)]
+    expirations: std::collections::HashMap<usize, u64>,
 }
 
 /// Internal query cache with statistics tracking
@@ -738,6 +869,7 @@ impl Collection {
             index: HnswIndex::new(config.hnsw.clone(), config.distance),
             metadata: MetadataStore::new(),
             query_cache,
+            expirations: HashMap::new(),
             config,
         }
     }
@@ -1028,6 +1160,61 @@ impl Collection {
         vector: &[f32],
         metadata: Option<Value>,
     ) -> Result<()> {
+        // Use default TTL from config if available
+        self.insert_with_ttl(id, vector, metadata, self.config.default_ttl_seconds)
+    }
+
+    /// Insert a vector with ID, optional metadata, and explicit TTL.
+    ///
+    /// Similar to `insert()`, but allows specifying a TTL (time-to-live) in seconds.
+    /// The vector will automatically expire after the specified duration.
+    ///
+    /// # Arguments
+    ///
+    /// * `id` - Unique identifier for the vector
+    /// * `vector` - The embedding vector (must match collection dimensions)
+    /// * `metadata` - Optional JSON metadata
+    /// * `ttl_seconds` - Optional TTL in seconds; if `None`, uses collection default
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - [`NeedleError::DimensionMismatch`] - Vector dimensions don't match collection
+    /// - [`NeedleError::InvalidVector`] - Vector contains NaN or Infinity values
+    /// - [`NeedleError::VectorAlreadyExists`] - A vector with the same ID exists
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use needle::Collection;
+    /// use serde_json::json;
+    ///
+    /// let mut collection = Collection::with_dimensions("ephemeral", 4);
+    ///
+    /// // Insert with 1-hour TTL
+    /// collection.insert_with_ttl(
+    ///     "temp1",
+    ///     &[0.1, 0.2, 0.3, 0.4],
+    ///     Some(json!({"type": "temporary"})),
+    ///     Some(3600)
+    /// )?;
+    ///
+    /// // Insert without TTL (permanent)
+    /// collection.insert_with_ttl(
+    ///     "perm1",
+    ///     &[0.5, 0.6, 0.7, 0.8],
+    ///     None,
+    ///     None
+    /// )?;
+    /// # Ok::<(), needle::NeedleError>(())
+    /// ```
+    pub fn insert_with_ttl(
+        &mut self,
+        id: impl Into<String>,
+        vector: &[f32],
+        metadata: Option<Value>,
+        ttl_seconds: Option<u64>,
+    ) -> Result<()> {
         let id = id.into();
 
         // Validate dimensions and vector values
@@ -1048,6 +1235,12 @@ impl Collection {
         self.index
             .insert(internal_id, vector, self.vectors.as_slice())?;
 
+        // Track expiration if TTL is specified
+        if let Some(ttl) = ttl_seconds {
+            let expiration = Self::now_unix() + ttl;
+            self.expirations.insert(internal_id, expiration);
+        }
+
         // Invalidate cache since collection changed
         self.invalidate_cache();
 
@@ -1063,6 +1256,20 @@ impl Collection {
         id: impl Into<String>,
         vector: Vec<f32>,
         metadata: Option<Value>,
+    ) -> Result<()> {
+        // Use default TTL from config if available
+        self.insert_vec_with_ttl(id, vector, metadata, self.config.default_ttl_seconds)
+    }
+
+    /// Insert a vector with ID, optional metadata, and explicit TTL, taking ownership.
+    ///
+    /// Combines the efficiency of `insert_vec()` with TTL support.
+    pub fn insert_vec_with_ttl(
+        &mut self,
+        id: impl Into<String>,
+        vector: Vec<f32>,
+        metadata: Option<Value>,
+        ttl_seconds: Option<u64>,
     ) -> Result<()> {
         let id = id.into();
 
@@ -1085,6 +1292,12 @@ impl Collection {
             .ok_or_else(|| NeedleError::Index("Vector not found after insert".into()))?;
         self.index
             .insert(internal_id, vector_ref, self.vectors.as_slice())?;
+
+        // Track expiration if TTL is specified
+        if let Some(ttl) = ttl_seconds {
+            let expiration = Self::now_unix() + ttl;
+            self.expirations.insert(internal_id, expiration);
+        }
 
         // Invalidate cache since collection changed
         self.invalidate_cache();
@@ -1175,7 +1388,18 @@ impl Collection {
         // Use cache if enabled
         let results = self.search_with_cache(query, k, || {
             let raw_results = self.index.search(query, k, self.vectors.as_slice());
-            self.enrich_results(raw_results)
+
+            // Apply lazy expiration filtering if enabled
+            let filtered_results = if self.config.lazy_expiration {
+                raw_results
+                    .into_iter()
+                    .filter(|(id, _)| !self.is_expired(*id))
+                    .collect()
+            } else {
+                raw_results
+            };
+
+            self.enrich_results(filtered_results)
         })?;
 
         // Log slow queries if threshold is configured
@@ -1195,6 +1419,107 @@ impl Collection {
         }
 
         Ok(results)
+    }
+
+    /// Brute-force linear search with a specified distance function.
+    ///
+    /// This method scans all vectors in the collection and computes distances
+    /// using the specified distance function. It's used when the query's distance
+    /// function differs from the index's configured function.
+    ///
+    /// **Warning:** This is O(n) complexity and may be slow on large collections.
+    fn brute_force_search(
+        &self,
+        query: &[f32],
+        k: usize,
+        distance_fn: DistanceFunction,
+        filter: Option<&Filter>,
+        post_filter: Option<&Filter>,
+        include_metadata: bool,
+    ) -> Result<Vec<SearchResult>> {
+        use std::cmp::Reverse;
+        use std::collections::BinaryHeap;
+
+        let k = self.clamp_k(k);
+        if k == 0 {
+            return Ok(Vec::new());
+        }
+
+        // Use a max-heap (via Reverse) to track top-k by smallest distance
+        let mut heap: BinaryHeap<(Reverse<OrderedFloat<f32>>, usize)> = BinaryHeap::with_capacity(k + 1);
+
+        // Linear scan over all non-deleted vectors
+        for (internal_id, vector) in self.vectors.as_slice().iter().enumerate() {
+            // Skip deleted vectors
+            if self.index.is_deleted(internal_id) {
+                continue;
+            }
+
+            // Skip expired vectors if lazy expiration is enabled
+            if self.config.lazy_expiration && self.is_expired(internal_id) {
+                continue;
+            }
+
+            // Apply pre-filter if present
+            if let Some(f) = filter {
+                if let Some(entry) = self.metadata.get(internal_id) {
+                    if !f.matches(entry.data.as_ref()) {
+                        continue;
+                    }
+                } else {
+                    continue;
+                }
+            }
+
+            // Compute distance with the specified function
+            let dist = distance_fn.compute(query, vector);
+
+            // Add to heap
+            heap.push((Reverse(OrderedFloat(dist)), internal_id));
+
+            // Keep only top-k
+            if heap.len() > k {
+                heap.pop();
+            }
+        }
+
+        // Extract results in order (smallest distance first)
+        let mut results: Vec<_> = heap.into_sorted_vec();
+        results.reverse(); // BinaryHeap::into_sorted_vec returns largest first
+
+        // Convert to SearchResults
+        let mut search_results = Vec::with_capacity(results.len());
+        for (Reverse(OrderedFloat(distance)), internal_id) in results {
+            if let Some(entry) = self.metadata.get(internal_id) {
+                let metadata = if include_metadata || post_filter.is_some() {
+                    entry.data.clone()
+                } else {
+                    None
+                };
+                search_results.push(SearchResult {
+                    id: entry.external_id.clone(),
+                    distance,
+                    metadata,
+                });
+            }
+        }
+
+        // Apply post-filter if present
+        if let Some(pf) = post_filter {
+            search_results = search_results
+                .into_iter()
+                .filter(|r| pf.matches(r.metadata.as_ref()))
+                .collect();
+        }
+
+        // Strip metadata if not requested
+        if !include_metadata {
+            for result in &mut search_results {
+                result.metadata = None;
+            }
+        }
+
+        Ok(search_results)
     }
 
     /// Search with detailed query execution profiling.
@@ -2134,14 +2459,17 @@ impl Collection {
             .map(|(_, entry)| entry.external_id.as_str())
     }
 
-    /// Compact the collection by removing deleted vectors
+    /// Compact the collection by removing deleted and expired vectors
     /// This rebuilds the index and reclaims storage
     /// Returns the number of vectors removed
     pub fn compact(&mut self) -> Result<usize> {
+        // First, expire any TTL'd vectors
+        let expired_count = self.expire_vectors()?;
+
         let deleted_count = self.index.deleted_count();
 
         if deleted_count == 0 {
-            return Ok(0);
+            return Ok(expired_count);
         }
 
         // Get the ID mapping from compacting the index
@@ -2150,6 +2478,7 @@ impl Collection {
         // Rebuild vectors and metadata with new IDs
         let mut new_vectors = VectorStore::new(self.config.dimensions);
         let mut new_metadata = MetadataStore::new();
+        let mut new_expirations = HashMap::new();
 
         // Sort by new ID to maintain order
         let mut mappings: Vec<_> = id_map.into_iter().collect();
@@ -2163,22 +2492,200 @@ impl Collection {
                 if let Some(entry) = self.metadata.get(old_id) {
                     new_metadata.insert(new_id, entry.external_id.clone(), entry.data.clone())?;
                 }
+
+                // Remap expiration entry if it exists
+                if let Some(expiration) = self.expirations.get(&old_id) {
+                    new_expirations.insert(new_id, *expiration);
+                }
             }
         }
 
         self.vectors = new_vectors;
         self.metadata = new_metadata;
+        self.expirations = new_expirations;
 
         // Invalidate cache since internal IDs changed
         self.invalidate_cache();
 
-        Ok(deleted_count)
+        Ok(deleted_count + expired_count)
     }
 
     /// Check if the collection needs compaction
     /// Returns true if deleted vectors exceed the given threshold (0.0-1.0)
     pub fn needs_compaction(&self, threshold: f64) -> bool {
         self.index.needs_compaction(threshold)
+    }
+
+    // ============ TTL/Expiration Methods ============
+
+    /// Get the current Unix timestamp in seconds
+    #[inline]
+    fn now_unix() -> u64 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs()
+    }
+
+    /// Check if a vector has expired based on its internal ID
+    #[inline]
+    fn is_expired(&self, internal_id: usize) -> bool {
+        if let Some(&expiration) = self.expirations.get(&internal_id) {
+            Self::now_unix() >= expiration
+        } else {
+            false
+        }
+    }
+
+    /// Sweep and delete all expired vectors.
+    ///
+    /// This is the "eager" expiration strategy. Call this periodically to
+    /// remove expired vectors and reclaim storage space.
+    ///
+    /// # Returns
+    ///
+    /// The number of vectors that were expired and deleted.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use needle::{Collection, CollectionConfig};
+    ///
+    /// let config = CollectionConfig::new("ephemeral", 4)
+    ///     .with_default_ttl_seconds(1); // 1 second TTL
+    /// let mut collection = Collection::new(config);
+    ///
+    /// collection.insert("temp", &[0.1, 0.2, 0.3, 0.4], None)?;
+    ///
+    /// // Wait for expiration...
+    /// std::thread::sleep(std::time::Duration::from_secs(2));
+    ///
+    /// let expired = collection.expire_vectors()?;
+    /// assert_eq!(expired, 1);
+    /// # Ok::<(), needle::NeedleError>(())
+    /// ```
+    pub fn expire_vectors(&mut self) -> Result<usize> {
+        let now = Self::now_unix();
+        let mut expired_ids = Vec::new();
+
+        // Find all expired vectors
+        for (&internal_id, &expiration) in &self.expirations {
+            if now >= expiration {
+                expired_ids.push(internal_id);
+            }
+        }
+
+        // Delete each expired vector
+        for internal_id in &expired_ids {
+            // Mark as deleted in index
+            self.index.delete(*internal_id)?;
+            // Remove metadata
+            self.metadata.delete(*internal_id);
+            // Remove from expirations tracking
+            self.expirations.remove(internal_id);
+        }
+
+        if !expired_ids.is_empty() {
+            self.invalidate_cache();
+        }
+
+        Ok(expired_ids.len())
+    }
+
+    /// Check if an expiration sweep is needed based on a threshold.
+    ///
+    /// Returns true if the ratio of expired vectors to total vectors
+    /// exceeds the given threshold (0.0-1.0).
+    ///
+    /// # Arguments
+    ///
+    /// * `threshold` - Ratio threshold (e.g., 0.1 = 10% expired)
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use needle::Collection;
+    ///
+    /// let collection = Collection::with_dimensions("test", 4);
+    ///
+    /// // Check if more than 10% of vectors are expired
+    /// if collection.needs_expiration_sweep(0.1) {
+    ///     // Run sweep...
+    /// }
+    /// ```
+    pub fn needs_expiration_sweep(&self, threshold: f64) -> bool {
+        if self.expirations.is_empty() {
+            return false;
+        }
+
+        let now = Self::now_unix();
+        let expired_count = self.expirations.values().filter(|&&exp| now >= exp).count();
+        let total = self.len();
+
+        if total == 0 {
+            return expired_count > 0;
+        }
+
+        (expired_count as f64 / total as f64) > threshold
+    }
+
+    /// Get TTL statistics for the collection.
+    ///
+    /// Returns a tuple of (total_with_ttl, expired_count, earliest_expiration, latest_expiration).
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use needle::Collection;
+    ///
+    /// let collection = Collection::with_dimensions("test", 4);
+    /// let (total, expired, earliest, latest) = collection.ttl_stats();
+    /// println!("TTL vectors: {}, expired: {}", total, expired);
+    /// ```
+    pub fn ttl_stats(&self) -> (usize, usize, Option<u64>, Option<u64>) {
+        let now = Self::now_unix();
+        let total = self.expirations.len();
+        let expired = self.expirations.values().filter(|&&exp| now >= exp).count();
+        let earliest = self.expirations.values().copied().min();
+        let latest = self.expirations.values().copied().max();
+
+        (total, expired, earliest, latest)
+    }
+
+    /// Get the expiration timestamp for a vector by external ID.
+    ///
+    /// Returns `None` if the vector doesn't exist or has no TTL set.
+    pub fn get_ttl(&self, id: &str) -> Option<u64> {
+        let internal_id = self.metadata.get_internal_id(id)?;
+        self.expirations.get(&internal_id).copied()
+    }
+
+    /// Set or update the TTL for an existing vector.
+    ///
+    /// # Arguments
+    ///
+    /// * `id` - External vector ID
+    /// * `ttl_seconds` - TTL in seconds from now, or `None` to remove TTL
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the vector doesn't exist.
+    pub fn set_ttl(&mut self, id: &str, ttl_seconds: Option<u64>) -> Result<()> {
+        let internal_id = self.metadata
+            .get_internal_id(id)
+            .ok_or_else(|| NeedleError::VectorNotFound(id.to_string()))?;
+
+        match ttl_seconds {
+            Some(ttl) => {
+                let expiration = Self::now_unix() + ttl;
+                self.expirations.insert(internal_id, expiration);
+            }
+            None => {
+                self.expirations.remove(&internal_id);
+            }
+        }
+
+        Ok(())
     }
 
     /// Serialize the collection to bytes
@@ -2952,5 +3459,238 @@ mod tests {
         assert_eq!(stats.hits, 4);
         assert_eq!(stats.misses, 1);
         assert!((stats.hit_ratio() - 0.8).abs() < 0.001);
+    }
+
+    // ========== TTL Tests ==========
+
+    #[test]
+    fn test_ttl_insert_with_ttl() {
+        let mut collection = Collection::new(CollectionConfig::new("test", 32));
+
+        let vec = random_vector(32);
+        collection.insert_with_ttl("doc1", &vec, None, Some(3600)).unwrap();
+
+        // Vector should exist
+        assert!(collection.get("doc1").is_some());
+
+        // Check TTL stats - returns (total_with_ttl, expired, earliest, latest)
+        let (total_with_ttl, _expired, _earliest, _latest) = collection.ttl_stats();
+        assert_eq!(total_with_ttl, 1);
+    }
+
+    #[test]
+    fn test_ttl_get_and_set_ttl() {
+        let mut collection = Collection::new(CollectionConfig::new("test", 32));
+
+        let vec = random_vector(32);
+        collection.insert("doc1", &vec, None).unwrap();
+
+        // Initially no TTL
+        assert!(collection.get_ttl("doc1").is_none());
+
+        // Set TTL
+        collection.set_ttl("doc1", Some(3600)).unwrap();
+        let ttl = collection.get_ttl("doc1");
+        assert!(ttl.is_some());
+
+        // Remove TTL
+        collection.set_ttl("doc1", None).unwrap();
+        assert!(collection.get_ttl("doc1").is_none());
+    }
+
+    #[test]
+    fn test_ttl_expire_vectors() {
+        let mut collection = Collection::new(CollectionConfig::new("test", 32));
+
+        // Insert with TTL of 0 (immediately expires)
+        let vec = random_vector(32);
+        collection.insert_with_ttl("doc1", &vec, None, Some(0)).unwrap();
+
+        // Wait a tiny bit for expiration to kick in
+        std::thread::sleep(std::time::Duration::from_millis(10));
+
+        let expired = collection.expire_vectors().unwrap();
+        assert_eq!(expired, 1);
+
+        // Vector should be gone
+        assert!(collection.get("doc1").is_none());
+    }
+
+    #[test]
+    fn test_ttl_needs_expiration_sweep() {
+        let mut collection = Collection::new(CollectionConfig::new("test", 32));
+
+        // Insert many vectors with TTL
+        for i in 0..100 {
+            let vec = random_vector(32);
+            collection.insert_with_ttl(format!("doc{}", i), &vec, None, Some(0)).unwrap();
+        }
+
+        // Should need sweep since many have TTL
+        assert!(collection.needs_expiration_sweep(0.1));
+    }
+
+    #[test]
+    fn test_ttl_lazy_expiration_filters_search() {
+        let config = CollectionConfig::new("test", 32).with_lazy_expiration(true);
+        let mut collection = Collection::new(config);
+
+        // Insert expired vector
+        let vec1 = random_vector(32);
+        collection.insert_with_ttl("expired", &vec1, None, Some(0)).unwrap();
+
+        // Insert valid vector
+        let vec2 = random_vector(32);
+        collection.insert("valid", &vec2, None).unwrap();
+
+        std::thread::sleep(std::time::Duration::from_millis(10));
+
+        // Search should filter out expired vector
+        let results = collection.search_builder(&vec1).k(10).execute().unwrap();
+        assert!(results.iter().all(|r| r.id != "expired"));
+    }
+
+    #[test]
+    fn test_ttl_compact_handles_expirations() {
+        let mut collection = Collection::new(CollectionConfig::new("test", 32));
+
+        // Insert some vectors with TTL
+        for i in 0..10 {
+            let vec = random_vector(32);
+            collection.insert_with_ttl(format!("doc{}", i), &vec, None, Some(3600)).unwrap();
+        }
+
+        // Delete some vectors
+        collection.delete("doc0").unwrap();
+        collection.delete("doc5").unwrap();
+
+        // Compact should handle TTL entries correctly
+        let compacted = collection.compact().unwrap();
+        assert!(compacted > 0);
+
+        // Remaining vectors should still have TTL
+        let (total_with_ttl, _expired, _earliest, _latest) = collection.ttl_stats();
+        assert_eq!(total_with_ttl, 8); // 10 - 2 deleted
+    }
+
+    // ========== Distance Override Tests ==========
+
+    #[test]
+    fn test_search_builder_distance_override() {
+        use crate::DistanceFunction;
+
+        let mut collection = Collection::new(CollectionConfig::new("test", 4));
+
+        collection.insert("a", &[1.0, 0.0, 0.0, 0.0], None).unwrap();
+        collection.insert("b", &[0.0, 1.0, 0.0, 0.0], None).unwrap();
+
+        let query = vec![1.0, 0.0, 0.0, 0.0];
+
+        // Search with euclidean distance override
+        let results = collection
+            .search_builder(&query)
+            .k(2)
+            .distance(DistanceFunction::Euclidean)
+            .execute()
+            .unwrap();
+
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].id, "a");
+        assert!(results[0].distance < 0.001); // Euclidean distance to itself is 0
+    }
+
+    #[test]
+    fn test_brute_force_search_correctness() {
+        use crate::DistanceFunction;
+
+        // Create collection with cosine distance
+        let config = CollectionConfig::new("test", 3)
+            .with_distance(DistanceFunction::Cosine);
+        let mut collection = Collection::new(config);
+
+        // Vectors that have different results for cosine vs euclidean
+        collection.insert("unit_x", &[1.0, 0.0, 0.0], None).unwrap();
+        collection.insert("scaled_x", &[5.0, 0.0, 0.0], None).unwrap();
+        collection.insert("unit_y", &[0.0, 1.0, 0.0], None).unwrap();
+
+        let query = vec![2.0, 0.0, 0.0];
+
+        // Cosine search (uses HNSW) - direction matters, not magnitude
+        let cosine_results = collection.search_builder(&query).k(3).execute().unwrap();
+        // Both x-axis vectors should have same cosine distance (0)
+        assert!(cosine_results[0].id == "unit_x" || cosine_results[0].id == "scaled_x");
+
+        // Euclidean override (uses brute-force) - magnitude matters
+        let euclidean_results = collection
+            .search_builder(&query)
+            .k(3)
+            .distance(DistanceFunction::Euclidean)
+            .execute()
+            .unwrap();
+
+        // scaled_x (5,0,0) is closer to query (2,0,0) in euclidean (dist=3)
+        // than unit_x (1,0,0) (dist=1)
+        // Actually: ||(2,0,0) - (1,0,0)|| = 1, ||(2,0,0) - (5,0,0)|| = 3
+        // So unit_x is closer
+        assert_eq!(euclidean_results[0].id, "unit_x");
+    }
+
+    #[test]
+    fn test_search_builder_distance_same_as_index() {
+        use crate::DistanceFunction;
+
+        // Create with euclidean
+        let config = CollectionConfig::new("test", 32)
+            .with_distance(DistanceFunction::Euclidean);
+        let mut collection = Collection::new(config);
+
+        for i in 0..50 {
+            collection.insert(format!("v{}", i), &random_vector(32), None).unwrap();
+        }
+
+        let query = random_vector(32);
+
+        // Override with same distance - should use HNSW (efficient)
+        let results = collection
+            .search_builder(&query)
+            .k(10)
+            .distance(DistanceFunction::Euclidean)
+            .execute()
+            .unwrap();
+
+        assert_eq!(results.len(), 10);
+    }
+
+    #[test]
+    fn test_brute_force_with_filter() {
+        use crate::DistanceFunction;
+        use crate::metadata::Filter;
+        use serde_json::json;
+
+        let config = CollectionConfig::new("test", 4)
+            .with_distance(DistanceFunction::Cosine);
+        let mut collection = Collection::new(config);
+
+        collection.insert("a", &[1.0, 0.0, 0.0, 0.0], Some(json!({"type": "x"}))).unwrap();
+        collection.insert("b", &[0.0, 1.0, 0.0, 0.0], Some(json!({"type": "y"}))).unwrap();
+        collection.insert("c", &[0.5, 0.5, 0.0, 0.0], Some(json!({"type": "x"}))).unwrap();
+
+        let query = vec![1.0, 0.0, 0.0, 0.0];
+        let filter = Filter::eq("type", "x");
+
+        // Brute force with filter
+        let results = collection
+            .search_builder(&query)
+            .k(10)
+            .distance(DistanceFunction::Euclidean)
+            .filter(&filter)
+            .execute()
+            .unwrap();
+
+        // Should only return type=x vectors
+        assert_eq!(results.len(), 2);
+        for r in &results {
+            assert!(r.id == "a" || r.id == "c");
+        }
     }
 }

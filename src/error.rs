@@ -86,6 +86,9 @@ pub enum ErrorCode {
     CollectionNotFound = 3001,
     CollectionAlreadyExists = 3002,
     CollectionCorrupted = 3003,
+    AliasNotFound = 3004,
+    AliasAlreadyExists = 3005,
+    AliasTargetHasAliases = 3006,
 
     // Vector errors (4xxx)
     VectorNotFound = 4001,
@@ -150,7 +153,7 @@ impl ErrorCode {
         match self {
             ErrorCode::IoRead | ErrorCode::IoWrite | ErrorCode::IoPermission | ErrorCode::IoDiskFull => "I/O",
             ErrorCode::SerializationFailed | ErrorCode::DeserializationFailed | ErrorCode::InvalidFormat => "Serialization",
-            ErrorCode::CollectionNotFound | ErrorCode::CollectionAlreadyExists | ErrorCode::CollectionCorrupted => "Collection",
+            ErrorCode::CollectionNotFound | ErrorCode::CollectionAlreadyExists | ErrorCode::CollectionCorrupted | ErrorCode::AliasNotFound | ErrorCode::AliasAlreadyExists | ErrorCode::AliasTargetHasAliases => "Collection",
             ErrorCode::VectorNotFound | ErrorCode::VectorAlreadyExists | ErrorCode::DimensionMismatch | ErrorCode::InvalidVector => "Vector",
             ErrorCode::InvalidDatabase | ErrorCode::DatabaseCorrupted | ErrorCode::DatabaseLocked => "Database",
             ErrorCode::IndexError | ErrorCode::IndexCorrupted | ErrorCode::IndexBuildFailed => "Index",
@@ -245,6 +248,15 @@ pub enum NeedleError {
     #[error("Collection '{0}' already exists")]
     CollectionAlreadyExists(String),
 
+    #[error("Alias '{0}' not found")]
+    AliasNotFound(String),
+
+    #[error("Alias '{0}' already exists")]
+    AliasAlreadyExists(String),
+
+    #[error("Cannot drop collection '{0}': aliases still reference it")]
+    CollectionHasAliases(String),
+
     #[error("Vector '{0}' not found")]
     VectorNotFound(String),
 
@@ -324,6 +336,9 @@ impl Recoverable for NeedleError {
             NeedleError::DimensionMismatch { .. } => ErrorCode::DimensionMismatch,
             NeedleError::CollectionNotFound(_) => ErrorCode::CollectionNotFound,
             NeedleError::CollectionAlreadyExists(_) => ErrorCode::CollectionAlreadyExists,
+            NeedleError::AliasNotFound(_) => ErrorCode::AliasNotFound,
+            NeedleError::AliasAlreadyExists(_) => ErrorCode::AliasAlreadyExists,
+            NeedleError::CollectionHasAliases(_) => ErrorCode::AliasTargetHasAliases,
             NeedleError::VectorNotFound(_) => ErrorCode::VectorNotFound,
             NeedleError::VectorAlreadyExists(_) => ErrorCode::VectorAlreadyExists,
             NeedleError::InvalidDatabase(_) => ErrorCode::InvalidDatabase,
@@ -398,6 +413,24 @@ impl Recoverable for NeedleError {
                 RecoveryHint::new(format!("Use db.collection(\"{}\") to access the existing collection", name)),
                 RecoveryHint::new("Delete the existing collection first if you need to recreate it"),
                 RecoveryHint::new("Choose a different collection name"),
+            ],
+
+            NeedleError::AliasNotFound(name) => vec![
+                RecoveryHint::new(format!("Create alias '{}' first using db.create_alias()", name)),
+                RecoveryHint::new("Check alias name spelling (case-sensitive)"),
+                RecoveryHint::new("Use db.list_aliases() to see available aliases"),
+            ],
+
+            NeedleError::AliasAlreadyExists(name) => vec![
+                RecoveryHint::new(format!("Alias '{}' already exists", name)),
+                RecoveryHint::new("Delete the existing alias first if you need to recreate it"),
+                RecoveryHint::new("Choose a different alias name"),
+            ],
+
+            NeedleError::CollectionHasAliases(name) => vec![
+                RecoveryHint::new(format!("Collection '{}' has aliases pointing to it", name)),
+                RecoveryHint::new("Delete all aliases first using db.delete_alias()"),
+                RecoveryHint::new("Use db.aliases_for_collection() to see which aliases reference this collection"),
             ],
 
             NeedleError::VectorNotFound(id) => vec![

@@ -101,6 +101,11 @@ enum Commands {
         /// Show detailed query profiling information
         #[arg(short, long, default_value = "false")]
         explain: bool,
+
+        /// Override distance function (cosine, euclidean, dot, manhattan)
+        /// When different from the collection's index, uses brute-force search
+        #[arg(long)]
+        distance: Option<String>,
     },
 
     /// Delete a vector by ID
@@ -249,6 +254,14 @@ enum Commands {
     /// Federated search commands
     #[command(subcommand)]
     Federate(FederateCommands),
+
+    /// Collection alias management
+    #[command(subcommand)]
+    Alias(AliasCommands),
+
+    /// TTL (time-to-live) management for vectors
+    #[command(subcommand)]
+    Ttl(TtlCommands),
 }
 
 /// Backup subcommands
@@ -367,6 +380,95 @@ enum DriftCommands {
     },
 }
 
+/// Alias subcommands
+#[derive(Subcommand)]
+enum AliasCommands {
+    /// Create a new alias for a collection
+    Create {
+        /// Path to the database file
+        #[arg(short, long)]
+        database: String,
+
+        /// Alias name
+        #[arg(short, long)]
+        alias: String,
+
+        /// Target collection name
+        #[arg(short, long)]
+        collection: String,
+    },
+
+    /// Delete an alias
+    Delete {
+        /// Path to the database file
+        #[arg(short, long)]
+        database: String,
+
+        /// Alias name
+        #[arg(short, long)]
+        alias: String,
+    },
+
+    /// List all aliases
+    List {
+        /// Path to the database file
+        #[arg(short, long)]
+        database: String,
+    },
+
+    /// Resolve an alias to its target collection
+    Resolve {
+        /// Path to the database file
+        #[arg(short, long)]
+        database: String,
+
+        /// Alias name
+        #[arg(short, long)]
+        alias: String,
+    },
+
+    /// Update an alias to point to a different collection
+    Update {
+        /// Path to the database file
+        #[arg(short, long)]
+        database: String,
+
+        /// Alias name
+        #[arg(short, long)]
+        alias: String,
+
+        /// New target collection name
+        #[arg(short, long)]
+        collection: String,
+    },
+}
+
+/// TTL (time-to-live) subcommands
+#[derive(Subcommand)]
+enum TtlCommands {
+    /// Sweep and delete all expired vectors in a collection
+    Sweep {
+        /// Path to the database file
+        #[arg(short, long)]
+        database: String,
+
+        /// Collection name
+        #[arg(short, long)]
+        collection: String,
+    },
+
+    /// Show TTL statistics for a collection
+    Stats {
+        /// Path to the database file
+        #[arg(short, long)]
+        database: String,
+
+        /// Collection name
+        #[arg(short, long)]
+        collection: String,
+    },
+}
+
 /// Federated search subcommands
 #[derive(Subcommand)]
 enum FederateCommands {
@@ -439,7 +541,8 @@ fn main() -> Result<()> {
             query,
             k,
             explain,
-        } => search_command(&database, &collection, &query, k, explain),
+            distance,
+        } => search_command(&database, &collection, &query, k, explain, distance.as_deref()),
         Commands::Delete {
             database,
             collection,
@@ -487,6 +590,8 @@ fn main() -> Result<()> {
         Commands::Backup(cmd) => backup_command(cmd),
         Commands::Drift(cmd) => drift_command(cmd),
         Commands::Federate(cmd) => federate_command(cmd),
+        Commands::Alias(cmd) => alias_command(cmd),
+        Commands::Ttl(cmd) => ttl_command(cmd),
     }
 }
 
@@ -638,7 +743,16 @@ fn insert_command(path: &str, collection_name: &str) -> Result<()> {
     Ok(())
 }
 
-fn search_command(path: &str, collection_name: &str, query_str: &str, k: usize, explain: bool) -> Result<()> {
+fn search_command(
+    path: &str,
+    collection_name: &str,
+    query_str: &str,
+    k: usize,
+    explain: bool,
+    distance_override: Option<&str>,
+) -> Result<()> {
+    use needle::DistanceFunction;
+
     let db = Database::open(path)?;
     let coll = db.collection(collection_name)?;
 
@@ -652,7 +766,23 @@ fn search_command(path: &str, collection_name: &str, query_str: &str, k: usize, 
         return Ok(());
     }
 
+    // Parse distance override if provided
+    let distance_fn = distance_override.map(|d| match d.to_lowercase().as_str() {
+        "cosine" => DistanceFunction::Cosine,
+        "euclidean" => DistanceFunction::Euclidean,
+        "dot" | "dotproduct" => DistanceFunction::DotProduct,
+        "manhattan" => DistanceFunction::Manhattan,
+        _ => {
+            eprintln!("Warning: Unknown distance function '{}', using collection default", d);
+            DistanceFunction::Cosine
+        }
+    });
+
     if explain {
+        // Note: explain mode doesn't support distance override (uses HNSW stats)
+        if distance_override.is_some() {
+            eprintln!("Warning: --explain and --distance cannot be combined; ignoring --distance");
+        }
         let (results, explain_data) = coll.search_explain(&query, k)?;
 
         println!("Search results (k={}):", k);
@@ -690,9 +820,16 @@ fn search_command(path: &str, collection_name: &str, query_str: &str, k: usize, 
         println!("  ef_search: {}", explain_data.ef_search);
         println!("  Distance function: {}", explain_data.distance_function);
     } else {
-        let results = coll.search(&query, k)?;
+        let results = if let Some(dist) = distance_fn {
+            coll.search_with_options(&query, k, Some(dist), None, None, 3)?
+        } else {
+            coll.search(&query, k)?
+        };
 
         println!("Search results (k={}):", k);
+        if distance_fn.is_some() {
+            println!("  (using distance override: {:?})", distance_fn.unwrap());
+        }
         for result in results {
             let meta = result
                 .metadata
@@ -1691,6 +1828,161 @@ fn federate_stats(instances_str: &str) -> Result<()> {
     println!("Failed queries: {}", stats.failed_queries);
     println!("Partial results: {}", stats.partial_results);
     println!("Timeouts: {}", stats.timeouts);
+
+    Ok(())
+}
+
+// ============================================================================
+// Alias Commands
+// ============================================================================
+
+fn alias_command(cmd: AliasCommands) -> Result<()> {
+    match cmd {
+        AliasCommands::Create {
+            database,
+            alias,
+            collection,
+        } => alias_create(&database, &alias, &collection),
+        AliasCommands::Delete { database, alias } => alias_delete(&database, &alias),
+        AliasCommands::List { database } => alias_list(&database),
+        AliasCommands::Resolve { database, alias } => alias_resolve(&database, &alias),
+        AliasCommands::Update {
+            database,
+            alias,
+            collection,
+        } => alias_update(&database, &alias, &collection),
+    }
+}
+
+fn alias_create(path: &str, alias: &str, collection: &str) -> Result<()> {
+    let mut db = Database::open(path)?;
+    db.create_alias(alias, collection)?;
+    db.save()?;
+
+    println!("Created alias '{}' -> '{}'", alias, collection);
+    Ok(())
+}
+
+fn alias_delete(path: &str, alias: &str) -> Result<()> {
+    let mut db = Database::open(path)?;
+    let deleted = db.delete_alias(alias)?;
+    db.save()?;
+
+    if deleted {
+        println!("Deleted alias '{}'", alias);
+    } else {
+        println!("Alias '{}' not found", alias);
+    }
+    Ok(())
+}
+
+fn alias_list(path: &str) -> Result<()> {
+    let db = Database::open(path)?;
+    let aliases = db.list_aliases();
+
+    if aliases.is_empty() {
+        println!("No aliases defined.");
+    } else {
+        println!("Aliases:");
+        println!("{:-<50}", "");
+        println!("{:<25} {:<25}", "Alias", "Collection");
+        println!("{:-<50}", "");
+        for (alias, collection) in aliases {
+            println!("{:<25} {:<25}", alias, collection);
+        }
+    }
+
+    Ok(())
+}
+
+fn alias_resolve(path: &str, alias: &str) -> Result<()> {
+    let db = Database::open(path)?;
+
+    match db.get_canonical_name(alias) {
+        Some(collection) => {
+            println!("{}", collection);
+        }
+        None => {
+            println!("Alias '{}' not found", alias);
+        }
+    }
+
+    Ok(())
+}
+
+fn alias_update(path: &str, alias: &str, collection: &str) -> Result<()> {
+    let mut db = Database::open(path)?;
+    db.update_alias(alias, collection)?;
+    db.save()?;
+
+    println!("Updated alias '{}' -> '{}'", alias, collection);
+    Ok(())
+}
+
+// ============ TTL Commands ============
+
+fn ttl_command(cmd: TtlCommands) -> Result<()> {
+    match cmd {
+        TtlCommands::Sweep {
+            database,
+            collection,
+        } => ttl_sweep(&database, &collection),
+        TtlCommands::Stats {
+            database,
+            collection,
+        } => ttl_stats(&database, &collection),
+    }
+}
+
+fn ttl_sweep(path: &str, collection_name: &str) -> Result<()> {
+    let mut db = Database::open(path)?;
+    let collection = db.collection(collection_name)?;
+    let expired = collection.expire_vectors()?;
+    db.save()?;
+
+    if expired > 0 {
+        println!("Expired {} vectors from '{}'", expired, collection_name);
+    } else {
+        println!("No expired vectors found in '{}'", collection_name);
+    }
+    Ok(())
+}
+
+fn ttl_stats(path: &str, collection_name: &str) -> Result<()> {
+    let db = Database::open(path)?;
+    let collection = db.collection(collection_name)?;
+    let (total, expired, earliest, latest) = collection.ttl_stats();
+
+    println!("TTL Statistics for '{}':", collection_name);
+    println!("{:-<50}", "");
+    println!("Vectors with TTL:        {}", total);
+    println!("Currently expired:       {}", expired);
+
+    if let Some(earliest_ts) = earliest {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        if earliest_ts > now {
+            println!("Next expiration in:      {} seconds", earliest_ts - now);
+        } else {
+            println!("Oldest expired:          {} seconds ago", now - earliest_ts);
+        }
+    }
+
+    if let Some(latest_ts) = latest {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        if latest_ts > now {
+            println!("Latest expiration in:    {} seconds", latest_ts - now);
+        }
+    }
+
+    if collection.needs_expiration_sweep(0.1) {
+        println!("\nRecommendation: Run 'needle ttl sweep' to clean up expired vectors.");
+    }
 
     Ok(())
 }

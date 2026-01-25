@@ -45,7 +45,7 @@ use axum::{
     http::{header, Method, Request, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Response},
-    routing::{delete, get, post},
+    routing::{delete, get, post, put},
     Json, Router,
 };
 use governor::{
@@ -683,6 +683,9 @@ impl From<NeedleError> for (StatusCode, Json<ApiError>) {
             NeedleError::DimensionMismatch { .. } => (StatusCode::BAD_REQUEST, "DIMENSION_MISMATCH"),
             NeedleError::InvalidVector(_) => (StatusCode::BAD_REQUEST, "INVALID_VECTOR"),
             NeedleError::InvalidConfig(_) => (StatusCode::BAD_REQUEST, "INVALID_CONFIG"),
+            NeedleError::AliasNotFound(_) => (StatusCode::NOT_FOUND, "ALIAS_NOT_FOUND"),
+            NeedleError::AliasAlreadyExists(_) => (StatusCode::CONFLICT, "ALIAS_EXISTS"),
+            NeedleError::CollectionHasAliases(_) => (StatusCode::CONFLICT, "COLLECTION_HAS_ALIASES"),
             _ => (StatusCode::INTERNAL_SERVER_ERROR, "INTERNAL_ERROR"),
         };
 
@@ -724,6 +727,9 @@ struct InsertRequest {
     vector: Vec<f32>,
     #[serde(default)]
     metadata: Option<Value>,
+    /// Optional TTL in seconds; if not provided, uses collection default
+    #[serde(default)]
+    ttl_seconds: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -737,6 +743,9 @@ struct UpsertRequest {
     vector: Vec<f32>,
     #[serde(default)]
     metadata: Option<Value>,
+    /// Optional TTL in seconds; if not provided, uses collection default
+    #[serde(default)]
+    ttl_seconds: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -758,6 +767,10 @@ struct SearchRequest {
     include_vectors: bool,
     #[serde(default)]
     explain: bool,
+    /// Override distance function for this query ("cosine", "euclidean", "dot", "manhattan")
+    /// When different from the collection's index, uses brute-force search
+    #[serde(default)]
+    distance: Option<String>,
 }
 
 fn default_k() -> usize {
@@ -896,6 +909,25 @@ struct QueryParams {
     limit: Option<usize>,
 }
 
+// ============ Alias Request/Response Types ============
+
+#[derive(Debug, Deserialize)]
+struct CreateAliasRequest {
+    alias: String,
+    collection: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct UpdateAliasRequest {
+    collection: String,
+}
+
+#[derive(Debug, Serialize)]
+struct AliasInfo {
+    alias: String,
+    collection: String,
+}
+
 // ============ Handlers ============
 
 /// Health check endpoint
@@ -1015,7 +1047,7 @@ async fn insert_vector(
     let db = state.db.write().await;
     let coll = db.collection(&collection).map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
 
-    coll.insert(&req.id, &req.vector, req.metadata)
+    coll.insert_with_ttl(&req.id, &req.vector, req.metadata, req.ttl_seconds)
         .map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
 
     Ok((StatusCode::CREATED, Json(json!({"inserted": req.id}))))
@@ -1049,7 +1081,7 @@ async fn batch_insert(
     let mut errors = Vec::new();
 
     for item in req.vectors {
-        match coll.insert(&item.id, &item.vector, item.metadata) {
+        match coll.insert_with_ttl(&item.id, &item.vector, item.metadata, item.ttl_seconds) {
             Ok(_) => inserted += 1,
             Err(e) => errors.push(json!({"id": item.id, "error": e.to_string()})),
         }
@@ -1078,7 +1110,7 @@ async fn upsert_vector(
         false
     };
 
-    coll.insert(&req.id, &req.vector, req.metadata)
+    coll.insert_with_ttl(&req.id, &req.vector, req.metadata, req.ttl_seconds)
         .map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
 
     Ok(Json(json!({
@@ -1168,6 +1200,8 @@ async fn search(
     Path(collection): Path<String>,
     Json(req): Json<SearchRequest>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<ApiError>)> {
+    use crate::DistanceFunction;
+
     let db = state.db.read().await;
     let coll = db.collection(&collection).map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
 
@@ -1192,10 +1226,32 @@ async fn search(
         None
     };
 
+    // Parse distance override if provided
+    let distance_override = if let Some(ref dist_str) = req.distance {
+        match dist_str.to_lowercase().as_str() {
+            "cosine" => Some(DistanceFunction::Cosine),
+            "euclidean" => Some(DistanceFunction::Euclidean),
+            "dot" | "dotproduct" => Some(DistanceFunction::DotProduct),
+            "manhattan" => Some(DistanceFunction::Manhattan),
+            _ => return Err((
+                StatusCode::BAD_REQUEST,
+                Json(ApiError {
+                    error: format!("Invalid distance function: '{}'. Use: cosine, euclidean, dot, manhattan", dist_str),
+                    code: "INVALID_DISTANCE".to_string(),
+                }),
+            )),
+        }
+    } else {
+        None
+    };
+
     // Perform search - use explain variants when profiling is requested
-    // Note: explain mode doesn't support post-filter (uses direct methods)
+    // Note: explain mode doesn't support post-filter or distance override (uses direct methods)
     let (raw_results, profiling_data) = if req.explain {
-        // Explain mode: use direct methods (post-filter not supported in explain)
+        // Explain mode: use direct methods (post-filter and distance override not supported in explain)
+        if distance_override.is_some() {
+            tracing::warn!("Distance override ignored in explain mode");
+        }
         if let Some(ref filter) = pre_filter {
             let (results, explain) = coll.search_with_filter_explain(&req.vector, req.k, filter)
                 .map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
@@ -1205,25 +1261,22 @@ async fn search(
                 .map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
             (results, Some(explain))
         }
-    } else if let Some(ref pf) = post_filter {
-        // Use search_with_post_filter for post-filter support
-        let results = coll.search_with_post_filter(
+    } else if distance_override.is_some() || pre_filter.is_some() || post_filter.is_some() {
+        // Use search_with_options for distance override, pre-filter, or post-filter
+        let results = coll.search_with_options(
             &req.vector,
             req.k,
+            distance_override,
             pre_filter.as_ref(),
-            pf,
+            post_filter.as_ref(),
             req.post_filter_factor,
         )
         .map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
         (results, None)
     } else {
-        // Standard search without post-filter
-        let results = if let Some(ref filter) = pre_filter {
-            coll.search_with_filter(&req.vector, req.k, filter)
-        } else {
-            coll.search(&req.vector, req.k)
-        }
-        .map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
+        // Standard search without filters or distance override
+        let results = coll.search(&req.vector, req.k)
+            .map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
         (results, None)
     };
 
@@ -1504,6 +1557,138 @@ async fn save_database(
     Ok(Json(json!({"saved": true})))
 }
 
+// ============ Alias Handlers ============
+
+/// Create a new alias for a collection
+async fn create_alias_handler(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<CreateAliasRequest>,
+) -> Result<impl IntoResponse, (StatusCode, Json<ApiError>)> {
+    let db = state.db.write().await;
+    db.create_alias(&req.alias, &req.collection)
+        .map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
+
+    Ok((
+        StatusCode::CREATED,
+        Json(json!({
+            "created": true,
+            "alias": req.alias,
+            "collection": req.collection
+        })),
+    ))
+}
+
+/// List all aliases
+async fn list_aliases_handler(
+    State(state): State<Arc<AppState>>,
+) -> impl IntoResponse {
+    let db = state.db.read().await;
+    let aliases: Vec<AliasInfo> = db
+        .list_aliases()
+        .into_iter()
+        .map(|(alias, collection)| AliasInfo { alias, collection })
+        .collect();
+
+    Json(json!({"aliases": aliases}))
+}
+
+/// Get (resolve) an alias to its canonical collection name
+async fn get_alias_handler(
+    State(state): State<Arc<AppState>>,
+    Path(alias): Path<String>,
+) -> Result<impl IntoResponse, (StatusCode, Json<ApiError>)> {
+    let db = state.db.read().await;
+
+    match db.get_canonical_name(&alias) {
+        Some(collection) => Ok(Json(AliasInfo { alias, collection })),
+        None => Err((
+            StatusCode::NOT_FOUND,
+            Json(ApiError {
+                error: format!("Alias '{}' not found", alias),
+                code: "ALIAS_NOT_FOUND".to_string(),
+            }),
+        )),
+    }
+}
+
+/// Delete an alias
+async fn delete_alias_handler(
+    State(state): State<Arc<AppState>>,
+    Path(alias): Path<String>,
+) -> Result<impl IntoResponse, (StatusCode, Json<ApiError>)> {
+    let db = state.db.write().await;
+    let deleted = db.delete_alias(&alias)
+        .map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
+
+    if deleted {
+        Ok(Json(json!({"deleted": alias})))
+    } else {
+        Err((
+            StatusCode::NOT_FOUND,
+            Json(ApiError {
+                error: format!("Alias '{}' not found", alias),
+                code: "ALIAS_NOT_FOUND".to_string(),
+            }),
+        ))
+    }
+}
+
+/// Update an alias to point to a different collection
+async fn update_alias_handler(
+    State(state): State<Arc<AppState>>,
+    Path(alias): Path<String>,
+    Json(req): Json<UpdateAliasRequest>,
+) -> Result<impl IntoResponse, (StatusCode, Json<ApiError>)> {
+    let db = state.db.write().await;
+    db.update_alias(&alias, &req.collection)
+        .map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
+
+    Ok(Json(json!({
+        "updated": true,
+        "alias": alias,
+        "collection": req.collection
+    })))
+}
+
+// ============ TTL Handlers ============
+
+/// Sweep and delete expired vectors from a collection
+async fn expire_vectors_handler(
+    State(state): State<Arc<AppState>>,
+    Path(collection): Path<String>,
+) -> Result<impl IntoResponse, (StatusCode, Json<ApiError>)> {
+    let db = state.db.write().await;
+    let coll = db.collection(&collection).map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
+
+    let expired = coll.expire_vectors()
+        .map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
+
+    Ok(Json(json!({
+        "collection": collection,
+        "expired_count": expired
+    })))
+}
+
+/// Get TTL statistics for a collection
+async fn ttl_stats_handler(
+    State(state): State<Arc<AppState>>,
+    Path(collection): Path<String>,
+) -> Result<impl IntoResponse, (StatusCode, Json<ApiError>)> {
+    let db = state.db.read().await;
+    let coll = db.collection(&collection).map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
+
+    let (total_with_ttl, expired_count, earliest_expiration, latest_expiration) = coll.ttl_stats();
+
+    Ok(Json(json!({
+        "collection": collection,
+        "vectors_with_ttl": total_with_ttl,
+        "expired_count": expired_count,
+        "earliest_expiration": earliest_expiration,
+        "latest_expiration": latest_expiration,
+        "needs_sweep": coll.needs_expiration_sweep(0.1)
+    })))
+}
+
 /// Build CORS layer from configuration
 fn build_cors_layer(config: &CorsConfig) -> CorsLayer {
     if !config.enabled {
@@ -1567,7 +1752,16 @@ pub fn create_router_with_config(state: Arc<AppState>, config: &ServerConfig) ->
         .route("/collections/:collection/search/batch", post(batch_search))
         .route("/collections/:collection/search/radius", post(radius_search))
         // Database operations
-        .route("/save", post(save_database));
+        .route("/save", post(save_database))
+        // Aliases
+        .route("/aliases", post(create_alias_handler))
+        .route("/aliases", get(list_aliases_handler))
+        .route("/aliases/:alias", get(get_alias_handler))
+        .route("/aliases/:alias", delete(delete_alias_handler))
+        .route("/aliases/:alias", put(update_alias_handler))
+        // TTL endpoints
+        .route("/collections/:name/expire", post(expire_vectors_handler))
+        .route("/collections/:name/ttl-stats", get(ttl_stats_handler));
 
     // Add metrics endpoint when metrics feature is enabled
     #[cfg(feature = "metrics")]
