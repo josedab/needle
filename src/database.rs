@@ -97,6 +97,9 @@ impl DatabaseConfig {
 struct DatabaseState {
     /// All collections
     collections: HashMap<String, Collection>,
+    /// Aliases mapping alias name -> canonical collection name
+    #[serde(default)]
+    aliases: HashMap<String, String>,
 }
 
 /// The main database handle for managing vector collections.
@@ -441,13 +444,23 @@ impl Database {
     /// ```
     pub fn collection(&self, name: &str) -> Result<CollectionRef<'_>> {
         let state = self.state.read();
-        if !state.collections.contains_key(name) {
-            return Err(NeedleError::CollectionNotFound(name.to_string()));
+        // Check if name is a direct collection name
+        if state.collections.contains_key(name) {
+            return Ok(CollectionRef {
+                db: self,
+                name: name.to_string(),
+            });
         }
-        Ok(CollectionRef {
-            db: self,
-            name: name.to_string(),
-        })
+        // Check if name is an alias
+        if let Some(canonical_name) = state.aliases.get(name) {
+            if state.collections.contains_key(canonical_name) {
+                return Ok(CollectionRef {
+                    db: self,
+                    name: canonical_name.clone(),
+                });
+            }
+        }
+        Err(NeedleError::CollectionNotFound(name.to_string()))
     }
 
     /// List all collection names in the database.
@@ -501,6 +514,19 @@ impl Database {
     /// ```
     pub fn drop_collection(&self, name: &str) -> Result<bool> {
         let mut state = self.state.write();
+
+        // Check if any aliases point to this collection
+        let aliases_pointing: Vec<String> = state
+            .aliases
+            .iter()
+            .filter(|(_, target)| *target == name)
+            .map(|(alias, _)| alias.clone())
+            .collect();
+
+        if !aliases_pointing.is_empty() {
+            return Err(NeedleError::CollectionHasAliases(name.to_string()));
+        }
+
         let removed = state.collections.remove(name).is_some();
         if removed {
             info!(collection = %name, "Collection dropped");
@@ -527,6 +553,239 @@ impl Database {
     /// ```
     pub fn has_collection(&self, name: &str) -> bool {
         self.state.read().collections.contains_key(name)
+    }
+
+    /// Create an alias for a collection.
+    ///
+    /// Aliases provide alternative names for collections, useful for blue-green
+    /// deployments where you can switch the "production" alias from one collection
+    /// to another atomically.
+    ///
+    /// # Arguments
+    ///
+    /// * `alias` - The alias name to create
+    /// * `collection` - The target collection name
+    ///
+    /// # Errors
+    ///
+    /// Returns [`NeedleError::AliasAlreadyExists`] if the alias already exists.
+    /// Returns [`NeedleError::CollectionNotFound`] if the target collection doesn't exist.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use needle::Database;
+    ///
+    /// let db = Database::in_memory();
+    /// db.create_collection("docs_v2", 128)?;
+    ///
+    /// // Create alias pointing to the new version
+    /// db.create_alias("docs", "docs_v2")?;
+    ///
+    /// // Now we can access via alias
+    /// let coll = db.collection("docs")?;
+    /// # Ok::<(), needle::NeedleError>(())
+    /// ```
+    pub fn create_alias(&self, alias: &str, collection: &str) -> Result<()> {
+        let mut state = self.state.write();
+
+        // Check if collection exists
+        if !state.collections.contains_key(collection) {
+            return Err(NeedleError::CollectionNotFound(collection.to_string()));
+        }
+
+        // Check if alias already exists (as alias or collection name)
+        if state.aliases.contains_key(alias) {
+            return Err(NeedleError::AliasAlreadyExists(alias.to_string()));
+        }
+        if state.collections.contains_key(alias) {
+            return Err(NeedleError::AliasAlreadyExists(format!(
+                "{} (conflicts with collection name)",
+                alias
+            )));
+        }
+
+        info!(alias = %alias, collection = %collection, "Creating alias");
+        state.aliases.insert(alias.to_string(), collection.to_string());
+        self.mark_modified();
+        Ok(())
+    }
+
+    /// Delete an alias.
+    ///
+    /// # Arguments
+    ///
+    /// * `alias` - The alias name to delete
+    ///
+    /// # Returns
+    ///
+    /// Returns `Ok(true)` if the alias was deleted, `Ok(false)` if no alias
+    /// with that name existed.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use needle::Database;
+    ///
+    /// let db = Database::in_memory();
+    /// db.create_collection("docs_v2", 128)?;
+    /// db.create_alias("docs", "docs_v2")?;
+    ///
+    /// assert!(db.delete_alias("docs")?);
+    /// assert!(!db.delete_alias("nonexistent")?);
+    /// # Ok::<(), needle::NeedleError>(())
+    /// ```
+    pub fn delete_alias(&self, alias: &str) -> Result<bool> {
+        let mut state = self.state.write();
+        let removed = state.aliases.remove(alias).is_some();
+        if removed {
+            info!(alias = %alias, "Alias deleted");
+            self.mark_modified();
+        } else {
+            debug!(alias = %alias, "Alias not found for delete");
+        }
+        Ok(removed)
+    }
+
+    /// List all aliases.
+    ///
+    /// Returns a list of `(alias_name, collection_name)` tuples.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use needle::Database;
+    ///
+    /// let db = Database::in_memory();
+    /// db.create_collection("docs_v1", 128)?;
+    /// db.create_collection("docs_v2", 128)?;
+    /// db.create_alias("docs", "docs_v2")?;
+    /// db.create_alias("old_docs", "docs_v1")?;
+    ///
+    /// let aliases = db.list_aliases();
+    /// assert_eq!(aliases.len(), 2);
+    /// # Ok::<(), needle::NeedleError>(())
+    /// ```
+    pub fn list_aliases(&self) -> Vec<(String, String)> {
+        self.state
+            .read()
+            .aliases
+            .iter()
+            .map(|(alias, collection)| (alias.clone(), collection.clone()))
+            .collect()
+    }
+
+    /// Get the canonical collection name for an alias.
+    ///
+    /// # Arguments
+    ///
+    /// * `alias` - The alias name to resolve
+    ///
+    /// # Returns
+    ///
+    /// Returns `Some(collection_name)` if the alias exists, `None` otherwise.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use needle::Database;
+    ///
+    /// let db = Database::in_memory();
+    /// db.create_collection("docs_v2", 128)?;
+    /// db.create_alias("docs", "docs_v2")?;
+    ///
+    /// assert_eq!(db.get_canonical_name("docs"), Some("docs_v2".to_string()));
+    /// assert_eq!(db.get_canonical_name("nonexistent"), None);
+    /// # Ok::<(), needle::NeedleError>(())
+    /// ```
+    pub fn get_canonical_name(&self, alias: &str) -> Option<String> {
+        self.state.read().aliases.get(alias).cloned()
+    }
+
+    /// Get all aliases that point to a specific collection.
+    ///
+    /// # Arguments
+    ///
+    /// * `collection` - The collection name to find aliases for
+    ///
+    /// # Returns
+    ///
+    /// A vector of alias names that reference the given collection.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use needle::Database;
+    ///
+    /// let db = Database::in_memory();
+    /// db.create_collection("docs_v2", 128)?;
+    /// db.create_alias("docs", "docs_v2")?;
+    /// db.create_alias("production", "docs_v2")?;
+    ///
+    /// let aliases = db.aliases_for_collection("docs_v2");
+    /// assert_eq!(aliases.len(), 2);
+    /// assert!(aliases.contains(&"docs".to_string()));
+    /// assert!(aliases.contains(&"production".to_string()));
+    /// # Ok::<(), needle::NeedleError>(())
+    /// ```
+    pub fn aliases_for_collection(&self, collection: &str) -> Vec<String> {
+        self.state
+            .read()
+            .aliases
+            .iter()
+            .filter(|(_, target)| *target == collection)
+            .map(|(alias, _)| alias.clone())
+            .collect()
+    }
+
+    /// Update an existing alias to point to a different collection.
+    ///
+    /// This is useful for blue-green deployments where you want to atomically
+    /// switch an alias from one collection to another.
+    ///
+    /// # Arguments
+    ///
+    /// * `alias` - The alias name to update
+    /// * `collection` - The new target collection name
+    ///
+    /// # Errors
+    ///
+    /// Returns [`NeedleError::AliasNotFound`] if the alias doesn't exist.
+    /// Returns [`NeedleError::CollectionNotFound`] if the target collection doesn't exist.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use needle::Database;
+    ///
+    /// let db = Database::in_memory();
+    /// db.create_collection("docs_v1", 128)?;
+    /// db.create_collection("docs_v2", 128)?;
+    /// db.create_alias("production", "docs_v1")?;
+    ///
+    /// // Switch production to v2
+    /// db.update_alias("production", "docs_v2")?;
+    ///
+    /// assert_eq!(db.get_canonical_name("production"), Some("docs_v2".to_string()));
+    /// # Ok::<(), needle::NeedleError>(())
+    /// ```
+    pub fn update_alias(&self, alias: &str, collection: &str) -> Result<()> {
+        let mut state = self.state.write();
+
+        // Check if collection exists
+        if !state.collections.contains_key(collection) {
+            return Err(NeedleError::CollectionNotFound(collection.to_string()));
+        }
+
+        // Check if alias exists
+        if !state.aliases.contains_key(alias) {
+            return Err(NeedleError::AliasNotFound(alias.to_string()));
+        }
+
+        info!(alias = %alias, collection = %collection, "Updating alias");
+        state.aliases.insert(alias.to_string(), collection.to_string());
+        self.mark_modified();
+        Ok(())
     }
 
     /// Save changes to disk.
@@ -724,6 +983,44 @@ impl Database {
         Ok(())
     }
 
+    fn insert_with_ttl_internal(
+        &self,
+        collection: &str,
+        id: impl Into<String>,
+        vector: &[f32],
+        metadata: Option<Value>,
+        ttl_seconds: Option<u64>,
+    ) -> Result<()> {
+        let mut state = self.state.write();
+        let coll = state
+            .collections
+            .get_mut(collection)
+            .ok_or_else(|| NeedleError::CollectionNotFound(collection.to_string()))?;
+
+        coll.insert_with_ttl(id, vector, metadata, ttl_seconds)?;
+        self.mark_modified();
+        Ok(())
+    }
+
+    fn insert_vec_with_ttl_internal(
+        &self,
+        collection: &str,
+        id: impl Into<String>,
+        vector: Vec<f32>,
+        metadata: Option<Value>,
+        ttl_seconds: Option<u64>,
+    ) -> Result<()> {
+        let mut state = self.state.write();
+        let coll = state
+            .collections
+            .get_mut(collection)
+            .ok_or_else(|| NeedleError::CollectionNotFound(collection.to_string()))?;
+
+        coll.insert_vec_with_ttl(id, vector, metadata, ttl_seconds)?;
+        self.mark_modified();
+        Ok(())
+    }
+
     fn update_internal(
         &self,
         collection: &str,
@@ -771,6 +1068,39 @@ impl Database {
             .ok_or_else(|| NeedleError::CollectionNotFound(collection.to_string()))?;
 
         coll.search_with_filter(query, k, filter)
+    }
+
+    fn search_with_options_internal(
+        &self,
+        collection: &str,
+        query: &[f32],
+        k: usize,
+        distance_override: Option<crate::DistanceFunction>,
+        filter: Option<&Filter>,
+        post_filter: Option<&Filter>,
+        post_filter_factor: usize,
+    ) -> Result<Vec<SearchResult>> {
+        let state = self.state.read();
+        let coll = state
+            .collections
+            .get(collection)
+            .ok_or_else(|| NeedleError::CollectionNotFound(collection.to_string()))?;
+
+        let mut builder = coll.search_builder(query).k(k);
+
+        if let Some(dist) = distance_override {
+            builder = builder.distance(dist);
+        }
+
+        if let Some(f) = filter {
+            builder = builder.filter(f);
+        }
+
+        if let Some(pf) = post_filter {
+            builder = builder.post_filter(pf).post_filter_factor(post_filter_factor);
+        }
+
+        builder.execute()
     }
 
     fn search_explain_internal(
@@ -948,6 +1278,60 @@ impl Database {
             .unwrap_or(false)
     }
 
+    // ============ TTL Internal Methods ============
+
+    fn expire_vectors_internal(&self, collection: &str) -> Result<usize> {
+        let mut state = self.state.write();
+        let coll = state
+            .collections
+            .get_mut(collection)
+            .ok_or_else(|| NeedleError::CollectionNotFound(collection.to_string()))?;
+
+        let count = coll.expire_vectors()?;
+        if count > 0 {
+            self.mark_modified();
+        }
+        Ok(count)
+    }
+
+    fn needs_expiration_sweep_internal(&self, collection: &str, threshold: f64) -> bool {
+        self.state
+            .read()
+            .collections
+            .get(collection)
+            .map(|c| c.needs_expiration_sweep(threshold))
+            .unwrap_or(false)
+    }
+
+    fn ttl_stats_internal(&self, collection: &str) -> (usize, usize, Option<u64>, Option<u64>) {
+        self.state
+            .read()
+            .collections
+            .get(collection)
+            .map(|c| c.ttl_stats())
+            .unwrap_or((0, 0, None, None))
+    }
+
+    fn get_ttl_internal(&self, collection: &str, id: &str) -> Option<u64> {
+        self.state
+            .read()
+            .collections
+            .get(collection)
+            .and_then(|c| c.get_ttl(id))
+    }
+
+    fn set_ttl_internal(&self, collection: &str, id: &str, ttl_seconds: Option<u64>) -> Result<()> {
+        let mut state = self.state.write();
+        let coll = state
+            .collections
+            .get_mut(collection)
+            .ok_or_else(|| NeedleError::CollectionNotFound(collection.to_string()))?;
+
+        coll.set_ttl(id, ttl_seconds)?;
+        self.mark_modified();
+        Ok(())
+    }
+
     fn count_internal(&self, collection: &str, filter: Option<&Filter>) -> Result<usize> {
         let state = self.state.read();
         let coll = state
@@ -1122,6 +1506,37 @@ impl<'a> CollectionRef<'a> {
         self.db.insert_vec_internal(&self.name, id, vector, metadata)
     }
 
+    /// Insert a vector with explicit TTL (time-to-live).
+    ///
+    /// The vector will automatically expire after the specified TTL.
+    ///
+    /// # Arguments
+    ///
+    /// * `id` - Unique identifier for the vector
+    /// * `vector` - The vector data
+    /// * `metadata` - Optional JSON metadata
+    /// * `ttl_seconds` - TTL in seconds; if `None`, uses collection default
+    pub fn insert_with_ttl(
+        &self,
+        id: impl Into<String>,
+        vector: &[f32],
+        metadata: Option<Value>,
+        ttl_seconds: Option<u64>,
+    ) -> Result<()> {
+        self.db.insert_with_ttl_internal(&self.name, id, vector, metadata, ttl_seconds)
+    }
+
+    /// Insert a vector with TTL, taking ownership (more efficient).
+    pub fn insert_vec_with_ttl(
+        &self,
+        id: impl Into<String>,
+        vector: Vec<f32>,
+        metadata: Option<Value>,
+        ttl_seconds: Option<u64>,
+    ) -> Result<()> {
+        self.db.insert_vec_with_ttl_internal(&self.name, id, vector, metadata, ttl_seconds)
+    }
+
     /// Search for the k most similar vectors to the query.
     ///
     /// # Arguments
@@ -1157,6 +1572,38 @@ impl<'a> CollectionRef<'a> {
     ) -> Result<Vec<SearchResult>> {
         self.db
             .search_with_filter_internal(&self.name, query, k, filter)
+    }
+
+    /// Search with full options including distance override, filters, and post-filter.
+    ///
+    /// This method provides access to all search options without using the builder pattern.
+    ///
+    /// # Arguments
+    ///
+    /// * `query` - The query vector
+    /// * `k` - Number of results to return
+    /// * `distance_override` - Optional distance function override (falls back to brute-force)
+    /// * `filter` - Optional pre-filter (applied during ANN search)
+    /// * `post_filter` - Optional post-filter (applied after ANN search)
+    /// * `post_filter_factor` - Over-fetch factor for post-filtering (default: 3)
+    pub fn search_with_options(
+        &self,
+        query: &[f32],
+        k: usize,
+        distance_override: Option<crate::DistanceFunction>,
+        filter: Option<&Filter>,
+        post_filter: Option<&Filter>,
+        post_filter_factor: usize,
+    ) -> Result<Vec<SearchResult>> {
+        self.db.search_with_options_internal(
+            &self.name,
+            query,
+            k,
+            distance_override,
+            filter,
+            post_filter,
+            post_filter_factor,
+        )
     }
 
     /// Search with detailed query execution profiling.
@@ -1456,6 +1903,40 @@ impl<'a> CollectionRef<'a> {
     /// ```
     pub fn needs_compaction(&self, threshold: f64) -> bool {
         self.db.needs_compaction_internal(&self.name, threshold)
+    }
+
+    // ============ TTL Methods ============
+
+    /// Sweep and delete all expired vectors.
+    ///
+    /// Returns the number of vectors that were expired and deleted.
+    pub fn expire_vectors(&self) -> Result<usize> {
+        self.db.expire_vectors_internal(&self.name)
+    }
+
+    /// Check if an expiration sweep is needed based on a threshold.
+    ///
+    /// Returns true if the ratio of expired vectors to total vectors
+    /// exceeds the given threshold (0.0-1.0).
+    pub fn needs_expiration_sweep(&self, threshold: f64) -> bool {
+        self.db.needs_expiration_sweep_internal(&self.name, threshold)
+    }
+
+    /// Get TTL statistics for the collection.
+    ///
+    /// Returns (total_with_ttl, expired_count, earliest_expiration, latest_expiration).
+    pub fn ttl_stats(&self) -> (usize, usize, Option<u64>, Option<u64>) {
+        self.db.ttl_stats_internal(&self.name)
+    }
+
+    /// Get the expiration timestamp for a vector by external ID.
+    pub fn get_ttl(&self, id: &str) -> Option<u64> {
+        self.db.get_ttl_internal(&self.name, id)
+    }
+
+    /// Set or update the TTL for an existing vector.
+    pub fn set_ttl(&self, id: &str, ttl_seconds: Option<u64>) -> Result<()> {
+        self.db.set_ttl_internal(&self.name, id, ttl_seconds)
     }
 
     /// Count vectors in the collection, optionally matching a filter.
@@ -2294,5 +2775,317 @@ mod tests {
 
         let result = db.create_collection("test", 128);
         assert!(result.is_err());
+    }
+
+    // ========== Alias Tests ==========
+
+    #[test]
+    fn test_alias_create_and_resolve() {
+        let db = Database::in_memory();
+        db.create_collection("v1", 128).unwrap();
+
+        // Create alias
+        db.create_alias("prod", "v1").unwrap();
+
+        // Resolve alias
+        assert_eq!(db.get_canonical_name("prod"), Some("v1".to_string()));
+
+        // Access collection via alias
+        let coll = db.collection("prod").unwrap();
+        assert_eq!(coll.count(None).unwrap(), 0);
+    }
+
+    #[test]
+    fn test_alias_list() {
+        let db = Database::in_memory();
+        db.create_collection("v1", 128).unwrap();
+        db.create_collection("v2", 128).unwrap();
+
+        db.create_alias("prod", "v1").unwrap();
+        db.create_alias("staging", "v2").unwrap();
+
+        let aliases = db.list_aliases();
+        assert_eq!(aliases.len(), 2);
+        assert!(aliases.contains(&("prod".to_string(), "v1".to_string())));
+        assert!(aliases.contains(&("staging".to_string(), "v2".to_string())));
+    }
+
+    #[test]
+    fn test_alias_delete() {
+        let db = Database::in_memory();
+        db.create_collection("v1", 128).unwrap();
+        db.create_alias("prod", "v1").unwrap();
+
+        assert!(db.get_canonical_name("prod").is_some());
+
+        // Delete alias
+        let deleted = db.delete_alias("prod").unwrap();
+        assert!(deleted);
+
+        // Alias no longer exists
+        assert!(db.get_canonical_name("prod").is_none());
+
+        // Deleting again returns false
+        let deleted = db.delete_alias("prod").unwrap();
+        assert!(!deleted);
+    }
+
+    #[test]
+    fn test_alias_prevents_collection_drop() {
+        let db = Database::in_memory();
+        db.create_collection("v1", 128).unwrap();
+        db.create_alias("prod", "v1").unwrap();
+
+        // Trying to drop collection with alias should fail
+        let result = db.drop_collection("v1");
+        assert!(result.is_err());
+
+        // Delete alias first
+        db.delete_alias("prod").unwrap();
+
+        // Now drop should succeed
+        let dropped = db.drop_collection("v1").unwrap();
+        assert!(dropped);
+    }
+
+    #[test]
+    fn test_alias_update() {
+        let db = Database::in_memory();
+        db.create_collection("v1", 128).unwrap();
+        db.create_collection("v2", 128).unwrap();
+
+        db.create_alias("prod", "v1").unwrap();
+        assert_eq!(db.get_canonical_name("prod"), Some("v1".to_string()));
+
+        // Update alias to point to v2
+        db.update_alias("prod", "v2").unwrap();
+        assert_eq!(db.get_canonical_name("prod"), Some("v2".to_string()));
+    }
+
+    #[test]
+    fn test_aliases_for_collection() {
+        let db = Database::in_memory();
+        db.create_collection("v1", 128).unwrap();
+
+        db.create_alias("prod", "v1").unwrap();
+        db.create_alias("latest", "v1").unwrap();
+
+        let aliases = db.aliases_for_collection("v1");
+        assert_eq!(aliases.len(), 2);
+        assert!(aliases.contains(&"prod".to_string()));
+        assert!(aliases.contains(&"latest".to_string()));
+    }
+
+    #[test]
+    fn test_alias_already_exists() {
+        let db = Database::in_memory();
+        db.create_collection("v1", 128).unwrap();
+
+        db.create_alias("prod", "v1").unwrap();
+
+        // Creating same alias again should fail
+        let result = db.create_alias("prod", "v1");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_alias_to_nonexistent_collection() {
+        let db = Database::in_memory();
+
+        // Creating alias to nonexistent collection should fail
+        let result = db.create_alias("prod", "nonexistent");
+        assert!(result.is_err());
+    }
+
+    // ========== TTL Tests ==========
+
+    #[test]
+    fn test_ttl_insert_and_stats() {
+        let db = Database::in_memory();
+        db.create_collection("test", 32).unwrap();
+
+        let coll = db.collection("test").unwrap();
+
+        // Insert with TTL
+        let vec = random_vector(32);
+        coll.insert_with_ttl("doc1", &vec, None, Some(3600)).unwrap();
+
+        // Insert without TTL
+        let vec2 = random_vector(32);
+        coll.insert("doc2", &vec2, None).unwrap();
+
+        let (total_with_ttl, _expired, _earliest, _latest) = coll.ttl_stats();
+        assert_eq!(total_with_ttl, 1);
+        assert_eq!(coll.count(None).unwrap(), 2);
+    }
+
+    #[test]
+    fn test_ttl_get_and_set() {
+        let db = Database::in_memory();
+        db.create_collection("test", 32).unwrap();
+
+        let coll = db.collection("test").unwrap();
+
+        let vec = random_vector(32);
+        coll.insert("doc1", &vec, None).unwrap();
+
+        // Initially no TTL
+        assert!(coll.get_ttl("doc1").is_none());
+
+        // Set TTL
+        coll.set_ttl("doc1", Some(3600)).unwrap();
+        assert!(coll.get_ttl("doc1").is_some());
+
+        // Remove TTL
+        coll.set_ttl("doc1", None).unwrap();
+        assert!(coll.get_ttl("doc1").is_none());
+    }
+
+    #[test]
+    fn test_ttl_expiration_sweep() {
+        let db = Database::in_memory();
+        db.create_collection("test", 32).unwrap();
+
+        let coll = db.collection("test").unwrap();
+
+        // Insert with very short TTL (already expired - TTL of 0 means expire immediately)
+        let vec = random_vector(32);
+        // Use a TTL in the past by setting expiration directly
+        coll.insert_with_ttl("doc1", &vec, None, Some(0)).unwrap();
+
+        // Wait a tiny bit and expire - but since TTL=0 sets expiration to now,
+        // the vector should be expired immediately on the next sweep
+        std::thread::sleep(std::time::Duration::from_millis(10));
+
+        let expired = coll.expire_vectors().unwrap();
+        assert_eq!(expired, 1);
+
+        // Vector should be gone
+        assert!(coll.get("doc1").is_none());
+    }
+
+    #[test]
+    fn test_ttl_lazy_expiration_in_search() {
+        use crate::CollectionConfig;
+
+        let db = Database::in_memory();
+
+        // Create collection with lazy expiration enabled
+        let config = CollectionConfig::new("test", 32).with_lazy_expiration(true);
+        db.create_collection_with_config(config).unwrap();
+
+        let coll = db.collection("test").unwrap();
+
+        // Insert expired vector
+        let vec1 = random_vector(32);
+        coll.insert_with_ttl("expired", &vec1, None, Some(0)).unwrap();
+
+        // Insert non-expired vector
+        let vec2 = random_vector(32);
+        coll.insert("valid", &vec2, None).unwrap();
+
+        std::thread::sleep(std::time::Duration::from_millis(10));
+
+        // Search should only return the valid vector (lazy expiration filters out expired)
+        let results = coll.search(&vec1, 10).unwrap();
+
+        // The expired vector should not appear in results
+        assert!(results.iter().all(|r| r.id != "expired"));
+    }
+
+    // ========== Distance Override Tests ==========
+
+    #[test]
+    fn test_distance_override_search() {
+        use crate::DistanceFunction;
+
+        let db = Database::in_memory();
+        db.create_collection("test", 4).unwrap();
+
+        let coll = db.collection("test").unwrap();
+
+        // Insert some vectors
+        coll.insert("a", &[1.0, 0.0, 0.0, 0.0], None).unwrap();
+        coll.insert("b", &[0.0, 1.0, 0.0, 0.0], None).unwrap();
+        coll.insert("c", &[0.5, 0.5, 0.0, 0.0], None).unwrap();
+
+        let query = vec![1.0, 0.0, 0.0, 0.0];
+
+        // Search with default distance (cosine)
+        let results_default = coll.search(&query, 3).unwrap();
+        assert_eq!(results_default.len(), 3);
+        assert_eq!(results_default[0].id, "a"); // Exact match
+
+        // Search with euclidean distance override (triggers brute-force)
+        let results_euclidean = coll
+            .search_with_options(&query, 3, Some(DistanceFunction::Euclidean), None, None, 3)
+            .unwrap();
+        assert_eq!(results_euclidean.len(), 3);
+        assert_eq!(results_euclidean[0].id, "a"); // Still exact match
+        assert!(results_euclidean[0].distance < 0.001); // Euclidean distance to itself is 0
+    }
+
+    #[test]
+    fn test_distance_override_produces_correct_ordering() {
+        use crate::DistanceFunction;
+
+        let db = Database::in_memory();
+
+        // Create collection with cosine distance
+        let config = crate::CollectionConfig::new("test", 3)
+            .with_distance(DistanceFunction::Cosine);
+        db.create_collection_with_config(config).unwrap();
+
+        let coll = db.collection("test").unwrap();
+
+        // Insert vectors with different magnitudes but same direction
+        coll.insert("small", &[1.0, 0.0, 0.0], None).unwrap();
+        coll.insert("large", &[10.0, 0.0, 0.0], None).unwrap();
+
+        let query = vec![5.0, 0.0, 0.0];
+
+        // With cosine, both should have same distance (direction matters, not magnitude)
+        let cosine_results = coll.search(&query, 2).unwrap();
+        let d1 = cosine_results[0].distance;
+        let d2 = cosine_results[1].distance;
+        assert!((d1 - d2).abs() < 0.001, "Cosine distances should be equal for same direction");
+
+        // With euclidean override, magnitude matters
+        let euclidean_results = coll
+            .search_with_options(&query, 2, Some(DistanceFunction::Euclidean), None, None, 3)
+            .unwrap();
+
+        // "small" (1.0) is closer to query (5.0) than "large" (10.0) in euclidean
+        // distance(5,1) = 4, distance(5,10) = 5
+        assert_eq!(euclidean_results[0].id, "small");
+        assert_eq!(euclidean_results[1].id, "large");
+    }
+
+    #[test]
+    fn test_distance_override_same_as_index_uses_hnsw() {
+        use crate::DistanceFunction;
+
+        let db = Database::in_memory();
+
+        // Create collection with euclidean distance
+        let config = crate::CollectionConfig::new("test", 32)
+            .with_distance(DistanceFunction::Euclidean);
+        db.create_collection_with_config(config).unwrap();
+
+        let coll = db.collection("test").unwrap();
+
+        for i in 0..100 {
+            let vec = random_vector(32);
+            coll.insert(format!("doc{}", i), &vec, None).unwrap();
+        }
+
+        let query = random_vector(32);
+
+        // Override with same distance as index - should use HNSW (not brute force)
+        let results = coll
+            .search_with_options(&query, 10, Some(DistanceFunction::Euclidean), None, None, 3)
+            .unwrap();
+
+        assert_eq!(results.len(), 10);
     }
 }
