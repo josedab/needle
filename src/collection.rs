@@ -61,14 +61,48 @@ use std::num::NonZeroUsize;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::warn;
 
-/// Search result with metadata
+/// A single result from a vector similarity search.
+///
+/// Contains the vector's identifier, its distance from the query, and optionally
+/// the associated metadata. Results are typically returned sorted by distance
+/// (ascending for most distance functions).
+///
+/// # Distance Interpretation
+///
+/// The meaning of the `distance` field depends on the collection's distance function:
+///
+/// | Function | Range | Interpretation |
+/// |----------|-------|----------------|
+/// | Cosine | 0.0 - 2.0 | 0 = identical, 2 = opposite |
+/// | Euclidean | 0.0 - ∞ | 0 = identical |
+/// | DotProduct | -∞ - +∞ | Higher (less negative) = more similar |
+/// | Manhattan | 0.0 - ∞ | 0 = identical |
+///
+/// # Example
+///
+/// ```
+/// use needle::SearchResult;
+///
+/// let result = SearchResult::new("doc_123", 0.15, None);
+/// println!("Found {} with distance {}", result.id, result.distance);
+///
+/// if let Some(meta) = &result.metadata {
+///     println!("Metadata: {}", meta);
+/// }
+/// ```
 #[derive(Debug, Clone)]
 pub struct SearchResult {
-    /// External vector ID
+    /// The unique string identifier of the vector.
     pub id: String,
-    /// Distance from query
+
+    /// Distance from the query vector. Lower values indicate greater similarity
+    /// for Cosine, Euclidean, and Manhattan; for DotProduct, higher (less negative)
+    /// values indicate greater similarity.
     pub distance: f32,
-    /// Associated metadata
+
+    /// Optional JSON metadata associated with this vector. Only populated if
+    /// the vector has metadata and `include_metadata` was not set to false
+    /// in the search builder.
     pub metadata: Option<Value>,
 }
 
@@ -158,14 +192,45 @@ pub struct SearchExplain {
     pub distance_function: String,
 }
 
-/// Builder for configuring and executing searches.
+/// Fluent builder for configuring and executing vector similarity searches.
 ///
-/// Supports both pre-filtering (filter before ANN search) and post-filtering
-/// (filter after ANN search). Use pre-filtering when the filter is selective
-/// and fast; use post-filtering when you need to guarantee k results or when
-/// the filter involves expensive computation.
+/// `SearchBuilder` provides fine-grained control over search behavior, including
+/// filtering strategies, performance tuning, and distance function overrides.
 ///
-/// # Example
+/// # Filtering Strategies
+///
+/// Two filtering modes are available:
+///
+/// | Mode | Method | When to Use |
+/// |------|--------|-------------|
+/// | **Pre-filter** | [`filter()`](Self::filter) | Filter is fast and selective; filters during HNSW traversal |
+/// | **Post-filter** | [`post_filter()`](Self::post_filter) | Need to guarantee k candidates; filter after ANN search |
+///
+/// Pre-filtering integrates with HNSW search, skipping non-matching candidates during
+/// traversal. Post-filtering fetches extra candidates (`k * post_filter_factor`), then
+/// filters and truncates.
+///
+/// # Performance Tuning
+///
+/// - [`ef_search()`](Self::ef_search): Higher values improve recall but increase latency
+/// - [`include_metadata(false)`](Self::include_metadata): Skip metadata loading for faster searches
+/// - [`post_filter_factor()`](Self::post_filter_factor): Adjust over-fetch ratio for post-filtering
+///
+/// # Example: Basic Search
+///
+/// ```
+/// use needle::Collection;
+///
+/// let mut collection = Collection::with_dimensions("docs", 4);
+/// collection.insert("v1", &[1.0, 0.0, 0.0, 0.0], None)?;
+///
+/// let results = collection.search_builder(&[1.0, 0.0, 0.0, 0.0])
+///     .k(10)
+///     .execute()?;
+/// # Ok::<(), needle::NeedleError>(())
+/// ```
+///
+/// # Example: Pre-Filter vs Post-Filter
 ///
 /// ```
 /// use needle::{Collection, Filter};
@@ -176,6 +241,7 @@ pub struct SearchExplain {
 /// collection.insert("v2", &[0.9, 0.1, 0.0, 0.0], Some(json!({"type": "b", "score": 20})))?;
 ///
 /// // Pre-filter: filter candidates BEFORE ANN search
+/// // Use when: filter is fast, you don't need exactly k results
 /// let pre_filter = Filter::eq("type", "a");
 /// let results = collection.search_builder(&[1.0, 0.0, 0.0, 0.0])
 ///     .k(10)
@@ -183,10 +249,34 @@ pub struct SearchExplain {
 ///     .execute()?;
 ///
 /// // Post-filter: filter results AFTER ANN search
+/// // Use when: need to guarantee k candidates before filtering
 /// let post_filter = Filter::gt("score", 15);
 /// let results = collection.search_builder(&[1.0, 0.0, 0.0, 0.0])
 ///     .k(10)
 ///     .post_filter(&post_filter)
+///     .post_filter_factor(5)  // Fetch 50 candidates, filter, keep 10
+///     .execute()?;
+/// # Ok::<(), needle::NeedleError>(())
+/// ```
+///
+/// # Example: Performance Tuning
+///
+/// ```
+/// use needle::Collection;
+///
+/// let mut collection = Collection::with_dimensions("docs", 4);
+/// collection.insert("v1", &[1.0, 0.0, 0.0, 0.0], None)?;
+///
+/// // Higher ef_search for better recall
+/// let high_recall = collection.search_builder(&[1.0, 0.0, 0.0, 0.0])
+///     .k(10)
+///     .ef_search(200)  // Default is 50
+///     .execute()?;
+///
+/// // Skip metadata for faster response
+/// let fast_search = collection.search_builder(&[1.0, 0.0, 0.0, 0.0])
+///     .k(10)
+///     .include_metadata(false)
 ///     .execute()?;
 /// # Ok::<(), needle::NeedleError>(())
 /// ```
