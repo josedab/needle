@@ -34,6 +34,27 @@ jobs:
       - name: Unit tests
         run: cargo test --lib
 
+  openapi-sync:
+    needs: quick-check
+    name: OpenAPI Spec Sync
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: dtolnay/rust-toolchain@b3b07ba8b418998c39fb20f53e18c1f174b91f20 # stable
+      - uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-openapi-${{ hashFiles('**/Cargo.lock') }}
+      - name: Verify docs/openapi.json is up to date
+        run: |
+          echo 'fn main() { print!("{}", needle::server::openapi_spec_json()); }' > examples/gen_openapi.rs
+          cargo run --features server --example gen_openapi > /tmp/openapi.json
+          rm examples/gen_openapi.rs
+          diff docs/openapi.json /tmp/openapi.json || (echo "::error::docs/openapi.json is out of date. Regenerate with: cargo run --features server --example gen_openapi > docs/openapi.json" && exit 1)
+
   test:
     needs: quick-check
     name: Test (${{ matrix.os }}, ${{ matrix.rust }})
