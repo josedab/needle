@@ -554,7 +554,7 @@ cargo bench -- --warm-up-time 3
 
 - **Questions**: Open a GitHub Discussion
 - **Bugs**: Open a GitHub Issue
-- **Security**: Email security@anthropic.com
+- **Security**: Email security@needle-db.io
 
 ---
 
