@@ -77,6 +77,6 @@ assert!(manifest.is_stable("Collection"));
 
 ### Getting Help
 
-- [API Stability Guide](docs/api-stability.md)
+- [API Stability Guide](api-stability.md)
 - [GitHub Discussions](https://github.com/anthropics/needle/discussions)
 - [SUPPORT.md](SUPPORT.md)
