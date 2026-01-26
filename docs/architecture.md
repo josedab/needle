@@ -6,29 +6,60 @@ This document describes the internal architecture of Needle, an embedded vector 
 
 Needle is designed as "SQLite for vectors" - a single-file, embedded vector database that provides high-performance approximate nearest neighbor (ANN) search with zero configuration.
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                         Application                              │
-├─────────────────────────────────────────────────────────────────┤
-│                      Needle Public API                           │
-│  ┌──────────┐  ┌────────────┐  ┌──────────┐  ┌──────────────┐  │
-│  │ Database │  │ Collection │  │  Filter  │  │ SearchResult │  │
-│  └──────────┘  └────────────┘  └──────────┘  └──────────────┘  │
-├─────────────────────────────────────────────────────────────────┤
-│                        Core Components                           │
-│  ┌──────────┐  ┌────────────┐  ┌──────────┐  ┌──────────────┐  │
-│  │   HNSW   │  │  Metadata  │  │ Storage  │  │ Quantization │  │
-│  │  Index   │  │   Store    │  │  Layer   │  │    Layer     │  │
-│  └──────────┘  └────────────┘  └──────────┘  └──────────────┘  │
-├─────────────────────────────────────────────────────────────────┤
-│                     Distance Functions                           │
-│  ┌──────────┐  ┌────────────┐  ┌──────────┐  ┌──────────────┐  │
-│  │  Cosine  │  │ Euclidean  │  │   Dot    │  │  Manhattan   │  │
-│  │  (SIMD)  │  │   (SIMD)   │  │ (SIMD)   │  │   (SIMD)     │  │
-│  └──────────┘  └────────────┘  └──────────┘  └──────────────┘  │
-├─────────────────────────────────────────────────────────────────┤
-│                      File System / Memory                        │
-└─────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+    subgraph Application["Application Layer"]
+        APP[Your Application]
+    end
+
+    subgraph API["Public API"]
+        DB[Database]
+        COLL[Collection]
+        FILTER[Filter]
+        RESULT[SearchResult]
+    end
+
+    subgraph Core["Core Engine"]
+        direction TB
+        HNSW[HNSW Index]
+        IVF[IVF Index]
+        META[Metadata Store]
+        STORE[Storage Layer]
+        QUANT[Quantization]
+    end
+
+    subgraph Distance["Distance Functions (SIMD)"]
+        COS[Cosine]
+        EUC[Euclidean]
+        DOT[Dot Product]
+        MAN[Manhattan]
+    end
+
+    subgraph Persistence["Persistence"]
+        FILE[".needle File"]
+        WAL[Write-Ahead Log]
+        MMAP[Memory Map]
+    end
+
+    APP --> DB
+    APP --> COLL
+    DB --> COLL
+    COLL --> HNSW
+    COLL --> IVF
+    COLL --> META
+    COLL --> FILTER
+    HNSW --> COS
+    HNSW --> EUC
+    IVF --> DOT
+    IVF --> MAN
+    HNSW --> STORE
+    IVF --> STORE
+    META --> STORE
+    QUANT --> STORE
+    STORE --> FILE
+    STORE --> WAL
+    STORE --> MMAP
+    COLL --> RESULT
 ```
 
 ## Module Overview
@@ -903,9 +934,272 @@ flowchart BT
     COLL -->|"Result<Vec<SearchResult>>"| APP
 ```
 
+## Write Path & Durability
+
+The write path ensures durability through Write-Ahead Logging (WAL):
+
+```mermaid
+sequenceDiagram
+    participant App as Application
+    participant Coll as Collection
+    participant WAL as WAL Manager
+    participant Store as Storage
+    participant HNSW as HNSW Index
+
+    App->>Coll: insert(id, vector, metadata)
+    activate Coll
+
+    Coll->>Coll: validate(vector)
+    Coll->>WAL: append(InsertOp)
+    activate WAL
+    WAL->>WAL: write to log file
+    WAL->>WAL: fsync()
+    WAL-->>Coll: LSN
+    deactivate WAL
+
+    par Update Storage
+        Coll->>Store: store_vector(id, vector)
+        Store-->>Coll: internal_id
+    and Update Index
+        Coll->>HNSW: insert(internal_id, vector)
+        Note over HNSW: Find entry point<br/>Navigate layers<br/>Connect neighbors
+        HNSW-->>Coll: success
+    end
+
+    Coll-->>App: Ok(())
+    deactivate Coll
+
+    Note over WAL: Periodic checkpoint<br/>flushes WAL to main storage
+```
+
+### Recovery Flow
+
+```mermaid
+flowchart LR
+    subgraph Startup
+        OPEN[Open Database]
+        CHECK[Check WAL]
+        REPLAY[Replay WAL Entries]
+        APPLY[Apply to Storage/Index]
+        READY[Ready for Queries]
+    end
+
+    OPEN --> CHECK
+    CHECK -->|WAL exists| REPLAY
+    CHECK -->|No WAL| READY
+    REPLAY --> APPLY
+    APPLY --> READY
+```
+
+## Index Selection Decision Tree
+
+Use this flowchart to choose the optimal index type:
+
+```mermaid
+flowchart TD
+    START[Dataset Size?]
+
+    START -->|< 1M vectors| Q1{Memory constrained?}
+    START -->|1M - 100M| Q2{Recall requirement?}
+    START -->|> 100M| DISKANN[DiskANN]
+
+    Q1 -->|No| HNSW[HNSW<br/>M=16, ef=50]
+    Q1 -->|Yes| HNSW_QUANT[HNSW + Scalar Quantization]
+
+    Q2 -->|> 95%| IVF_HIGH[IVF<br/>nprobe=10-20% clusters]
+    Q2 -->|90-95%| IVF_MED[IVF + PQ<br/>nprobe=5-10%]
+    Q2 -->|< 90%| IVF_FAST[IVF + Heavy PQ<br/>nprobe=1-5%]
+
+    HNSW --> TUNE1[Tune ef_search<br/>for recall/latency]
+    HNSW_QUANT --> TUNE1
+    IVF_HIGH --> TUNE2[Tune nprobe<br/>for recall/latency]
+    IVF_MED --> TUNE2
+    IVF_FAST --> TUNE2
+    DISKANN --> TUNE3[Tune search_complexity<br/>for recall/latency]
+
+    style HNSW fill:#90EE90
+    style HNSW_QUANT fill:#90EE90
+    style IVF_HIGH fill:#87CEEB
+    style IVF_MED fill:#87CEEB
+    style IVF_FAST fill:#87CEEB
+    style DISKANN fill:#DDA0DD
+```
+
+## Security Architecture
+
+Needle's security model with RBAC and encryption:
+
+```mermaid
+flowchart TB
+    subgraph Client["Client Request"]
+        REQ[API Request]
+        CREDS[Credentials/Token]
+    end
+
+    subgraph Auth["Authentication"]
+        AUTHN[Authenticate]
+        TOKEN[Validate Token]
+    end
+
+    subgraph RBAC["Authorization (RBAC)"]
+        ROLES[Check Roles]
+        PERMS[Check Permissions]
+        POLICY[Policy Decision]
+    end
+
+    subgraph Execution["Protected Execution"]
+        DECRYPT[Decrypt Data]
+        EXEC[Execute Operation]
+        ENCRYPT[Encrypt Results]
+        AUDIT[Audit Log]
+    end
+
+    subgraph Storage["Encrypted Storage"]
+        DATA[(Encrypted Data)]
+        KEYS[Key Manager]
+    end
+
+    REQ --> AUTHN
+    CREDS --> TOKEN
+    TOKEN --> AUTHN
+
+    AUTHN -->|Valid| ROLES
+    AUTHN -->|Invalid| DENY1[Deny: 401]
+
+    ROLES --> PERMS
+    PERMS --> POLICY
+
+    POLICY -->|Allow| DECRYPT
+    POLICY -->|Deny| DENY2[Deny: 403]
+
+    KEYS --> DECRYPT
+    DECRYPT --> EXEC
+    EXEC --> ENCRYPT
+    ENCRYPT --> AUDIT
+
+    DATA --> DECRYPT
+    ENCRYPT --> DATA
+
+    style DENY1 fill:#FF6B6B
+    style DENY2 fill:#FF6B6B
+```
+
+### Permission Model
+
+```mermaid
+graph TD
+    subgraph Roles
+        ADMIN[Admin]
+        WRITER[Writer]
+        READER[Reader]
+    end
+
+    subgraph Permissions
+        P_READ[Read]
+        P_WRITE[Write]
+        P_DELETE[Delete]
+        P_ADMIN[Admin]
+    end
+
+    subgraph Resources
+        R_COLL[Collections]
+        R_VEC[Vectors]
+        R_META[Metadata]
+        R_CONFIG[Configuration]
+    end
+
+    ADMIN --> P_ADMIN
+    ADMIN --> P_DELETE
+    ADMIN --> P_WRITE
+    ADMIN --> P_READ
+
+    WRITER --> P_WRITE
+    WRITER --> P_READ
+
+    READER --> P_READ
+
+    P_ADMIN --> R_CONFIG
+    P_DELETE --> R_VEC
+    P_DELETE --> R_COLL
+    P_WRITE --> R_VEC
+    P_WRITE --> R_META
+    P_READ --> R_VEC
+    P_READ --> R_META
+    P_READ --> R_COLL
+```
+
+## NeedleQL Query Flow
+
+The NeedleQL query language processing pipeline:
+
+```mermaid
+flowchart LR
+    subgraph Input
+        QUERY["SEARCH 'AI' FROM docs<br/>WHERE category = 'tech'<br/>LIMIT 10"]
+    end
+
+    subgraph Lexer
+        TOKENS[Tokens:<br/>SEARCH, STRING, FROM,<br/>IDENT, WHERE, ...]
+    end
+
+    subgraph Parser
+        AST[Abstract Syntax Tree]
+    end
+
+    subgraph Validator
+        VALID[Semantic Validation<br/>- Collection exists?<br/>- Fields valid?]
+    end
+
+    subgraph Optimizer
+        OPT[Query Plan<br/>- Filter pushdown<br/>- Index selection]
+    end
+
+    subgraph Executor
+        EXEC[Execute:<br/>1. Vector search<br/>2. Apply filter<br/>3. Return results]
+    end
+
+    QUERY --> TOKENS
+    TOKENS --> AST
+    AST --> VALID
+    VALID --> OPT
+    OPT --> EXEC
+```
+
+### Query AST Structure
+
+```mermaid
+graph TD
+    ROOT[SearchQuery]
+
+    ROOT --> VECTOR[VectorSource]
+    ROOT --> FROM[FromClause]
+    ROOT --> WHERE[WhereClause]
+    ROOT --> LIMIT[LimitClause]
+
+    VECTOR --> EMBED[Embedding: 'AI']
+
+    FROM --> COLL[Collection: 'docs']
+
+    WHERE --> FILTER[FilterExpr]
+    FILTER --> EQ[Eq]
+    EQ --> FIELD[Field: 'category']
+    EQ --> VALUE[Value: 'tech']
+
+    LIMIT --> COUNT[Count: 10]
+```
+
 ## Future Considerations
 
 1. **GPU acceleration:** CUDA/OpenCL distance computation
 2. **Tiered storage:** Hot/warm/cold data separation
 3. **Streaming ingestion:** Real-time vector updates
 4. **Federated search:** Cross-cluster queries
+
+---
+
+## See Also
+
+- [Index Selection Guide](index-selection-guide.md) - Detailed index comparison
+- [Production Checklist](production-checklist.md) - Security and durability checklist
+- [Distributed Operations](distributed-operations.md) - Clustering architecture
+- [API Reference](api-reference.md) - Complete API documentation
