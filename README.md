@@ -234,6 +234,8 @@ fn main() -> needle::Result<()> {
     for result in results {
         println!("ID: {}, Distance: {}", result.id, result.distance);
     }
+    // Output:
+    // ID: doc1, Distance: 0
 
     Ok(())
 }
@@ -254,6 +256,8 @@ collection.insert("doc1", [0.1] * 384, {"title": "Hello"})
 results = collection.search([0.1] * 384, k=10)
 for result in results:
     print(f"ID: {result.id}, Distance: {result.distance}")
+# Output:
+# ID: doc1, Distance: 0.0
 
 # Search with filter
 results = collection.search_with_filter(
@@ -281,6 +285,8 @@ const results = collection.search(new Float32Array(384).fill(0.1), 10);
 for (const result of results) {
     console.log(`ID: ${result.id}, Distance: ${result.distance}`);
 }
+// Output:
+// ID: doc1, Distance: 0
 ```
 
 ## Persistence
