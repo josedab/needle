@@ -521,7 +521,9 @@ impl TransactionManager {
         for entry in entries.iter().rev() {
             if let Some(undo) = &entry.undo {
                 // Best-effort rollback — log failures but continue
-                let _ = self.apply_undo(db, undo);
+                if let Err(e) = self.apply_undo(db, undo) {
+                    tracing::warn!("Transaction rollback undo failed: {e}");
+                }
             }
         }
     }

@@ -172,7 +172,9 @@ impl RagPipeline {
         };
         for i in 0..chunks.len() {
             let chunk_id = format!("{doc_id}__chunk_{i}");
-            let _ = self.collection.delete(&chunk_id);
+            if let Err(e) = self.collection.delete(&chunk_id) {
+                tracing::warn!("Failed to delete chunk '{chunk_id}': {e}");
+            }
         }
         Ok(true)
     }

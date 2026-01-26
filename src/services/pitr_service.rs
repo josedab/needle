@@ -289,7 +289,9 @@ impl<'a> PitrService<'a> {
 
         for cs in col_snapshots {
             // Drop and recreate the collection
-            let _ = self.db.delete_collection(&cs.name);
+            if let Err(e) = self.db.delete_collection(&cs.name) {
+                tracing::warn!("Failed to delete collection '{}' during restore: {e}", cs.name);
+            }
             self.db.create_collection(&cs.name, cs.dimension)?;
             let coll = self.db.collection(&cs.name)?;
 
