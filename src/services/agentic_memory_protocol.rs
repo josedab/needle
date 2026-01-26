@@ -384,7 +384,9 @@ impl AgentMemory {
 
             // Promote high-importance episodic → semantic
             if eff_importance >= self.config.promotion_threshold {
-                let _ = self.episodic.delete(&id);
+                if let Err(e) = self.episodic.delete(&id) {
+                    tracing::warn!("Failed to delete episodic memory '{id}' during promotion: {e}");
+                }
                 let meta = serde_json::to_value(&entry).ok();
                 let new_id = format!("mem_{}", self.next_id);
                 self.next_id += 1;
@@ -403,7 +405,9 @@ impl AgentMemory {
             if let Some(ttl) = self.config.episodic_ttl {
                 if now.saturating_sub(entry.created_at) > ttl.as_secs() && eff_importance < 0.3
                 {
-                    let _ = self.episodic.delete(&id);
+                    if let Err(e) = self.episodic.delete(&id) {
+                        tracing::warn!("Failed to delete expired episodic memory '{id}': {e}");
+                    }
                     self.entries.remove(&id);
                     stats.forgotten += 1;
                 }
@@ -417,7 +421,9 @@ impl AgentMemory {
     pub fn forget(&mut self, id: &str) -> Result<bool> {
         if let Some(entry) = self.entries.remove(id) {
             let coll = self.tier_collection_mut(entry.tier);
-            let _ = coll.delete(id);
+            if let Err(e) = coll.delete(id) {
+                tracing::warn!("Failed to delete memory '{id}' from collection: {e}");
+            }
             Ok(true)
         } else {
             Ok(false)
@@ -569,7 +575,9 @@ impl LangChainMemoryStore {
     pub fn clear(&mut self) {
         let ids: Vec<String> = self.inner.entries.keys().cloned().collect();
         for id in ids {
-            let _ = self.inner.forget(&id);
+            if let Err(e) = self.inner.forget(&id) {
+                tracing::warn!("Failed to forget memory '{id}' during clear: {e}");
+            }
         }
     }
 
@@ -654,7 +662,9 @@ impl LlamaIndexMemoryBuffer {
         self.history.clear();
         let ids: Vec<String> = self.inner.entries.keys().cloned().collect();
         for id in ids {
-            let _ = self.inner.forget(&id);
+            if let Err(e) = self.inner.forget(&id) {
+                tracing::warn!("Failed to forget memory '{id}' during reset: {e}");
+            }
         }
     }
 
