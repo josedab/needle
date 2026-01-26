@@ -77,8 +77,23 @@ const sidebars: SidebarsConfig = {
     },
     {
       type: 'doc',
+      id: 'benchmarks',
+      label: 'Performance & Benchmarks',
+    },
+    {
+      type: 'doc',
       id: 'comparison',
       label: 'Comparison',
+    },
+    {
+      type: 'doc',
+      id: 'migration',
+      label: 'Migration Guide',
+    },
+    {
+      type: 'doc',
+      id: 'troubleshooting',
+      label: 'Troubleshooting',
     },
     {
       type: 'doc',
