@@ -460,3 +460,12 @@ needle tune --vectors 1000000 --dimensions 384 --profile high-recall
 - Check logs: `docker logs needle` or `kubectl logs -f deployment/needle`
 - Health endpoint: `curl http://localhost:8080/health`
 - Metrics endpoint: `curl http://localhost:8080/metrics`
+
+---
+
+## See Also
+
+- [Production Checklist](production-checklist.md) - Pre-deployment verification checklist
+- [Operations Guide](OPERATIONS.md) - Day-to-day operations and monitoring
+- [Distributed Operations](distributed-operations.md) - Sharding, Raft, and clustering
+- [WASM Guide](WASM_GUIDE.md) - WebAssembly integration for browser/edge deployment
