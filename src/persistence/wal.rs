@@ -676,7 +676,9 @@ impl WalManager {
 
             // Skip newline
             let mut newline = [0u8; 1];
-            let _ = reader.read_exact(&mut newline);
+            if let Err(e) = reader.read_exact(&mut newline) {
+                tracing::warn!("Failed to read WAL record newline separator: {e}");
+            }
 
             let record: WalRecord =
                 serde_json::from_slice(&buffer).map_err(|e| NeedleError::Serialization(e))?;
@@ -837,7 +839,9 @@ impl WalManager {
                 }
 
                 // Skip newline
-                let _ = reader.seek(SeekFrom::Current(1));
+                if let Err(e) = reader.seek(SeekFrom::Current(1)) {
+                    tracing::warn!("Failed to seek past WAL record newline: {e}");
+                }
 
                 if let Ok(record) = serde_json::from_slice::<WalRecord>(&buffer) {
                     last_lsn = record.lsn;

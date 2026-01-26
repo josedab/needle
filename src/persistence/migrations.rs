@@ -840,7 +840,9 @@ impl MigrationManager {
             .map(|m| {
                 let mut ctx = MigrationContext::new(self.current_version, m.version);
                 ctx.dry_run = true;
-                let _ = m.up(&mut ctx);
+                if let Err(e) = m.up(&mut ctx) {
+                    tracing::warn!("Migration preview failed for '{}': {e}", m.id);
+                }
 
                 MigrationPreview {
                     id: m.id.clone(),
