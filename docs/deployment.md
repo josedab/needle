@@ -295,6 +295,14 @@ helm uninstall needle
 | `RUST_LOG` | Log level (error, warn, info, debug, trace) | `info` |
 | `NEEDLE_ADDRESS` | Server bind address | `0.0.0.0:8080` |
 | `NEEDLE_METRICS_PORT` | Prometheus metrics port | `9090` |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | OpenTelemetry OTLP collector endpoint | — |
+| `OTEL_SERVICE_NAME` | Service name for distributed traces | `needle` |
+| `OPENAI_API_KEY` | API key for OpenAI embeddings | — |
+| `COHERE_API_KEY` | API key for Cohere embeddings/reranking | — |
+| `HUGGINGFACE_API_KEY` | API key for Hugging Face Inference API | — |
+| `HUGGINGFACE_MODEL` | Hugging Face model name | `sentence-transformers/all-MiniLM-L6-v2` |
+| `EDGE_CONFIG` | Edge runtime configuration (experimental) | — |
+| `BLOB_READ_WRITE_TOKEN` | Blob storage read/write token (experimental) | — |
 
 ### Server Configuration
 
