@@ -13,19 +13,30 @@ RAG is a technique that:
 2. **Augments** an LLM prompt with retrieved context
 3. **Generates** responses grounded in your data
 
-```
-┌─────────────┐     ┌─────────────┐     ┌─────────────┐
-│   Question  │────▶│   Needle    │────▶│  Retrieved  │
-│  "How do I  │     │   Vector    │     │   Context   │
-│   deploy?"  │     │   Search    │     │             │
-└─────────────┘     └─────────────┘     └──────┬──────┘
-                                               │
-                                               ▼
-                    ┌─────────────┐     ┌─────────────┐
-                    │   Answer    │◀────│    LLM      │
-                    │  "To deploy │     │  (GPT-4,    │
-                    │   first..." │     │   Claude)   │
-                    └─────────────┘     └─────────────┘
+```mermaid
+flowchart LR
+    subgraph Input
+        Q[Question<br/>"How do I deploy?"]
+    end
+
+    subgraph Retrieval["Retrieval (Needle)"]
+        EMB[Embed Query]
+        VS[Vector Search]
+        CTX[Retrieved Context]
+    end
+
+    subgraph Generation
+        LLM[LLM<br/>GPT-4 / Claude]
+        ANS[Answer<br/>"To deploy, first..."]
+    end
+
+    Q --> EMB --> VS --> CTX
+    CTX --> LLM
+    Q --> LLM
+    LLM --> ANS
+
+    style Retrieval fill:#312e81,stroke:#818cf8,color:#fff
+    style Generation fill:#1e3a5f,stroke:#60a5fa,color:#fff
 ```
 
 ## Benefits of RAG

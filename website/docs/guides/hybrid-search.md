@@ -23,28 +23,34 @@ Example queries where hybrid excels:
 
 ## Architecture
 
-```
-          ┌─────────────────┐
-          │      Query      │
-          └────────┬────────┘
-                   │
-        ┌──────────┴──────────┐
-        ▼                     ▼
-┌───────────────┐     ┌───────────────┐
-│ Vector Search │     │  BM25 Search  │
-│   (Needle)    │     │   (Needle)    │
-└───────┬───────┘     └───────┬───────┘
-        │                     │
-        └──────────┬──────────┘
-                   ▼
-          ┌───────────────┐
-          │  RRF Fusion   │
-          └───────┬───────┘
-                  │
-                  ▼
-          ┌───────────────┐
-          │    Results    │
-          └───────────────┘
+```mermaid
+flowchart TB
+    subgraph Input
+        Q[Query]
+    end
+
+    subgraph "Parallel Search"
+        VS[Vector Search<br/>Semantic Similarity]
+        BM25[BM25 Search<br/>Keyword Matching]
+    end
+
+    subgraph Fusion
+        RRF[Reciprocal Rank Fusion<br/>RRF_score = Σ 1/(k + rank)]
+    end
+
+    subgraph Output
+        R[Ranked Results]
+    end
+
+    Q --> VS
+    Q --> BM25
+    VS --> RRF
+    BM25 --> RRF
+    RRF --> R
+
+    style VS fill:#312e81,stroke:#818cf8,color:#fff
+    style BM25 fill:#1e3a5f,stroke:#60a5fa,color:#fff
+    style RRF fill:#065f46,stroke:#34d399,color:#fff
 ```
 
 ## Setting Up Hybrid Search
