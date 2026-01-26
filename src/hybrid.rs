@@ -24,7 +24,40 @@ impl Default for Bm25Config {
     }
 }
 
-/// RRF (Reciprocal Rank Fusion) parameters
+/// RRF (Reciprocal Rank Fusion) parameters.
+///
+/// RRF combines ranked results from multiple retrieval systems (here: vector
+/// search and BM25) into a single ranking. The formula for each result is:
+///
+/// ```text
+/// rrf_score(d) = Σ  weight_i / (k + rank_i(d))
+///                i
+/// ```
+///
+/// where `rank_i(d)` is the 1-based rank of document `d` in system `i`, and `k`
+/// is a smoothing constant. Documents appearing in both result sets have their
+/// scores summed.
+///
+/// ## Why k = 60?
+///
+/// The constant `k` (default: 60) controls how much rank position matters:
+/// - **Small k** (e.g., 1): top-ranked results dominate; score drops off steeply.
+/// - **Large k** (e.g., 1000): ranks are nearly uniform; all results matter equally.
+/// - **k = 60**: the original value from Cormack et al. (2009), empirically shown
+///   to work well across diverse retrieval tasks. It provides a gentle falloff
+///   that balances top-result emphasis with tail inclusion.
+///
+/// ## Worked Example
+///
+/// Given `k=60`, `vector_weight=0.5`, `bm25_weight=0.5`:
+///
+/// | Document | Vector Rank | BM25 Rank | Vector RRF       | BM25 RRF         | Combined |
+/// |----------|-------------|-----------|------------------|------------------|----------|
+/// | doc_A    | 1           | 3         | 0.5/(60+1)=0.0082| 0.5/(60+3)=0.0079| 0.0161   |
+/// | doc_B    | 2           | 1         | 0.5/(60+2)=0.0081| 0.5/(60+1)=0.0082| 0.0163   |
+/// | doc_C    | 3           | —         | 0.5/(60+3)=0.0079| 0.0              | 0.0079   |
+///
+/// Result: doc_B > doc_A > doc_C (doc_B wins because it ranks highly in both systems).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RrfConfig {
     /// Constant to prevent division by zero and control rank importance
@@ -297,7 +330,13 @@ pub struct HybridSearchResult {
     pub bm25_rank: Option<usize>,
 }
 
-/// Combine vector and BM25 results using Reciprocal Rank Fusion
+/// Combine vector and BM25 results using Reciprocal Rank Fusion.
+///
+/// For each document, computes `rrf_score = weight / (k + rank + 1)` from each
+/// result set (vector and BM25), then sums the scores for documents appearing in
+/// both. Results are sorted by combined score (descending) and truncated to `limit`.
+///
+/// See [`RrfConfig`] for the formula details and parameter tuning guidance.
 pub fn reciprocal_rank_fusion(
     vector_results: &[(String, f32)],
     bm25_results: &[(String, f32)],
