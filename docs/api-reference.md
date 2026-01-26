@@ -496,20 +496,1179 @@ When compiled with `--features server`:
 cargo run --features server -- serve -a 127.0.0.1:8080 -d vectors.needle
 ```
 
-### Endpoints
+### Endpoints Overview
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
+| **System** | | |
+| GET | `/` | Root info (collection/vector counts) |
 | GET | `/health` | Health check |
+| GET | `/info` | Database info |
+| GET | `/metrics` | Prometheus metrics |
+| GET | `/openapi.json` | OpenAPI 3.1 specification |
+| POST | `/save` | Persist database to disk |
+| **Collections** | | |
 | GET | `/collections` | List collections |
 | POST | `/collections` | Create collection |
 | GET | `/collections/:name` | Get collection info |
 | DELETE | `/collections/:name` | Delete collection |
-| POST | `/collections/:name/vectors` | Insert vectors |
-| GET | `/collections/:name/vectors/:id` | Get vector |
-| DELETE | `/collections/:name/vectors/:id` | Delete vector |
-| POST | `/collections/:name/search` | Search |
-| POST | `/save` | Save database |
+| POST | `/collections/:name/compact` | Compact collection (reclaim space) |
+| GET | `/collections/:name/export` | Export collection data |
+| POST | `/collections/:name/expire` | Expire TTL-based vectors |
+| GET | `/collections/:name/ttl-stats` | TTL statistics |
+| **Vectors** | | |
+| GET | `/collections/:collection/vectors` | List vector IDs (paginated) |
+| POST | `/collections/:collection/vectors` | Insert vectors |
+| POST | `/collections/:collection/vectors/batch` | Batch insert vectors |
+| POST | `/collections/:collection/vectors/upsert` | Upsert a vector |
+| GET | `/collections/:collection/vectors/:id` | Get vector by ID |
+| DELETE | `/collections/:collection/vectors/:id` | Delete vector |
+| POST | `/collections/:collection/vectors/:id/metadata` | Update vector metadata |
+| **Text (Auto-Embed)** | | |
+| POST | `/collections/:collection/texts` | Insert text (auto-embedded) |
+| POST | `/collections/:collection/texts/batch` | Batch insert texts |
+| POST | `/collections/:collection/texts/search` | Search by text |
+| **Search** | | |
+| POST | `/collections/:collection/search` | Vector similarity search |
+| POST | `/collections/:collection/search/batch` | Batch search (multiple queries) |
+| POST | `/collections/:collection/search/radius` | Radius search (distance threshold) |
+| POST | `/collections/:collection/search/graph` | Graph-augmented search |
+| POST | `/collections/:collection/search/matryoshka` | Matryoshka coarse-to-fine search |
+| POST | `/collections/:collection/search/time-travel` | Search against a snapshot |
+| POST | `/collections/:collection/search/estimate` | Search cost estimation |
+| **Semantic Cache** | | |
+| POST | `/collections/:collection/cache/lookup` | Look up cached response |
+| POST | `/collections/:collection/cache/store` | Store prompt/response in cache |
+| **Streaming & Diff** | | |
+| POST | `/collections/:collection/ingest` | Streaming vector ingest |
+| POST | `/collections/:collection/diff` | Diff two collections |
+| GET | `/collections/:collection/changes` | Change feed |
+| **Benchmarks & Index** | | |
+| POST | `/collections/:collection/benchmark` | Run search benchmark |
+| GET | `/collections/:collection/index/status` | Index and WAL status |
+| **Snapshots** | | |
+| GET | `/collections/:name/snapshots` | List snapshots |
+| POST | `/collections/:name/snapshots` | Create snapshot |
+| POST | `/collections/:name/snapshots/:snapshot/restore` | Restore from snapshot |
+| POST | `/collections/:collection/snapshots/diff` | Diff two snapshots |
+| **Memory Protocol** | | |
+| POST | `/collections/:collection/memory/remember` | Store a memory |
+| POST | `/collections/:collection/memory/recall` | Recall memories by similarity |
+| DELETE | `/collections/:collection/memory/:memory_id/forget` | Forget a memory |
+| **Aliases** | | |
+| POST | `/aliases` | Create alias |
+| GET | `/aliases` | List all aliases |
+| GET | `/aliases/:alias` | Get alias target |
+| DELETE | `/aliases/:alias` | Delete alias |
+| PUT | `/aliases/:alias` | Update alias target |
+| **Webhooks** | | |
+| POST | `/webhooks` | Register webhook |
+| GET | `/webhooks` | List webhooks |
+| DELETE | `/webhooks/:id` | Delete webhook |
+| **Admin & Integration** | | |
+| GET | `/embeddings/router/status` | Embedding router status |
+| GET | `/cluster/status` | Cluster/shard status |
+| GET | `/grpc/schema` | gRPC schema info |
+| GET | `/tracing/status` | OpenTelemetry tracing status |
+| POST | `/mcp` | MCP JSON-RPC endpoint |
+| GET | `/mcp/config` | MCP client configuration |
+| **UI** | | |
+| GET | `/dashboard` | Admin dashboard (HTML) |
+| GET | `/playground` | Interactive API playground (HTML) |
+
+---
+
+### System Endpoints
+
+#### `GET /health`
+
+Health check endpoint.
+
+```bash
+curl http://localhost:8080/health
+# {"status":"ok"}
+```
+
+#### `GET /` or `GET /info`
+
+Database summary information.
+
+```bash
+curl http://localhost:8080/info
+# {"collections":2,"total_vectors":1500}
+```
+
+#### `GET /metrics`
+
+Prometheus-format metrics (requires `metrics` feature).
+
+```bash
+curl http://localhost:8080/metrics
+# needle_vectors_total{collection="docs"} 1500
+# needle_search_duration_seconds_bucket{le="0.01"} 42
+```
+
+#### `POST /save`
+
+Persist all in-memory changes to disk.
+
+```bash
+curl -X POST http://localhost:8080/save
+# {"saved":true}
+```
+
+#### `GET /openapi.json`
+
+Returns the OpenAPI 3.1 specification for all endpoints.
+
+```bash
+curl http://localhost:8080/openapi.json -o openapi.json
+```
+
+---
+
+### Collection Endpoints
+
+#### `POST /collections`
+
+Create a new collection.
+
+**Request Body:**
+```json
+{
+  "name": "docs",
+  "dimension": 384,
+  "distance": "cosine",
+  "hnsw_config": {
+    "m": 16,
+    "ef_construction": 200
+  }
+}
+```
+
+```bash
+curl -X POST http://localhost:8080/collections \
+  -H "Content-Type: application/json" \
+  -d '{"name": "docs", "dimension": 384}'
+# {"created":"docs"}
+```
+
+#### `GET /collections`
+
+List all collections.
+
+```bash
+curl http://localhost:8080/collections
+# {"collections":["docs","images"]}
+```
+
+#### `GET /collections/:name`
+
+Get collection info and statistics.
+
+```bash
+curl http://localhost:8080/collections/docs
+# {"name":"docs","dimensions":384,"count":1500,"distance":"cosine"}
+```
+
+#### `DELETE /collections/:name`
+
+Delete a collection and all its data.
+
+```bash
+curl -X DELETE http://localhost:8080/collections/docs
+# {"deleted":"docs"}
+```
+
+#### `POST /collections/:name/compact`
+
+Compact collection to reclaim space from deleted vectors.
+
+```bash
+curl -X POST http://localhost:8080/collections/docs/compact
+# {"compacted":"docs","reclaimed_bytes":4096}
+```
+
+#### `GET /collections/:name/export`
+
+Export all vectors and metadata as JSON.
+
+```bash
+curl http://localhost:8080/collections/docs/export
+# {"vectors":[{"id":"doc1","values":[0.1,...],"metadata":{...}},...],"count":1500}
+```
+
+#### `POST /collections/:name/expire`
+
+Remove expired TTL-based vectors.
+
+```bash
+curl -X POST http://localhost:8080/collections/docs/expire
+# {"collection":"docs","expired_count":5}
+```
+
+#### `GET /collections/:name/ttl-stats`
+
+Get TTL expiration statistics.
+
+```bash
+curl http://localhost:8080/collections/docs/ttl-stats
+# {"collection":"docs","vectors_with_ttl":100,"expired_count":5,"earliest_expiration":"...","latest_expiration":"...","needs_sweep":true}
+```
+
+---
+
+### Vector Endpoints
+
+#### `POST /collections/:collection/vectors`
+
+Insert one or more vectors.
+
+**Request Body:**
+```json
+{
+  "vectors": [
+    {
+      "id": "doc1",
+      "values": [0.1, 0.2, 0.3],
+      "metadata": {"title": "Hello World"}
+    }
+  ]
+}
+```
+
+```bash
+curl -X POST http://localhost:8080/collections/docs/vectors \
+  -H "Content-Type: application/json" \
+  -d '{"vectors": [{"id": "doc1", "values": [0.1, 0.2, 0.3], "metadata": {"title": "Hello"}}]}'
+# {"inserted":1}
+```
+
+#### `POST /collections/:collection/vectors/batch`
+
+Batch insert vectors.
+
+**Request Body:**
+```json
+{
+  "vectors": [
+    {"id": "doc1", "values": [0.1, 0.2, 0.3], "metadata": {"type": "a"}},
+    {"id": "doc2", "values": [0.4, 0.5, 0.6], "metadata": {"type": "b"}}
+  ]
+}
+```
+
+```bash
+curl -X POST http://localhost:8080/collections/docs/vectors/batch \
+  -H "Content-Type: application/json" \
+  -d '{"vectors": [{"id": "d1", "values": [0.1,0.2,0.3]}, {"id": "d2", "values": [0.4,0.5,0.6]}]}'
+# {"inserted":2,"errors":[]}
+```
+
+#### `POST /collections/:collection/vectors/upsert`
+
+Insert or update a single vector. Returns whether the vector was updated (existed) or newly inserted.
+
+**Request Body:**
+```json
+{
+  "id": "doc1",
+  "vector": [0.1, 0.2, 0.3],
+  "metadata": {"title": "Updated"},
+  "ttl_seconds": 3600
+}
+```
+
+```bash
+curl -X POST http://localhost:8080/collections/docs/vectors/upsert \
+  -H "Content-Type: application/json" \
+  -d '{"id": "doc1", "vector": [0.1,0.2,0.3], "metadata": {"title": "Updated"}}'
+# {"id":"doc1","updated":false}
+```
+
+#### `GET /collections/:collection/vectors`
+
+List vector IDs with pagination.
+
+| Query Param | Type | Default | Description |
+|-------------|------|---------|-------------|
+| `offset` | integer | 0 | Starting offset |
+| `limit` | integer | 100 | Max IDs to return |
+
+```bash
+curl "http://localhost:8080/collections/docs/vectors?offset=0&limit=10"
+# {"ids":["doc1","doc2",...],"offset":0,"limit":10,"total":1500}
+```
+
+#### `GET /collections/:collection/vectors/:id`
+
+Get a specific vector and its metadata.
+
+```bash
+curl http://localhost:8080/collections/docs/vectors/doc1
+# {"id":"doc1","values":[0.1,0.2,0.3],"metadata":{"title":"Hello"}}
+```
+
+#### `DELETE /collections/:collection/vectors/:id`
+
+Delete a vector by ID.
+
+```bash
+curl -X DELETE http://localhost:8080/collections/docs/vectors/doc1
+# {"deleted":"doc1"}
+```
+
+#### `POST /collections/:collection/vectors/:id/metadata`
+
+Update only the metadata of a vector (without re-indexing the vector).
+
+**Request Body:**
+```json
+{
+  "metadata": {"title": "New Title", "category": "updated"}
+}
+```
+
+```bash
+curl -X POST http://localhost:8080/collections/docs/vectors/doc1/metadata \
+  -H "Content-Type: application/json" \
+  -d '{"metadata": {"title": "New Title"}}'
+# {"updated":"doc1"}
+```
+
+---
+
+### Text Endpoints (Auto-Embed)
+
+These endpoints automatically generate embeddings from text using the configured embedding provider.
+
+#### `POST /collections/:collection/texts`
+
+Insert a text document (auto-embedded).
+
+**Request Body:**
+```json
+{
+  "id": "doc1",
+  "text": "Machine learning is a subset of artificial intelligence.",
+  "metadata": {"source": "textbook"}
+}
+```
+
+```bash
+curl -X POST http://localhost:8080/collections/docs/texts \
+  -H "Content-Type: application/json" \
+  -d '{"id": "doc1", "text": "Machine learning is a subset of AI.", "metadata": {"source": "textbook"}}'
+# {"id":"doc1","dimensions":384,"text_length":35,"embed_method":"auto"}
+```
+
+#### `POST /collections/:collection/texts/batch`
+
+Batch insert text documents.
+
+**Request Body:**
+```json
+{
+  "texts": [
+    {"id": "doc1", "text": "First document", "metadata": {}},
+    {"id": "doc2", "text": "Second document", "metadata": {}}
+  ]
+}
+```
+
+```bash
+curl -X POST http://localhost:8080/collections/docs/texts/batch \
+  -H "Content-Type: application/json" \
+  -d '{"texts": [{"id": "d1", "text": "Hello"}, {"id": "d2", "text": "World"}]}'
+# {"inserted":2,"total":2,"errors":[],"embed_method":"auto"}
+```
+
+#### `POST /collections/:collection/texts/search`
+
+Search by text query (auto-embedded).
+
+**Request Body:**
+```json
+{
+  "text": "artificial intelligence",
+  "k": 10,
+  "filter": {"source": "textbook"}
+}
+```
+
+```bash
+curl -X POST http://localhost:8080/collections/docs/texts/search \
+  -H "Content-Type: application/json" \
+  -d '{"text": "artificial intelligence", "k": 5}'
+# {"results":[{"id":"doc1","distance":0.12,"score":0.88,"text":"...","metadata":{}}],"count":1}
+```
+
+---
+
+### Search Endpoints
+
+#### `POST /collections/:collection/search`
+
+Vector similarity search with optional filtering and explanation.
+
+**Request Body:**
+```json
+{
+  "vector": [0.1, 0.2, 0.3],
+  "k": 10,
+  "filter": {"category": "books"},
+  "post_filter": {"price": {"$lt": 50}},
+  "post_filter_factor": 3,
+  "include_vectors": false,
+  "explain": false,
+  "distance": "cosine"
+}
+```
+
+**Response:**
+```json
+{
+  "results": [
+    {"id": "doc1", "distance": 0.05, "metadata": {"category": "books"}}
+  ],
+  "explanation": null
+}
+```
+
+```bash
+curl -X POST http://localhost:8080/collections/docs/search \
+  -H "Content-Type: application/json" \
+  -d '{"vector": [0.1, 0.2, 0.3], "k": 10, "filter": {"category": "books"}}'
+```
+
+#### `POST /collections/:collection/search/batch`
+
+Execute multiple search queries in parallel.
+
+**Request Body:**
+```json
+{
+  "vectors": [[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]],
+  "k": 10,
+  "filter": {"category": "books"}
+}
+```
+
+**Response:**
+```json
+{
+  "results": [
+    [{"id": "doc1", "distance": 0.05, "metadata": {}}],
+    [{"id": "doc2", "distance": 0.12, "metadata": {}}]
+  ]
+}
+```
+
+```bash
+curl -X POST http://localhost:8080/collections/docs/search/batch \
+  -H "Content-Type: application/json" \
+  -d '{"vectors": [[0.1,0.2,0.3],[0.4,0.5,0.6]], "k": 5}'
+```
+
+#### `POST /collections/:collection/search/radius`
+
+Find all vectors within a distance threshold.
+
+**Request Body:**
+```json
+{
+  "vector": [0.1, 0.2, 0.3],
+  "max_distance": 0.5,
+  "limit": 100,
+  "filter": {},
+  "include_vectors": false
+}
+```
+
+**Response:**
+```json
+{
+  "results": [{"id": "doc1", "distance": 0.05, "metadata": {}}],
+  "max_distance": 0.5,
+  "count": 1
+}
+```
+
+```bash
+curl -X POST http://localhost:8080/collections/docs/search/radius \
+  -H "Content-Type: application/json" \
+  -d '{"vector": [0.1,0.2,0.3], "max_distance": 0.5}'
+```
+
+#### `POST /collections/:collection/search/graph`
+
+Graph-augmented search that traverses connections between vectors.
+
+**Request Body:**
+```json
+{
+  "vector": [0.1, 0.2, 0.3],
+  "k": 10,
+  "max_hops": 3
+}
+```
+
+**Response:**
+```json
+{
+  "results": [
+    {
+      "id": "doc1",
+      "name": "doc1",
+      "vector_score": 0.95,
+      "graph_score": 0.8,
+      "combined_score": 0.88,
+      "hop_count": 1,
+      "path": ["entry", "doc1"],
+      "properties": {}
+    }
+  ],
+  "count": 1
+}
+```
+
+```bash
+curl -X POST http://localhost:8080/collections/docs/search/graph \
+  -H "Content-Type: application/json" \
+  -d '{"vector": [0.1,0.2,0.3], "k": 5, "max_hops": 2}'
+```
+
+#### `POST /collections/:collection/search/matryoshka`
+
+Matryoshka (coarse-to-fine) search. First searches with truncated dimensions for speed, then re-ranks with full dimensions.
+
+**Request Body:**
+```json
+{
+  "vector": [0.1, 0.2, 0.3],
+  "k": 10,
+  "coarse_dims": 64,
+  "oversample": 4,
+  "include_vectors": false
+}
+```
+
+**Response:**
+```json
+{
+  "results": [{"id": "doc1", "distance": 0.05, "metadata": {}}],
+  "count": 1,
+  "coarse_dims": 64,
+  "oversample": 4
+}
+```
+
+```bash
+curl -X POST http://localhost:8080/collections/docs/search/matryoshka \
+  -H "Content-Type: application/json" \
+  -d '{"vector": [0.1,0.2,0.3], "k": 10, "coarse_dims": 64}'
+```
+
+#### `POST /collections/:collection/search/time-travel`
+
+Search against a named snapshot of the collection.
+
+**Request Body:**
+```json
+{
+  "vector": [0.1, 0.2, 0.3],
+  "k": 10,
+  "snapshot": "2024-01-01-backup"
+}
+```
+
+**Response:**
+```json
+{
+  "results": [{"id": "doc1", "distance": 0.05, "metadata": {}}],
+  "count": 1,
+  "snapshot": "2024-01-01-backup",
+  "note": "..."
+}
+```
+
+```bash
+curl -X POST http://localhost:8080/collections/docs/search/time-travel \
+  -H "Content-Type: application/json" \
+  -d '{"vector": [0.1,0.2,0.3], "k": 5, "snapshot": "2024-01-01-backup"}'
+```
+
+#### `POST /collections/:collection/search/estimate`
+
+Estimate query cost and suggest alternative plans without executing a search.
+
+**Request Body:**
+```json
+{
+  "vector": [0.1, 0.2, 0.3],
+  "k": 10,
+  "filter": {"category": "books"},
+  "ef_search": 100
+}
+```
+
+**Response:**
+```json
+{
+  "collection": "docs",
+  "query_dimensions": 3,
+  "collection_vectors": 1500,
+  "plan": {...},
+  "alternatives": [...]
+}
+```
+
+```bash
+curl -X POST http://localhost:8080/collections/docs/search/estimate \
+  -H "Content-Type: application/json" \
+  -d '{"vector": [0.1,0.2,0.3], "k": 10}'
+```
+
+---
+
+### Semantic Cache Endpoints
+
+#### `POST /collections/:collection/cache/lookup`
+
+Look up a cached response by vector similarity.
+
+**Request Body:**
+```json
+{
+  "vector": [0.1, 0.2, 0.3],
+  "threshold": 0.95
+}
+```
+
+**Response:**
+```json
+{
+  "hit": true,
+  "message": "cached response text",
+  "stats": {"lookups": 42, "hits": 30}
+}
+```
+
+```bash
+curl -X POST http://localhost:8080/collections/docs/cache/lookup \
+  -H "Content-Type: application/json" \
+  -d '{"vector": [0.1,0.2,0.3], "threshold": 0.95}'
+```
+
+#### `POST /collections/:collection/cache/store`
+
+Store a prompt/response pair in the semantic cache.
+
+**Request Body:**
+```json
+{
+  "vector": [0.1, 0.2, 0.3],
+  "response": "The answer is 42.",
+  "model": "gpt-4",
+  "ttl_seconds": 3600
+}
+```
+
+**Response:**
+```json
+{
+  "stored": true,
+  "collection": "docs",
+  "model": "gpt-4",
+  "response_length": 17,
+  "ttl_seconds": 3600
+}
+```
+
+```bash
+curl -X POST http://localhost:8080/collections/docs/cache/store \
+  -H "Content-Type: application/json" \
+  -d '{"vector": [0.1,0.2,0.3], "response": "The answer is 42.", "model": "gpt-4"}'
+```
+
+---
+
+### Streaming & Diff Endpoints
+
+#### `POST /collections/:collection/ingest`
+
+Streaming vector ingest with backpressure support.
+
+**Request Body:**
+```json
+{
+  "vectors": [
+    {"id": "v1", "values": [0.1, 0.2, 0.3], "metadata": {}},
+    {"id": "v2", "values": [0.4, 0.5, 0.6], "metadata": {}}
+  ],
+  "sequence_id": "seq-001",
+  "flush": false
+}
+```
+
+**Response:**
+```json
+{
+  "accepted": 2,
+  "total": 2,
+  "errors": [],
+  "sequence_id": "seq-001",
+  "flushed": false,
+  "latency_ms": 5,
+  "backpressure": false,
+  "collection_size": 1502
+}
+```
+
+```bash
+curl -X POST http://localhost:8080/collections/docs/ingest \
+  -H "Content-Type: application/json" \
+  -d '{"vectors": [{"id": "v1", "values": [0.1,0.2,0.3]}], "flush": true}'
+```
+
+#### `POST /collections/:collection/diff`
+
+Compute the diff between two collections.
+
+**Request Body:**
+```json
+{
+  "other_collection": "docs_v2",
+  "limit": 100
+}
+```
+
+**Response:**
+```json
+{
+  "source": "docs",
+  "target": "docs_v2",
+  "source_count": 1500,
+  "target_count": 1600,
+  "only_in_source": ["old_doc"],
+  "only_in_target": ["new_doc"],
+  "modified": ["doc1"],
+  "shared_count": 1499,
+  "summary": "..."
+}
+```
+
+```bash
+curl -X POST http://localhost:8080/collections/docs/diff \
+  -H "Content-Type: application/json" \
+  -d '{"other_collection": "docs_v2"}'
+```
+
+#### `GET /collections/:collection/changes`
+
+Get a change feed for the collection.
+
+| Query Param | Type | Default | Description |
+|-------------|------|---------|-------------|
+| `limit` | integer | 100 | Max events |
+| `after` | string | — | Return events after this cursor |
+| `event_type` | string | — | Filter by event type |
+
+```bash
+curl "http://localhost:8080/collections/docs/changes?limit=50"
+# {"collection":"docs","vector_count":1500,"feed_config":{...}}
+```
+
+---
+
+### Benchmark & Index Endpoints
+
+#### `POST /collections/:collection/benchmark`
+
+Run a search latency benchmark on the collection.
+
+**Request Body:**
+```json
+{
+  "num_queries": 100,
+  "k": 10
+}
+```
+
+**Response:**
+```json
+{
+  "collection": "docs",
+  "vectors": 1500,
+  "dimensions": 384,
+  "k": 10,
+  "queries": 100,
+  "latency_us": {"p50": 120, "p95": 450, "p99": 800},
+  "throughput_qps": 8300
+}
+```
+
+```bash
+curl -X POST http://localhost:8080/collections/docs/benchmark \
+  -H "Content-Type: application/json" \
+  -d '{"num_queries": 100, "k": 10}'
+```
+
+#### `GET /collections/:collection/index/status`
+
+Get HNSW index health and WAL status.
+
+```bash
+curl http://localhost:8080/collections/docs/index/status
+# {"collection":"docs","index":{"type":"hnsw","layers":4,"entry_point":0},"wal":{},"compaction_recommended":false}
+```
+
+---
+
+### Snapshot Endpoints
+
+#### `GET /collections/:name/snapshots`
+
+List available snapshots.
+
+```bash
+curl http://localhost:8080/collections/docs/snapshots
+# {"snapshots":["2024-01-01-backup","2024-02-01-backup"]}
+```
+
+#### `POST /collections/:name/snapshots`
+
+Create a named snapshot.
+
+**Request Body:**
+```json
+{
+  "name": "before-migration"
+}
+```
+
+```bash
+curl -X POST http://localhost:8080/collections/docs/snapshots \
+  -H "Content-Type: application/json" \
+  -d '{"name": "before-migration"}'
+# {"created":true,"name":"before-migration"}
+```
+
+#### `POST /collections/:name/snapshots/:snapshot/restore`
+
+Restore a collection from a snapshot.
+
+```bash
+curl -X POST http://localhost:8080/collections/docs/snapshots/before-migration/restore
+# {"restored":true}
+```
+
+#### `POST /collections/:collection/snapshots/diff`
+
+Diff two snapshots.
+
+**Request Body:**
+```json
+{
+  "from": "snapshot-a",
+  "to": "snapshot-b"
+}
+```
+
+**Response:**
+```json
+{
+  "collection": "docs",
+  "from": "snapshot-a",
+  "to": "snapshot-b",
+  "current_vector_count": 1500,
+  "available_snapshots": ["snapshot-a", "snapshot-b"],
+  "note": "..."
+}
+```
+
+```bash
+curl -X POST http://localhost:8080/collections/docs/snapshots/diff \
+  -H "Content-Type: application/json" \
+  -d '{"from": "snapshot-a", "to": "snapshot-b"}'
+```
+
+---
+
+### Memory Protocol Endpoints
+
+Agentic memory with tiered storage (episodic, semantic, procedural).
+
+#### `POST /collections/:collection/memory/remember`
+
+Store a memory with optional tier and importance.
+
+**Request Body:**
+```json
+{
+  "content": "The user prefers dark mode.",
+  "vector": [0.1, 0.2, 0.3],
+  "tier": "semantic",
+  "importance": 0.8,
+  "session_id": "session-123",
+  "metadata": {"source": "preferences"}
+}
+```
+
+**Response:**
+```json
+{
+  "stored": true,
+  "memory_id": "mem_abc123",
+  "tier": "semantic",
+  "importance": 0.8
+}
+```
+
+```bash
+curl -X POST http://localhost:8080/collections/docs/memory/remember \
+  -H "Content-Type: application/json" \
+  -d '{"content": "User prefers dark mode", "vector": [0.1,0.2,0.3], "importance": 0.8}'
+```
+
+#### `POST /collections/:collection/memory/recall`
+
+Recall memories by vector similarity with optional filters.
+
+**Request Body:**
+```json
+{
+  "vector": [0.1, 0.2, 0.3],
+  "k": 5,
+  "tier": "semantic",
+  "session_id": "session-123",
+  "min_importance": 0.5
+}
+```
+
+**Response:**
+```json
+{
+  "memories": [
+    {
+      "memory_id": "mem_abc123",
+      "distance": 0.05,
+      "relevance_score": 0.95,
+      "content": "The user prefers dark mode.",
+      "tier": "semantic",
+      "importance": 0.8,
+      "timestamp": "2024-01-15T10:30:00Z",
+      "session_id": "session-123"
+    }
+  ],
+  "count": 1
+}
+```
+
+```bash
+curl -X POST http://localhost:8080/collections/docs/memory/recall \
+  -H "Content-Type: application/json" \
+  -d '{"vector": [0.1,0.2,0.3], "k": 5, "min_importance": 0.5}'
+```
+
+#### `DELETE /collections/:collection/memory/:memory_id/forget`
+
+Delete a specific memory.
+
+```bash
+curl -X DELETE http://localhost:8080/collections/docs/memory/mem_abc123/forget
+# {"forgotten":true,"memory_id":"mem_abc123"}
+```
+
+---
+
+### Alias Endpoints
+
+Aliases let you refer to collections by alternative names (useful for blue-green deployments).
+
+#### `POST /aliases`
+
+Create an alias pointing to a collection.
+
+**Request Body:**
+```json
+{
+  "alias": "production",
+  "collection": "docs_v2"
+}
+```
+
+```bash
+curl -X POST http://localhost:8080/aliases \
+  -H "Content-Type: application/json" \
+  -d '{"alias": "production", "collection": "docs_v2"}'
+# {"created":true,"alias":"production","collection":"docs_v2"}
+```
+
+#### `GET /aliases`
+
+List all aliases.
+
+```bash
+curl http://localhost:8080/aliases
+# {"aliases":[{"alias":"production","collection":"docs_v2"}]}
+```
+
+#### `GET /aliases/:alias`
+
+Get the target collection for an alias.
+
+```bash
+curl http://localhost:8080/aliases/production
+# {"alias":"production","collection":"docs_v2"}
+```
+
+#### `PUT /aliases/:alias`
+
+Update an alias to point to a different collection.
+
+**Request Body:**
+```json
+{
+  "collection": "docs_v3"
+}
+```
+
+```bash
+curl -X PUT http://localhost:8080/aliases/production \
+  -H "Content-Type: application/json" \
+  -d '{"collection": "docs_v3"}'
+# {"updated":true,"alias":"production","collection":"docs_v3"}
+```
+
+#### `DELETE /aliases/:alias`
+
+Delete an alias.
+
+```bash
+curl -X DELETE http://localhost:8080/aliases/production
+# {"deleted":true,"alias":"production"}
+```
+
+---
+
+### Webhook Endpoints
+
+#### `POST /webhooks`
+
+Register a webhook for collection events.
+
+**Request Body:**
+```json
+{
+  "url": "https://example.com/webhook",
+  "secret": "whsec_abc123",
+  "collections": ["docs"],
+  "event_types": ["insert", "delete", "search"]
+}
+```
+
+**Response:**
+```json
+{
+  "id": "wh_abc123",
+  "url": "https://example.com/webhook",
+  "active": true,
+  "note": "Webhook registered"
+}
+```
+
+```bash
+curl -X POST http://localhost:8080/webhooks \
+  -H "Content-Type: application/json" \
+  -d '{"url": "https://example.com/hook", "collections": ["docs"], "event_types": ["insert"]}'
+```
+
+#### `GET /webhooks`
+
+List all registered webhooks.
+
+```bash
+curl http://localhost:8080/webhooks
+# {"webhooks":[],"note":"..."}
+```
+
+#### `DELETE /webhooks/:id`
+
+Delete a webhook.
+
+```bash
+curl -X DELETE http://localhost:8080/webhooks/wh_abc123
+# {"deleted":true,"id":"wh_abc123"}
+```
+
+---
+
+### Admin & Integration Endpoints
+
+#### `GET /embeddings/router/status`
+
+Get the status of the embedding provider router.
+
+```bash
+curl http://localhost:8080/embeddings/router/status
+# {"router":"active","providers":[...],"collection_pins":{},"configuration":{}}
+```
+
+#### `GET /cluster/status`
+
+Get cluster and shard information.
+
+```bash
+curl http://localhost:8080/cluster/status
+# {"cluster":"standalone","shards":1,"total_collections":2,"replication_factor":1,"note":"..."}
+```
+
+#### `GET /grpc/schema`
+
+Get gRPC service schema information.
+
+```bash
+curl http://localhost:8080/grpc/schema
+# {"schema_version":"1.0","services":[...],"hint":"..."}
+```
+
+#### `GET /tracing/status`
+
+Get OpenTelemetry tracing configuration status.
+
+```bash
+curl http://localhost:8080/tracing/status
+# {"tracing":"enabled","instrumented_operations":[...],"configuration":{}}
+```
+
+#### `POST /mcp`
+
+JSON-RPC endpoint for Model Context Protocol integration.
+
+**Request Body:**
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "tools/list",
+  "id": 1
+}
+```
+
+```bash
+curl -X POST http://localhost:8080/mcp \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc": "2.0", "method": "tools/list", "id": 1}'
+```
+
+#### `GET /mcp/config`
+
+Get MCP client configuration (e.g., for Claude Desktop).
+
+```bash
+curl http://localhost:8080/mcp/config
+# {"mcpServers":{"needle":{"command":"needle","args":["mcp","--database","vectors.needle"]}}}
+```
 
 ### Example Requests
 
@@ -522,12 +1681,12 @@ curl -X POST http://localhost:8080/collections \
 # Insert vector
 curl -X POST http://localhost:8080/collections/docs/vectors \
   -H "Content-Type: application/json" \
-  -d '{"vectors": [{"id": "doc1", "values": [0.1, ...], "metadata": {"title": "Hello"}}]}'
+  -d '{"vectors": [{"id": "doc1", "values": [0.1, 0.2, 0.3], "metadata": {"title": "Hello"}}]}'
 
 # Search
 curl -X POST http://localhost:8080/collections/docs/search \
   -H "Content-Type: application/json" \
-  -d '{"vector": [0.1, ...], "k": 10, "filter": {"title": "Hello"}}'
+  -d '{"vector": [0.1, 0.2, 0.3], "k": 10, "filter": {"title": "Hello"}}'
 ```
 
 ---
