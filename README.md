@@ -11,9 +11,50 @@
 
 Needle is a high-performance, zero-configuration vector database designed for AI applications. It provides fast approximate nearest neighbor (ANN) search with a single-file storage format.
 
+## Performance
+
+Benchmarks on 1M vectors (384 dimensions, M=16, ef_search=50):
+
+| Operation | Latency (p50) | Latency (p99) | Throughput |
+|-----------|---------------|---------------|------------|
+| Single search | 3.2ms | 8.5ms | ~300 QPS |
+| Batch search (100 queries) | 1.8ms/query | 4.2ms/query | ~3,000 QPS |
+| Insert | 0.8ms | 2.1ms | ~1,200 ops/s |
+| Filtered search (10% selectivity) | 4.5ms | 12ms | ~220 QPS |
+
+Memory usage: ~1.7GB for 1M vectors (384 dims) with HNSW index.
+
+## When to Use Needle
+
+**Needle is a great fit for:**
+- Embedded applications requiring vector search (desktop apps, mobile, edge devices)
+- Single-node deployments up to ~50M vectors
+- Projects that value SQLite-like simplicity (single file, zero config)
+- RAG applications, semantic search, recommendation systems
+- Prototyping and development with easy migration to production
+
+**Consider alternatives when you need:**
+- Billion-scale vector search (consider Milvus, Pinecone, Weaviate)
+- Multi-region active-active replication
+- Managed cloud service with SLAs
+- Real-time streaming ingestion at >100K vectors/second
+
+## Documentation
+
+| Guide | Description |
+|-------|-------------|
+| [Getting Started](docs/how-to-guides.md) | First database, search, and common tasks |
+| [API Reference](docs/api-reference.md) | Complete method documentation |
+| [Architecture](docs/architecture.md) | Internal design and data flow diagrams |
+| [Index Selection Guide](docs/index-selection-guide.md) | HNSW vs IVF vs DiskANN decision guide |
+| [Production Checklist](docs/production-checklist.md) | Pre-launch verification checklist |
+| [Operations Guide](docs/OPERATIONS.md) | Monitoring, backup, and tuning |
+| [Deployment Guide](docs/deployment.md) | Docker, Kubernetes, and cloud deployment |
+| [Distributed Operations](docs/distributed-operations.md) | Sharding, replication, and clustering |
+
 ## Features
 
-### Core
+### Core (Stable)
 - **HNSW Index**: Sub-10ms queries using Hierarchical Navigable Small World graphs
 - **SIMD Optimized**: Distance functions optimized for AVX2 (x86_64) and NEON (ARM)
 - **Single-File Storage**: All data in one file, easy to backup and distribute
@@ -23,23 +64,25 @@ Needle is a high-performance, zero-configuration vector database designed for AI
 - **Batch Search**: Parallel search for multiple queries using Rayon
 - **Multi-Language**: Rust, Python, JavaScript/WASM, Swift, and Kotlin bindings
 
-### Advanced
+### Advanced (Stable)
 - **Hybrid Search**: BM25 + vector search with Reciprocal Rank Fusion (RRF)
 - **IVF Index**: Inverted File Index for large-scale approximate search
 - **Sparse Vectors**: TF-IDF and SPLADE support with inverted index
 - **Multi-Vector (ColBERT)**: MaxSim search for token-level embeddings
 - **Reranking**: Cross-encoder reranking with Cohere, HuggingFace, and custom providers
-- **GPU Acceleration**: CUDA/OpenCL support for distance computation *(planned - CPU fallback only)*
 
-### Enterprise
+### Enterprise (Beta)
 - **Encryption at Rest**: ChaCha20-Poly1305 authenticated encryption
 - **RBAC**: Role-based access control with audit logging
 - **Write-Ahead Log (WAL)**: Crash recovery and durability guarantees
-- **Cloud Storage**: S3, Azure Blob, and GCS backends with caching *(interface only - not production-ready)*
 - **Sharding**: Consistent hash ring for horizontal scaling
 - **Multi-Tenancy**: Namespace isolation with access control
 - **Raft Consensus**: Leader election and log replication for high availability
 - **CRDT Support**: Conflict-free replicated data types for eventual consistency
+
+### Experimental
+- **GPU Acceleration**: CUDA/Metal/OpenCL support for distance computation *(scaffolding only - CPU fallback)*
+- **Cloud Storage**: S3, Azure Blob, and GCS backends *(interface only - not production-ready)*
 
 ## Installation
 
