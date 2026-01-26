@@ -595,7 +595,9 @@ where
 
         // Cache miss — generate and store
         let response = (self.generate_fn)(prompt);
-        let _ = self.cache.store(prompt, &response, embedding, None);
+        if let Err(e) = self.cache.store(prompt, &response, embedding, None) {
+            tracing::warn!("Failed to store response in semantic cache: {e}");
+        }
 
         CachedResponse {
             response,
