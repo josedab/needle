@@ -405,7 +405,14 @@ impl HnswIndex {
         self.config.ef_search = ef;
     }
 
-    /// Generate a random level for a new node
+    /// Generate a random level for a new node using a geometric distribution.
+    ///
+    /// Each node is assigned to layers 0..=level. The probability of being assigned
+    /// to layer L is: P(level >= L) = ml^L, where ml is the level multiplier
+    /// (default: 1/ln(M)). This gives an exponential decay: most nodes exist only
+    /// in layer 0, while ~1/M nodes reach layer 1, ~1/M² reach layer 2, etc.
+    /// The expected graph height is O(ln(n)), matching a skip-list structure.
+    /// Level is capped at 32 to prevent degenerate cases.
     fn random_level(&self) -> usize {
         let mut rng = rand::thread_rng();
         let mut level = 0;
@@ -415,7 +422,11 @@ impl HnswIndex {
         level
     }
 
-    /// Get max connections for a given layer
+    /// Get max connections for a given layer.
+    ///
+    /// Layer 0 allows `m_max_0` (default: 2*M = 32) connections because it is the
+    /// densest layer and the primary search surface. Upper layers use `M` (default: 16)
+    /// connections. More connections improve recall at the cost of memory and build time.
     fn max_connections(&self, layer: usize) -> usize {
         if layer == 0 {
             self.config.m_max_0
@@ -424,7 +435,18 @@ impl HnswIndex {
         }
     }
 
-    /// Insert a vector into the index
+    /// Insert a vector into the HNSW index.
+    ///
+    /// Algorithm overview (from the HNSW paper by Malkov & Yashunin, 2018):
+    /// 1. Assign a random level L to the new node (geometric distribution).
+    /// 2. Starting from the entry point at the top layer, greedily descend through
+    ///    layers above L, finding the closest node at each layer (ef=1).
+    /// 3. From layer min(L, entry_level) down to layer 0, perform a beam search
+    ///    with ef=ef_construction to find candidate neighbors.
+    /// 4. Select the closest M neighbors and create bidirectional edges.
+    /// 5. If any neighbor now exceeds max_connections, prune its edges by keeping
+    ///    only the M closest neighbors (simple heuristic).
+    /// 6. If L > entry_level, the new node becomes the entry point.
     pub fn insert(&mut self, id: VectorId, vector: &[f32], vectors: &[Vec<f32>]) -> Result<()> {
         let level = self.random_level();
 
@@ -510,7 +532,11 @@ impl HnswIndex {
         Ok(())
     }
 
-    /// Search for k nearest neighbors
+    /// Search for k nearest neighbors.
+    ///
+    /// Uses the default ef_search parameter from config. Higher ef_search improves
+    /// recall (probability of finding true nearest neighbors) at the cost of latency.
+    /// Typical values: ef_search=50 for ~95% recall, ef_search=200 for ~99% recall.
     pub fn search(&self, query: &[f32], k: usize, vectors: &[Vec<f32>]) -> Result<Vec<(VectorId, f32)>> {
         self.search_with_ef(query, k, self.config.ef_search, vectors)
     }
@@ -536,7 +562,14 @@ impl HnswIndex {
         Ok(self.search_with_ef_stats(query, k, ef_search, vectors)?.0)
     }
 
-    /// Search for k nearest neighbors with custom ef_search and return statistics
+    /// Search for k nearest neighbors with custom ef_search and return statistics.
+    ///
+    /// The search proceeds in two phases:
+    /// 1. **Greedy descent (layers entry_level..1):** Starting from the entry point,
+    ///    traverse each upper layer with ef=1 (greedy), moving to the closest node
+    ///    found at each layer. This quickly narrows down to the right neighborhood.
+    /// 2. **Beam search (layer 0):** Search layer 0 with the full ef_search parameter,
+    ///    exploring more candidates for higher recall. Return the top-k results.
     pub fn search_with_ef_stats(
         &self,
         query: &[f32],
@@ -686,7 +719,17 @@ impl HnswIndex {
         self.search_layer_core(query, entry, ef, layer, vectors)
     }
 
-    /// Core layer search implementation. Returns (results, visited_count).
+    /// Core layer search implementation (beam search). Returns (results, visited_count).
+    ///
+    /// Implements Algorithm 2 from the HNSW paper:
+    /// - Maintains two heaps: a min-heap of candidates (closest first) and a
+    ///   max-heap of results (farthest first, for easy pruning to ef best).
+    /// - Iteratively pops the closest unvisited candidate, explores its neighbors,
+    ///   and adds promising ones to both heaps.
+    /// - **Early termination:** stops when the best remaining candidate is farther
+    ///   than the worst result and we already have ef results.
+    /// - Uses a Vec<u8> visited array for O(1) cache-friendly lookups instead of
+    ///   a HashSet.
     fn search_layer_core(
         &self,
         query: &[f32],
@@ -749,7 +792,13 @@ impl HnswIndex {
         Ok((result_vec, visited_count))
     }
 
-    /// Select neighbors using the simple heuristic
+    /// Select neighbors using the simple heuristic (Algorithm 3 from the HNSW paper).
+    ///
+    /// Sorts candidates by distance and keeps the closest `max_neighbors`. This is
+    /// the "simple" selection strategy. The alternative "heuristic" strategy
+    /// (Algorithm 4) also considers diversity by preferring neighbors that are not
+    /// too close to each other, but the simple version performs well in practice
+    /// and is faster.
     fn select_neighbors(
         &self,
         candidates: &[(VectorId, f32)],
