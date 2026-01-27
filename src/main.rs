@@ -827,8 +827,8 @@ fn search_command(
         };
 
         println!("Search results (k={}):", k);
-        if distance_fn.is_some() {
-            println!("  (using distance override: {:?})", distance_fn.unwrap());
+        if let Some(dist) = distance_fn {
+            println!("  (using distance override: {:?})", dist);
         }
         for result in results {
             let meta = result
