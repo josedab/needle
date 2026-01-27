@@ -169,16 +169,32 @@ impl ReadinessProbe {
         }
 
         let mut max_latency_ms = 0.0f64;
+        let mut search_failed = false;
         for name in &collections {
             if let Ok(coll) = db.collection(name) {
                 if coll.len() == 0 { continue; }
                 let dims = coll.dimensions().unwrap_or(4);
                 let query = vec![0.0f32; dims];
                 let search_start = Instant::now();
-                let _ = coll.search(&query, self.config.search_sample_k);
-                let latency = search_start.elapsed().as_secs_f64() * 1000.0;
-                max_latency_ms = max_latency_ms.max(latency);
+                match coll.search(&query, self.config.search_sample_k) {
+                    Ok(_) => {
+                        let latency = search_start.elapsed().as_secs_f64() * 1000.0;
+                        max_latency_ms = max_latency_ms.max(latency);
+                    }
+                    Err(_) => {
+                        search_failed = true;
+                    }
+                }
             }
+        }
+
+        if search_failed {
+            return CheckResult {
+                name: "search_latency".into(),
+                status: CheckStatus::Fail,
+                message: "Search operation failed".into(),
+                duration_us: start.elapsed().as_micros() as u64,
+            };
         }
 
         let (status, msg) = if max_latency_ms > self.config.max_search_latency_ms {
@@ -193,9 +209,16 @@ impl ReadinessProbe {
 
     fn check_api_responsiveness(&self, db: &Database) -> CheckResult {
         let start = Instant::now();
-        // Test basic API operations
-        let _ = db.list_collections();
+        let collections_result = db.list_collections();
         let latency = start.elapsed().as_micros() as u64;
+        if collections_result.is_empty() && latency > 10_000 {
+            return CheckResult {
+                name: "api_responsiveness".into(),
+                status: CheckStatus::Warn,
+                message: format!("API response in {latency}µs (slow, no collections)"),
+                duration_us: latency,
+            };
+        }
         CheckResult {
             name: "api_responsiveness".into(),
             status: if latency < 10_000 { CheckStatus::Pass } else { CheckStatus::Warn },
