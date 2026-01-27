@@ -796,7 +796,7 @@ impl ProviderRouter {
         error: Option<String>,
     ) {
         let mut metrics = self.metrics.write();
-        let m = metrics.entry(provider).or_insert_with(ProviderMetrics::default);
+        let m = metrics.entry(provider).or_default();
 
         m.total_requests += 1;
         if success {
@@ -906,19 +906,21 @@ impl EmbeddingsGateway {
             }
         }
 
-        // Select provider
-        let provider_config = self.router.select_provider()
-            .ok_or_else(|| NeedleError::InvalidState("No available providers".into()))?;
+        // Select initial provider
+        let mut current_provider = self.router.select_provider()
+            .ok_or_else(|| NeedleError::InvalidState("No available providers".into()))?
+            .clone();
 
         let start = Instant::now();
+        #[allow(unused_assignments)]
         let mut last_error = None;
         let mut tried_providers = vec![];
 
         // Try with fallback
         loop {
-            tried_providers.push(provider_config.provider_type);
+            tried_providers.push(current_provider.provider_type);
 
-            match self.embed_with_provider(text, provider_config) {
+            match self.embed_with_provider(text, &current_provider) {
                 Ok(result) => {
                     // Cache the result
                     if let Some(ref cache) = self.cache {
@@ -935,7 +937,7 @@ impl EmbeddingsGateway {
                 Err(e) => {
                     last_error = Some(e);
                     self.router.record_result(
-                        provider_config.provider_type,
+                        current_provider.provider_type,
                         false,
                         start.elapsed().as_millis() as u64,
                         0,
@@ -948,8 +950,8 @@ impl EmbeddingsGateway {
                         if let Some(fallback) = self.router.get_fallback(&tried_providers) {
                             let mut metrics = self.metrics.write();
                             metrics.fallback_count += 1;
-                            // Continue with fallback provider (would need to refactor the loop)
-                            break;
+                            current_provider = fallback.clone();
+                            continue;
                         }
                     }
 
@@ -1142,7 +1144,7 @@ impl EmbeddingsGateway {
 /// Estimate token count for text
 fn estimate_tokens(text: &str) -> usize {
     // Simple approximation: ~4 characters per token
-    (text.len() + 3) / 4
+    text.len().div_ceil(4)
 }
 
 /// Compute cosine similarity

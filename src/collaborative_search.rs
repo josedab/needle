@@ -445,7 +445,7 @@ impl CollaborativeCollection {
 
     /// Subscribe to collection events.
     pub fn subscribe(&self) -> EventReceiver {
-        let (sender, receiver) = EventChannel::new(EVENT_BUFFER_SIZE);
+        let (sender, receiver) = EventChannel::create(EVENT_BUFFER_SIZE);
         self.subscribers.write().push(sender);
         receiver
     }
@@ -1357,7 +1357,7 @@ pub enum CollaborativeEvent {
 struct EventChannel;
 
 impl EventChannel {
-    fn new(capacity: usize) -> (EventSubscriber, EventReceiver) {
+    fn create(capacity: usize) -> (EventSubscriber, EventReceiver) {
         let buffer = Arc::new(RwLock::new(VecDeque::with_capacity(capacity)));
         let closed = Arc::new(std::sync::atomic::AtomicBool::new(false));
 
