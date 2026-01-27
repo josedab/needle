@@ -2,6 +2,7 @@
 
 use super::config::{CacheConfig, StorageBackend};
 use crate::error::{NeedleError, Result};
+use tracing::warn;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::future::Future;
@@ -243,7 +244,9 @@ impl<B: StorageBackend> TieredCacheBackend<B> {
         // Delete SSD files
         for entry in index.values() {
             if let Some(ref path) = entry.ssd_path {
-                let _ = std::fs::remove_file(path);
+                if let Err(e) = std::fs::remove_file(path) {
+                    warn!(path = %path.display(), error = %e, "Failed to remove SSD cache file during clear_all");
+                }
             }
         }
 
@@ -305,7 +308,9 @@ impl<B: StorageBackend> TieredCacheBackend<B> {
                     }
                     CacheTier::Ssd => {
                         if let Some(ref path) = entry.ssd_path {
-                            let _ = std::fs::remove_file(path);
+                            if let Err(e) = std::fs::remove_file(path) {
+                                warn!(path = %path.display(), error = %e, "Failed to remove expired SSD cache file");
+                            }
                         }
                         self.ssd_usage
                             .fetch_sub(entry.size as u64, Ordering::Relaxed);
@@ -397,7 +402,9 @@ impl<B: StorageBackend> TieredCacheBackend<B> {
 
             if let Some(entry) = index.remove(&key) {
                 if let Some(ref path) = entry.ssd_path {
-                    let _ = std::fs::remove_file(path);
+                    if let Err(e) = std::fs::remove_file(path) {
+                        warn!(path = %path.display(), error = %e, "Failed to remove evicted SSD cache file");
+                    }
                 }
                 self.ssd_usage.fetch_sub(size as u64, Ordering::Relaxed);
                 self.stats
@@ -434,7 +441,9 @@ impl<B: StorageBackend> TieredCacheBackend<B> {
         entry.expires_at = Instant::now() + self.config.memory_ttl;
 
         // Clean up SSD file
-        let _ = std::fs::remove_file(ssd_path);
+        if let Err(e) = std::fs::remove_file(ssd_path) {
+            warn!(path = %ssd_path.display(), error = %e, "Failed to remove SSD cache file during promotion");
+        }
         entry.ssd_path = None;
 
         // Update stats
@@ -591,7 +600,9 @@ impl<B: StorageBackend> StorageBackend for TieredCacheBackend<B> {
                                             entry.ssd_path = None;
 
                                             // Clean up SSD file
-                                            let _ = std::fs::remove_file(&ssd_path_clone);
+                                            if let Err(e) = std::fs::remove_file(&ssd_path_clone) {
+                                                warn!(error = %e, "Failed to remove SSD cache file during read promotion");
+                                            }
 
                                             // Update stats
                                             self.ssd_usage
@@ -683,7 +694,9 @@ impl<B: StorageBackend> StorageBackend for TieredCacheBackend<B> {
                     }
                     CacheTier::Ssd => {
                         if let Some(ref path) = entry.ssd_path {
-                            let _ = std::fs::remove_file(path);
+                            if let Err(e) = std::fs::remove_file(path) {
+                                warn!(path = %path.display(), error = %e, "Failed to remove SSD cache file during delete");
+                            }
                         }
                         self.ssd_usage
                             .fetch_sub(entry.size as u64, Ordering::Relaxed);
