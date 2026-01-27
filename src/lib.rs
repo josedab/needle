@@ -73,20 +73,32 @@
 
 // ── Core ──────────────────────────────────────────────────────────────────────
 // Fundamental types: database, collections, vectors, errors, storage, metadata.
+
+/// Collection management: vectors, HNSW index, metadata, and search pipeline.
 pub mod collection;
+/// Database management: multi-collection container, persistence, and thread-safe access.
 pub mod database;
+/// Distance functions for vector similarity (Cosine, Euclidean, Dot Product, Manhattan).
 pub mod distance;
+/// Error types, error codes, and recovery hints for all Needle operations.
 pub mod error;
 pub(crate) mod lineage;
+/// Metadata storage and MongoDB-style query filtering (`$eq`, `$gt`, `$in`, `$or`, etc.).
 pub mod metadata;
 pub(crate) mod storage;
+/// Auto-tuning for HNSW parameters based on workload profiling.
 pub mod tuning;
+/// Columnar storage for efficient batch vector operations.
 pub mod columnar;
+/// Data processing pipelines for vector ingestion and transformation.
 pub mod pipeline;
+/// Graph-based retrieval augmented generation (GraphRAG) support.
 pub mod graphrag;
 
 // ── Indexing ──────────────────────────────────────────────────────────────────
 // Vector index implementations: HNSW, DiskANN, IVF, sparse, multi-vector.
+
+/// Vector index implementations: HNSW, IVF, DiskANN, sparse, multi-vector, and quantization.
 pub mod indexing;
 #[cfg(feature = "diskann")]
 pub use indexing::{diskann, tiered_ann};
@@ -96,6 +108,8 @@ pub use indexing::{
 };
 
 // ── Search & Query ───────────────────────────────────────────────────────────
+
+/// Search query planning, reranking, federated search, and natural language filtering.
 pub mod search;
 #[cfg(feature = "experimental")]
 pub use search::collaborative_search;
@@ -105,6 +119,8 @@ pub use search::{
 };
 
 // ── Storage & Persistence ────────────────────────────────────────────────────
+
+/// Storage and persistence: WAL, backups, migrations, sharding, and cloud storage.
 pub mod persistence;
 pub use persistence::{
     backup, cloud_storage, managed_backup, migrations, shard, snapshot_replication, sync_protocol,
@@ -112,6 +128,8 @@ pub use persistence::{
 };
 
 // ── Embeddings & ML ──────────────────────────────────────────────────────────
+
+/// Machine learning utilities: auto-embedding, model registry, RAG, and dimensionality reduction.
 pub mod ml;
 pub use ml::{
     auto_embed, dimreduce, embeddings_gateway, finetuning, local_inference, matryoshka,
@@ -120,6 +138,8 @@ pub use ml::{
 
 // ── Enterprise Features ──────────────────────────────────────────────────────
 // Security, encryption, multi-tenancy, RBAC, Raft consensus.
+
+/// Enterprise features: encryption, RBAC, multi-tenancy, Raft consensus, and autoscaling.
 pub mod enterprise;
 #[cfg(feature = "encryption")]
 pub use enterprise::encryption;
@@ -127,11 +147,15 @@ pub use enterprise::{autoscaling, namespace, raft, security, tenant_isolation};
 
 // ── Observability ────────────────────────────────────────────────────────────
 // Telemetry, drift detection, anomaly detection, profiling.
+
+/// Observability: telemetry, drift detection, anomaly detection, and profiling.
 pub mod observe;
 pub use observe::{anomaly, drift, observability, otel_service, profiler, telemetry};
 
 // ── Framework Integrations ───────────────────────────────────────────────────
 // Adapters for LangChain, LlamaIndex, Haystack, Semantic Kernel.
+
+/// Framework integrations: LangChain, LlamaIndex, Haystack, and Semantic Kernel adapters.
 pub mod integrations;
 pub(crate) use integrations::framework_common;
 pub use integrations::{haystack, semantic_kernel};
@@ -140,6 +164,8 @@ pub use integrations::{langchain, llamaindex};
 
 // ── High-Level Services ──────────────────────────────────────────────────────
 // Database-level service wrappers with builders and lifecycle management.
+
+/// High-level service wrappers: ingestion, multi-modal, PITR, text collections, and more.
 pub mod services;
 #[cfg(feature = "experimental")]
 pub use services::{adaptive_service, ingestion_pipeline, plugin_runtime};
@@ -230,109 +256,157 @@ pub use services::{
 // ── Experimental / Advanced ──────────────────────────────────────────────────
 // Features under active development. APIs may change without notice.
 // Enable experimental modules with: --features experimental
+
+/// Experimental modules under active development. APIs may change without notice.
+///
+/// Enable with `--features experimental`. Includes adaptive indexing, GPU acceleration,
+/// clustering, CRDT replication, graph operations, and more.
 pub mod experimental;
 
 // Backward-compatible re-exports so `crate::module_name` still works
+/// Adaptive index selection based on workload patterns. **Experimental**: API may change without notice.
 #[cfg(feature = "experimental")]
 pub use experimental::adaptive_index;
+/// Adaptive runtime for dynamic resource allocation. **Experimental**: API may change without notice.
 #[cfg(feature = "experimental")]
 pub use experimental::adaptive_runtime;
+/// Agentic memory protocol for LLM agent context management. **Experimental**: API may change without notice.
 #[cfg(feature = "experimental")]
 pub use experimental::agentic_memory;
+/// Analytics and aggregation over vector collections. **Experimental**: API may change without notice.
 #[cfg(feature = "experimental")]
 pub use experimental::analytics;
+/// Cloud control plane for managed deployments. **Experimental**: API may change without notice.
 #[cfg(feature = "experimental")]
 pub use experimental::cloud_control;
+/// K-means and hierarchical clustering of vectors. **Experimental**: API may change without notice.
 #[cfg(feature = "experimental")]
 pub use experimental::clustering;
+/// Conflict-free Replicated Data Types for eventual consistency. **Experimental**: API may change without notice.
 #[cfg(feature = "experimental")]
 pub use experimental::crdt;
+/// Vector deduplication using similarity thresholds. **Experimental**: API may change without notice.
 #[cfg(feature = "experimental")]
 pub use experimental::dedup;
+/// Distributed HNSW index across multiple nodes. **Experimental**: API may change without notice.
 #[cfg(feature = "experimental")]
 pub use experimental::distributed_hnsw;
+/// Optimized builds for edge and resource-constrained devices. **Experimental**: API may change without notice.
 #[cfg(feature = "experimental")]
 pub use experimental::edge_optimized;
+/// Graph-based edge partitioning for distributed workloads. **Experimental**: API may change without notice.
 #[cfg(feature = "experimental")]
 pub use experimental::edge_partitioning;
+/// GPU-accelerated distance computations. **Experimental**: API may change without notice.
 #[cfg(feature = "experimental")]
 pub use experimental::gpu;
+/// Semantic graph operations on vector relationships. **Experimental**: API may change without notice.
 #[cfg(feature = "experimental")]
 pub use experimental::graph;
+/// Plugin system for extending Needle with custom logic. **Experimental**: API may change without notice.
 #[cfg(feature = "experimental")]
 pub use experimental::plugin;
+/// Temporal indexing with time-decay functions. **Experimental**: API may change without notice.
 #[cfg(feature = "experimental")]
 pub use experimental::temporal;
 // NOTE: experimental::edge_runtime is accessed via crate::experimental::edge_runtime
 // to avoid conflict with the services::edge_runtime re-export above.
+/// GraphRAG index for knowledge-graph-augmented retrieval. **Experimental**: API may change without notice.
 #[cfg(feature = "experimental")]
 pub use experimental::graphrag_index;
+/// Knowledge graph construction and traversal. **Experimental**: API may change without notice.
 #[cfg(feature = "experimental")]
 pub use experimental::knowledge_graph;
+/// Learned parameter tuning using workload feedback. **Experimental**: API may change without notice.
 #[cfg(feature = "experimental")]
 pub use experimental::learned_tuning;
+/// LLM response caching with semantic similarity. **Experimental**: API may change without notice.
 #[cfg(feature = "experimental")]
 pub use experimental::llm_cache;
+/// Query optimizer for complex search pipelines. **Experimental**: API may change without notice.
 #[cfg(feature = "experimental")]
 pub use experimental::optimizer;
+/// Platform-specific adapters (iOS, Android, embedded). **Experimental**: API may change without notice.
 #[cfg(feature = "experimental")]
 pub use experimental::platform_adapters;
+/// Interactive playground for exploring vector operations. **Experimental**: API may change without notice.
 #[cfg(feature = "experimental")]
 pub use experimental::playground;
+/// Registry for managing and discovering plugins. **Experimental**: API may change without notice.
 #[cfg(feature = "experimental")]
 pub use experimental::plugin_registry;
+/// Apache Arrow interop for Python-based analytics. **Experimental**: API may change without notice.
 #[cfg(feature = "experimental")]
 pub use experimental::python_arrow;
+/// Online index rebalancing for skewed data distributions. **Experimental**: API may change without notice.
 #[cfg(feature = "experimental")]
 pub use experimental::rebalance;
+/// Serverless runtime for event-driven vector operations. **Experimental**: API may change without notice.
 #[cfg(feature = "experimental")]
 pub use experimental::serverless_runtime;
+/// Streaming upsert pipeline for high-throughput ingestion. **Experimental**: API may change without notice.
 #[cfg(feature = "experimental")]
 pub use experimental::streaming_upsert;
+/// Real-time vector streaming with backpressure. **Experimental**: API may change without notice.
 #[cfg(feature = "experimental")]
 pub use experimental::vector_streaming;
+/// Zero-copy deserialization for memory-mapped vectors. **Experimental**: API may change without notice.
 #[cfg(feature = "experimental")]
 pub use experimental::zero_copy;
 
 // ── Streaming (feature-gated) ────────────────────────────────────────────────
+
+/// Real-time vector streaming support. Requires the `server` feature.
 #[cfg(feature = "server")]
 pub mod streaming;
 
 // ── Feature-Gated Modules ────────────────────────────────────────────────────
 // Optional modules enabled by Cargo feature flags.
 
+/// Terminal UI for interactive database management. Requires the `tui` feature.
 #[cfg(feature = "tui")]
 pub mod tui;
 
+/// Async database API with streaming support. Requires the `async` feature.
 #[cfg(feature = "async")]
 pub mod async_api;
 
+/// BM25 text search and hybrid vector+text search with Reciprocal Rank Fusion. Requires the `hybrid` feature.
 #[cfg(feature = "hybrid")]
 pub mod hybrid;
 
+/// HTTP REST API server with authentication and rate limiting. Requires the `server` feature.
 #[cfg(feature = "server")]
 pub mod server;
 
+/// Model Context Protocol (MCP) tools for LLM integration.
 pub mod mcp;
 
+/// Web-based administration UI. Requires the `web-ui` feature.
 #[cfg(feature = "web-ui")]
 pub mod web_ui;
 
+/// Prometheus metrics export and monitoring. Requires the `metrics` feature.
 #[cfg(feature = "metrics")]
 pub mod metrics;
 
+/// ONNX Runtime embedding inference. Requires the `embeddings` feature.
 #[cfg(feature = "embeddings")]
 pub mod embeddings;
 
+/// Embedding providers for OpenAI, Cohere, and Ollama. Requires the `embedding-providers` feature.
 #[cfg(feature = "embedding-providers")]
 pub mod embeddings_provider;
 
+/// Python bindings via PyO3. Requires the `python` feature.
 #[cfg(feature = "python")]
 pub mod python;
 
+/// WebAssembly bindings for browser and Node.js. Requires the `wasm` feature.
 #[cfg(feature = "wasm")]
 pub mod wasm;
 
+/// Swift and Kotlin bindings via UniFFI. Requires the `uniffi-bindings` feature.
 #[cfg(feature = "uniffi-bindings")]
 pub mod uniffi_bindings;
 
@@ -373,7 +447,9 @@ pub use auto_embed::{
 // Beta and experimental types have been moved behind dedicated module paths.
 // Use `needle::beta_api::*` for beta types and `needle::experimental_api::*`
 // for experimental types.
+/// Beta API types that are approaching stability but may still have minor breaking changes.
 pub mod beta_api;
+/// Experimental API types under active development. APIs may change without notice.
 pub mod experimental_api;
 
 #[cfg(feature = "hybrid")]
