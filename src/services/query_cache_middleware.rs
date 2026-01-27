@@ -32,6 +32,7 @@ use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use tracing::debug;
 
 use crate::collection::SearchResult;
 use crate::database::Database;
@@ -157,7 +158,9 @@ impl QueryCacheMiddleware {
             })
             .collect();
         if let Ok(json) = serde_json::to_string(&cached) {
-            let _ = self.cache.put(query, collection, &json, None);
+            if let Err(e) = self.cache.put(query, collection, &json, None) {
+                debug!(collection, error = %e, "Failed to store search results in query cache");
+            }
         }
 
         Ok(results)
