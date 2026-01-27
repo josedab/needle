@@ -242,6 +242,26 @@ harness = false
 name = "hybrid_search"
 required-features = ["hybrid"]
 
+[[example]]
+name = "server_usage"
+required-features = ["server"]
+
+[[example]]
+name = "metrics_usage"
+required-features = ["metrics"]
+
+[[example]]
+name = "encryption_usage"
+required-features = ["encryption"]
+
+[[example]]
+name = "diskann_usage"
+required-features = ["diskann"]
+
+[[example]]
+name = "embedding_providers_usage"
+required-features = ["embedding-providers"]
+
 [features]
 default = []
 simd = []
