@@ -204,7 +204,7 @@ impl<'a> TimeTravelService<'a> {
         // Write to the actual collection (delete first if exists for update)
         let coll = self.db.collection(&self.collection_name)?;
         if coll.get(id).is_some() {
-            let _ = coll.delete(id);
+            coll.delete(id)?;
         }
         coll.insert(id, vector, metadata)?;
 
@@ -231,7 +231,7 @@ impl<'a> TimeTravelService<'a> {
         history.insert(version, tombstone);
 
         let coll = self.db.collection(&self.collection_name)?;
-        let _ = coll.delete(id);
+        coll.delete(id)?;
 
         self.record_audit(version, AuditOp::Delete, id);
         self.maybe_auto_snapshot()?;

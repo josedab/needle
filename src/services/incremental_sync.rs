@@ -314,7 +314,7 @@ impl<'a> SyncManager<'a> {
         };
 
         let coll = self.db.collection(collection)?;
-        let _ = coll.delete(id);
+        coll.delete(id)?;
 
         self.op_log.push(op);
         self.stats.total_ops_recorded += 1;
