@@ -336,18 +336,18 @@ impl IndexSegment {
         serde_json::from_slice(bytes).map_err(NeedleError::Serialization)
     }
 
-    /// Compress segment data
-    #[cfg(feature = "compression")]
+    /// Compress segment data (placeholder - returns uncompressed bytes)
+    #[allow(dead_code)]
     pub fn compress(&self) -> Result<Vec<u8>> {
         let bytes = self.to_bytes()?;
-        // Use simple LZ4 or similar compression
-        Ok(bytes) // Placeholder - actual compression would be added
+        // TODO: Use LZ4 or similar compression when compression feature is implemented
+        Ok(bytes)
     }
 
-    /// Decompress segment data
-    #[cfg(feature = "compression")]
+    /// Decompress segment data (placeholder - assumes uncompressed bytes)
+    #[allow(dead_code)]
     pub fn decompress(bytes: &[u8]) -> Result<Self> {
-        // Placeholder for decompression
+        // TODO: Add decompression when compression feature is implemented
         Self::from_bytes(bytes)
     }
 }
@@ -484,6 +484,7 @@ impl EdgeStorage for InMemoryEdgeStorage {
 
 /// Cached search result with expiration
 #[derive(Clone)]
+#[allow(dead_code)]
 struct CachedResult {
     results: Vec<SearchResult>,
     query_hash: u64,

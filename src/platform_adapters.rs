@@ -43,6 +43,7 @@ use std::sync::Arc;
 /// - Max key size: 512 bytes
 /// - Eventually consistent reads
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct CloudflareKvAdapter {
     /// KV namespace binding name
     namespace: String,
@@ -139,6 +140,7 @@ impl EdgeStorage for CloudflareKvAdapter {
 /// - Max object size: 5 TB
 /// - Strongly consistent reads
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct CloudflareR2Adapter {
     /// R2 bucket binding name
     bucket: String,
@@ -214,6 +216,7 @@ impl EdgeStorage for CloudflareR2Adapter {
 /// - Max key size: 2 KB
 /// - Supports atomic transactions
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct DenoKvAdapter {
     /// Database path (empty for default)
     path: String,
@@ -303,6 +306,7 @@ impl EdgeStorage for DenoKvAdapter {
 /// - Max total size: 512 KB (hobby) to 24 MB (enterprise)
 /// - Read-only at runtime (write via API)
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct VercelEdgeConfigAdapter {
     /// Edge Config connection string
     connection_string: String,
@@ -368,6 +372,7 @@ impl EdgeStorage for VercelEdgeConfigAdapter {
 /// Limits:
 /// - Max blob size: 500 MB (Pro), 5 GB (Enterprise)
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct VercelBlobAdapter {
     /// Blob store token
     token: String,

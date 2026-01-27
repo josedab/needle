@@ -652,6 +652,7 @@ impl TokenBucket {
         }
     }
 
+    #[allow(dead_code)]
     fn wait_time(&self) -> Duration {
         let tokens = self.tokens.lock();
         if *tokens >= 1.0 {
@@ -842,6 +843,7 @@ pub struct EmbeddingsGateway {
     cache: Option<SemanticCache>,
     metrics: parking_lot::RwLock<GatewayMetrics>,
     /// In-flight request deduplication
+    #[allow(dead_code)]
     pending_requests: parking_lot::RwLock<HashMap<String, Vec<f32>>>,
 }
 
