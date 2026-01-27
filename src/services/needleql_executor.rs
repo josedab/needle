@@ -566,7 +566,9 @@ impl NeedleQLExecutor {
         })?;
 
         // Validate via QueryValidator (catches semantic issues early).
-        let _ = QueryValidator::validate(&ql_query);
+        QueryValidator::validate(&ql_query).map_err(|e| {
+            NeedleError::InvalidArgument(format!("NeedleQL validation error: {e}"))
+        })?;
 
         // Map SelectClause
         let columns = match &ql_query.select {
