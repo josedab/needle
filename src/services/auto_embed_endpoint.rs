@@ -164,7 +164,7 @@ impl AutoEmbedService {
     ) -> Result<()> {
         // Pre-initialize the engine to validate the model exists
         let engine = self.get_or_create_engine(&embed_config.model_id)?;
-        let _ = engine;
+        drop(engine); // validation only — engine is cached for later use
         self.collection_configs
             .insert(collection.to_string(), embed_config);
         Ok(())

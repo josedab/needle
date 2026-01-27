@@ -178,10 +178,9 @@ impl QueryCacheMiddleware {
     }
 
     /// Called when a vector is deleted.
-    pub fn on_delete(&mut self, collection: &str, vector_id: &str) {
+    pub fn on_delete(&mut self, _collection: &str, vector_id: &str) {
         let count = self.cache.invalidate_for_vector(vector_id);
         self.invalidations += count as u64;
-        let _ = collection; // used for logging in production
     }
 
     /// Get cache dashboard stats.

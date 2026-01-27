@@ -462,7 +462,7 @@ impl TextVectorCollection {
                         embedding = matryoshka_reduce(&embedding, target);
                     }
                     let meta = serde_json::json!({"_text": text, "_re_embedded": true});
-                    // Delete old and insert new
+                    // Best-effort delete: if the old entry is already gone, proceed with insert
                     let _ = self.collection.delete(id);
                     if self.collection.insert(id, &embedding, Some(meta)).is_ok() {
                         re_embedded += 1;

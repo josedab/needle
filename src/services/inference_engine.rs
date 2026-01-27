@@ -293,7 +293,7 @@ impl InferenceEngine {
         let embedding = self.embed_tokens(&tokens);
         self.total_inferences += 1;
 
-        let _ = start.elapsed();
+        let _ = start.elapsed(); // timing captured but not yet surfaced
         Ok(embedding)
     }
 
