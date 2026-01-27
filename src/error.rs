@@ -298,99 +298,142 @@ pub trait Recoverable {
 #[must_use]
 #[derive(Error, Debug)]
 pub enum NeedleError {
+    /// An I/O error occurred during file or network operations.
+    /// Typically caused by file system issues, permission errors, or disk full conditions.
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 
+    /// Failed to serialize or deserialize data (JSON).
+    /// Usually indicates corrupted data or an incompatible schema version.
     #[error("Serialization error: {0}")]
     Serialization(#[from] serde_json::Error),
 
+    /// The vector dimension does not match the collection's configured dimension.
+    /// Ensure all vectors inserted into a collection have the same dimensionality.
     #[error("Dimension mismatch: expected {expected}, got {got}")]
     DimensionMismatch { expected: usize, got: usize },
 
+    /// The requested collection does not exist in the database.
+    /// Use `Database::list_collections()` to see available collections.
     #[error("Collection '{0}' not found")]
     CollectionNotFound(String),
 
+    /// A collection with the given name already exists.
+    /// Use a different name or delete the existing collection first.
     #[error("Collection '{0}' already exists")]
     CollectionAlreadyExists(String),
 
+    /// The requested alias does not exist.
     #[error("Alias '{0}' not found")]
     AliasNotFound(String),
 
+    /// An alias with the given name already exists.
     #[error("Alias '{0}' already exists")]
     AliasAlreadyExists(String),
 
+    /// Cannot drop a collection because one or more aliases still reference it.
+    /// Remove the aliases first before deleting the collection.
     #[error("Cannot drop collection '{0}': aliases still reference it")]
     CollectionHasAliases(String),
 
+    /// The requested vector ID was not found in the collection.
     #[error("Vector '{0}' not found")]
     VectorNotFound(String),
 
+    /// A vector with the given ID already exists in the collection.
+    /// Use a different ID or delete the existing vector first.
     #[error("Vector '{0}' already exists")]
     VectorAlreadyExists(String),
 
+    /// A duplicate ID was encountered during a batch operation.
     #[error("Duplicate ID: '{0}'")]
     DuplicateId(String),
 
+    /// Another operation is currently in progress and prevents this one.
+    /// Retry after the ongoing operation completes.
     #[error("Operation in progress: {0}")]
     OperationInProgress(String),
 
+    /// The database file is not a valid Needle database or has an unsupported format version.
     #[error("Invalid database file: {0}")]
     InvalidDatabase(String),
 
+    /// Data corruption was detected (e.g., checksum mismatch).
+    /// The database may need to be restored from a backup.
     #[error("Database corruption detected: {0}")]
     Corruption(String),
 
+    /// An error occurred within an index operation (HNSW, IVF, etc.).
     #[error("Index error: {0}")]
     Index(String),
 
+    /// The provided configuration is invalid.
+    /// Check the field values against the documented constraints.
     #[error("Invalid configuration: {0}")]
     InvalidConfig(String),
 
+    /// A capacity limit has been exceeded (e.g., max vectors per collection).
     #[error("Capacity exceeded: {0}")]
     CapacityExceeded(String),
 
+    /// The provided vector data is invalid (e.g., contains NaN or Inf values).
     #[error("Invalid vector: {0}")]
     InvalidVector(String),
 
+    /// The input to an operation is invalid.
     #[error("Invalid input: {0}")]
     InvalidInput(String),
 
+    /// A resource quota has been exceeded (e.g., storage or request limits).
     #[error("Quota exceeded: {0}")]
     QuotaExceeded(String),
 
+    /// An error occurred during a backup or restore operation.
     #[error("Backup error: {0}")]
     BackupError(String),
 
+    /// A generic not-found error for resources other than collections or vectors.
     #[error("Not found: {0}")]
     NotFound(String),
 
+    /// A conflicting operation was detected (e.g., concurrent modification).
     #[error("Conflict: {0}")]
     Conflict(String),
 
+    /// An error occurred during encryption or decryption.
+    /// Verify that the correct encryption key is being used.
     #[error("Encryption error: {0}")]
     EncryptionError(String),
 
+    /// An error occurred in the Raft consensus protocol.
     #[error("Consensus error: {0}")]
     ConsensusError(String),
 
+    /// Failed to acquire an internal lock. This is typically transient; retry the operation.
     #[error("Lock error: failed to acquire lock")]
     LockError,
 
+    /// The operation exceeded the configured timeout duration.
     #[error("Operation timed out after {0:?}")]
     Timeout(std::time::Duration),
 
+    /// Timed out while waiting to acquire a lock. Consider increasing the timeout or reducing contention.
     #[error("Lock acquisition timed out after {0:?}")]
     LockTimeout(std::time::Duration),
 
+    /// The requested operation is not valid in the current context.
     #[error("Invalid operation: {0}")]
     InvalidOperation(String),
 
+    /// The system is in an invalid state for the requested operation.
     #[error("Invalid state: {0}")]
     InvalidState(String),
 
+    /// The request lacks valid authentication or authorization credentials.
     #[error("Unauthorized: {0}")]
     Unauthorized(String),
 
+    /// An argument passed to a function or API is invalid.
     #[error("Invalid argument: {0}")]
     InvalidArgument(String),
 }
