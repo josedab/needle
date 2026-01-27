@@ -31,6 +31,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{NeedleError, Result};
 
+#[allow(unused_imports)]
+use tracing::warn;
+
 // ── Core CRDT scaffold imports (feature-gated) ──────────────────────────────
 
 #[cfg(feature = "experimental")]
@@ -495,7 +498,9 @@ impl SyncService {
         #[cfg(feature = "experimental")]
         {
             let meta_map = json_to_string_map(metadata.as_ref());
-            let _ = self.crdt.add(vector_id, vector, meta_map);
+            if let Err(e) = self.crdt.add(vector_id, vector, meta_map) {
+                warn!(vector_id, error = %e, "CRDT add failed during record_insert");
+            }
         }
 
         let op = VectorOp {
@@ -537,7 +542,9 @@ impl SyncService {
         // Delegate to core CRDT backend
         #[cfg(feature = "experimental")]
         {
-            let _ = self.crdt.update(vector_id, vector);
+            if let Err(e) = self.crdt.update(vector_id, vector) {
+                warn!(vector_id, error = %e, "CRDT update failed during record_update");
+            }
         }
 
         let op = VectorOp {
@@ -567,7 +574,9 @@ impl SyncService {
         // Delegate to core CRDT backend
         #[cfg(feature = "experimental")]
         {
-            let _ = self.crdt.delete(vector_id);
+            if let Err(e) = self.crdt.delete(vector_id) {
+                warn!(vector_id, error = %e, "CRDT delete failed during record_delete");
+            }
         }
 
         let op = VectorOp {
@@ -637,7 +646,9 @@ impl SyncService {
         #[cfg(feature = "experimental")]
         {
             let core_delta = delta.to_core_delta();
-            let _ = self.crdt.merge(core_delta);
+            if let Err(e) = self.crdt.merge(core_delta) {
+                warn!(error = %e, "CRDT merge failed during apply_delta");
+            }
         }
 
         self.stats.total_deltas_received += 1;
