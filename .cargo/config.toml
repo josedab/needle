@@ -13,3 +13,15 @@ test-all     = "test --features full"
 test-quick   = "test --lib"
 lint         = "clippy --features full"
 t            = "test --features full"
+
+[env]
+RUST_BACKTRACE = "1"
+
+# Platform-specific linker settings for faster linking during development.
+# Uncomment the section matching your OS (requires mold or lld to be installed).
+
+# [target.x86_64-unknown-linux-gnu]
+# rustflags = ["-C", "link-arg=-fuse-ld=mold"]
+
+# [target.aarch64-unknown-linux-gnu]
+# rustflags = ["-C", "link-arg=-fuse-ld=mold"]
