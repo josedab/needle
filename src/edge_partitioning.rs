@@ -79,7 +79,7 @@ impl PartitionConfig {
 
         Self {
             max_vectors_per_partition: max_vectors.min(20_000),
-            target_partitions: ((memory_bytes / 1024 / 1024) / 10).max(4).min(64) as usize,
+            target_partitions: ((memory_bytes / 1024 / 1024) / 10).clamp(4, 64),
             search_probe_count: 3,
             enable_preload_hints: true,
             boundary_overlap: 0.1,
@@ -762,11 +762,10 @@ impl HierarchicalPartitioner {
             return 0;
         }
 
-        let dims = vectors[0].len();
         let mut max_variance = 0.0;
         let mut split_dim = 0;
 
-        for d in 0..dims {
+        for (d, _) in vectors[0].iter().enumerate() {
             let values: Vec<f32> = indices.iter().map(|&i| vectors[i][d]).collect();
             let mean: f32 = values.iter().sum::<f32>() / values.len() as f32;
             let variance: f32 = values.iter().map(|v| (v - mean).powi(2)).sum::<f32>() / values.len() as f32;
