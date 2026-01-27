@@ -1614,10 +1614,7 @@ impl Collection {
 
         // Apply post-filter if present
         if let Some(pf) = post_filter {
-            search_results = search_results
-                .into_iter()
-                .filter(|r| pf.matches(r.metadata.as_ref()))
-                .collect();
+            search_results.retain(|r| pf.matches(r.metadata.as_ref()));
         }
 
         // Strip metadata if not requested
