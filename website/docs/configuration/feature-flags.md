@@ -11,11 +11,31 @@ Needle uses Cargo feature flags for optional functionality. This allows you to i
 | Feature | Description | Dependencies Added |
 |---------|-------------|-------------------|
 | `simd` | SIMD-optimized distance functions | None |
+| `async` | Async database API without HTTP server | tokio, futures |
 | `server` | HTTP REST API server | axum, tokio, tower |
+| `web-ui` | Web-based admin UI | axum |
+| `tui` | Terminal UI for interactive management | ratatui, crossterm |
 | `metrics` | Prometheus metrics | prometheus |
 | `hybrid` | BM25 hybrid search | rust-stemmers |
 | `embeddings` | ONNX embedding inference | ort, ndarray, tokenizers |
-| `full` | server + metrics + hybrid | (combined) |
+| `embedding-providers` | OpenAI, Cohere, Ollama embedding providers | reqwest, async-trait |
+| `encryption` | ChaCha20-Poly1305 encryption at rest | chacha20poly1305, hkdf |
+| `diskann` | DiskANN on-disk index support | bincode |
+| `integrations` | LangChain / LlamaIndex adapters | uuid |
+| `cloud-storage` | All cloud storage backends (S3 + GCS + Azure) | (combined) |
+| `cloud-storage-s3` | AWS S3 storage backend | aws-config, aws-sdk-s3 |
+| `cloud-storage-gcs` | Google Cloud Storage backend | google-cloud-storage |
+| `cloud-storage-azure` | Azure Blob Storage backend | azure_storage, azure_storage_blobs |
+| `gpu` | GPU acceleration (base) | wide |
+| `gpu-cuda` | NVIDIA CUDA GPU acceleration | gpu + cudarc |
+| `gpu-metal` | Apple Metal GPU acceleration | gpu + metal, objc |
+| `cdc` | All CDC/streaming connectors | (combined) |
+| `cdc-kafka` | Kafka change data capture connector | rdkafka |
+| `cdc-pulsar` | Apache Pulsar CDC connector | pulsar |
+| `cdc-postgres` | PostgreSQL CDC connector | tokio-postgres |
+| `cdc-mongodb` | MongoDB CDC connector | mongodb |
+| `experimental` | Experimental modules (APIs may change) | None |
+| `full` | All stable features combined | (combined) |
 | `python` | Python bindings | pyo3 |
 | `wasm` | WebAssembly bindings | wasm-bindgen |
 | `uniffi-bindings` | Swift/Kotlin bindings | uniffi |
@@ -62,7 +82,7 @@ needle = { version = "0.1", features = ["full"] }
 This is equivalent to:
 ```toml
 [dependencies]
-needle = { version = "0.1", features = ["server", "metrics", "hybrid"] }
+needle = { version = "0.1", features = ["server", "metrics", "hybrid", "web-ui", "embedding-providers", "encryption", "diskann", "integrations", "experimental"] }
 ```
 
 #### RAG Application
@@ -203,6 +223,107 @@ Enables Swift and Kotlin bindings via UniFFI.
 ```bash
 # Generate bindings
 cargo build --features uniffi-bindings
+```
+
+### async
+
+Enables the async database API without starting an HTTP server. Useful for embedding Needle in async Rust applications.
+
+```rust
+use needle::{AsyncDatabase, AsyncDatabaseConfig};
+
+let config = AsyncDatabaseConfig::default();
+let db = AsyncDatabase::new(config).await?;
+```
+
+**Dependencies:** tokio, futures
+
+### tui
+
+Enables a terminal user interface for interactive database management.
+
+```bash
+cargo run --features tui -- tui -d vectors.needle
+```
+
+**Dependencies:** ratatui, crossterm
+
+### encryption
+
+Enables ChaCha20-Poly1305 authenticated encryption for data at rest.
+
+```rust
+use needle::enterprise::encryption;
+// Encrypt collections using ChaCha20-Poly1305
+```
+
+**Dependencies:** chacha20poly1305, hkdf
+
+### diskann
+
+Enables the DiskANN on-disk index for datasets that exceed available RAM.
+
+```rust
+use needle::indexing::diskann;
+// Build DiskANN index for large-scale search
+```
+
+**Dependencies:** bincode
+
+### integrations
+
+Enables framework adapters for LangChain and LlamaIndex.
+
+```rust
+use needle::integrations::{langchain, llamaindex};
+```
+
+**Dependencies:** uuid
+
+### cloud-storage
+
+Enables all cloud storage backends. Use individual features (`cloud-storage-s3`, `cloud-storage-gcs`, `cloud-storage-azure`) for specific providers.
+
+```toml
+# Only AWS S3
+needle = { version = "0.1", features = ["cloud-storage-s3"] }
+
+# All providers
+needle = { version = "0.1", features = ["cloud-storage"] }
+```
+
+### gpu / gpu-cuda / gpu-metal
+
+Enables GPU-accelerated distance computations.
+
+- `gpu`: Base GPU support using SIMD-wide types
+- `gpu-cuda`: NVIDIA CUDA acceleration (requires CUDA toolkit)
+- `gpu-metal`: Apple Metal acceleration (macOS/iOS only)
+
+```toml
+# NVIDIA GPU
+needle = { version = "0.1", features = ["gpu-cuda"] }
+
+# Apple Silicon
+needle = { version = "0.1", features = ["gpu-metal"] }
+```
+
+### cdc / cdc-kafka / cdc-pulsar / cdc-postgres / cdc-mongodb
+
+Enables Change Data Capture (CDC) streaming connectors for real-time vector ingestion.
+
+- `cdc-kafka`: Apache Kafka connector
+- `cdc-pulsar`: Apache Pulsar connector
+- `cdc-postgres`: PostgreSQL logical replication connector
+- `cdc-mongodb`: MongoDB change stream connector
+- `cdc`: All connectors combined
+
+```toml
+# Kafka only
+needle = { version = "0.1", features = ["cdc-kafka"] }
+
+# All CDC connectors
+needle = { version = "0.1", features = ["cdc"] }
 ```
 
 ## Build Size Impact
