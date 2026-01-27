@@ -35,6 +35,7 @@ use std::sync::{Arc, RwLock};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
+use tracing::warn;
 
 use crate::error::{NeedleError, Result};
 
@@ -531,7 +532,9 @@ impl FineTuner {
             && self.interactions_since_train >= self.config.auto_train_interval
             && self.interactions.len() >= self.config.min_interactions_for_training
         {
-            let _ = self.train(10); // Quick training session
+            if let Err(e) = self.train(10) {
+                warn!(error = %e, "Auto-train failed during record_interaction");
+            }
         }
     }
 
