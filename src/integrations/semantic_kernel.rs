@@ -161,7 +161,7 @@ impl NeedleMemoryStore {
         });
 
         // Delete existing if present (upsert semantics)
-        let _ = col.write().delete(&record.id);
+        col.write().delete(&record.id)?;
         col.write()
             .insert(&record.id, embedding, Some(metadata.clone()))?;
 
@@ -206,7 +206,7 @@ impl NeedleMemoryStore {
         let col = cols
             .get(collection_name)
             .ok_or_else(|| NeedleError::CollectionNotFound(collection_name.to_string()))?;
-        let _ = col.write().delete(key);
+        col.write().delete(key)?;
         Ok(())
     }
 

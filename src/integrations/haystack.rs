@@ -184,7 +184,7 @@ impl NeedleDocumentStore {
 
             match self.config.duplicate_policy {
                 DuplicatePolicy::Overwrite => {
-                    let _ = self.inner.write().delete(&doc.id);
+                    self.inner.write().delete(&doc.id)?;
                     self.inner
                         .write()
                         .insert(&doc.id, embedding, Some(metadata))?;
