@@ -44,11 +44,11 @@ let db = Database::open("vectors.needle")?;
 
 // With custom configuration
 let config = DatabaseConfig {
-    auto_save: true,
-    save_interval: Duration::from_secs(60),
-    ..Default::default()
+    path: PathBuf::from("vectors.needle"),
+    create_if_missing: true,
+    read_only: false,
 };
-let db = Database::with_config("vectors.needle", config)?;
+let db = Database::open_with_config(config)?;
 ```
 
 ### Database Methods
