@@ -2396,7 +2396,7 @@ impl Collection {
         }
 
         // Get the ID mapping from compacting the index
-        let id_map = self.index.compact(self.vectors.as_slice());
+        let id_map = self.index.compact(self.vectors.as_slice())?;
 
         // Rebuild vectors and metadata with new IDs
         let mut new_vectors = VectorStore::new(self.config.dimensions);

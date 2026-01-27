@@ -839,10 +839,10 @@ impl HnswIndex {
 
     /// Compact the index by rebuilding without deleted vectors
     /// Returns a mapping from old IDs to new IDs
-    pub fn compact(&mut self, vectors: &[Vec<f32>]) -> HashMap<VectorId, VectorId> {
+    pub fn compact(&mut self, vectors: &[Vec<f32>]) -> Result<HashMap<VectorId, VectorId>> {
         if self.deleted.is_empty() {
             debug!("Compact called but no deleted vectors");
-            return HashMap::new();
+            return Ok(HashMap::new());
         }
 
         debug!(
@@ -880,7 +880,7 @@ impl HnswIndex {
 
         // Insert all vectors into new index
         for (new_id, vec) in new_vectors.iter().enumerate() {
-            let _ = new_index.insert(new_id, vec, &new_vectors);
+            new_index.insert(new_id, vec, &new_vectors)?;
         }
 
         // Replace self with new index
@@ -897,7 +897,7 @@ impl HnswIndex {
             "Index compaction completed"
         );
 
-        id_map
+        Ok(id_map)
     }
 
     /// Check if compaction is recommended based on deleted ratio
@@ -1171,7 +1171,7 @@ mod tests {
         assert!(index.needs_compaction(0.3)); // 50% deleted > 30% threshold
 
         // Compact the index
-        let id_map = index.compact(&vectors);
+        let id_map = index.compact(&vectors).unwrap();
 
         assert_eq!(index.len(), n / 2);
         assert_eq!(index.deleted_count(), 0);

@@ -729,7 +729,7 @@ impl IncrementalIndex {
             let mut index = self.index.write();
             let vectors = self.vectors.read();
             let old_count = index.deleted_count();
-            let id_map = index.compact(vectors.as_slice());
+            let id_map = index.compact(vectors.as_slice())?;
             (id_map, old_count)
         };
 
