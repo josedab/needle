@@ -1454,4 +1454,185 @@ mod tests {
         let content = &resp.result.unwrap()["content"][0]["text"];
         assert!(content.as_str().unwrap().contains("Error"));
     }
+
+    #[test]
+    fn test_collection_info() {
+        let server = create_test_server();
+
+        // Create collection
+        server.handle_request(&JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            id: Some(json!(1)),
+            method: "tools/call".to_string(),
+            params: json!({
+                "name": "create_collection",
+                "arguments": { "name": "info_test", "dimensions": 4 }
+            }),
+        });
+
+        // Insert a vector
+        server.handle_request(&JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            id: Some(json!(2)),
+            method: "tools/call".to_string(),
+            params: json!({
+                "name": "insert_vectors",
+                "arguments": {
+                    "collection": "info_test",
+                    "vectors": [{ "id": "v1", "values": [1.0, 0.0, 0.0, 0.0] }]
+                }
+            }),
+        });
+
+        // Get collection info
+        let resp = server.handle_request(&JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            id: Some(json!(3)),
+            method: "tools/call".to_string(),
+            params: json!({
+                "name": "collection_info",
+                "arguments": { "name": "info_test" }
+            }),
+        });
+        assert!(resp.error.is_none());
+        let content = &resp.result.unwrap()["content"][0]["text"];
+        let parsed: Value = serde_json::from_str(content.as_str().unwrap()).unwrap();
+        assert_eq!(parsed["name"], "info_test");
+        assert_eq!(parsed["vector_count"], 1);
+
+        // Non-existent collection should error
+        let resp = server.handle_request(&JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            id: Some(json!(4)),
+            method: "tools/call".to_string(),
+            params: json!({
+                "name": "collection_info",
+                "arguments": { "name": "nonexistent" }
+            }),
+        });
+        let content = &resp.result.unwrap()["content"][0]["text"];
+        assert!(content.as_str().unwrap().contains("Error"));
+    }
+
+    #[test]
+    fn test_delete_collection() {
+        let server = create_test_server();
+
+        // Create collection
+        server.handle_request(&JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            id: Some(json!(1)),
+            method: "tools/call".to_string(),
+            params: json!({
+                "name": "create_collection",
+                "arguments": { "name": "to_delete", "dimensions": 3 }
+            }),
+        });
+
+        // Delete it
+        let resp = server.handle_request(&JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            id: Some(json!(2)),
+            method: "tools/call".to_string(),
+            params: json!({
+                "name": "delete_collection",
+                "arguments": { "name": "to_delete" }
+            }),
+        });
+        assert!(resp.error.is_none());
+        let content = &resp.result.unwrap()["content"][0]["text"];
+        let parsed: Value = serde_json::from_str(content.as_str().unwrap()).unwrap();
+        assert_eq!(parsed["deleted"], true);
+
+        // Verify it's gone
+        let resp = server.handle_request(&JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            id: Some(json!(3)),
+            method: "tools/call".to_string(),
+            params: json!({
+                "name": "list_collections",
+                "arguments": {}
+            }),
+        });
+        let content = &resp.result.unwrap()["content"][0]["text"];
+        let parsed: Value = serde_json::from_str(content.as_str().unwrap()).unwrap();
+        assert_eq!(parsed["collections"].as_array().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn test_save_database() {
+        let server = create_test_server();
+
+        let resp = server.handle_request(&JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            id: Some(json!(1)),
+            method: "tools/call".to_string(),
+            params: json!({
+                "name": "save_database",
+                "arguments": {}
+            }),
+        });
+        assert!(resp.error.is_none());
+        let content = &resp.result.unwrap()["content"][0]["text"];
+        let parsed: Value = serde_json::from_str(content.as_str().unwrap()).unwrap();
+        assert_eq!(parsed["acknowledged"], true);
+    }
+
+    #[test]
+    fn test_search_with_filter() {
+        let server = create_test_server();
+
+        // Create collection
+        server.handle_request(&JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            id: Some(json!(1)),
+            method: "tools/call".to_string(),
+            params: json!({
+                "name": "create_collection",
+                "arguments": { "name": "filtered", "dimensions": 4 }
+            }),
+        });
+
+        // Insert vectors with metadata
+        server.handle_request(&JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            id: Some(json!(2)),
+            method: "tools/call".to_string(),
+            params: json!({
+                "name": "insert_vectors",
+                "arguments": {
+                    "collection": "filtered",
+                    "vectors": [
+                        { "id": "a", "values": [1.0, 0.0, 0.0, 0.0], "metadata": {"category": "books"} },
+                        { "id": "b", "values": [0.0, 1.0, 0.0, 0.0], "metadata": {"category": "movies"} },
+                        { "id": "c", "values": [0.9, 0.1, 0.0, 0.0], "metadata": {"category": "books"} }
+                    ]
+                }
+            }),
+        });
+
+        // Search with filter
+        let resp = server.handle_request(&JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            id: Some(json!(3)),
+            method: "tools/call".to_string(),
+            params: json!({
+                "name": "search",
+                "arguments": {
+                    "collection": "filtered",
+                    "vector": [1.0, 0.0, 0.0, 0.0],
+                    "k": 10,
+                    "filter": { "category": "books" }
+                }
+            }),
+        });
+        assert!(resp.error.is_none());
+        let content = &resp.result.unwrap()["content"][0]["text"];
+        let parsed: Value = serde_json::from_str(content.as_str().unwrap()).unwrap();
+        assert_eq!(parsed["count"], 2);
+        // All results should be books
+        for result in parsed["results"].as_array().unwrap() {
+            assert_eq!(result["metadata"]["category"], "books");
+        }
+    }
 }
