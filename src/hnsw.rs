@@ -152,6 +152,7 @@ impl Default for HnswConfig {
 
 impl HnswConfig {
     /// Create a new configuration with custom M value
+    #[must_use]
     pub fn with_m(m: usize) -> Self {
         Self {
             m,
@@ -163,11 +164,13 @@ impl HnswConfig {
     }
 
     /// Create a new builder starting from defaults
+    #[must_use]
     pub fn builder() -> Self {
         Self::default()
     }
 
     /// Set the M parameter (max connections per layer)
+    #[must_use]
     pub fn m(mut self, m: usize) -> Self {
         self.m = m;
         self.m_max_0 = m * 2;
@@ -176,24 +179,28 @@ impl HnswConfig {
     }
 
     /// Set the M_max_0 parameter (max connections for layer 0)
+    #[must_use]
     pub fn m_max_0(mut self, m_max_0: usize) -> Self {
         self.m_max_0 = m_max_0;
         self
     }
 
     /// Set ef_construction (construction search depth)
+    #[must_use]
     pub fn ef_construction(mut self, ef: usize) -> Self {
         self.ef_construction = ef;
         self
     }
 
     /// Set ef_search (query search depth)
+    #[must_use]
     pub fn ef_search(mut self, ef: usize) -> Self {
         self.ef_search = ef;
         self
     }
 
     /// Set the level multiplier
+    #[must_use]
     pub fn ml(mut self, ml: f64) -> Self {
         self.ml = ml;
         self

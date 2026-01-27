@@ -84,6 +84,7 @@ impl Default for DatabaseConfig {
 
 impl DatabaseConfig {
     /// Create a new config with the given path
+    #[must_use]
     pub fn new(path: impl Into<PathBuf>) -> Self {
         Self {
             path: path.into(),
