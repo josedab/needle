@@ -2,7 +2,7 @@
 # Usage: make <recipe>
 
 .PHONY: help quick check build build-all build-release test test-unit test-integration \
-        fmt fmt-check lint watch serve demo doctor doc bench clean playground setup test-single
+        fmt fmt-check lint watch serve demo doctor doc bench clean playground setup test-single coverage
 
 help:
 	@echo "Available recipes:"
@@ -19,11 +19,12 @@ help:
 	@echo "  make fmt-check     — Check formatting"
 	@echo "  make lint          — Run clippy linter"
 	@echo "  make watch         — Continuous check on file changes (requires cargo-watch)"
-	@echo "  make serve         — Run HTTP server locally"
+	@echo "  make serve         — Run HTTP server locally (NEEDLE_PORT=9090 make serve)"
 	@echo "  make demo          — Run quickstart demo"
 	@echo "  make doctor        — Check local environment"
 	@echo "  make doc           — Generate and open documentation"
 	@echo "  make bench         — Run benchmarks"
+	@echo "  make coverage      — Generate HTML coverage report (requires cargo-llvm-cov)"
 	@echo "  make playground    — Interactive guided walkthrough"
 	@echo "  make clean         — Clean build artifacts"
 
@@ -58,14 +59,18 @@ fmt-check:
 	cargo fmt -- --check
 
 lint:
-	cargo clippy --features full -- -D warnings
+	cargo clippy --all-targets --features full -- -D warnings
 
 # Continuous check on save (requires: cargo install cargo-watch)
 watch:
 	cargo watch -x 'check --features full'
 
+NEEDLE_PORT ?= 8080
+
 serve:
-	cargo run --features server -- serve -a 127.0.0.1:8080
+	@echo "Starting Needle server on 127.0.0.1:$(NEEDLE_PORT)"
+	@echo "Tip: change port with NEEDLE_PORT=9090 make serve"
+	cargo run --features server -- serve -a 127.0.0.1:$(NEEDLE_PORT)
 
 demo:
 	./scripts/quickstart.sh
@@ -78,6 +83,10 @@ doc:
 
 bench:
 	cargo bench
+
+# Coverage report (requires: cargo install cargo-llvm-cov)
+coverage:
+	cargo llvm-cov --features full --html --open
 
 playground:
 	./scripts/playground.sh
