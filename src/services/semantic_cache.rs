@@ -588,9 +588,158 @@ impl SemanticCache {
             a.total_evictions, a.hit_rate(), a.avg_hit_distance,
         )
     }
+
+    /// Adaptively adjust the similarity threshold based on observed hit rate.
+    ///
+    /// If the hit rate is too low, the threshold is relaxed (increased) to
+    /// accept more approximate matches. If too high (potentially returning
+    /// stale results), the threshold is tightened.
+    ///
+    /// Returns the new threshold value.
+    pub fn adapt_threshold(
+        &mut self,
+        target_hit_rate: f32,
+        adjustment_step: f32,
+    ) -> f32 {
+        let current_rate = self.analytics.hit_rate();
+        let threshold = &mut self.config.similarity_threshold;
+
+        if self.analytics.total_lookups < 100 {
+            // Not enough data to adapt
+            return *threshold;
+        }
+
+        if current_rate < target_hit_rate * 0.8 {
+            // Hit rate too low — relax threshold (accept more approximate matches)
+            *threshold = (*threshold + adjustment_step).min(0.5);
+        } else if current_rate > target_hit_rate * 1.2 {
+            // Hit rate too high — tighten threshold (require closer matches)
+            *threshold = (*threshold - adjustment_step).max(0.01);
+        }
+
+        *threshold
+    }
+
+    /// Get the current similarity threshold.
+    pub fn threshold(&self) -> f32 {
+        self.config.similarity_threshold
+    }
 }
 
 // ── LLM Middleware ───────────────────────────────────────────────────────────
+
+// ── Namespaced Cache ────────────────────────────────────────────────────────
+
+/// A multi-namespace cache that isolates entries by model or tenant.
+///
+/// Each namespace gets its own `SemanticCache` instance, preventing cross-
+/// contamination between different embedding models, deployment stages,
+/// or tenants.
+pub struct NamespacedCache {
+    caches: HashMap<String, SemanticCache>,
+    config: CacheConfig,
+    cost_tracker: CostTracker,
+}
+
+/// Tracks API cost savings from cache hits.
+#[derive(Debug, Clone, Default)]
+pub struct CostTracker {
+    /// Estimated cost per embedding API call in USD.
+    pub cost_per_embedding_call: f64,
+    /// Estimated cost per LLM completion call in USD.
+    pub cost_per_completion_call: f64,
+    /// Total embedding calls avoided via cache.
+    pub embedding_calls_saved: u64,
+    /// Total completion calls avoided via cache.
+    pub completion_calls_saved: u64,
+}
+
+impl CostTracker {
+    /// Total estimated savings in USD.
+    pub fn total_savings(&self) -> f64 {
+        self.embedding_calls_saved as f64 * self.cost_per_embedding_call
+            + self.completion_calls_saved as f64 * self.cost_per_completion_call
+    }
+}
+
+impl NamespacedCache {
+    /// Create a new namespaced cache.
+    pub fn new(config: CacheConfig) -> Self {
+        Self {
+            caches: HashMap::new(),
+            config,
+            cost_tracker: CostTracker {
+                cost_per_embedding_call: 0.00002,  // ~$0.02 per 1K tokens
+                cost_per_completion_call: 0.002,    // ~$2 per 1K tokens
+                ..Default::default()
+            },
+        }
+    }
+
+    /// Set cost tracking parameters.
+    pub fn with_costs(mut self, per_embed: f64, per_completion: f64) -> Self {
+        self.cost_tracker.cost_per_embedding_call = per_embed;
+        self.cost_tracker.cost_per_completion_call = per_completion;
+        self
+    }
+
+    /// Get or create the cache for a namespace.
+    pub fn namespace(&mut self, name: &str) -> &mut SemanticCache {
+        if !self.caches.contains_key(name) {
+            self.caches.insert(name.to_string(), SemanticCache::new(self.config.clone()));
+        }
+        self.caches.get_mut(name).unwrap_or_else(|| unreachable!())
+    }
+
+    /// Look up in a namespace's cache.
+    pub fn get(
+        &mut self,
+        namespace: &str,
+        embedding: &[f32],
+        model: Option<&str>,
+    ) -> Result<Option<CacheHit>> {
+        let cache = self.namespace(namespace);
+        let result = cache.get(embedding, model)?;
+        if result.is_some() {
+            self.cost_tracker.completion_calls_saved += 1;
+        }
+        Ok(result)
+    }
+
+    /// Store in a namespace's cache.
+    pub fn put(
+        &mut self,
+        namespace: &str,
+        embedding: &[f32],
+        query: &str,
+        response: &str,
+        model: Option<&str>,
+    ) -> Result<String> {
+        self.namespace(namespace).put(embedding, query, response, model)
+    }
+
+    /// Get cost savings.
+    pub fn cost_tracker(&self) -> &CostTracker {
+        &self.cost_tracker
+    }
+
+    /// List all active namespaces.
+    pub fn namespaces(&self) -> Vec<&str> {
+        self.caches.keys().map(|s| s.as_str()).collect()
+    }
+
+    /// Total entries across all namespaces.
+    pub fn total_entries(&self) -> usize {
+        self.caches.values().map(|c| c.len()).sum()
+    }
+
+    /// Clear all namespaces.
+    pub fn clear_all(&mut self) {
+        for cache in self.caches.values_mut() {
+            cache.clear();
+        }
+    }
+}
 
 /// An LLM provider that can be wrapped with caching middleware.
 pub trait LlmProvider {
@@ -779,6 +928,110 @@ pub struct WarmUpResult {
     pub embedded: usize,
     /// Number of entries that failed to embed.
     pub failed: usize,
+}
+
+// ── Query Log for Auto-Warming ──────────────────────────────────────────────
+
+/// A query log entry for cache warming analysis.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QueryLogEntry {
+    /// The query text.
+    pub query: String,
+    /// The embedding vector (if available).
+    pub embedding: Option<Vec<f32>>,
+    /// How many times this query has been seen.
+    pub frequency: u64,
+    /// Timestamp of last occurrence.
+    pub last_seen: u64,
+}
+
+/// Query log that tracks frequently asked queries for cache warming.
+pub struct QueryLog {
+    entries: HashMap<String, QueryLogEntry>,
+    max_entries: usize,
+}
+
+impl QueryLog {
+    /// Create a new query log with max capacity.
+    pub fn new(max_entries: usize) -> Self {
+        Self {
+            entries: HashMap::new(),
+            max_entries,
+        }
+    }
+
+    /// Record a query occurrence.
+    pub fn record(&mut self, query: &str, embedding: Option<Vec<f32>>) {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+
+        if let Some(entry) = self.entries.get_mut(query) {
+            entry.frequency += 1;
+            entry.last_seen = now;
+            if entry.embedding.is_none() {
+                entry.embedding = embedding;
+            }
+        } else {
+            if self.entries.len() >= self.max_entries {
+                // Evict least-frequent entry
+                if let Some(least) = self.entries.iter()
+                    .min_by_key(|(_, e)| e.frequency)
+                    .map(|(k, _)| k.clone())
+                {
+                    self.entries.remove(&least);
+                }
+            }
+            self.entries.insert(query.to_string(), QueryLogEntry {
+                query: query.to_string(),
+                embedding,
+                frequency: 1,
+                last_seen: now,
+            });
+        }
+    }
+
+    /// Get the top-N most frequent queries that have embeddings.
+    pub fn top_queries(&self, n: usize) -> Vec<&QueryLogEntry> {
+        let mut entries: Vec<&QueryLogEntry> = self.entries.values()
+            .filter(|e| e.embedding.is_some())
+            .collect();
+        entries.sort_by(|a, b| b.frequency.cmp(&a.frequency));
+        entries.truncate(n);
+        entries
+    }
+
+    /// Auto-warm a cache from the query log's most frequent queries.
+    pub fn warm_cache(
+        &self,
+        cache: &mut SemanticCache,
+        top_n: usize,
+        default_response: &str,
+    ) -> usize {
+        let top = self.top_queries(top_n);
+        let mut warmed = 0;
+        for entry in top {
+            if let Some(ref emb) = entry.embedding {
+                if cache.get(emb, None).ok().flatten().is_none() {
+                    if cache.put(emb, &entry.query, default_response, None).is_ok() {
+                        warmed += 1;
+                    }
+                }
+            }
+        }
+        warmed
+    }
+
+    /// Number of tracked queries.
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// Whether the log is empty.
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
 }
 
 #[cfg(test)]
@@ -1139,5 +1392,19 @@ mod tests {
         let evicted = cache.invalidate_drifted(&reference, 0.3);
         // emb2 should be drifted (far from reference)
         assert!(evicted >= 1);
+    }
+
+    #[test]
+    fn test_adaptive_threshold_insufficient_data() {
+        let mut cache = SemanticCache::new(CacheConfig::new(4).with_threshold(0.15));
+        // Not enough data — threshold should not change
+        let new_t = cache.adapt_threshold(0.5, 0.02);
+        assert!((new_t - 0.15).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn test_threshold_getter() {
+        let cache = SemanticCache::new(CacheConfig::new(4).with_threshold(0.2));
+        assert!((cache.threshold() - 0.2).abs() < f32::EPSILON);
     }
 }
