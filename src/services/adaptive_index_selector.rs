@@ -77,6 +77,29 @@ pub struct MigrationPlan {
     pub can_serve_during_migration: bool,
 }
 
+/// Full evaluation result from the adaptive index selector.
+#[derive(Debug, Clone)]
+pub struct IndexEvaluation {
+    /// The recommended strategy and its parameters.
+    pub recommended: SelectionResult,
+    /// The currently active strategy, if set.
+    pub current_strategy: Option<IndexStrategy>,
+    /// Whether a migration is recommended.
+    pub needs_migration: bool,
+    /// Migration plan if migration is needed.
+    pub migration_plan: Option<MigrationPlan>,
+    /// Latency statistics: (p50, p95, p99) in ms.
+    pub latency_stats: Option<(f64, f64, f64)>,
+    /// Whether current latency meets the configured target.
+    pub latency_meets_target: bool,
+    /// Estimated memory usage in bytes for the current dataset.
+    pub memory_estimate_bytes: usize,
+    /// Whether memory usage is within the configured budget.
+    pub memory_within_budget: bool,
+    /// Number of workload observations collected.
+    pub observation_count: usize,
+}
+
 /// Adaptive index selector.
 pub struct AdaptiveSelector {
     observations: Vec<WorkloadProfile>,
@@ -134,6 +157,48 @@ impl AdaptiveSelector {
             Some(rec)
         } else {
             None
+        }
+    }
+
+    /// Perform a full evaluation of the current index strategy against workload data.
+    ///
+    /// Returns an `IndexEvaluation` with a recommendation, latency analysis,
+    /// memory analysis, and migration plan if applicable.
+    pub fn evaluate(&self, vector_count: usize, dimensions: usize) -> IndexEvaluation {
+        let rec = self.recommend(vector_count, dimensions);
+        let latency = self.latency_stats();
+        let current = self.current_strategy;
+
+        let needs_migration = current
+            .map(|c| c != rec.strategy && rec.confidence > 0.6)
+            .unwrap_or(false);
+
+        let migration_plan = if needs_migration {
+            current.map(|from| self.migration_plan(from, rec.strategy, vector_count))
+        } else {
+            None
+        };
+
+        let latency_meets_target = match (latency, self.latency_target_ms) {
+            (Some((p50, _, _)), Some(target)) => p50 <= target,
+            _ => true,
+        };
+
+        let memory_estimate_bytes = vector_count * dimensions * 4;
+        let memory_within_budget = self.memory_budget_bytes
+            .map(|budget| memory_estimate_bytes <= budget)
+            .unwrap_or(true);
+
+        IndexEvaluation {
+            recommended: rec,
+            current_strategy: current,
+            needs_migration,
+            migration_plan,
+            latency_stats: latency,
+            latency_meets_target,
+            memory_estimate_bytes,
+            memory_within_budget,
+            observation_count: self.observations.len(),
         }
     }
 
@@ -214,9 +279,24 @@ impl AdaptiveSelector {
         let mut params = HashMap::new();
         match best {
             IndexStrategy::Hnsw | IndexStrategy::HnswQuantized => {
-                params.insert("m".into(), "16".into());
-                params.insert("ef_construction".into(), "200".into());
-                params.insert("ef_search".into(), "50".into());
+                // Use the auto_tune infrastructure for HNSW parameters
+                let tuning = crate::tuning::TuningConstraints::new(vector_count, dimensions);
+                let tuned = crate::tuning::auto_tune(&tuning);
+                params.insert("m".into(), tuned.config.m.to_string());
+                params.insert("ef_construction".into(), tuned.config.ef_construction.to_string());
+                params.insert("ef_search".into(), tuned.config.ef_search.to_string());
+            }
+            IndexStrategy::Ivf => {
+                // Recommend nlist based on dataset size
+                let nlist = ((vector_count as f64).sqrt() as usize).clamp(16, 65536);
+                let nprobe = (nlist / 10).clamp(1, 256);
+                params.insert("nlist".into(), nlist.to_string());
+                params.insert("nprobe".into(), nprobe.to_string());
+            }
+            IndexStrategy::DiskAnn => {
+                params.insert("max_degree".into(), "64".into());
+                params.insert("l_build".into(), "100".into());
+                params.insert("l_search".into(), "100".into());
             }
             _ => {}
         }
@@ -376,6 +456,18 @@ pub fn select_by_cost(
     let max_score = candidates[0].1;
     let confidence = (max_score / 5.0).min(1.0);
 
+    let mut suggested_params = HashMap::new();
+    match candidates[0].0 {
+        IndexStrategy::Hnsw | IndexStrategy::HnswQuantized => {
+            let tuning = crate::tuning::TuningConstraints::new(vector_count, dimensions);
+            let tuned = crate::tuning::auto_tune(&tuning);
+            suggested_params.insert("m".into(), tuned.config.m.to_string());
+            suggested_params.insert("ef_construction".into(), tuned.config.ef_construction.to_string());
+            suggested_params.insert("ef_search".into(), tuned.config.ef_search.to_string());
+        }
+        _ => {}
+    }
+
     SelectionResult {
         strategy: candidates[0].0,
         confidence,
@@ -385,7 +477,86 @@ pub fn select_by_cost(
             vec![candidates[0].2.clone()]
         },
         alternatives: candidates.iter().skip(1).map(|(s, sc, _)| (*s, *sc)).collect(),
-        suggested_params: HashMap::new(),
+        suggested_params,
+    }
+}
+
+// ── Workload Tracker ────────────────────────────────────────────────────────
+
+/// Tracks query patterns over time for adaptive index decisions.
+///
+/// Attach this to a `Database` to automatically collect workload data
+/// and periodically check whether an index migration is beneficial.
+pub struct WorkloadTracker {
+    selector: AdaptiveSelector,
+    query_count: u64,
+    insert_count: u64,
+    evaluation_interval: u64,
+    last_vector_count: usize,
+    last_dimensions: usize,
+}
+
+impl WorkloadTracker {
+    /// Create a new workload tracker that evaluates every `interval` queries.
+    pub fn new(evaluation_interval: u64) -> Self {
+        Self {
+            selector: AdaptiveSelector::new(),
+            query_count: 0,
+            insert_count: 0,
+            evaluation_interval,
+            last_vector_count: 0,
+            last_dimensions: 0,
+        }
+    }
+
+    /// Record a search query with its latency and parameters.
+    pub fn record_search(&mut self, dimensions: usize, k: usize, latency_ms: f64, had_filter: bool) {
+        self.query_count += 1;
+        self.last_dimensions = dimensions;
+        self.selector.record_latency(latency_ms);
+
+        let profile = if had_filter {
+            WorkloadProfile::filtered_query(dimensions, k, 0.5)
+        } else {
+            WorkloadProfile::point_query(dimensions, k)
+        };
+        self.selector.observe_query(profile);
+    }
+
+    /// Record an insert operation.
+    pub fn record_insert(&mut self, vector_count: usize, dimensions: usize) {
+        self.insert_count += 1;
+        self.last_vector_count = vector_count;
+        self.last_dimensions = dimensions;
+    }
+
+    /// Check if it's time for an evaluation (every `evaluation_interval` queries).
+    pub fn should_evaluate(&self) -> bool {
+        self.query_count > 0 && self.query_count % self.evaluation_interval == 0
+    }
+
+    /// Perform an evaluation and return it if migration is recommended.
+    pub fn check_migration(&self) -> Option<IndexEvaluation> {
+        if self.last_vector_count == 0 || self.last_dimensions == 0 {
+            return None;
+        }
+        let eval = self.selector.evaluate(self.last_vector_count, self.last_dimensions);
+        if eval.needs_migration { Some(eval) } else { None }
+    }
+
+    /// Get current selector reference.
+    pub fn selector(&self) -> &AdaptiveSelector {
+        &self.selector
+    }
+
+    /// Get mutable selector reference.
+    pub fn selector_mut(&mut self) -> &mut AdaptiveSelector {
+        &mut self.selector
+    }
+
+    /// Total queries tracked.
+    pub fn total_queries(&self) -> u64 {
+        self.query_count
     }
 }
 
