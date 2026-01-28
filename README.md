@@ -37,6 +37,8 @@ cargo run --example basic_usage
 ```
 
 > ⏱️ First build takes ~2–3 minutes (compiling dependencies). Subsequent builds are ~5 seconds.
+>
+> For full development environment setup (doctor checks, pre-commit hooks, build), run `make setup`.
 
 <details>
 <summary><strong>More ways to run</strong></summary>
@@ -58,6 +60,9 @@ curl http://127.0.0.1:8080/health
 # Task runner shortcuts (make works out of the box; just needs: cargo install just)
 make demo
 just demo
+
+# Interactive guided HTTP API walkthrough (creates, searches, filters)
+make playground
 
 # Docker: run the image directly
 docker run --rm -p 8080:8080 ghcr.io/anthropics/needle:latest
