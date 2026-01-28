@@ -400,12 +400,10 @@ impl TransactionManager {
         };
 
         if let Some((conflicting_tx, conflicting_id)) = conflict {
-            let txn_mut = inner
-                .active_transactions
-                .get_mut(&tx_id)
-                .expect("just looked up");
-            txn_mut.status = TransactionStatus::Aborted;
-            txn_mut.write_set.clear();
+            if let Some(txn_mut) = inner.active_transactions.get_mut(&tx_id) {
+                txn_mut.status = TransactionStatus::Aborted;
+                txn_mut.write_set.clear();
+            }
             inner.active_transactions.remove(&tx_id);
             inner.stats.total_aborted += 1;
             inner.stats.total_conflicts += 1;
@@ -417,14 +415,11 @@ impl TransactionManager {
         }
 
         // No conflicts — commit.
-        let txn_mut = inner
-            .active_transactions
-            .get_mut(&tx_id)
-            .expect("just looked up");
-        txn_mut.status = TransactionStatus::Committed;
-
-        let ops = std::mem::take(&mut txn_mut.write_set);
-        inner.committed_log.push((tx_id, ops));
+        if let Some(txn_mut) = inner.active_transactions.get_mut(&tx_id) {
+            txn_mut.status = TransactionStatus::Committed;
+            let ops = std::mem::take(&mut txn_mut.write_set);
+            inner.committed_log.push((tx_id, ops));
+        }
         inner.active_transactions.remove(&tx_id);
         inner.stats.total_committed += 1;
         inner.stats.active_count = inner.active_transactions.len();

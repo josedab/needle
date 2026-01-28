@@ -476,7 +476,7 @@ impl WalManager {
             (1, 1)
         } else {
             let last_lsn = Self::find_last_lsn(&segments)?;
-            let last_segment = segments.last().expect("segments is non-empty");
+            let last_segment = segments.last().unwrap_or(&segments[0]);
             let segment_number = Self::parse_segment_number(last_segment).unwrap_or(0) + 1;
             (segment_number, last_lsn + 1)
         };
