@@ -840,7 +840,7 @@ impl McpServer {
                 conditions.push(json!({ "_memory_importance": { "$gte": imp } }));
             }
             let filter_json = if conditions.len() == 1 {
-                conditions.into_iter().next().expect("checked non-empty")
+                conditions.into_iter().next().unwrap_or_else(|| json!({}))
             } else {
                 json!({ "$and": conditions })
             };

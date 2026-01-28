@@ -66,7 +66,7 @@ pub struct WebUiConfig {
 impl Default for WebUiConfig {
     fn default() -> Self {
         Self {
-            addr: "127.0.0.1:8081".parse().expect("valid socket addr"),
+            addr: std::net::SocketAddr::from(([127, 0, 0, 1], 8081)),
             title: "Needle Dashboard".to_string(),
             enable_query_playground: true,
             refresh_interval: 30,
@@ -78,7 +78,9 @@ impl WebUiConfig {
     /// Create a new configuration with the specified address
     pub fn new(addr: &str) -> Self {
         Self {
-            addr: addr.parse().expect("Invalid address"),
+            addr: addr.parse().unwrap_or_else(|_| {
+                std::net::SocketAddr::from(([127, 0, 0, 1], 8081))
+            }),
             ..Default::default()
         }
     }

@@ -2300,17 +2300,17 @@ pub async fn serve(config: ServerConfig) -> Result<(), Box<dyn std::error::Error
     // Graceful shutdown handling
     let shutdown_signal = async {
         let ctrl_c = async {
-            tokio::signal::ctrl_c()
-                .await
-                .expect("Failed to install Ctrl+C handler");
+            if let Err(e) = tokio::signal::ctrl_c().await {
+                tracing::error!("Failed to install Ctrl+C handler: {e}");
+            }
         };
 
         #[cfg(unix)]
         let terminate = async {
-            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-                .expect("Failed to install SIGTERM handler")
-                .recv()
-                .await;
+            match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+                Ok(mut sig) => { sig.recv().await; }
+                Err(e) => tracing::error!("Failed to install SIGTERM handler: {e}"),
+            }
         };
 
         #[cfg(not(unix))]
@@ -3947,7 +3947,7 @@ async fn recall_handler(
         if conditions.is_empty() {
             None
         } else if conditions.len() == 1 {
-            Some(conditions.into_iter().next().expect("checked non-empty"))
+            conditions.into_iter().next()
         } else {
             Some(json!({ "$and": conditions }))
         }
