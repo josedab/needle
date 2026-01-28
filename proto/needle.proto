@@ -35,6 +35,7 @@ service NeedleService {
   rpc Search(SearchRequest) returns (SearchResponse);
   rpc BatchSearch(BatchSearchRequest) returns (BatchSearchResponse);
   rpc StreamingInsert(stream InsertRequest) returns (BatchInsertResponse);
+  rpc StreamingSearch(stream SearchRequest) returns (stream SearchResponse);
 
   // Text operations (auto-embed)
   rpc InsertText(InsertTextRequest) returns (InsertTextResponse);
