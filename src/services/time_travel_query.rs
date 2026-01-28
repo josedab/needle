@@ -443,6 +443,294 @@ impl<'a> TimeTravelService<'a> {
         }
         Ok(())
     }
+
+    /// Search at the version that was active at the given Unix timestamp.
+    ///
+    /// Finds the latest version committed before `unix_timestamp` and
+    /// searches against that historical state.
+    pub fn search_at_timestamp(
+        &self,
+        query: &[f32],
+        k: usize,
+        unix_timestamp: u64,
+    ) -> Result<Vec<crate::collection::SearchResult>> {
+        // Find the latest version that was committed at or before the timestamp
+        let target_version = self
+            .audit_log
+            .iter()
+            .filter(|entry| entry.timestamp <= unix_timestamp)
+            .map(|entry| entry.version)
+            .max()
+            .unwrap_or(0);
+
+        if target_version == 0 {
+            return Ok(Vec::new());
+        }
+
+        self.search_at(query, k, target_version)
+    }
+
+    /// Get the state of a vector at the given Unix timestamp.
+    pub fn get_at_timestamp(
+        &self,
+        id: &str,
+        unix_timestamp: u64,
+    ) -> Result<Option<VersionedVector>> {
+        let target_version = self
+            .audit_log
+            .iter()
+            .filter(|entry| entry.timestamp <= unix_timestamp && entry.vector_id == id)
+            .map(|entry| entry.version)
+            .max()
+            .unwrap_or(0);
+
+        if target_version == 0 {
+            return Ok(None);
+        }
+
+        self.get_at(id, target_version)
+    }
+
+    /// Generate a changelog between two timestamps.
+    pub fn changelog(
+        &self,
+        from_timestamp: u64,
+        to_timestamp: u64,
+    ) -> Vec<&AuditEntry> {
+        self.audit_log
+            .iter()
+            .filter(|entry| entry.timestamp >= from_timestamp && entry.timestamp <= to_timestamp)
+            .collect()
+    }
+
+    /// Garbage collect old versions to reclaim memory.
+    ///
+    /// Removes all version history entries older than `min_version`,
+    /// keeping only the latest version for each vector.
+    /// Returns the number of version entries removed.
+    pub fn gc(&mut self, min_version: Version) -> usize {
+        let mut removed = 0;
+
+        for history in self.versions.values_mut() {
+            let before = history.len();
+            // Keep the latest version and any version >= min_version
+            if history.len() > 1 {
+                let latest = history.last().cloned();
+                history.retain(|v| v.version >= min_version);
+                // Always keep at least the latest version
+                if history.is_empty() {
+                    if let Some(latest) = latest {
+                        history.push(latest);
+                    }
+                }
+            }
+            removed += before - history.len();
+        }
+
+        // Also trim audit log
+        let before_audit = self.audit_log.len();
+        self.audit_log.retain(|entry| entry.version >= min_version);
+        removed += before_audit - self.audit_log.len();
+
+        // Trim old snapshots
+        let before_snap = self.snapshots.len();
+        self.snapshots.retain(|s| s.version >= min_version);
+        removed += before_snap - self.snapshots.len();
+
+        removed
+    }
+
+    /// Get a detailed diff between two versions, including vector-level changes.
+    pub fn detailed_diff(&self, from: Version, to: Version) -> DetailedVersionDiff {
+        let basic = self.diff(from, to);
+
+        let mut vector_changes = Vec::new();
+        for id in &basic.modified {
+            let old_vec = self.get_at(id, from).ok().flatten();
+            let new_vec = self.get_at(id, to).ok().flatten();
+
+            if let (Some(old), Some(new)) = (old_vec, new_vec) {
+                // Compute L2 distance between old and new vectors
+                let l2_dist: f32 = old.vector.iter().zip(new.vector.iter())
+                    .map(|(a, b)| (a - b).powi(2))
+                    .sum::<f32>()
+                    .sqrt();
+
+                vector_changes.push(VectorChange {
+                    id: id.clone(),
+                    old_version: from,
+                    new_version: to,
+                    l2_distance: l2_dist,
+                    dimension_changes: old.vector.iter().zip(new.vector.iter())
+                        .enumerate()
+                        .filter(|(_, (a, b))| (a - b).abs() > f32::EPSILON)
+                        .count(),
+                    metadata_changed: old.metadata != new.metadata,
+                });
+            }
+        }
+
+        DetailedVersionDiff {
+            basic,
+            vector_changes,
+            total_operations: self.audit_log.iter()
+                .filter(|e| e.version > from && e.version <= to)
+                .count(),
+        }
+    }
+
+    /// Get storage statistics for the version history.
+    pub fn storage_stats(&self) -> VersionStorageStats {
+        let total_versions: usize = self.versions.values().map(|h| h.len()).sum();
+        let total_vectors: usize = self.versions.len();
+        let avg_versions_per_vector = if total_vectors > 0 {
+            total_versions as f64 / total_vectors as f64
+        } else {
+            0.0
+        };
+        let max_versions_per_vector = self.versions.values()
+            .map(|h| h.len())
+            .max()
+            .unwrap_or(0);
+
+        VersionStorageStats {
+            total_vectors,
+            total_versions,
+            avg_versions_per_vector,
+            max_versions_per_vector,
+            snapshot_count: self.snapshots.len(),
+            audit_log_entries: self.audit_log.len(),
+        }
+    }
+}
+
+/// Detailed diff between two versions including vector-level changes.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DetailedVersionDiff {
+    /// Basic added/modified/deleted summary.
+    pub basic: VersionDiff,
+    /// Per-vector change details for modified vectors.
+    pub vector_changes: Vec<VectorChange>,
+    /// Total number of operations between the two versions.
+    pub total_operations: usize,
+}
+
+/// Details about how a specific vector changed between versions.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VectorChange {
+    /// The vector ID.
+    pub id: String,
+    /// Old version number.
+    pub old_version: Version,
+    /// New version number.
+    pub new_version: Version,
+    /// L2 distance between old and new vector values.
+    pub l2_distance: f32,
+    /// Number of dimensions that changed.
+    pub dimension_changes: usize,
+    /// Whether metadata changed.
+    pub metadata_changed: bool,
+}
+
+/// Storage statistics for the version history.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VersionStorageStats {
+    pub total_vectors: usize,
+    pub total_versions: usize,
+    pub avg_versions_per_vector: f64,
+    pub max_versions_per_vector: usize,
+    pub snapshot_count: usize,
+    pub audit_log_entries: usize,
+}
+
+// ── Restore from Snapshot ───────────────────────────────────────────────────
+
+/// Result of a snapshot restore operation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RestoreResult {
+    /// The version restored to.
+    pub restored_version: Version,
+    /// Number of vectors in the restored state.
+    pub vector_count: usize,
+    /// Number of versions that were discarded (newer than snapshot).
+    pub versions_discarded: usize,
+}
+
+impl<'a> TimeTravelService<'a> {
+    /// Restore the collection to the state captured in a named snapshot.
+    ///
+    /// This discards all changes after the snapshot version and makes
+    /// the snapshot's state the current state. Creates a new version
+    /// for the restore operation itself.
+    pub fn restore_snapshot(&mut self, snapshot_name: &str) -> Result<RestoreResult> {
+        let snapshot = self.find_snapshot(snapshot_name)
+            .ok_or_else(|| NeedleError::NotFound(format!("Snapshot '{snapshot_name}'")))?
+            .clone();
+
+        let target_version = snapshot.version;
+        let result = self.rollback_to(target_version)?;
+
+        // Count discarded versions
+        let versions_discarded = self.versions.values()
+            .flat_map(|h| h.iter())
+            .filter(|v| v.version > target_version && v.version != result)
+            .count();
+
+        // Count vectors at restored state
+        let vector_count = self.versions.values()
+            .filter(|h| h.iter().any(|v| v.version <= target_version && !v.deleted))
+            .count();
+
+        Ok(RestoreResult {
+            restored_version: result,
+            vector_count,
+            versions_discarded,
+        })
+    }
+
+    /// Compact history by merging consecutive versions of the same vector
+    /// that have identical content (dedup).
+    ///
+    /// Returns the number of redundant version entries removed.
+    pub fn compact_history(&mut self) -> usize {
+        let mut removed = 0;
+
+        for history in self.versions.values_mut() {
+            if history.len() <= 1 {
+                continue;
+            }
+
+            let mut compacted = Vec::with_capacity(history.len());
+            compacted.push(history[0].clone());
+
+            for i in 1..history.len() {
+                let prev = &compacted[compacted.len() - 1];
+                let curr = &history[i];
+
+                // Keep if vector changed or deletion status changed
+                let vectors_differ = prev.vector != curr.vector;
+                let deletion_changed = prev.deleted != curr.deleted;
+                let metadata_changed = prev.metadata != curr.metadata;
+
+                if vectors_differ || deletion_changed || metadata_changed {
+                    compacted.push(curr.clone());
+                } else {
+                    removed += 1;
+                }
+            }
+
+            *history = compacted;
+        }
+
+        removed
+    }
+
+    /// Get the list of version numbers where a specific vector was modified.
+    pub fn version_history_for(&self, id: &str) -> Vec<Version> {
+        self.versions.get(id)
+            .map(|h| h.iter().map(|v| v.version).collect())
+            .unwrap_or_default()
+    }
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────────
@@ -620,5 +908,24 @@ mod tests {
         let db = test_db();
         let svc = TimeTravelService::new(&db, "test", TimeTravelConfig::default()).unwrap();
         assert!(svc.get_at("nonexistent", 999).unwrap().is_none());
+    }
+
+    #[test]
+    fn test_changelog() {
+        let db = test_db();
+        let mut svc = TimeTravelService::new(&db, "test", TimeTravelConfig::default()).unwrap();
+        svc.insert("v1", &[1.0, 0.0, 0.0, 0.0], None).unwrap();
+        svc.insert("v2", &[0.0, 1.0, 0.0, 0.0], None).unwrap();
+
+        let log = svc.changelog(0, u64::MAX);
+        assert_eq!(log.len(), 2);
+    }
+
+    #[test]
+    fn test_search_at_timestamp_empty() {
+        let db = test_db();
+        let svc = TimeTravelService::new(&db, "test", TimeTravelConfig::default()).unwrap();
+        let results = svc.search_at_timestamp(&[1.0, 0.0, 0.0, 0.0], 5, 0).unwrap();
+        assert!(results.is_empty());
     }
 }
