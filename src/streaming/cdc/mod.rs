@@ -342,3 +342,112 @@ impl CdcIngestionPipeline {
         self.stats.read().await.clone()
     }
 }
+
+// ============================================================================
+// CDC to Ingest Pipeline Bridge
+// ============================================================================
+
+/// Configuration for the CDC-to-ingest bridge.
+#[derive(Debug, Clone)]
+pub struct CdcIngestBridgeConfig {
+    /// Name of the target collection.
+    pub collection: String,
+    /// JSON path for extracting the vector field from CDC events.
+    pub vector_field: String,
+    /// JSON path for extracting the ID from CDC events.
+    pub id_field: String,
+    /// Maximum batch size before flushing to the database.
+    pub batch_size: usize,
+    /// Whether to treat update events as upserts.
+    pub upsert_on_update: bool,
+    /// Whether to delete vectors when the source record is deleted.
+    pub delete_on_remove: bool,
+}
+
+impl Default for CdcIngestBridgeConfig {
+    fn default() -> Self {
+        Self {
+            collection: String::new(),
+            vector_field: "embedding".to_string(),
+            id_field: "id".to_string(),
+            batch_size: 256,
+            upsert_on_update: true,
+            delete_on_remove: true,
+        }
+    }
+}
+
+/// Converts a CDC `ChangeEvent` into ingest operations.
+///
+/// Returns `(id, vector, metadata)` for insert/update events,
+/// or `None` for delete/unsupported events.
+pub fn change_event_to_ingest(
+    event: &ChangeEvent,
+    config: &CdcIngestBridgeConfig,
+) -> Option<CdcIngestAction> {
+    use super::core::OperationType;
+
+    match event.operation {
+        OperationType::Insert | OperationType::Update => {
+            let doc_bytes = event.full_document.as_ref()?;
+
+            // Parse the document bytes as JSON
+            let after: serde_json::Value = serde_json::from_slice(doc_bytes).ok()?;
+
+            // Extract ID
+            let id = after.get(&config.id_field)
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| event.document_key.clone().unwrap_or_default());
+
+            // Extract vector
+            let vector: Vec<f32> = after.get(&config.vector_field)
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_f64().map(|f| f as f32))
+                        .collect()
+                })?;
+
+            if vector.is_empty() {
+                return None;
+            }
+
+            // Build metadata from remaining fields
+            let mut metadata = after.clone();
+            if let Some(obj) = metadata.as_object_mut() {
+                obj.remove(&config.vector_field);
+                obj.remove(&config.id_field);
+            }
+
+            Some(CdcIngestAction::Upsert {
+                id,
+                vector,
+                metadata: Some(metadata),
+            })
+        }
+        OperationType::Delete => {
+            if config.delete_on_remove {
+                Some(CdcIngestAction::Delete {
+                    id: event.document_key.clone().unwrap_or_default(),
+                })
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+/// Action to be performed on the ingest pipeline based on a CDC event.
+#[derive(Debug, Clone)]
+pub enum CdcIngestAction {
+    /// Insert or update a vector in the collection.
+    Upsert {
+        id: String,
+        vector: Vec<f32>,
+        metadata: Option<serde_json::Value>,
+    },
+    /// Delete a vector from the collection.
+    Delete { id: String },
+}
