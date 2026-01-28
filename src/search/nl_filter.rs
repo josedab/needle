@@ -256,7 +256,7 @@ impl NLFilterParser {
                 if let Some(pos) = query_lower.find(keyword) {
                     let now = std::time::SystemTime::now()
                         .duration_since(std::time::UNIX_EPOCH)
-                        .expect("system time before UNIX epoch")
+                        .unwrap_or_default()
                         .as_secs();
 
                     temporal = Some(TemporalConstraint {
@@ -610,7 +610,7 @@ impl QueryBuilder {
     pub fn from_last_days(mut self, days: u64) -> Self {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .expect("system time before UNIX epoch")
+            .unwrap_or_default()
             .as_secs();
 
         self.temporal = Some(TemporalConstraint {
@@ -629,7 +629,7 @@ impl QueryBuilder {
                 self.filters
                     .into_iter()
                     .next()
-                    .expect("filters has exactly one element"),
+                    .unwrap_or(Filter::And(Vec::new())),
             )
         } else {
             Some(Filter::And(self.filters))
@@ -914,7 +914,7 @@ impl ConversationalQueryParser {
                 all_filters
                     .into_iter()
                     .next()
-                    .expect("all_filters has exactly one element")
+                    .unwrap_or(Filter::And(Vec::new()))
             } else {
                 Filter::And(all_filters)
             });

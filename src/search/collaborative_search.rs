@@ -1583,7 +1583,7 @@ impl Default for SyncManager {
 fn current_timestamp_millis() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .expect("system clock should be after Unix epoch")
+        .unwrap_or_default()
         .as_millis() as u64
 }
 

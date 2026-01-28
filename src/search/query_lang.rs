@@ -1954,10 +1954,9 @@ impl CostBasedOptimizer {
 
     /// Estimate filter selectivity from WHERE clause.
     fn estimate_selectivity(query: &Query, stats: &CollectionStatistics) -> f64 {
-        if query.where_clause.is_none() {
+        let Some(where_clause) = query.where_clause.as_ref() else {
             return 1.0;
-        }
-        let where_clause = query.where_clause.as_ref().expect("where_clause is Some");
+        };
         Self::estimate_expr_selectivity(&where_clause.expression, stats)
     }
 
@@ -2174,7 +2173,8 @@ impl QuerySession {
         let query_str = if !trimmed.to_uppercase().contains("FROM")
             && self.default_collection.is_some()
         {
-            let coll = self.default_collection.as_ref().unwrap();
+            // Safe: checked is_some() in the condition above
+            let coll = self.default_collection.as_ref().expect("checked is_some above");
             if trimmed.to_uppercase().starts_with("SELECT") {
                 trimmed.replacen("SELECT", &format!("SELECT"), 1)
                     + &format!(" FROM {}", coll)
