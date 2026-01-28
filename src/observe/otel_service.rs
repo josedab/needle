@@ -185,7 +185,9 @@ impl LatencyHistogram {
             }
         }
         if !placed {
-            *self.counts.last_mut().expect("counts is non-empty") += 1;
+            if let Some(last) = self.counts.last_mut() {
+                *last += 1;
+            }
         }
     }
 

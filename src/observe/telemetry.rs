@@ -409,7 +409,7 @@ impl TraceContext {
 
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .expect("system clock should be after Unix epoch")
+            .unwrap_or_default()
             .as_nanos();
 
         let mut hasher = DefaultHasher::new();
@@ -436,7 +436,7 @@ impl TraceContext {
 
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .expect("system clock should be after Unix epoch")
+            .unwrap_or_default()
             .as_nanos();
 
         let mut hasher = DefaultHasher::new();
@@ -536,7 +536,7 @@ impl Span {
     fn now_nanos() -> u64 {
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .expect("system clock should be after Unix epoch")
+            .unwrap_or_default()
             .as_nanos() as u64
     }
 
@@ -766,7 +766,7 @@ impl Telemetry {
                 labels,
                 timestamp: SystemTime::now()
                     .duration_since(UNIX_EPOCH)
-                    .expect("system clock should be after Unix epoch")
+                    .unwrap_or_default()
                     .as_nanos() as u64,
             });
         }
@@ -785,7 +785,7 @@ impl Telemetry {
                 labels,
                 timestamp: SystemTime::now()
                     .duration_since(UNIX_EPOCH)
-                    .expect("system clock should be after Unix epoch")
+                    .unwrap_or_default()
                     .as_nanos() as u64,
             });
         }
@@ -808,7 +808,7 @@ impl Telemetry {
                 labels,
                 timestamp: SystemTime::now()
                     .duration_since(UNIX_EPOCH)
-                    .expect("system clock should be after Unix epoch")
+                    .unwrap_or_default()
                     .as_nanos() as u64,
             });
         }

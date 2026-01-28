@@ -205,7 +205,7 @@ impl MetricPoint {
         Self {
             timestamp: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
-                .expect("system time before UNIX epoch")
+                .unwrap_or_default()
                 .as_secs(),
             cpu_utilization: 0.0,
             memory_utilization: 0.0,
@@ -443,7 +443,7 @@ impl AccessTracker {
     pub fn record_access(&mut self, vector_id: &str) {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .expect("system time before UNIX epoch")
+            .unwrap_or_default()
             .as_secs();
 
         let info = self.access_counts.entry(vector_id.to_string()).or_default();
@@ -465,7 +465,7 @@ impl AccessTracker {
     pub fn get_hot_vectors(&self, threshold: usize) -> Vec<String> {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .expect("system time before UNIX epoch")
+            .unwrap_or_default()
             .as_secs();
 
         self.access_counts
@@ -489,7 +489,7 @@ impl AccessTracker {
     pub fn get_cold_vectors(&self, cold_hours: u64) -> Vec<String> {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .expect("system time before UNIX epoch")
+            .unwrap_or_default()
             .as_secs();
         let cold_threshold = cold_hours * 3600;
 
@@ -509,7 +509,7 @@ impl AccessTracker {
     pub fn cleanup(&mut self) {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .expect("system time before UNIX epoch")
+            .unwrap_or_default()
             .as_secs();
 
         self.access_counts
@@ -924,7 +924,7 @@ impl AutoScaler {
     fn now() -> u64 {
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .expect("system time before UNIX epoch")
+            .unwrap_or_default()
             .as_secs()
     }
 
