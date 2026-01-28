@@ -546,7 +546,9 @@ impl WorkflowEngine {
 
         // Mutate the workflow
         let (completed_step, is_finished, next_step) = {
-            let wf = self.workflows.get_mut(workflow_id).unwrap();
+            let wf = self.workflows.get_mut(workflow_id).ok_or_else(|| {
+                NeedleError::InvalidOperation(format!("Workflow '{workflow_id}' not found"))
+            })?;
             wf.status = WorkflowStatus::Running;
 
             let completed_step = if wf.current_step < wf.steps.len() {
@@ -597,7 +599,9 @@ impl WorkflowEngine {
             serde_json::json!({ "step": next_step }),
         );
 
-        let wf = self.workflows.get(workflow_id).unwrap();
+        let wf = self.workflows.get(workflow_id).ok_or_else(|| {
+            NeedleError::InvalidOperation(format!("Workflow '{workflow_id}' not found"))
+        })?;
         Ok(Some(&wf.steps[wf.current_step]))
     }
 

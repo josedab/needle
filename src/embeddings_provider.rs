@@ -259,7 +259,7 @@ impl OpenAIProvider {
         let client = reqwest::Client::builder()
             .timeout(config.timeout)
             .build()
-            .expect("Failed to create HTTP client");
+            .unwrap_or_else(|_| reqwest::Client::new());
         let dimensions = config.dimensions.unwrap_or(1536);
         Self {
             config,

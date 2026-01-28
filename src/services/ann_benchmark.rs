@@ -441,7 +441,7 @@ class {class_name}(BaseANN):
         class_name = algorithm_name
             .chars()
             .enumerate()
-            .map(|(i, c)| if i == 0 {{ c.to_uppercase().next().unwrap() }} else {{ c }})
+            .map(|(i, c)| if i == 0 {{ c.to_uppercase().next().unwrap_or(c) }} else {{ c }})
             .collect::<String>()
     )
 }

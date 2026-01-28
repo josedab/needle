@@ -299,7 +299,9 @@ impl EdgeRuntime {
         let coll = ReadOnlyCollection::new(name, dimensions, self.config.ef_search)?;
         self.collections.insert(name.to_string(), coll);
 
-        let coll = self.collections.get_mut(name).unwrap();
+        let coll = self.collections.get_mut(name).ok_or_else(|| {
+            NeedleError::CollectionNotFound(name.to_string())
+        })?;
         coll.load_vectors(vectors)
     }
 

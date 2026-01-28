@@ -183,6 +183,8 @@ impl KnowledgeService {
             });
         }
 
+        let doc_id = doc.id.clone();
+
         // Extract entities from text (simple NLP: capitalized words as entities)
         let extracted = self.extract_entities(&doc.text, &doc.id);
         let entity_count = extracted.entities.len();
@@ -212,7 +214,7 @@ impl KnowledgeService {
         self.documents.insert(doc.id.clone(), doc);
 
         Ok(IngestResult {
-            doc_id: self.documents.keys().last().unwrap().clone(),
+            doc_id,
             entities_extracted: entity_count,
             relations_extracted: relation_count,
         })

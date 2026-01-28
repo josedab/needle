@@ -302,8 +302,8 @@ impl VersionedStore {
         let modified: Vec<String> = from_ids
             .intersection(&to_ids)
             .filter(|id| {
-                let (v1, _) = snap_from.get(id).unwrap();
-                let (v2, _) = snap_to.get(id).unwrap();
+                let Some((v1, _)) = snap_from.get(id) else { return false };
+                let Some((v2, _)) = snap_to.get(id) else { return false };
                 v1 != v2
             })
             .map(|s| s.to_string())

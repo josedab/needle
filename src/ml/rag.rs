@@ -539,7 +539,7 @@ impl RagPipeline {
             metadata,
             ingested_at: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
-                .expect("system clock should be after Unix epoch")
+                .unwrap_or_default()
                 .as_secs(),
         };
 

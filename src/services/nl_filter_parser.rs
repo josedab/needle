@@ -367,7 +367,9 @@ impl NLFilterParser {
             return json!(n);
         }
         if cleaned == "true" || cleaned == "false" {
-            return json!(cleaned.parse::<bool>().unwrap());
+            if let Ok(b) = cleaned.parse::<bool>() {
+                return json!(b);
+            }
         }
 
         json!(cleaned)
