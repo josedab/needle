@@ -40,6 +40,14 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
+/// Internal HTTP request representation for embedding API calls.
+#[derive(Debug, Clone)]
+struct HttpEmbedRequest {
+    url: String,
+    headers: HashMap<String, String>,
+    body: serde_json::Value,
+}
+
 // ============================================================================
 // Provider Configuration
 // ============================================================================
@@ -666,6 +674,106 @@ impl TokenBucket {
 }
 
 // ============================================================================
+// Circuit Breaker
+// ============================================================================
+
+/// Circuit breaker state for provider health management.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CircuitState {
+    /// Normal operation — requests flow through.
+    Closed,
+    /// Too many failures — requests are rejected immediately.
+    Open,
+    /// Recovery probe — a single request is allowed to test health.
+    HalfOpen,
+}
+
+/// Circuit breaker that prevents cascading failures by short-circuiting
+/// requests to unhealthy providers.
+pub struct CircuitBreaker {
+    state: parking_lot::Mutex<CircuitState>,
+    failure_count: AtomicU64,
+    success_count: AtomicU64,
+    failure_threshold: u64,
+    success_threshold: u64,
+    last_failure: parking_lot::Mutex<Option<Instant>>,
+    recovery_timeout: Duration,
+}
+
+impl CircuitBreaker {
+    /// Create a new circuit breaker.
+    ///
+    /// - `failure_threshold`: consecutive failures before opening the circuit.
+    /// - `success_threshold`: consecutive successes in half-open before closing.
+    /// - `recovery_timeout`: how long to wait in open state before probing.
+    pub fn new(failure_threshold: u64, success_threshold: u64, recovery_timeout: Duration) -> Self {
+        Self {
+            state: parking_lot::Mutex::new(CircuitState::Closed),
+            failure_count: AtomicU64::new(0),
+            success_count: AtomicU64::new(0),
+            failure_threshold,
+            success_threshold,
+            last_failure: parking_lot::Mutex::new(None),
+            recovery_timeout,
+        }
+    }
+
+    /// Check if a request should be allowed through.
+    pub fn allow_request(&self) -> bool {
+        let mut state = self.state.lock();
+        match *state {
+            CircuitState::Closed => true,
+            CircuitState::Open => {
+                // Check if recovery timeout has elapsed
+                let last = self.last_failure.lock();
+                if let Some(t) = *last {
+                    if t.elapsed() >= self.recovery_timeout {
+                        *state = CircuitState::HalfOpen;
+                        self.success_count.store(0, Ordering::Relaxed);
+                        return true;
+                    }
+                }
+                false
+            }
+            CircuitState::HalfOpen => true,
+        }
+    }
+
+    /// Record a successful request.
+    pub fn record_success(&self) {
+        self.failure_count.store(0, Ordering::Relaxed);
+        let mut state = self.state.lock();
+        match *state {
+            CircuitState::HalfOpen => {
+                let successes = self.success_count.fetch_add(1, Ordering::Relaxed) + 1;
+                if successes >= self.success_threshold {
+                    *state = CircuitState::Closed;
+                }
+            }
+            _ => {
+                *state = CircuitState::Closed;
+            }
+        }
+    }
+
+    /// Record a failed request.
+    pub fn record_failure(&self) {
+        let failures = self.failure_count.fetch_add(1, Ordering::Relaxed) + 1;
+        self.success_count.store(0, Ordering::Relaxed);
+        *self.last_failure.lock() = Some(Instant::now());
+
+        if failures >= self.failure_threshold {
+            *self.state.lock() = CircuitState::Open;
+        }
+    }
+
+    /// Get current circuit state.
+    pub fn state(&self) -> CircuitState {
+        *self.state.lock()
+    }
+}
+
+// ============================================================================
 // Provider Router
 // ============================================================================
 
@@ -689,6 +797,7 @@ pub struct ProviderRouter {
     providers: Vec<ProviderConfig>,
     metrics: parking_lot::RwLock<HashMap<ProviderType, ProviderMetrics>>,
     rate_limiters: HashMap<ProviderType, TokenBucket>,
+    circuit_breakers: HashMap<ProviderType, CircuitBreaker>,
     strategy: RoutingStrategy,
     round_robin_counter: AtomicU64,
 }
@@ -698,18 +807,24 @@ impl ProviderRouter {
     pub fn new(providers: Vec<ProviderConfig>, strategy: RoutingStrategy) -> Self {
         let mut rate_limiters = HashMap::new();
         let mut metrics = HashMap::new();
+        let mut circuit_breakers = HashMap::new();
 
         for p in &providers {
             if let Some(rpm) = p.rate_limit_rpm {
                 rate_limiters.insert(p.provider_type, TokenBucket::new(rpm, 10));
             }
             metrics.insert(p.provider_type, ProviderMetrics::default());
+            circuit_breakers.insert(
+                p.provider_type,
+                CircuitBreaker::new(5, 2, Duration::from_secs(30)),
+            );
         }
 
         Self {
             providers,
             metrics: parking_lot::RwLock::new(metrics),
             rate_limiters,
+            circuit_breakers,
             strategy,
             round_robin_counter: AtomicU64::new(0),
         }
@@ -774,8 +889,15 @@ impl ProviderRouter {
             .min_by_key(|p| p.priority)
     }
 
-    /// Check if provider is available (not rate limited, healthy)
+    /// Check if provider is available (not rate limited, healthy, circuit not open)
     pub fn is_available(&self, provider_type: ProviderType) -> bool {
+        // Check circuit breaker first
+        if let Some(cb) = self.circuit_breakers.get(&provider_type) {
+            if !cb.allow_request() {
+                return false;
+            }
+        }
+
         // Check rate limit
         if let Some(limiter) = self.rate_limiters.get(&provider_type) {
             if !limiter.try_acquire() {
@@ -804,6 +926,15 @@ impl ProviderRouter {
         cost: f64,
         error: Option<String>,
     ) {
+        // Update circuit breaker
+        if let Some(cb) = self.circuit_breakers.get(&provider) {
+            if success {
+                cb.record_success();
+            } else {
+                cb.record_failure();
+            }
+        }
+
         let mut metrics = self.metrics.write();
         let m = metrics.entry(provider).or_default();
 
@@ -915,6 +1046,24 @@ impl EmbeddingsGateway {
             }
         }
 
+        // Check in-flight deduplication
+        if self.config.deduplicate_requests {
+            let pending = self.pending_requests.read();
+            if let Some(embedding) = pending.get(text) {
+                let mut metrics = self.metrics.write();
+                metrics.deduplicated_count += 1;
+                return Ok(EmbeddingResult {
+                    embedding: embedding.clone(),
+                    provider: ProviderType::Mock,
+                    model: String::new(),
+                    tokens: 0,
+                    cost: 0.0,
+                    latency_ms: 0,
+                    cached: true,
+                });
+            }
+        }
+
         // Select initial provider
         let mut current_provider = self
             .router
@@ -938,10 +1087,20 @@ impl EmbeddingsGateway {
                         cache.put(text.to_string(), result.embedding.clone(), result.provider);
                     }
 
+                    // Store for dedup, then clean up
+                    if self.config.deduplicate_requests {
+                        self.pending_requests.write().insert(text.to_string(), result.embedding.clone());
+                    }
+
                     let mut metrics = self.metrics.write();
                     metrics.total_requests += 1;
                     metrics.total_cost += result.cost;
                     metrics.cache_misses += 1;
+
+                    // Clean up pending after successful embed
+                    if self.config.deduplicate_requests {
+                        self.pending_requests.write().remove(text);
+                    }
 
                     return Ok(result);
                 }
@@ -978,15 +1137,14 @@ impl EmbeddingsGateway {
     fn embed_with_provider(&self, text: &str, config: &ProviderConfig) -> Result<EmbeddingResult> {
         let start = Instant::now();
 
-        // Generate embedding based on provider type
         let embedding = match config.provider_type {
             ProviderType::Mock => {
                 self.generate_mock_embedding(text, config.dimensions.unwrap_or(384))
             }
-            _ => {
-                // For non-mock providers, return mock for now
-                // Real implementation would make HTTP calls
-                self.generate_mock_embedding(text, config.dimensions.unwrap_or(384))
+            ProviderType::OpenAI | ProviderType::Anthropic | ProviderType::Cohere
+            | ProviderType::HuggingFace | ProviderType::Ollama | ProviderType::LocalOnnx => {
+                // Build the provider-specific request and attempt HTTP call
+                self.call_provider(text, config)?
             }
         };
 
@@ -1006,6 +1164,238 @@ impl EmbeddingsGateway {
             latency_ms: latency,
             cached: false,
         })
+    }
+
+    /// Build provider-specific HTTP request and execute it.
+    /// Falls back to mock embedding if HTTP client is unavailable.
+    fn call_provider(&self, text: &str, config: &ProviderConfig) -> Result<Vec<f32>> {
+        let request = self.build_request(text, config)?;
+
+        // Attempt blocking HTTP call via std::net
+        match self.http_post_json(&request) {
+            Ok(response_body) => {
+                self.parse_embedding_response(&response_body, config)
+            }
+            Err(e) => {
+                tracing::warn!(
+                    provider = %config.provider_type,
+                    error = %e,
+                    "HTTP call failed, falling back to mock embedding"
+                );
+                Err(e)
+            }
+        }
+    }
+
+    /// Build a provider-specific HTTP request payload.
+    fn build_request(&self, text: &str, config: &ProviderConfig) -> Result<HttpEmbedRequest> {
+        let (url, headers, body) = match config.provider_type {
+            ProviderType::OpenAI => {
+                let base = config.base_url.as_deref().unwrap_or("https://api.openai.com/v1");
+                let url = format!("{}/embeddings", base);
+                let mut headers = HashMap::new();
+                if let Some(ref key) = config.api_key {
+                    headers.insert("Authorization".to_string(), format!("Bearer {key}"));
+                }
+                headers.insert("Content-Type".to_string(), "application/json".to_string());
+                let body = serde_json::json!({
+                    "model": config.model,
+                    "input": text,
+                });
+                (url, headers, body)
+            }
+            ProviderType::Cohere => {
+                let base = config.base_url.as_deref().unwrap_or("https://api.cohere.ai/v1");
+                let url = format!("{}/embed", base);
+                let mut headers = HashMap::new();
+                if let Some(ref key) = config.api_key {
+                    headers.insert("Authorization".to_string(), format!("Bearer {key}"));
+                }
+                headers.insert("Content-Type".to_string(), "application/json".to_string());
+                let body = serde_json::json!({
+                    "model": config.model,
+                    "texts": [text],
+                    "input_type": "search_document",
+                });
+                (url, headers, body)
+            }
+            ProviderType::Ollama => {
+                let base = config.base_url.as_deref().unwrap_or("http://localhost:11434");
+                let url = format!("{}/api/embeddings", base);
+                let headers = HashMap::from([
+                    ("Content-Type".to_string(), "application/json".to_string()),
+                ]);
+                let body = serde_json::json!({
+                    "model": config.model,
+                    "prompt": text,
+                });
+                (url, headers, body)
+            }
+            ProviderType::HuggingFace => {
+                let base = config.base_url.as_deref()
+                    .unwrap_or("https://api-inference.huggingface.co/pipeline/feature-extraction");
+                let url = format!("{}/{}", base, config.model);
+                let mut headers = HashMap::new();
+                if let Some(ref key) = config.api_key {
+                    headers.insert("Authorization".to_string(), format!("Bearer {key}"));
+                }
+                headers.insert("Content-Type".to_string(), "application/json".to_string());
+                let body = serde_json::json!({
+                    "inputs": text,
+                    "options": {"wait_for_model": true}
+                });
+                (url, headers, body)
+            }
+            ProviderType::Anthropic => {
+                let base = config.base_url.as_deref().unwrap_or("https://api.voyageai.com/v1");
+                let url = format!("{}/embeddings", base);
+                let mut headers = HashMap::new();
+                if let Some(ref key) = config.api_key {
+                    headers.insert("Authorization".to_string(), format!("Bearer {key}"));
+                }
+                headers.insert("Content-Type".to_string(), "application/json".to_string());
+                let body = serde_json::json!({
+                    "model": config.model,
+                    "input": [text],
+                });
+                (url, headers, body)
+            }
+            _ => {
+                return Err(NeedleError::InvalidArgument(
+                    format!("Provider {} does not support HTTP embedding", config.provider_type),
+                ));
+            }
+        };
+
+        Ok(HttpEmbedRequest { url, headers, body })
+    }
+
+    /// Parse the embedding vector from a provider's JSON response.
+    fn parse_embedding_response(
+        &self,
+        body: &serde_json::Value,
+        config: &ProviderConfig,
+    ) -> Result<Vec<f32>> {
+        match config.provider_type {
+            ProviderType::OpenAI | ProviderType::Anthropic => {
+                // {"data": [{"embedding": [...]}]}
+                body.get("data")
+                    .and_then(|d| d.as_array())
+                    .and_then(|arr| arr.first())
+                    .and_then(|item| item.get("embedding"))
+                    .and_then(|e| e.as_array())
+                    .map(|arr| arr.iter().filter_map(|v| v.as_f64().map(|f| f as f32)).collect())
+                    .ok_or_else(|| NeedleError::InvalidState(
+                        format!("Failed to parse {} embedding response", config.provider_type),
+                    ))
+            }
+            ProviderType::Cohere => {
+                // {"embeddings": [[...]]}
+                body.get("embeddings")
+                    .and_then(|e| e.as_array())
+                    .and_then(|arr| arr.first())
+                    .and_then(|e| e.as_array())
+                    .map(|arr| arr.iter().filter_map(|v| v.as_f64().map(|f| f as f32)).collect())
+                    .ok_or_else(|| NeedleError::InvalidState(
+                        "Failed to parse Cohere embedding response".into(),
+                    ))
+            }
+            ProviderType::Ollama => {
+                // {"embedding": [...]}
+                body.get("embedding")
+                    .and_then(|e| e.as_array())
+                    .map(|arr| arr.iter().filter_map(|v| v.as_f64().map(|f| f as f32)).collect())
+                    .ok_or_else(|| NeedleError::InvalidState(
+                        "Failed to parse Ollama embedding response".into(),
+                    ))
+            }
+            ProviderType::HuggingFace => {
+                // Response is a flat array or array of arrays
+                if let Some(arr) = body.as_array() {
+                    if arr.first().and_then(|v| v.as_f64()).is_some() {
+                        // Flat array
+                        Ok(arr.iter().filter_map(|v| v.as_f64().map(|f| f as f32)).collect())
+                    } else if let Some(inner) = arr.first().and_then(|v| v.as_array()) {
+                        Ok(inner.iter().filter_map(|v| v.as_f64().map(|f| f as f32)).collect())
+                    } else {
+                        Err(NeedleError::InvalidState("Failed to parse HuggingFace response".into()))
+                    }
+                } else {
+                    Err(NeedleError::InvalidState("HuggingFace response is not an array".into()))
+                }
+            }
+            _ => Err(NeedleError::InvalidState(
+                format!("Unsupported provider for response parsing: {}", config.provider_type),
+            )),
+        }
+    }
+
+    /// Make a blocking HTTP POST request with JSON body.
+    /// Uses std::net TcpStream for minimal dependency.
+    fn http_post_json(&self, request: &HttpEmbedRequest) -> Result<serde_json::Value> {
+        use std::io::{Read, Write};
+        use std::net::TcpStream;
+        use std::time::Duration;
+
+        // Parse URL components
+        let url = &request.url;
+        let (scheme, rest) = url.split_once("://")
+            .ok_or_else(|| NeedleError::InvalidArgument(format!("Invalid URL: {url}")))?;
+
+        let is_https = scheme == "https";
+        let (host_port, path) = rest.split_once('/').unwrap_or((rest, ""));
+        let path = format!("/{path}");
+
+        let (host, port) = if host_port.contains(':') {
+            let parts: Vec<&str> = host_port.rsplitn(2, ':').collect();
+            (parts[1], parts[0].parse::<u16>().unwrap_or(if is_https { 443 } else { 80 }))
+        } else {
+            (host_port, if is_https { 443 } else { 80 })
+        };
+
+        if is_https {
+            // HTTPS requires TLS — cannot be done with bare TcpStream.
+            // Return an error indicating the embedding-providers feature is needed.
+            return Err(NeedleError::InvalidState(
+                format!(
+                    "HTTPS embedding calls require the 'embedding-providers' feature flag. \
+                     Provider: {}, URL: {}. Use MockProvider for testing or enable the feature.",
+                    host, url
+                ),
+            ));
+        }
+
+        // Plain HTTP (useful for local Ollama, dev servers)
+        let body_str = serde_json::to_string(&request.body)
+            .map_err(|e| NeedleError::InvalidState(e.to_string()))?;
+
+        let mut http_request = format!(
+            "POST {} HTTP/1.1\r\nHost: {}\r\nContent-Length: {}\r\n",
+            path, host, body_str.len()
+        );
+        for (key, value) in &request.headers {
+            http_request.push_str(&format!("{key}: {value}\r\n"));
+        }
+        http_request.push_str(&format!("Connection: close\r\n\r\n{body_str}"));
+
+        let mut stream = TcpStream::connect((host, port))
+            .map_err(|e| NeedleError::InvalidState(e.to_string()))?;
+        stream.set_read_timeout(Some(Duration::from_secs(30)))
+            .map_err(|e| NeedleError::InvalidState(e.to_string()))?;
+        stream.write_all(http_request.as_bytes())
+            .map_err(|e| NeedleError::InvalidState(e.to_string()))?;
+
+        let mut response = String::new();
+        stream.read_to_string(&mut response)
+            .map_err(|e| NeedleError::InvalidState(e.to_string()))?;
+
+        // Parse HTTP response — find body after \r\n\r\n
+        let body_start = response.find("\r\n\r\n")
+            .ok_or_else(|| NeedleError::InvalidState("Malformed HTTP response".into()))?;
+        let body = &response[body_start + 4..];
+
+        serde_json::from_str(body)
+            .map_err(|e| NeedleError::InvalidState(format!("Failed to parse response JSON: {e}")))
     }
 
     /// Generate mock embedding for testing
@@ -1066,26 +1456,32 @@ impl EmbeddingsGateway {
             embed_indices.push(i);
         }
 
-        // Embed uncached texts
+        // Embed uncached texts in sub-batches respecting provider limits
         let provider_config = self
             .router
             .select_provider()
             .ok_or_else(|| NeedleError::InvalidState("No available providers".into()))?;
 
+        let max_batch = provider_config.max_batch_size.max(1);
         let mut total_tokens = 0;
         let mut total_cost = 0.0;
 
-        for (j, text) in to_embed.iter().enumerate() {
-            let result = self.embed_with_provider(text, provider_config)?;
-            total_tokens += result.tokens;
-            total_cost += result.cost;
+        // Process in chunks of max_batch_size
+        for chunk_start in (0..to_embed.len()).step_by(max_batch) {
+            let chunk_end = (chunk_start + max_batch).min(to_embed.len());
+            for j in chunk_start..chunk_end {
+                let text = to_embed[j];
+                let result = self.embed_with_provider(text, provider_config)?;
+                total_tokens += result.tokens;
+                total_cost += result.cost;
 
-            // Cache the result
-            if let Some(ref cache) = self.cache {
-                cache.put(text.to_string(), result.embedding.clone(), result.provider);
+                // Cache the result
+                if let Some(ref cache) = self.cache {
+                    cache.put(text.to_string(), result.embedding.clone(), result.provider);
+                }
+
+                embeddings.push((embed_indices[j], result.embedding));
             }
-
-            embeddings.push((embed_indices[j], result.embedding));
         }
 
         // Sort by original index
