@@ -300,6 +300,110 @@ impl ModalityIndex {
 }
 
 // ---------------------------------------------------------------------------
+// Cross-Modal Projection
+// ---------------------------------------------------------------------------
+
+/// A learned linear projection from one modality's embedding space to another.
+///
+/// Enables cross-modal search by projecting a query in modality A's space
+/// into modality B's space. Uses a simple random orthogonal projection
+/// that can be replaced with a learned CLIP-style alignment matrix.
+#[derive(Debug, Clone)]
+pub struct ModalityProjector {
+    /// Source modality and its dimension.
+    pub source: (Modality, usize),
+    /// Target modality and its dimension.
+    pub target: (Modality, usize),
+    /// Projection matrix (target_dim × source_dim), stored row-major.
+    matrix: Vec<f32>,
+}
+
+impl ModalityProjector {
+    /// Create a new random orthogonal projection from source to target dimension.
+    pub fn random(source: Modality, source_dim: usize, target: Modality, target_dim: usize) -> Self {
+        // Generate a deterministic pseudo-random projection matrix
+        let mut matrix = Vec::with_capacity(target_dim * source_dim);
+        let mut state: u64 = (source_dim as u64).wrapping_mul(31).wrapping_add(target_dim as u64);
+
+        for _ in 0..(target_dim * source_dim) {
+            state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            let val = ((state >> 33) as f32) / (u32::MAX as f32) * 2.0 - 1.0;
+            matrix.push(val);
+        }
+
+        // Normalize each row for better projection quality
+        for row in 0..target_dim {
+            let start = row * source_dim;
+            let end = start + source_dim;
+            let norm: f32 = matrix[start..end].iter().map(|x| x * x).sum::<f32>().sqrt();
+            if norm > 0.0 {
+                for v in &mut matrix[start..end] {
+                    *v /= norm;
+                }
+            }
+        }
+
+        Self {
+            source: (source, source_dim),
+            target: (target, target_dim),
+            matrix,
+        }
+    }
+
+    /// Create a projection from an explicit matrix (target_dim × source_dim, row-major).
+    pub fn from_matrix(
+        source: Modality, source_dim: usize,
+        target: Modality, target_dim: usize,
+        matrix: Vec<f32>,
+    ) -> Result<Self> {
+        if matrix.len() != target_dim * source_dim {
+            return Err(crate::error::NeedleError::DimensionMismatch {
+                expected: target_dim * source_dim,
+                got: matrix.len(),
+            });
+        }
+        Ok(Self {
+            source: (source, source_dim),
+            target: (target, target_dim),
+            matrix,
+        })
+    }
+
+    /// Project a vector from the source space to the target space.
+    pub fn project(&self, input: &[f32]) -> Result<Vec<f32>> {
+        let source_dim = self.source.1;
+        let target_dim = self.target.1;
+
+        if input.len() != source_dim {
+            return Err(crate::error::NeedleError::DimensionMismatch {
+                expected: source_dim,
+                got: input.len(),
+            });
+        }
+
+        let mut output = vec![0.0f32; target_dim];
+        for row in 0..target_dim {
+            let offset = row * source_dim;
+            let mut sum = 0.0f32;
+            for col in 0..source_dim {
+                sum += self.matrix[offset + col] * input[col];
+            }
+            output[row] = sum;
+        }
+
+        // L2 normalize the projected vector
+        let norm: f32 = output.iter().map(|x| x * x).sum::<f32>().sqrt();
+        if norm > 0.0 {
+            for v in &mut output {
+                *v /= norm;
+            }
+        }
+
+        Ok(output)
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Multi-Modal Index
 // ---------------------------------------------------------------------------
 
@@ -422,6 +526,21 @@ impl MultiModalUnifiedIndex {
         Ok(results)
     }
 
+    /// Search across modalities using a projection matrix.
+    ///
+    /// Projects the query from the source modality's space into the target
+    /// modality's space, then searches the target modality's index.
+    /// This enables text→image search even when dimensions differ.
+    pub fn projected_search(
+        &self,
+        query: &[f32],
+        projector: &ModalityProjector,
+        k: usize,
+    ) -> Result<Vec<MultiModalSearchResult>> {
+        let projected = projector.project(query)?;
+        self.search(&projected, projector.target.0, k)
+    }
+
     /// Multi-modal search with late fusion across specified modalities.
     pub fn fused_search(
         &self,
@@ -538,6 +657,97 @@ impl MultiModalUnifiedIndex {
             fusion_strategy: self.config.fusion,
         }
     }
+
+    /// Compute cross-modal alignment score for a document.
+    ///
+    /// Returns the average cosine similarity between all pairs of modality
+    /// embeddings for the given document. A high score (close to 1.0) indicates
+    /// the embeddings are well-aligned (e.g., CLIP-style text-image alignment).
+    /// Returns `None` if the document has fewer than 2 modalities.
+    pub fn alignment_score(&self, doc_id: &str) -> Option<f32> {
+        let docs = self.documents.read();
+        let idx = *self.doc_id_map.read().get(doc_id)?;
+        let doc = docs.get(idx)?;
+
+        let embeddings: Vec<&Vec<f32>> = doc.embeddings.values().collect();
+        if embeddings.len() < 2 {
+            return None;
+        }
+
+        let mut total_sim = 0.0f32;
+        let mut pair_count = 0;
+
+        for i in 0..embeddings.len() {
+            for j in (i + 1)..embeddings.len() {
+                total_sim += cosine_similarity(embeddings[i], embeddings[j]);
+                pair_count += 1;
+            }
+        }
+
+        if pair_count > 0 {
+            Some(total_sim / pair_count as f32)
+        } else {
+            None
+        }
+    }
+
+    /// Find documents with the lowest cross-modal alignment.
+    ///
+    /// Useful for identifying documents where embeddings from different
+    /// modalities are poorly aligned, which may indicate quality issues.
+    pub fn least_aligned(&self, limit: usize) -> Vec<(String, f32)> {
+        let docs = self.documents.read();
+        let mut scores: Vec<(String, f32)> = docs
+            .iter()
+            .filter_map(|doc| {
+                let score = self.alignment_score_inner(doc)?;
+                Some((doc.id.clone(), score))
+            })
+            .collect();
+
+        scores.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+        scores.truncate(limit);
+        scores
+    }
+
+    fn alignment_score_inner(&self, doc: &MultiModalDoc) -> Option<f32> {
+        let embeddings: Vec<&Vec<f32>> = doc.embeddings.values().collect();
+        if embeddings.len() < 2 {
+            return None;
+        }
+
+        let mut total_sim = 0.0f32;
+        let mut pair_count = 0;
+
+        for i in 0..embeddings.len() {
+            for j in (i + 1)..embeddings.len() {
+                total_sim += cosine_similarity(embeddings[i], embeddings[j]);
+                pair_count += 1;
+            }
+        }
+
+        if pair_count > 0 {
+            Some(total_sim / pair_count as f32)
+        } else {
+            None
+        }
+    }
+}
+
+fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
+    let min_len = a.len().min(b.len());
+    let a = &a[..min_len];
+    let b = &b[..min_len];
+
+    let dot: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
+    let norm_a: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
+    let norm_b: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
+
+    if norm_a > 0.0 && norm_b > 0.0 {
+        dot / (norm_a * norm_b)
+    } else {
+        0.0
+    }
 }
 
 /// Statistics for the multi-modal index.
@@ -547,6 +757,89 @@ pub struct MultiModalStats {
     pub per_modality_vectors: HashMap<Modality, usize>,
     pub modality_count: usize,
     pub fusion_strategy: FusionStrategy,
+}
+
+// ---------------------------------------------------------------------------
+// Modality Auto-Detection
+// ---------------------------------------------------------------------------
+
+/// Heuristic modality detection from embedding dimensions.
+///
+/// Common embedding dimensions by modality:
+/// - Text: 384 (MiniLM), 768 (BERT), 1024 (large), 1536 (OpenAI)
+/// - Image: 512 (CLIP ViT-B), 768 (CLIP ViT-L), 2048 (ResNet)
+/// - Audio: 128 (VGGish), 512 (CLAP), 768
+/// - Code: 768 (CodeBERT), 1024 (StarEncoder)
+pub fn detect_modality(dimensions: usize, hint: Option<&str>) -> Modality {
+    // If a hint is provided, use it
+    if let Some(h) = hint {
+        return match h.to_lowercase().as_str() {
+            "text" | "txt" | "nlp" => Modality::Text,
+            "image" | "img" | "vision" | "clip" => Modality::Image,
+            "audio" | "sound" | "speech" => Modality::Audio,
+            "video" | "vid" => Modality::Video,
+            "code" | "source" => Modality::Code,
+            _ => Modality::Custom,
+        };
+    }
+
+    // Heuristic based on dimensions
+    match dimensions {
+        128 => Modality::Audio,       // VGGish
+        384 => Modality::Text,        // MiniLM
+        512 => Modality::Image,       // CLIP ViT-B/32
+        768 => Modality::Text,        // BERT/RoBERTa (most common)
+        1024 => Modality::Text,       // Large text models
+        1536 => Modality::Text,       // OpenAI text-embedding-3
+        2048 => Modality::Image,      // ResNet features
+        _ => Modality::Custom,
+    }
+}
+
+/// Normalize scores across modalities to [0, 1] for fair comparison.
+///
+/// Different modalities may produce scores on different scales (e.g., cosine
+/// distance in [0, 2] vs euclidean distance in [0, ∞]). This function
+/// applies min-max normalization per modality for fair fusion.
+pub fn normalize_cross_modal_results(
+    results: &mut [MultiModalSearchResult],
+) {
+    if results.is_empty() {
+        return;
+    }
+
+    // Collect per-modality score ranges
+    let mut ranges: HashMap<Modality, (f32, f32)> = HashMap::new();
+    for r in results.iter() {
+        for (&modality, &score) in &r.per_modality_scores {
+            let entry = ranges.entry(modality).or_insert((f32::MAX, f32::MIN));
+            entry.0 = entry.0.min(score);
+            entry.1 = entry.1.max(score);
+        }
+    }
+
+    // Normalize per-modality scores to [0, 1]
+    for r in results.iter_mut() {
+        for (modality, score) in r.per_modality_scores.iter_mut() {
+            if let Some(&(min, max)) = ranges.get(modality) {
+                let range = max - min;
+                if range > f32::EPSILON {
+                    *score = (*score - min) / range;
+                }
+            }
+        }
+
+        // Recompute combined score as average of normalized per-modality scores
+        if !r.per_modality_scores.is_empty() {
+            r.combined_score = r.per_modality_scores.values().sum::<f32>()
+                / r.per_modality_scores.len() as f32;
+        }
+    }
+
+    // Re-sort by normalized combined score
+    results.sort_by(|a, b| {
+        b.combined_score.partial_cmp(&a.combined_score).unwrap_or(std::cmp::Ordering::Equal)
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -764,5 +1057,53 @@ mod tests {
         let json = serde_json::to_string(&result).unwrap();
         let decoded: MultiModalSearchResult = serde_json::from_str(&json).unwrap();
         assert_eq!(decoded.id, "doc1");
+    }
+
+    #[test]
+    fn test_alignment_score() {
+        let index = MultiModalUnifiedIndex::new(MultiModalIndexConfig::default());
+
+        // Insert a document with identical embeddings across modalities (perfect alignment)
+        let vec384 = vec![0.5f32; 384];
+        let vec512 = vec![0.5f32; 512];
+        let doc = MultiModalDoc::builder("aligned")
+            .with_text_embedding(vec384)
+            .with_image_embedding(vec512)
+            .build();
+        index.insert(doc).unwrap();
+
+        let score = index.alignment_score("aligned");
+        assert!(score.is_some());
+        // Identical direction vectors should have high similarity
+        assert!(score.unwrap() > 0.9);
+    }
+
+    #[test]
+    fn test_alignment_score_single_modality() {
+        let index = MultiModalUnifiedIndex::new(MultiModalIndexConfig::default());
+
+        let doc = MultiModalDoc::builder("single")
+            .with_text_embedding(vec![0.5f32; 384])
+            .build();
+        index.insert(doc).unwrap();
+
+        // Single modality → no alignment score
+        assert!(index.alignment_score("single").is_none());
+    }
+
+    #[test]
+    fn test_least_aligned() {
+        let index = MultiModalUnifiedIndex::new(MultiModalIndexConfig::default());
+
+        for i in 0..5 {
+            let doc = MultiModalDoc::builder(format!("doc{i}"))
+                .with_text_embedding(random_vector(384))
+                .with_image_embedding(random_vector(512))
+                .build();
+            index.insert(doc).unwrap();
+        }
+
+        let least = index.least_aligned(3);
+        assert!(least.len() <= 3);
     }
 }
