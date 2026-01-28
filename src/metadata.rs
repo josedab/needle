@@ -493,8 +493,7 @@ impl Filter {
                     return Err("Empty filter object".to_string());
                 }
                 if conditions.len() == 1 {
-                    // Safe: we just checked conditions.len() == 1
-                    Ok(conditions.pop().expect("checked len == 1"))
+                    conditions.pop().ok_or_else(|| "Empty conditions after len check".to_string())
                 } else {
                     Ok(Filter::And(conditions))
                 }
@@ -578,8 +577,7 @@ impl Filter {
                     conditions.push(filter);
                 }
                 if conditions.len() == 1 {
-                    // Safe: we just checked conditions.len() == 1
-                    Ok(conditions.pop().expect("checked len == 1"))
+                    conditions.pop().ok_or_else(|| "Empty conditions after len check".to_string())
                 } else {
                     Ok(Filter::And(conditions))
                 }

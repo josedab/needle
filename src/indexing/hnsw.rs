@@ -472,10 +472,9 @@ impl HnswIndex {
             return Ok(());
         }
 
-        // Safety: entry_point is Some because we just checked is_none() above
-        let entry_point = self
-            .entry_point
-            .expect("entry_point should be Some after is_none check");
+        let entry_point = self.entry_point.ok_or_else(|| {
+            crate::error::NeedleError::Index("HNSW entry point missing after init check".into())
+        })?;
         let mut current = entry_point;
 
         // Traverse from top layer to one above insert level
@@ -583,10 +582,9 @@ impl HnswIndex {
             return Ok((vec![], stats));
         }
 
-        // Safety: entry_point is Some because we just checked is_none() above
-        let mut current = self
-            .entry_point
-            .expect("entry_point should be Some after is_none check");
+        let mut current = self.entry_point.ok_or_else(|| {
+            crate::error::NeedleError::Index("HNSW entry point missing after init check".into())
+        })?;
 
         // Traverse from top layer down to layer 1
         let layers_to_traverse = self.entry_level;

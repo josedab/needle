@@ -577,10 +577,9 @@ impl std::fmt::Debug for ShardedQueryCache {
 
 impl ShardedQueryCache {
     fn new(capacity: NonZeroUsize) -> Self {
-        let per_shard = NonZeroUsize::new(
-            (capacity.get() / CACHE_SHARD_COUNT).max(1),
-        )
-        .expect("per-shard capacity must be non-zero");
+        // .max(1) guarantees this is always >= 1, so NonZeroUsize::new never returns None
+        let per_shard_val = (capacity.get() / CACHE_SHARD_COUNT).max(1);
+        let per_shard = NonZeroUsize::new(per_shard_val).unwrap_or(NonZeroUsize::MIN);
 
         let shards = (0..CACHE_SHARD_COUNT)
             .map(|_| Mutex::new(QueryCache::new(per_shard)))
