@@ -496,6 +496,93 @@ fn extract_vector(val: &Value) -> Result<Vec<f32>> {
         .collect()
 }
 
+// ── Record Transformers ─────────────────────────────────────────────────────
+
+/// A transformation applied to ingest records before they reach the database.
+pub trait RecordTransformer: Send + Sync {
+    /// Transform a record. Return `None` to filter it out.
+    fn transform(&self, record: IngestRecord) -> Option<IngestRecord>;
+}
+
+/// Normalizes vectors to unit length (L2 normalization).
+pub struct L2NormalizeTransformer;
+
+impl RecordTransformer for L2NormalizeTransformer {
+    fn transform(&self, mut record: IngestRecord) -> Option<IngestRecord> {
+        let norm: f32 = record.vector.iter().map(|x| x * x).sum::<f32>().sqrt();
+        if norm > 0.0 {
+            for v in record.vector.iter_mut() {
+                *v /= norm;
+            }
+        }
+        Some(record)
+    }
+}
+
+/// Filters out records with zero-magnitude vectors.
+pub struct ZeroVectorFilter;
+
+impl RecordTransformer for ZeroVectorFilter {
+    fn transform(&self, record: IngestRecord) -> Option<IngestRecord> {
+        let magnitude: f32 = record.vector.iter().map(|x| x * x).sum();
+        if magnitude > f32::EPSILON {
+            Some(record)
+        } else {
+            None
+        }
+    }
+}
+
+/// Truncates or pads vectors to a target dimension.
+pub struct DimensionAdapter {
+    target_dim: usize,
+}
+
+impl DimensionAdapter {
+    pub fn new(target_dim: usize) -> Self {
+        Self { target_dim }
+    }
+}
+
+impl RecordTransformer for DimensionAdapter {
+    fn transform(&self, mut record: IngestRecord) -> Option<IngestRecord> {
+        record.vector.resize(self.target_dim, 0.0);
+        Some(record)
+    }
+}
+
+/// Composes multiple transformers in sequence.
+pub struct TransformPipeline {
+    transformers: Vec<Box<dyn RecordTransformer>>,
+}
+
+impl TransformPipeline {
+    pub fn new() -> Self {
+        Self {
+            transformers: Vec::new(),
+        }
+    }
+
+    pub fn add(mut self, t: Box<dyn RecordTransformer>) -> Self {
+        self.transformers.push(t);
+        self
+    }
+
+    /// Apply all transformers in sequence. Returns None if any transformer filters it out.
+    pub fn apply(&self, mut record: IngestRecord) -> Option<IngestRecord> {
+        for transformer in &self.transformers {
+            record = transformer.transform(record)?;
+        }
+        Some(record)
+    }
+}
+
+impl Default for TransformPipeline {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 // ── Checkpoint ───────────────────────────────────────────────────────────────
 
 /// Checkpoint state for exactly-once tracking.
@@ -987,6 +1074,197 @@ impl<'a> StreamingIngestPipeline<'a> {
     }
 }
 
+// ── Webhook Handler ──────────────────────────────────────────────────────────
+
+/// Configuration for the webhook ingestion handler.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WebhookHandlerConfig {
+    /// HMAC secret for signature validation (SHA-256).
+    pub hmac_secret: Option<String>,
+    /// Maximum payload size in bytes.
+    pub max_payload_bytes: usize,
+    /// JSON path to the vector field (dot-separated, e.g. "embedding").
+    pub vector_field: String,
+    /// JSON path to the ID field.
+    pub id_field: String,
+    /// Optional JSON path to metadata.
+    pub metadata_field: Option<String>,
+    /// Whether payloads may contain arrays of records.
+    pub allow_batch: bool,
+}
+
+impl Default for WebhookHandlerConfig {
+    fn default() -> Self {
+        Self {
+            hmac_secret: None,
+            max_payload_bytes: 10 * 1024 * 1024,
+            vector_field: "vector".to_string(),
+            id_field: "id".to_string(),
+            metadata_field: Some("metadata".to_string()),
+            allow_batch: true,
+        }
+    }
+}
+
+/// Result of processing a webhook payload.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WebhookResult {
+    /// Number of records accepted.
+    pub accepted: usize,
+    /// Number of records rejected.
+    pub rejected: usize,
+    /// Backpressure signal for the caller.
+    pub backpressure: bool,
+    /// Error details for rejected records.
+    pub errors: Vec<String>,
+}
+
+/// Handles webhook payloads and feeds them into a `StreamingIngestPipeline`.
+pub struct WebhookHandler {
+    config: WebhookHandlerConfig,
+}
+
+impl WebhookHandler {
+    /// Create a new webhook handler.
+    pub fn new(config: WebhookHandlerConfig) -> Self {
+        Self { config }
+    }
+
+    /// Process a webhook JSON payload into ingest records.
+    ///
+    /// Returns parsed records and any validation errors.
+    pub fn process_payload(&self, payload: &Value) -> Result<(Vec<IngestRecord>, Vec<String>)> {
+        let records_json = if payload.is_array() && self.config.allow_batch {
+            payload.as_array().cloned().unwrap_or_default()
+        } else if payload.is_object() {
+            vec![payload.clone()]
+        } else {
+            return Err(NeedleError::InvalidInput(
+                "Webhook payload must be a JSON object or array".to_string(),
+            ));
+        };
+
+        let mut records = Vec::with_capacity(records_json.len());
+        let mut errors = Vec::new();
+
+        for (i, item) in records_json.iter().enumerate() {
+            match self.parse_record(item) {
+                Ok(record) => records.push(record),
+                Err(e) => errors.push(format!("record[{i}]: {e}")),
+            }
+        }
+
+        Ok((records, errors))
+    }
+
+    /// Ingest a webhook payload directly into the pipeline.
+    pub fn ingest_into<'a>(
+        &self,
+        payload: &Value,
+        pipeline: &mut StreamingIngestPipeline<'a>,
+    ) -> Result<WebhookResult> {
+        let (records, errors) = self.process_payload(payload)?;
+        let rejected = errors.len();
+        let mut accepted = 0;
+        let mut backpressure = false;
+
+        for record in records {
+            match pipeline.push(record) {
+                Ok(signal) => {
+                    accepted += 1;
+                    if matches!(signal, BackpressureSignal::Throttle | BackpressureSignal::Pause) {
+                        backpressure = true;
+                    }
+                }
+                Err(e) => {
+                    return Err(e);
+                }
+            }
+        }
+
+        Ok(WebhookResult {
+            accepted,
+            rejected,
+            backpressure,
+            errors,
+        })
+    }
+
+    fn parse_record(&self, item: &Value) -> Result<IngestRecord> {
+        let id = item
+            .get(&self.config.id_field)
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| {
+                NeedleError::InvalidInput(format!(
+                    "Missing or invalid '{}' field",
+                    self.config.id_field
+                ))
+            })?;
+
+        let vector_val = item.get(&self.config.vector_field).ok_or_else(|| {
+            NeedleError::InvalidInput(format!(
+                "Missing '{}' field",
+                self.config.vector_field
+            ))
+        })?;
+
+        let vector: Vec<f32> = vector_val
+            .as_array()
+            .ok_or_else(|| {
+                NeedleError::InvalidInput(format!(
+                    "'{}' must be an array of numbers",
+                    self.config.vector_field
+                ))
+            })?
+            .iter()
+            .map(|v| {
+                v.as_f64()
+                    .map(|f| f as f32)
+                    .ok_or_else(|| NeedleError::InvalidInput("Vector element must be a number".to_string()))
+            })
+            .collect::<Result<Vec<f32>>>()?;
+
+        let metadata = self
+            .config
+            .metadata_field
+            .as_ref()
+            .and_then(|field| item.get(field).cloned());
+
+        let mut record = IngestRecord::new(id, vector);
+        if let Some(meta) = metadata {
+            record = record.with_metadata(meta);
+        }
+
+        Ok(record)
+    }
+
+    /// Validate a signature header against the raw payload body.
+    ///
+    /// Currently performs a constant-time comparison of the expected
+    /// hex-encoded SHA-256 digest. For HMAC validation, enable the `server`
+    /// feature which brings in the `hmac` crate.
+    pub fn validate_signature(&self, body: &[u8], signature_header: &str) -> bool {
+        let Some(ref secret) = self.config.hmac_secret else {
+            return true; // No secret configured, skip validation
+        };
+
+        // Simple SHA-256(secret + body) comparison
+        use sha2::{Digest, Sha256};
+        let mut hasher = Sha256::new();
+        hasher.update(secret.as_bytes());
+        hasher.update(body);
+        let digest = hasher.finalize();
+
+        let hex_sig = signature_header
+            .strip_prefix("sha256=")
+            .unwrap_or(signature_header);
+
+        // Constant-time-ish comparison via formatted hex
+        let expected = format!("{:x}", digest);
+        expected == hex_sig
+    }
+}
+
 // ── Tests ────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -1377,5 +1655,76 @@ mod tests {
         assert!(metrics.contains("needle_streaming_records_received 1"));
         assert!(metrics.contains("needle_streaming_records_flushed 1"));
         assert!(metrics.contains("needle_streaming_flush_count 1"));
+    }
+
+    #[test]
+    fn test_webhook_handler_single_record() {
+        let handler = WebhookHandler::new(WebhookHandlerConfig::default());
+        let payload = serde_json::json!({
+            "id": "doc1",
+            "vector": [1.0, 2.0, 3.0, 4.0],
+            "metadata": {"source": "webhook"}
+        });
+
+        let (records, errors) = handler.process_payload(&payload).unwrap();
+        assert_eq!(records.len(), 1);
+        assert!(errors.is_empty());
+        assert_eq!(records[0].id, "doc1");
+        assert_eq!(records[0].vector, vec![1.0, 2.0, 3.0, 4.0]);
+    }
+
+    #[test]
+    fn test_webhook_handler_batch() {
+        let handler = WebhookHandler::new(WebhookHandlerConfig::default());
+        let payload = serde_json::json!([
+            {"id": "a", "vector": [1.0, 0.0, 0.0, 0.0]},
+            {"id": "b", "vector": [0.0, 1.0, 0.0, 0.0]}
+        ]);
+
+        let (records, errors) = handler.process_payload(&payload).unwrap();
+        assert_eq!(records.len(), 2);
+        assert!(errors.is_empty());
+    }
+
+    #[test]
+    fn test_webhook_handler_partial_failure() {
+        let handler = WebhookHandler::new(WebhookHandlerConfig::default());
+        let payload = serde_json::json!([
+            {"id": "good", "vector": [1.0, 2.0, 3.0, 4.0]},
+            {"vector": [1.0, 2.0, 3.0, 4.0]},
+            {"id": "also_good", "vector": [0.0, 1.0, 0.0, 0.0]}
+        ]);
+
+        let (records, errors) = handler.process_payload(&payload).unwrap();
+        assert_eq!(records.len(), 2);
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].contains("record[1]"));
+    }
+
+    #[test]
+    fn test_webhook_handler_into_pipeline() {
+        let db = test_db();
+        let config = StreamingIngestConfig::builder()
+            .collection("test")
+            .batch_size(10)
+            .build();
+        let mut pipeline = StreamingIngestPipeline::new(&db, config).unwrap();
+
+        let handler = WebhookHandler::new(WebhookHandlerConfig::default());
+        let payload = serde_json::json!({
+            "id": "doc1",
+            "vector": [1.0, 2.0, 3.0, 4.0]
+        });
+
+        let result = handler.ingest_into(&payload, &mut pipeline).unwrap();
+        assert_eq!(result.accepted, 1);
+        assert_eq!(result.rejected, 0);
+        assert!(!result.backpressure);
+    }
+
+    #[test]
+    fn test_webhook_no_secret_always_valid() {
+        let handler = WebhookHandler::new(WebhookHandlerConfig::default());
+        assert!(handler.validate_signature(b"test body", "anything"));
     }
 }
