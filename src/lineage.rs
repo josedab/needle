@@ -1035,7 +1035,7 @@ impl<'a> LineageGraphExplorer<'a> {
         queue.push_back(vec![from.to_string()]);
 
         while let Some(path) = queue.pop_front() {
-            let current = path.last().expect("path is non-empty");
+            let Some(current) = path.last() else { continue };
 
             if let Some(lineage) = self.tracker.get(current) {
                 let neighbors: Vec<&String> = lineage

@@ -150,7 +150,7 @@ impl Default for QueryEvent {
             nodes_visited: None,
             timestamp: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
-                .expect("system time before UNIX epoch")
+                .unwrap_or_default()
                 .as_secs(),
             metadata: None,
         }
@@ -628,7 +628,7 @@ impl AnalyticsDashboard {
             "collections": self.get_collection_analytics(),
             "generated_at": SystemTime::now()
                 .duration_since(UNIX_EPOCH)
-                .expect("system time before UNIX epoch")
+                .unwrap_or_default()
                 .as_secs(),
         })
     }
@@ -758,7 +758,7 @@ impl Drop for QueryTracker {
             nodes_visited: self.nodes_visited,
             timestamp: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
-                .expect("system time before UNIX epoch")
+                .unwrap_or_default()
                 .as_secs(),
             metadata: None,
         });
@@ -881,7 +881,7 @@ impl AlertManager {
         let mut active = self.active_alerts.write();
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .expect("system time before UNIX epoch")
+            .unwrap_or_default()
             .as_secs();
 
         for rule in rules.iter() {

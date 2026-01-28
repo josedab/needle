@@ -286,7 +286,7 @@ impl TemporalIndex {
 
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .expect("system time before UNIX epoch")
+            .unwrap_or_default()
             .as_secs();
 
         // Apply decay and convert to temporal results
@@ -608,7 +608,7 @@ impl<'a> TemporalQueryBuilder<'a> {
     pub fn last_hours(self, hours: u64) -> Self {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .expect("system time before UNIX epoch")
+            .unwrap_or_default()
             .as_secs();
         self.in_range(now - hours * 3600, now)
     }
@@ -616,7 +616,7 @@ impl<'a> TemporalQueryBuilder<'a> {
     pub fn last_days(self, days: u64) -> Self {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .expect("system time before UNIX epoch")
+            .unwrap_or_default()
             .as_secs();
         self.in_range(now - days * 86400, now)
     }
@@ -766,7 +766,9 @@ impl TemporalPartitionManager {
                 },
             );
         }
-        Ok(self.partitions.get_mut(&bucket).unwrap())
+        self.partitions.get_mut(&bucket).ok_or_else(|| {
+            NeedleError::InvalidOperation(format!("Partition for bucket {bucket} not found"))
+        })
     }
 
     /// Number of active partitions.
