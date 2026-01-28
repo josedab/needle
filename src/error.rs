@@ -263,6 +263,12 @@ pub enum NeedleError {
     #[error("Vector '{0}' already exists")]
     VectorAlreadyExists(String),
 
+    #[error("Duplicate ID: '{0}'")]
+    DuplicateId(String),
+
+    #[error("Operation in progress: {0}")]
+    OperationInProgress(String),
+
     #[error("Invalid database file: {0}")]
     InvalidDatabase(String),
 
@@ -341,6 +347,8 @@ impl Recoverable for NeedleError {
             NeedleError::CollectionHasAliases(_) => ErrorCode::AliasTargetHasAliases,
             NeedleError::VectorNotFound(_) => ErrorCode::VectorNotFound,
             NeedleError::VectorAlreadyExists(_) => ErrorCode::VectorAlreadyExists,
+            NeedleError::DuplicateId(_) => ErrorCode::VectorAlreadyExists,
+            NeedleError::OperationInProgress(_) => ErrorCode::Conflict,
             NeedleError::InvalidDatabase(_) => ErrorCode::InvalidDatabase,
             NeedleError::Corruption(_) => ErrorCode::DatabaseCorrupted,
             NeedleError::Index(_) => ErrorCode::IndexError,
@@ -568,6 +576,17 @@ impl Recoverable for NeedleError {
                 RecoveryHint::new(format!("Unauthorized: {}", msg)),
                 RecoveryHint::new("Check your credentials and permissions"),
                 RecoveryHint::new("Ensure you have access to the requested resource"),
+            ],
+
+            NeedleError::DuplicateId(id) => vec![
+                RecoveryHint::new(format!("ID '{}' already exists", id)),
+                RecoveryHint::new("Use a different ID or update the existing vector"),
+            ],
+
+            NeedleError::OperationInProgress(msg) => vec![
+                RecoveryHint::new(format!("Operation in progress: {}", msg)),
+                RecoveryHint::new("Wait for the current operation to complete"),
+                RecoveryHint::new("Consider using async APIs for long-running operations"),
             ],
         }
     }
