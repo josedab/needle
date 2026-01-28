@@ -555,6 +555,187 @@ impl WasmDatabase {
             .get_mut(name)
             .ok_or_else(|| NeedleError::CollectionNotFound(name.into()))
     }
+
+    /// Export the entire database as a compact JSON string for backup/transfer.
+    pub fn export_json(&self) -> Result<String> {
+        let state = self.serialize_state()?;
+        serde_json::to_string(&state).map_err(|e| NeedleError::SerializationError(e.to_string()))
+    }
+
+    /// Import database state from a JSON string (e.g., from IndexedDB backup).
+    pub fn import_json(&mut self, json: &str) -> Result<RestoreResult> {
+        let state: Value = serde_json::from_str(json)
+            .map_err(|e| NeedleError::SerializationError(e.to_string()))?;
+        self.restore_state(&state)
+    }
+
+    /// Get total vector count across all collections.
+    pub fn total_vectors(&self) -> usize {
+        self.collections.values().map(|c| c.len()).sum()
+    }
+
+    /// Estimate memory usage in bytes.
+    pub fn estimated_memory_bytes(&self) -> usize {
+        self.collections
+            .values()
+            .map(|c| {
+                let dims = c.dimensions().unwrap_or(0);
+                c.len() * dims * 4 // 4 bytes per f32
+            })
+            .sum()
+    }
+}
+
+// ── IndexedDB Storage Protocol ──────────────────────────────────────────────
+
+/// Binary serialization format for IndexedDB persistence.
+///
+/// The format stores each collection as a separate IndexedDB object store entry,
+/// enabling incremental saves (only changed collections need to be rewritten).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IndexedDbEntry {
+    /// Collection name (used as object store key).
+    pub key: String,
+    /// Schema version for forward compatibility.
+    pub schema_version: u32,
+    /// Collection dimensions.
+    pub dimensions: usize,
+    /// Number of vectors.
+    pub vector_count: usize,
+    /// Serialized collection data (JSON).
+    pub data: Vec<u8>,
+    /// Checksum for integrity verification.
+    pub checksum: u32,
+    /// Timestamp of last modification.
+    pub modified_at: u64,
+}
+
+impl IndexedDbEntry {
+    /// Create an entry from a collection.
+    pub fn from_collection(name: &str, collection: &Collection) -> Result<Self> {
+        let data = collection.to_bytes()?;
+        let checksum = crc32_simple(&data);
+
+        Ok(Self {
+            key: name.to_string(),
+            schema_version: 1,
+            dimensions: collection.dimensions().unwrap_or(0),
+            vector_count: collection.len(),
+            data,
+            checksum,
+            modified_at: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
+        })
+    }
+
+    /// Restore a collection from this entry.
+    pub fn to_collection(&self) -> Result<Collection> {
+        // Verify checksum
+        let actual = crc32_simple(&self.data);
+        if actual != self.checksum {
+            return Err(NeedleError::InvalidState(format!(
+                "IndexedDB entry '{}' checksum mismatch: expected {}, got {}",
+                self.key, self.checksum, actual
+            )));
+        }
+        Collection::from_bytes(&self.data)
+    }
+
+    /// Get the size in bytes of the serialized data.
+    pub fn size_bytes(&self) -> usize {
+        self.data.len()
+    }
+}
+
+/// Simple CRC32 for integrity checking (no external dependency needed in WASM).
+fn crc32_simple(data: &[u8]) -> u32 {
+    let mut crc: u32 = 0xFFFF_FFFF;
+    for &byte in data {
+        crc ^= u32::from(byte);
+        for _ in 0..8 {
+            if crc & 1 != 0 {
+                crc = (crc >> 1) ^ 0xEDB8_8320;
+            } else {
+                crc >>= 1;
+            }
+        }
+    }
+    !crc
+}
+
+/// Manifest for the IndexedDB database, tracking all stored collections.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IndexedDbManifest {
+    /// Schema version.
+    pub version: u32,
+    /// Database name.
+    pub db_name: String,
+    /// List of stored collection names and their sizes.
+    pub collections: Vec<IndexedDbCollectionMeta>,
+    /// Total size in bytes across all collections.
+    pub total_size_bytes: usize,
+    /// Last save timestamp.
+    pub saved_at: u64,
+}
+
+/// Metadata about a stored collection in IndexedDB.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IndexedDbCollectionMeta {
+    /// Collection name.
+    pub name: String,
+    /// Number of vectors.
+    pub vector_count: usize,
+    /// Dimensions.
+    pub dimensions: usize,
+    /// Serialized size in bytes.
+    pub size_bytes: usize,
+}
+
+impl WasmDatabase {
+    /// Serialize all collections for IndexedDB storage.
+    pub fn to_indexeddb_entries(&self) -> Result<(IndexedDbManifest, Vec<IndexedDbEntry>)> {
+        let mut entries = Vec::new();
+        let mut meta = Vec::new();
+        let mut total_size = 0;
+
+        for (name, collection) in &self.collections {
+            let entry = IndexedDbEntry::from_collection(name, collection)?;
+            total_size += entry.size_bytes();
+            meta.push(IndexedDbCollectionMeta {
+                name: name.clone(),
+                vector_count: entry.vector_count,
+                dimensions: entry.dimensions,
+                size_bytes: entry.size_bytes(),
+            });
+            entries.push(entry);
+        }
+
+        let manifest = IndexedDbManifest {
+            version: 1,
+            db_name: "needle".to_string(),
+            collections: meta,
+            total_size_bytes: total_size,
+            saved_at: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
+        };
+
+        Ok((manifest, entries))
+    }
+
+    /// Restore database from IndexedDB entries.
+    pub fn from_indexeddb_entries(&mut self, entries: &[IndexedDbEntry]) -> Result<usize> {
+        let mut restored = 0;
+        for entry in entries {
+            let collection = entry.to_collection()?;
+            self.collections.insert(entry.key.clone(), collection);
+            restored += 1;
+        }
+        Ok(restored)
+    }
 }
 
 // ── Sync Protocol ───────────────────────────────────────────────────────────
@@ -693,6 +874,66 @@ export interface CollectionInfo {
   dimensions: number;
 }
 
+export interface InsertOptions {
+  id: string;
+  vector: number[];
+  metadata?: Record<string, unknown>;
+}
+
+export interface SearchOptions {
+  query: number[];
+  k?: number;
+  filter?: Record<string, unknown>;
+  includeVectors?: boolean;
+}
+
+/**
+ * Main NeedleDB class for browser-native vector search.
+ * Under 2MB WASM bundle with IndexedDB persistence.
+ */
+export class NeedleDB {
+  constructor(config?: NeedleConfig);
+
+  /** Create a new collection with the given dimensions. */
+  createCollection(name: string, dimensions: number): Promise<void>;
+
+  /** Delete a collection. */
+  deleteCollection(name: string): Promise<boolean>;
+
+  /** List all collections. */
+  listCollections(): CollectionInfo[];
+
+  /** Insert a vector into a collection. */
+  insert(collection: string, options: InsertOptions): Promise<void>;
+
+  /** Insert multiple vectors in a batch. */
+  insertBatch(collection: string, items: InsertOptions[]): Promise<number>;
+
+  /** Search for similar vectors. */
+  search(collection: string, options: SearchOptions): Promise<SearchResult[]>;
+
+  /** Get a vector by ID. */
+  get(collection: string, id: string): SearchResult | null;
+
+  /** Delete a vector by ID. */
+  delete(collection: string, id: string): Promise<boolean>;
+
+  /** Persist database to IndexedDB/localStorage. */
+  save(): Promise<void>;
+
+  /** Load database from IndexedDB/localStorage. */
+  load(): Promise<void>;
+
+  /** Export database as JSON for backup. */
+  export(): string;
+
+  /** Import database from JSON backup. */
+  import(json: string): Promise<void>;
+
+  /** Close the database and release resources. */
+  close(): void;
+}
+
 export function useNeedleSearch(
   collection: string,
   query: number[],
@@ -779,6 +1020,105 @@ pub struct RestoreResult {
     pub restored_vectors: usize,
     /// Number of errors encountered during restore.
     pub errors: usize,
+}
+
+// ── Incremental Sync ────────────────────────────────────────────────────────
+
+/// Tracks which collections have been modified since the last save.
+///
+/// Enables incremental persistence — only dirty collections need to be
+/// rewritten to IndexedDB, significantly reducing save latency for
+/// databases with many collections.
+pub struct DirtyTracker {
+    /// Set of collection names that have been modified since last save.
+    dirty_collections: std::collections::HashSet<String>,
+    /// Monotonic generation counter for each collection.
+    generations: HashMap<String, u64>,
+    /// Last saved generation per collection.
+    saved_generations: HashMap<String, u64>,
+}
+
+impl DirtyTracker {
+    pub fn new() -> Self {
+        Self {
+            dirty_collections: std::collections::HashSet::new(),
+            generations: HashMap::new(),
+            saved_generations: HashMap::new(),
+        }
+    }
+
+    /// Mark a collection as dirty (modified).
+    pub fn mark_dirty(&mut self, collection: &str) {
+        self.dirty_collections.insert(collection.to_string());
+        let gen = self.generations.entry(collection.to_string()).or_insert(0);
+        *gen += 1;
+    }
+
+    /// Get the list of collections that need saving.
+    pub fn dirty_collections(&self) -> Vec<&str> {
+        self.dirty_collections.iter().map(|s| s.as_str()).collect()
+    }
+
+    /// Check if a specific collection needs saving.
+    pub fn is_dirty(&self, collection: &str) -> bool {
+        self.dirty_collections.contains(collection)
+    }
+
+    /// Mark a collection as saved (clean).
+    pub fn mark_saved(&mut self, collection: &str) {
+        self.dirty_collections.remove(collection);
+        if let Some(&gen) = self.generations.get(collection) {
+            self.saved_generations.insert(collection.to_string(), gen);
+        }
+    }
+
+    /// Mark all collections as saved.
+    pub fn mark_all_saved(&mut self) {
+        for (name, &gen) in &self.generations {
+            self.saved_generations.insert(name.clone(), gen);
+        }
+        self.dirty_collections.clear();
+    }
+
+    /// Get the number of dirty collections.
+    pub fn dirty_count(&self) -> usize {
+        self.dirty_collections.len()
+    }
+
+    /// Check if any collection needs saving.
+    pub fn has_unsaved_changes(&self) -> bool {
+        !self.dirty_collections.is_empty()
+    }
+}
+
+impl Default for DirtyTracker {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl WasmDatabase {
+    /// Save only dirty (modified) collections, returning the entries that were saved.
+    ///
+    /// More efficient than `to_indexeddb_entries()` for databases with many
+    /// collections where only a few have changed.
+    pub fn save_incremental(
+        &self,
+        tracker: &mut DirtyTracker,
+    ) -> Result<Vec<IndexedDbEntry>> {
+        let dirty = tracker.dirty_collections();
+        let mut entries = Vec::with_capacity(dirty.len());
+
+        for name in dirty {
+            if let Some(collection) = self.collections.get(name) {
+                let entry = IndexedDbEntry::from_collection(name, collection)?;
+                entries.push(entry);
+                tracker.mark_saved(name);
+            }
+        }
+
+        Ok(entries)
+    }
 }
 
 #[cfg(test)]
