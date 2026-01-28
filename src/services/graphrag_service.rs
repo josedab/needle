@@ -934,6 +934,305 @@ pub enum GraphFilter {
     Or(Vec<GraphFilter>),
 }
 
+// ── RAG Context Assembly ─────────────────────────────────────────────────────
+
+/// A fully assembled RAG context from graph-augmented retrieval.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RagContext {
+    /// The assembled context text, ready for LLM prompt injection.
+    pub context: String,
+    /// Entity IDs that contributed to this context.
+    pub source_entities: Vec<String>,
+    /// Relation triples (source, relation, target) in the context.
+    pub relations: Vec<(String, String, String)>,
+    /// Number of hops traversed.
+    pub hops_traversed: usize,
+    /// Vector similarity score of the seed entities.
+    pub similarity_score: f32,
+}
+
+impl<'a> GraphRagService<'a> {
+    /// Assemble a RAG context by combining vector similarity search with
+    /// graph traversal to gather multi-hop related entities.
+    ///
+    /// This produces a structured context string suitable for injection
+    /// into an LLM prompt, combining direct vector matches with
+    /// graph-connected entities for richer context.
+    pub fn assemble_context(
+        &self,
+        query_vector: &[f32],
+        k: usize,
+        max_hops: usize,
+        graph_weight: f32,
+    ) -> Result<RagContext> {
+        // Step 1: Vector search for seed entities
+        let search_results = self.graph_search(query_vector, k, max_hops, graph_weight)?;
+
+        if search_results.is_empty() {
+            return Ok(RagContext {
+                context: String::new(),
+                source_entities: Vec::new(),
+                relations: Vec::new(),
+                hops_traversed: 0,
+                similarity_score: 0.0,
+            });
+        }
+
+        let avg_score = search_results.iter().map(|r| r.score).sum::<f32>()
+            / search_results.len() as f32;
+
+        // Step 2: Collect entities and their relations
+        let mut context_parts: Vec<String> = Vec::new();
+        let mut all_entity_ids: Vec<String> = Vec::new();
+        let mut all_relations: Vec<(String, String, String)> = Vec::new();
+
+        for result in &search_results {
+            all_entity_ids.push(result.entity_id.clone());
+
+            // Add entity info
+            if let Some(entity) = self.entities.get(&result.entity_id) {
+                context_parts.push(format!(
+                    "[{}: {}]",
+                    entity.label, result.entity_id
+                ));
+            }
+
+            // Add relation context for each path hop
+            for (hop_idx, hop_id) in result.path.iter().enumerate() {
+                if hop_idx > 0 {
+                    let prev = &result.path[hop_idx - 1];
+                    // Find the relation between prev and hop_id
+                    for rel in &self.relations {
+                        if (&rel.source == prev && &rel.target == hop_id)
+                            || (&rel.target == prev && &rel.source == hop_id)
+                        {
+                            let triple = (
+                                rel.source.clone(),
+                                rel.relation_type.clone(),
+                                rel.target.clone(),
+                            );
+                            if !all_relations.contains(&triple) {
+                                context_parts.push(format!(
+                                    "{} --[{}]--> {}",
+                                    rel.source, rel.relation_type, rel.target
+                                ));
+                                all_relations.push(triple);
+                            }
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        let max_hops_found = search_results.iter().map(|r| r.hops).max().unwrap_or(0);
+
+        Ok(RagContext {
+            context: context_parts.join("\n"),
+            source_entities: all_entity_ids,
+            relations: all_relations,
+            hops_traversed: max_hops_found,
+            similarity_score: avg_score,
+        })
+    }
+
+    /// Compute PageRank scores for all entities in the graph.
+    ///
+    /// Returns a map of entity ID → PageRank score. Higher scores indicate
+    /// more "important" entities that are well-connected in the graph.
+    /// Useful for boosting search results by entity importance.
+    pub fn pagerank(&self, damping: f32, iterations: usize) -> HashMap<String, f32> {
+        let n = self.entities.len();
+        if n == 0 {
+            return HashMap::new();
+        }
+
+        let entity_ids: Vec<&String> = self.entities.keys().collect();
+        let n_f = n as f32;
+        let mut scores: HashMap<&String, f32> = entity_ids.iter().map(|id| (*id, 1.0 / n_f)).collect();
+
+        for _ in 0..iterations {
+            let mut new_scores: HashMap<&String, f32> = entity_ids.iter().map(|id| (*id, (1.0 - damping) / n_f)).collect();
+
+            for id in &entity_ids {
+                let out_degree = self.adjacency.degree(id, false);
+                if out_degree == 0 {
+                    // Dangling node — distribute evenly
+                    let share = scores[id] / n_f;
+                    for other in &entity_ids {
+                        *new_scores.get_mut(other).unwrap_or(&mut 0.0) += damping * share;
+                    }
+                } else {
+                    // Distribute to neighbors
+                    let share = scores[id] / out_degree as f32;
+                    if let Some(edges) = self.adjacency.outgoing.get(id.as_str()) {
+                        for (target, _, _) in edges {
+                            if let Some(score) = new_scores.get_mut(&target) {
+                                *score += damping * share;
+                            }
+                        }
+                    }
+                    if self.config.bidirectional {
+                        if let Some(edges) = self.adjacency.incoming.get(id.as_str()) {
+                            for (source, _, _) in edges {
+                                if let Some(score) = new_scores.get_mut(&source) {
+                                    *score += damping * share;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            scores = new_scores;
+        }
+
+        scores.into_iter().map(|(k, v)| (k.clone(), v)).collect()
+    }
+
+    /// Search with PageRank boost: entities with higher graph importance
+    /// get boosted in the final ranking.
+    pub fn graph_search_with_pagerank(
+        &self,
+        query: &[f32],
+        k: usize,
+        max_hops: usize,
+        graph_weight: f32,
+        pagerank_weight: f32,
+    ) -> Result<Vec<GraphSearchResult>> {
+        let mut results = self.graph_search(query, k * 2, max_hops, graph_weight)?;
+        let pr_scores = self.pagerank(0.85, 20);
+
+        // Boost scores by PageRank
+        for result in &mut results {
+            let pr = pr_scores.get(&result.entity_id).copied().unwrap_or(0.0);
+            result.score = result.score * (1.0 - pagerank_weight) + pr * pagerank_weight;
+        }
+
+        results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        results.truncate(k);
+        Ok(results)
+    }
+}
+
+// ── Simple Entity Extraction ────────────────────────────────────────────────
+
+/// Extract candidate entity names from text using simple heuristics.
+///
+/// Uses capitalization patterns and common NER-like rules:
+/// - Consecutive capitalized words → potential entity
+/// - Words in quotes → potential entity
+/// - Words after "the" that are capitalized → potential entity
+pub fn extract_entities_from_text(text: &str) -> Vec<String> {
+    let mut entities = Vec::new();
+    let words: Vec<&str> = text.split_whitespace().collect();
+
+    let mut i = 0;
+    while i < words.len() {
+        let word = words[i].trim_matches(|c: char| !c.is_alphanumeric());
+
+        // Check for consecutive capitalized words (multi-word entities)
+        if !word.is_empty() && word.chars().next().map(|c| c.is_uppercase()).unwrap_or(false) {
+            let mut entity_parts = vec![word.to_string()];
+            let mut j = i + 1;
+            while j < words.len() {
+                let next = words[j].trim_matches(|c: char| !c.is_alphanumeric());
+                if !next.is_empty() && next.chars().next().map(|c| c.is_uppercase()).unwrap_or(false) {
+                    entity_parts.push(next.to_string());
+                    j += 1;
+                } else {
+                    break;
+                }
+            }
+
+            // Only treat as entity if not a sentence starter (first word) or if multi-word
+            if entity_parts.len() > 1 || (i > 0 && !words[i - 1].ends_with('.')) {
+                let entity = entity_parts.join(" ");
+                if entity.len() > 1 && !entities.contains(&entity) {
+                    entities.push(entity);
+                }
+            }
+
+            i = j;
+            continue;
+        }
+
+        // Check for quoted strings
+        if word.starts_with('"') || word.starts_with('\'') {
+            let quote_char = word.chars().next().unwrap_or('"');
+            let mut quoted = word.trim_start_matches(quote_char).to_string();
+            let mut j = i + 1;
+            while j < words.len() && !words[j].ends_with(quote_char) {
+                quoted.push(' ');
+                quoted.push_str(words[j]);
+                j += 1;
+            }
+            if j < words.len() {
+                quoted.push(' ');
+                quoted.push_str(words[j].trim_end_matches(quote_char));
+                j += 1;
+            }
+            let trimmed = quoted.trim().to_string();
+            if !trimmed.is_empty() && !entities.contains(&trimmed) {
+                entities.push(trimmed);
+            }
+            i = j;
+            continue;
+        }
+
+        i += 1;
+    }
+
+    entities
+}
+
+/// Extract a k-hop subgraph around a set of seed entities.
+///
+/// Returns entity IDs and relation triples within `max_hops` of any seed entity.
+/// Useful for building context windows for LLM prompts.
+pub fn extract_subgraph(
+    service: &GraphRagService<'_>,
+    seed_entities: &[&str],
+    max_hops: usize,
+) -> (Vec<String>, Vec<(String, String, String)>) {
+    let mut visited = HashSet::new();
+    let mut queue: VecDeque<(String, usize)> = VecDeque::new();
+    let mut relations = Vec::new();
+
+    // Seed the BFS
+    for &seed in seed_entities {
+        if !visited.contains(seed) {
+            visited.insert(seed.to_string());
+            queue.push_back((seed.to_string(), 0));
+        }
+    }
+
+    // BFS traversal
+    while let Some((current, depth)) = queue.pop_front() {
+        if depth >= max_hops {
+            continue;
+        }
+
+        let neighbors = service.neighbors(&current);
+        for (neighbor_id, relation_type, _weight) in neighbors {
+            // Record relation
+            let triple = (current.clone(), relation_type, neighbor_id.clone());
+            if !relations.contains(&triple) {
+                relations.push(triple);
+            }
+
+            // Continue BFS
+            if !visited.contains(&neighbor_id) {
+                visited.insert(neighbor_id.clone());
+                queue.push_back((neighbor_id, depth + 1));
+            }
+        }
+    }
+
+    let entity_ids: Vec<String> = visited.into_iter().collect();
+    (entity_ids, relations)
+}
+
 // ── Tests ────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -1328,6 +1627,41 @@ mod tests {
         let deser: Community = serde_json::from_str(&json).unwrap();
         assert_eq!(deser.id, 0);
         assert_eq!(deser.members.len(), 2);
+    }
+
+    #[test]
+    fn test_assemble_context_empty() {
+        let db = test_db();
+        let svc = GraphRagService::new(&db, "entities", GraphRagConfig::default()).unwrap();
+        let ctx = svc.assemble_context(&[1.0, 0.0, 0.0, 0.0], 5, 2, 0.3).unwrap();
+        assert!(ctx.context.is_empty());
+        assert!(ctx.source_entities.is_empty());
+    }
+
+    #[test]
+    fn test_assemble_context_with_data() {
+        let db = test_db();
+        let mut svc = GraphRagService::new(&db, "entities", GraphRagConfig::default()).unwrap();
+
+        svc.add_entity(Entity {
+            id: "rust".into(),
+            label: "Language".into(),
+            vector: vec![0.9, 0.1, 0.0, 0.0],
+            metadata: None,
+        }).unwrap();
+
+        svc.add_entity(Entity {
+            id: "cargo".into(),
+            label: "Tool".into(),
+            vector: vec![0.8, 0.2, 0.0, 0.0],
+            metadata: None,
+        }).unwrap();
+
+        svc.add_relation(Relation::new("rust", "cargo", "uses")).unwrap();
+
+        let ctx = svc.assemble_context(&[0.9, 0.1, 0.0, 0.0], 5, 2, 0.3).unwrap();
+        assert!(!ctx.source_entities.is_empty());
+        assert!(ctx.similarity_score > 0.0);
     }
 
     #[test]
