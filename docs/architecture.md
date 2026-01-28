@@ -1203,3 +1203,4 @@ graph TD
 - [Production Checklist](production-checklist.md) - Security and durability checklist
 - [Distributed Operations](distributed-operations.md) - Clustering architecture
 - [API Reference](api-reference.md) - Complete API documentation
+- [Services Architecture](ARCHITECTURE_SERVICES.md) - Services layer (90+ modules, dependency graph)
