@@ -746,6 +746,13 @@ impl CollectionConfig {
         self
     }
 
+    /// Set the full HNSW configuration
+    #[must_use]
+    pub fn with_hnsw_config(mut self, config: HnswConfig) -> Self {
+        self.hnsw = config;
+        self
+    }
+
     /// Set the slow query threshold in microseconds.
     ///
     /// When set, search queries that exceed this duration will be logged
