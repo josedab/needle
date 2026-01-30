@@ -49,6 +49,7 @@ use crate::collection::{Collection, CollectionConfig, SearchResult};
 use crate::error::{NeedleError, Result};
 use crate::metadata::Filter;
 use crate::storage::{crc32, StorageEngine, HEADER_SIZE};
+use crate::tuning::{AdaptiveTuner, WorkloadObservation, RecommendedIndex};
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -157,6 +158,8 @@ pub struct Database {
     modification_gen: AtomicU64,
     /// Last saved generation. If modification_gen > saved_gen, database is dirty.
     saved_gen: AtomicU64,
+    /// Optional adaptive tuner for online index-tuning feedback
+    adaptive_tuner: Option<Arc<AdaptiveTuner>>,
 }
 
 impl Database {
@@ -280,6 +283,7 @@ impl Database {
             dirty: AtomicBool::new(false),
             modification_gen: AtomicU64::new(0),
             saved_gen: AtomicU64::new(0),
+            adaptive_tuner: None,
         })
     }
 
@@ -309,7 +313,19 @@ impl Database {
             dirty: AtomicBool::new(false),
             modification_gen: AtomicU64::new(0),
             saved_gen: AtomicU64::new(0),
+            adaptive_tuner: None,
         }
+    }
+
+    /// Attach an adaptive tuner for online index-parameter learning.
+    /// After each search, the tuner receives latency feedback.
+    pub fn set_adaptive_tuner(&mut self, tuner: Arc<AdaptiveTuner>) {
+        self.adaptive_tuner = Some(tuner);
+    }
+
+    /// Get a reference to the adaptive tuner, if one is attached.
+    pub fn adaptive_tuner(&self) -> Option<&Arc<AdaptiveTuner>> {
+        self.adaptive_tuner.as_ref()
     }
 
     /// Get the database file path.
@@ -1046,13 +1062,35 @@ impl Database {
         query: &[f32],
         k: usize,
     ) -> Result<Vec<SearchResult>> {
+        let start = std::time::Instant::now();
+
         let state = self.state.read();
         let coll = state
             .collections
             .get(collection)
             .ok_or_else(|| NeedleError::CollectionNotFound(collection.to_string()))?;
 
-        coll.search(query, k)
+        let results = coll.search(query, k)?;
+        let latency_ms = start.elapsed().as_secs_f64() * 1000.0;
+
+        // Feed latency data to adaptive tuner if attached
+        if let Some(tuner) = &self.adaptive_tuner {
+            let stats = coll.stats();
+            let obs = WorkloadObservation {
+                vector_count: stats.vector_count,
+                dimensions: stats.dimensions,
+                qps: 0.0,
+                insert_rate: 0.0,
+                avg_latency_ms: latency_ms,
+                measured_recall: 1.0, // unknown in production; assume best-case
+                memory_bytes: stats.total_memory_bytes as u64,
+                current_index: RecommendedIndex::Hnsw,
+                current_config: None,
+            };
+            tuner.feedback(&obs, 1.0, latency_ms);
+        }
+
+        Ok(results)
     }
 
     fn search_with_filter_internal(
@@ -1231,6 +1269,18 @@ impl Database {
             .collections
             .get(collection)
             .map(|c| c.dimensions())
+    }
+
+    fn collection_stats_internal(
+        &self,
+        collection: &str,
+    ) -> Result<crate::collection::CollectionStats> {
+        let state = self.state.read();
+        let coll = state
+            .collections
+            .get(collection)
+            .ok_or_else(|| NeedleError::CollectionNotFound(collection.to_string()))?;
+        Ok(coll.stats())
     }
 
     fn export_internal(&self, collection: &str) -> Result<Vec<ExportEntry>> {
@@ -1464,6 +1514,11 @@ impl<'a> CollectionRef<'a> {
     /// Get the vector dimensions
     pub fn dimensions(&self) -> Option<usize> {
         self.db.collection_dimensions(&self.name)
+    }
+
+    /// Get collection statistics (vector count, dimensions, memory usage, etc.)
+    pub fn stats(&self) -> Result<crate::collection::CollectionStats> {
+        self.db.collection_stats_internal(&self.name)
     }
 
     /// Insert a vector into the collection.
