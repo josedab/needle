@@ -684,6 +684,196 @@ impl LlamaIndexMemoryBuffer {
     }
 }
 
+// ── Ebbinghaus Forgetting Curves ─────────────────────────────────────────────
+
+/// Ebbinghaus forgetting curve model for spaced repetition memory strength.
+/// Models how memory retention decreases over time without reinforcement.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EbbinghausCurve {
+    /// Memory stability (higher = slower forgetting). Increases with repetition.
+    pub stability: f64,
+    /// Number of successful retrievals.
+    pub repetitions: u32,
+    /// Time of last retrieval (epoch seconds).
+    pub last_retrieval: u64,
+}
+
+impl EbbinghausCurve {
+    /// Create a new curve for a freshly created memory.
+    pub fn new() -> Self {
+        Self {
+            stability: 1.0,
+            repetitions: 0,
+            last_retrieval: now_secs(),
+        }
+    }
+
+    /// Compute retention probability (0.0 - 1.0) at the current time.
+    pub fn retention(&self) -> f64 {
+        let elapsed_hours =
+            (now_secs().saturating_sub(self.last_retrieval)) as f64 / 3600.0;
+        (-elapsed_hours / (self.stability * 24.0)).exp()
+    }
+
+    /// Record a retrieval, strengthening the memory.
+    pub fn record_retrieval(&mut self) {
+        self.repetitions += 1;
+        self.last_retrieval = now_secs();
+        // Each retrieval increases stability (spaced repetition effect)
+        self.stability *= 1.0 + 0.5 * (self.repetitions as f64).ln_1p();
+    }
+
+    /// Get the optimal review time (when retention drops to 90%).
+    pub fn optimal_review_hours(&self) -> f64 {
+        let target_retention = 0.9_f64;
+        -target_retention.ln() * self.stability * 24.0
+    }
+}
+
+impl Default for EbbinghausCurve {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+// ── Importance Scoring ───────────────────────────────────────────────────────
+
+/// Composite importance scorer using recency × frequency × relevance.
+#[derive(Debug, Clone)]
+pub struct ImportanceScorer {
+    /// Weight for recency factor (0.0 - 1.0).
+    pub recency_weight: f32,
+    /// Weight for frequency factor (0.0 - 1.0).
+    pub frequency_weight: f32,
+    /// Weight for relevance factor (0.0 - 1.0).
+    pub relevance_weight: f32,
+    /// Decay half-life in hours for recency computation.
+    pub recency_half_life_hours: f32,
+}
+
+impl Default for ImportanceScorer {
+    fn default() -> Self {
+        Self {
+            recency_weight: 0.4,
+            frequency_weight: 0.3,
+            relevance_weight: 0.3,
+            recency_half_life_hours: 24.0,
+        }
+    }
+}
+
+impl ImportanceScorer {
+    /// Score a memory entry. `relevance` is 1.0 - distance (semantic similarity).
+    pub fn score(&self, entry: &MemoryEntry, relevance: f32) -> f32 {
+        let age_hours =
+            (now_secs().saturating_sub(entry.last_accessed)) as f32 / 3600.0;
+        let recency = (-age_hours * (2.0f32.ln()) / self.recency_half_life_hours).exp();
+        let frequency = (entry.access_count as f32 + 1.0).ln() / 5.0f32.ln();
+        let relevance_clamped = relevance.clamp(0.0, 1.0);
+
+        (self.recency_weight * recency
+            + self.frequency_weight * frequency.min(1.0)
+            + self.relevance_weight * relevance_clamped)
+            .clamp(0.0, 1.0)
+    }
+}
+
+// ── Conversation-Aware RAG ───────────────────────────────────────────────────
+
+/// A conversation turn for context-aware retrieval.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConversationTurn {
+    /// Speaker role (user, assistant, system).
+    pub role: String,
+    /// Content text.
+    pub content: String,
+    /// Embedding (optional, lazily computed).
+    pub embedding: Option<Vec<f32>>,
+    /// Timestamp.
+    pub timestamp: u64,
+}
+
+/// Conversation-aware RAG context builder.
+/// Combines conversation history with semantic memory for richer retrieval context.
+pub struct ConversationRag {
+    memory: AgentMemory,
+    history: Vec<ConversationTurn>,
+    max_context_turns: usize,
+    scorer: ImportanceScorer,
+}
+
+impl ConversationRag {
+    /// Create a new conversation-aware RAG system.
+    pub fn new(config: MemoryConfig, max_context_turns: usize) -> Self {
+        Self {
+            memory: AgentMemory::new(config),
+            history: Vec::new(),
+            max_context_turns,
+            scorer: ImportanceScorer::default(),
+        }
+    }
+
+    /// Add a conversation turn.
+    pub fn add_turn(&mut self, role: &str, content: &str, embedding: Option<&[f32]>) -> Result<()> {
+        let turn = ConversationTurn {
+            role: role.into(),
+            content: content.into(),
+            embedding: embedding.map(|e| e.to_vec()),
+            timestamp: now_secs(),
+        };
+
+        if let Some(emb) = embedding {
+            let entry = MemoryEntry::episodic(content, emb)
+                .with_metadata(serde_json::json!({
+                    "role": role,
+                    "turn_index": self.history.len(),
+                }));
+            self.memory.remember(entry)?;
+        }
+
+        self.history.push(turn);
+        Ok(())
+    }
+
+    /// Retrieve context for the next response, combining recent turns with semantic memories.
+    pub fn build_context(
+        &mut self,
+        query_embedding: &[f32],
+        k_memories: usize,
+    ) -> Result<(Vec<ConversationTurn>, Vec<RecallResult>)> {
+        let start = self.history.len().saturating_sub(self.max_context_turns);
+        let recent_turns = self.history[start..].to_vec();
+        let memories = self.memory.recall(query_embedding, k_memories, None)?;
+        Ok((recent_turns, memories))
+    }
+
+    /// Store a knowledge fact as semantic memory for future RAG retrieval.
+    pub fn add_knowledge(&mut self, content: &str, embedding: &[f32]) -> Result<String> {
+        let entry = MemoryEntry::semantic(content, embedding);
+        self.memory.remember(entry)
+    }
+
+    /// Get conversation history length.
+    pub fn history_len(&self) -> usize {
+        self.history.len()
+    }
+
+    /// Get total memory count.
+    pub fn memory_count(&self) -> usize {
+        self.memory.total()
+    }
+
+    /// Access the underlying memory.
+    pub fn memory(&mut self) -> &mut AgentMemory {
+        &mut self.memory
+    }
+
+    /// Consolidate memories.
+    pub fn consolidate(&mut self) -> Result<ConsolidationStats> {
+        self.memory.consolidate()
+    }
+}
+
 /// AutoGen-compatible memory provider adapter.
 ///
 /// Wraps `AgentMemory` to match AutoGen's memory interfaces for
@@ -901,5 +1091,161 @@ mod tests {
 
         let results = provider.query(&emb(0.1), 5).unwrap();
         assert!(!results.is_empty());
+    }
+
+    #[test]
+    fn test_ebbinghaus_curve() {
+        let mut curve = EbbinghausCurve::new();
+        // Fresh memory should have high retention
+        assert!(curve.retention() > 0.99);
+
+        // Retrieval should strengthen
+        let old_stability = curve.stability;
+        curve.record_retrieval();
+        assert!(curve.stability > old_stability);
+        assert_eq!(curve.repetitions, 1);
+
+        // Optimal review should be positive
+        assert!(curve.optimal_review_hours() > 0.0);
+    }
+
+    #[test]
+    fn test_importance_scorer() {
+        let scorer = ImportanceScorer::default();
+        let entry = MemoryEntry::episodic("test", &emb(0.1));
+        let score = scorer.score(&entry, 0.9);
+        assert!(score > 0.0 && score <= 1.0);
+
+        // High relevance should give higher score
+        let high = scorer.score(&entry, 1.0);
+        let low = scorer.score(&entry, 0.0);
+        assert!(high > low);
+    }
+
+    #[test]
+    fn test_conversation_rag() {
+        let mut rag = ConversationRag::new(MemoryConfig::default(), 5);
+        rag.add_turn("user", "What is Rust?", Some(&emb(0.1))).unwrap();
+        rag.add_turn("assistant", "Rust is a systems language", Some(&emb(0.2))).unwrap();
+        rag.add_knowledge("Rust was created by Mozilla", &emb(0.15)).unwrap();
+
+        assert_eq!(rag.history_len(), 2);
+        assert_eq!(rag.memory_count(), 3);
+
+        let (turns, memories) = rag.build_context(&emb(0.12), 5).unwrap();
+        assert_eq!(turns.len(), 2);
+        assert!(!memories.is_empty());
+    }
+
+    #[test]
+    fn test_conversation_rag_window() {
+        let mut rag = ConversationRag::new(MemoryConfig::default(), 2);
+        for i in 0..5 {
+            rag.add_turn("user", &format!("msg {i}"), Some(&emb(i as f32 * 0.1))).unwrap();
+        }
+
+        let (turns, _) = rag.build_context(&emb(0.1), 3).unwrap();
+        assert_eq!(turns.len(), 2); // max_context_turns = 2
+    }
+
+    #[test]
+    fn test_batch_consolidation() {
+        let mut mem = AgentMemory::new(
+            MemoryConfig::default().with_promotion_threshold(0.3),
+        );
+        // Add many episodic memories
+        for i in 0..10 {
+            let imp = if i % 2 == 0 { 0.9 } else { 0.1 };
+            mem.remember(
+                MemoryEntry::episodic(&format!("fact {i}"), &emb(i as f32 * 0.1))
+                    .with_importance(imp),
+            )
+            .unwrap();
+        }
+
+        let stats = mem.consolidate().unwrap();
+        // Should promote high-importance ones
+        assert!(stats.promoted > 0);
+        assert!(stats.scanned > 0);
+    }
+
+    #[test]
+    fn test_importance_scorer_recency_decay() {
+        let scorer = ImportanceScorer {
+            recency_weight: 1.0,
+            frequency_weight: 0.0,
+            relevance_weight: 0.0,
+            recency_half_life_hours: 24.0,
+        };
+        let entry = MemoryEntry::episodic("test", &emb(0.1));
+        // Just created, so recency should be close to 1.0
+        let score = scorer.score(&entry, 0.5);
+        assert!(score > 0.9);
+    }
+
+    #[test]
+    fn test_importance_scorer_frequency() {
+        let scorer = ImportanceScorer {
+            recency_weight: 0.0,
+            frequency_weight: 1.0,
+            relevance_weight: 0.0,
+            recency_half_life_hours: 24.0,
+        };
+        let mut entry = MemoryEntry::episodic("test", &emb(0.1));
+        let score_0 = scorer.score(&entry, 0.5);
+        entry.access_count = 10;
+        let score_10 = scorer.score(&entry, 0.5);
+        assert!(score_10 > score_0);
+    }
+
+    #[test]
+    fn test_conversation_rag_knowledge_retrieval() {
+        let mut rag = ConversationRag::new(MemoryConfig::default(), 10);
+        // Add knowledge
+        rag.add_knowledge("Rust was first released in 2015", &emb(0.3)).unwrap();
+        rag.add_knowledge("Python was created by Guido van Rossum", &emb(0.7)).unwrap();
+
+        // Add conversation turns
+        rag.add_turn("user", "Tell me about Rust", Some(&emb(0.31))).unwrap();
+
+        let (turns, memories) = rag.build_context(&emb(0.3), 5).unwrap();
+        assert_eq!(turns.len(), 1);
+        // Should find the Rust knowledge first
+        assert!(!memories.is_empty());
+    }
+
+    #[test]
+    fn test_ebbinghaus_multiple_retrievals() {
+        let mut curve = EbbinghausCurve::new();
+        let initial_stability = curve.stability;
+
+        // Multiple retrievals should compound stability
+        for _ in 0..5 {
+            curve.record_retrieval();
+        }
+        assert!(curve.stability > initial_stability * 3.0);
+        assert_eq!(curve.repetitions, 5);
+        // Should retain very well with many repetitions
+        assert!(curve.retention() > 0.99);
+    }
+
+    #[test]
+    fn test_memory_export_import_preserves_tiers() {
+        let mut mem1 = AgentMemory::new(MemoryConfig::default());
+        mem1.remember(MemoryEntry::episodic("ep", &emb(0.1))).unwrap();
+        mem1.remember(MemoryEntry::semantic("sem", &emb(0.5))).unwrap();
+        mem1.remember(MemoryEntry::procedural("proc", &emb(0.9))).unwrap();
+
+        let exported = mem1.export();
+        assert_eq!(exported.len(), 3);
+
+        let mut mem2 = AgentMemory::new(MemoryConfig::default());
+        mem2.import(exported).unwrap();
+        assert_eq!(mem2.total(), 3);
+
+        let counts = mem2.counts();
+        assert_eq!(*counts.get(&MemoryTier::Episodic).unwrap(), 1);
+        assert_eq!(*counts.get(&MemoryTier::Semantic).unwrap(), 1);
+        assert_eq!(*counts.get(&MemoryTier::Procedural).unwrap(), 1);
     }
 }
