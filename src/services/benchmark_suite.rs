@@ -152,6 +152,10 @@ pub struct BenchmarkMetrics {
     pub total_queries: usize,
     /// Total time (microseconds).
     pub total_time_us: u64,
+    /// Peak memory usage in bytes (if tracked).
+    pub peak_memory_bytes: u64,
+    /// Average memory usage in bytes (if tracked).
+    pub avg_memory_bytes: f64,
 }
 
 impl Default for BenchmarkMetrics {
@@ -169,6 +173,8 @@ impl Default for BenchmarkMetrics {
             qps: 0.0,
             total_queries: 0,
             total_time_us: 0,
+            peak_memory_bytes: 0,
+            avg_memory_bytes: 0.0,
         }
     }
 }
@@ -289,6 +295,7 @@ struct QueryResult {
     query_id: String,
     result_ids: Vec<String>,
     latency_us: u64,
+    memory_bytes: Option<u64>,
 }
 
 /// Benchmark engine for evaluation and regression detection.
@@ -324,6 +331,23 @@ impl BenchmarkEngine {
             query_id: query_id.to_string(),
             result_ids,
             latency_us,
+            memory_bytes: None,
+        });
+    }
+
+    /// Record a search result with memory usage.
+    pub fn record_search_with_memory(
+        &mut self,
+        query_id: &str,
+        result_ids: Vec<String>,
+        latency_us: u64,
+        memory_bytes: u64,
+    ) {
+        self.results.push(QueryResult {
+            query_id: query_id.to_string(),
+            result_ids,
+            latency_us,
+            memory_bytes: Some(memory_bytes),
         });
     }
 
@@ -388,6 +412,15 @@ impl BenchmarkEngine {
             0.0
         };
 
+        // Memory tracking
+        let memory_samples: Vec<u64> = self.results.iter().filter_map(|r| r.memory_bytes).collect();
+        let peak_memory_bytes = memory_samples.iter().copied().max().unwrap_or(0);
+        let avg_memory_bytes = if memory_samples.is_empty() {
+            0.0
+        } else {
+            memory_samples.iter().sum::<u64>() as f64 / memory_samples.len() as f64
+        };
+
         BenchmarkMetrics {
             recall_at_k,
             precision_at_k,
@@ -401,6 +434,8 @@ impl BenchmarkEngine {
             qps,
             total_queries: n,
             total_time_us,
+            peak_memory_bytes,
+            avg_memory_bytes,
         }
     }
 
@@ -627,6 +662,439 @@ impl Default for BenchmarkEngine {
     }
 }
 
+// ── Competitor Comparison ───────────────────────────────────────────────────
+
+/// Result from a competitor system (Qdrant, ChromaDB, LanceDB, etc.).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompetitorResult {
+    /// Competitor name.
+    pub name: String,
+    /// Dataset used.
+    pub dataset: String,
+    /// Metrics from the competitor.
+    pub metrics: BenchmarkMetrics,
+    /// Competitor version.
+    pub version: String,
+}
+
+/// Comparison between Needle and a competitor.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompetitorComparison {
+    /// Name of the competitor.
+    pub competitor_name: String,
+    /// Recall difference (Needle - competitor).
+    pub recall_diff: f64,
+    /// Latency ratio (Needle / competitor). < 1.0 means Needle is faster.
+    pub latency_ratio: f64,
+    /// QPS ratio (Needle / competitor). > 1.0 means Needle is faster.
+    pub qps_ratio: f64,
+    /// Overall verdict.
+    pub verdict: String,
+}
+
+/// Compare Needle metrics against a competitor.
+pub fn compare_with_competitor(
+    needle: &BenchmarkMetrics,
+    competitor: &CompetitorResult,
+) -> CompetitorComparison {
+    let recall_diff = needle.recall_at_k - competitor.metrics.recall_at_k;
+    let latency_ratio = if competitor.metrics.mean_latency_us > 0.0 {
+        needle.mean_latency_us / competitor.metrics.mean_latency_us
+    } else {
+        0.0
+    };
+    let qps_ratio = if competitor.metrics.qps > 0.0 {
+        needle.qps / competitor.metrics.qps
+    } else {
+        0.0
+    };
+
+    let verdict = if recall_diff >= 0.0 && latency_ratio <= 1.0 {
+        "Needle wins on both recall and latency".into()
+    } else if recall_diff >= 0.0 {
+        "Needle has better recall, higher latency".into()
+    } else if latency_ratio <= 1.0 {
+        "Needle has lower latency, lower recall".into()
+    } else {
+        format!(
+            "Competitor {} is ahead on measured metrics",
+            competitor.name
+        )
+    };
+
+    CompetitorComparison {
+        competitor_name: competitor.name.clone(),
+        recall_diff,
+        latency_ratio,
+        qps_ratio,
+        verdict,
+    }
+}
+
+// ── Badge Generation ────────────────────────────────────────────────────────
+
+/// SVG badge for embedding in README or website.
+#[derive(Debug, Clone)]
+pub struct Badge {
+    /// Badge label.
+    pub label: String,
+    /// Badge value.
+    pub value: String,
+    /// Badge color.
+    pub color: String,
+    /// SVG content.
+    pub svg: String,
+}
+
+/// Generate SVG badges for benchmark results.
+pub fn generate_badges(metrics: &BenchmarkMetrics, dataset: &str) -> Vec<Badge> {
+    let mut badges = Vec::new();
+
+    // Recall badge
+    let recall_color = if metrics.recall_at_k >= 0.95 {
+        "#4c1"
+    } else if metrics.recall_at_k >= 0.90 {
+        "#97ca00"
+    } else {
+        "#dfb317"
+    };
+    badges.push(make_badge(
+        &format!("recall@{}", metrics.k),
+        &format!("{:.1}%", metrics.recall_at_k * 100.0),
+        recall_color,
+    ));
+
+    // P99 latency badge
+    let latency_color = if metrics.p99_latency_us < 1000 {
+        "#4c1"
+    } else if metrics.p99_latency_us < 5000 {
+        "#97ca00"
+    } else {
+        "#dfb317"
+    };
+    badges.push(make_badge(
+        "p99 latency",
+        &format!("{}μs", metrics.p99_latency_us),
+        latency_color,
+    ));
+
+    // QPS badge
+    let qps_color = if metrics.qps > 10_000.0 {
+        "#4c1"
+    } else if metrics.qps > 1_000.0 {
+        "#97ca00"
+    } else {
+        "#dfb317"
+    };
+    badges.push(make_badge("QPS", &format!("{:.0}", metrics.qps), qps_color));
+
+    // Dataset badge
+    badges.push(make_badge("dataset", dataset, "#007ec6"));
+
+    badges
+}
+
+fn make_badge(label: &str, value: &str, color: &str) -> Badge {
+    let label_width = label.len() * 7 + 10;
+    let value_width = value.len() * 7 + 10;
+    let total_width = label_width + value_width;
+    let lx = label_width / 2;
+    let vx = label_width + value_width / 2;
+    let fill_color = color;
+
+    let svg = format!(
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{total_width}\" height=\"20\">\
+         <rect width=\"{label_width}\" height=\"20\" fill=\"#555\"/>\
+         <rect x=\"{label_width}\" width=\"{value_width}\" height=\"20\" fill=\"{fill_color}\"/>\
+         <text x=\"{lx}\" y=\"14\" fill=\"white\" font-size=\"11\" text-anchor=\"middle\">{label}</text>\
+         <text x=\"{vx}\" y=\"14\" fill=\"white\" font-size=\"11\" text-anchor=\"middle\">{value}</text>\
+         </svg>"
+    );
+
+    Badge {
+        label: label.to_string(),
+        value: value.to_string(),
+        color: color.to_string(),
+        svg,
+    }
+}
+
+// ── ann-benchmarks Compatible Export ────────────────────────────────────────
+
+impl BenchmarkEngine {
+    /// Export results in ann-benchmarks compatible JSON format.
+    pub fn export_ann_benchmarks_format(&self, algorithm: &str, version: &str) -> String {
+        let metrics = self.compute_metrics();
+        let runs: Vec<serde_json::Value> = self
+            .history
+            .iter()
+            .map(|run| {
+                serde_json::json!({
+                    "algorithm": algorithm,
+                    "version": version,
+                    "dataset": run.dataset,
+                    "parameters": {
+                        "M": run.hnsw_params.m,
+                        "ef_construction": run.hnsw_params.ef_construction,
+                        "ef_search": run.hnsw_params.ef_search,
+                    },
+                    "recall": run.metrics.recall_at_k,
+                    "qps": run.metrics.qps,
+                    "mean_latency_us": run.metrics.mean_latency_us,
+                    "p99_latency_us": run.metrics.p99_latency_us,
+                    "k": run.metrics.k,
+                })
+            })
+            .collect();
+
+        let output = serde_json::json!({
+            "algorithm": algorithm,
+            "version": version,
+            "current_metrics": {
+                "recall": metrics.recall_at_k,
+                "qps": metrics.qps,
+                "mean_latency_us": metrics.mean_latency_us,
+                "p99_latency_us": metrics.p99_latency_us,
+            },
+            "runs": runs,
+        });
+
+        serde_json::to_string_pretty(&output).unwrap_or_default()
+    }
+
+    /// Generate comparison HTML report including competitor data.
+    pub fn generate_comparison_report(
+        &self,
+        competitors: &[CompetitorResult],
+    ) -> String {
+        let metrics = self.compute_metrics();
+        let mut html = self.generate_html_report();
+
+        // Insert competitor comparison table before closing body
+        if !competitors.is_empty() {
+            let mut table = String::from("<h2>🏁 Competitor Comparison</h2>\n<table>\n");
+            table.push_str("<tr><th>System</th><th>Recall</th><th>Mean Latency (μs)</th><th>QPS</th><th>Verdict</th></tr>\n");
+
+            // Add Needle row
+            table.push_str(&format!(
+                "<tr><td><strong>Needle</strong></td><td>{:.3}</td><td>{:.0}</td><td>{:.0}</td><td>-</td></tr>\n",
+                metrics.recall_at_k, metrics.mean_latency_us, metrics.qps
+            ));
+
+            for comp in competitors {
+                let comparison = compare_with_competitor(&metrics, comp);
+                table.push_str(&format!(
+                    "<tr><td>{}</td><td>{:.3}</td><td>{:.0}</td><td>{:.0}</td><td>{}</td></tr>\n",
+                    comp.name,
+                    comp.metrics.recall_at_k,
+                    comp.metrics.mean_latency_us,
+                    comp.metrics.qps,
+                    comparison.verdict
+                ));
+            }
+            table.push_str("</table>\n");
+
+            html = html.replace("</body>", &format!("{table}</body>"));
+        }
+
+        html
+    }
+}
+
+// ── Docker-based Benchmark Isolation ────────────────────────────────────────
+
+/// Configuration for Docker-based benchmark isolation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DockerBenchmarkConfig {
+    /// CPU limit per container.
+    pub cpu_limit: f64,
+    /// Memory limit per container.
+    pub memory_limit: String,
+    /// Dataset mount path.
+    pub dataset_path: String,
+    /// Results output path.
+    pub results_path: String,
+    /// Competitors to benchmark.
+    pub competitors: Vec<CompetitorDockerConfig>,
+}
+
+/// Docker config for a single competitor.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompetitorDockerConfig {
+    /// Competitor name.
+    pub name: String,
+    /// Docker image.
+    pub image: String,
+    /// Port mapping.
+    pub port: u16,
+    /// Environment variables.
+    pub env: HashMap<String, String>,
+}
+
+impl Default for DockerBenchmarkConfig {
+    fn default() -> Self {
+        Self {
+            cpu_limit: 4.0,
+            memory_limit: "8g".into(),
+            dataset_path: "./benchmark-data".into(),
+            results_path: "./benchmark-results".into(),
+            competitors: vec![
+                CompetitorDockerConfig {
+                    name: "qdrant".into(),
+                    image: "qdrant/qdrant:latest".into(),
+                    port: 6333,
+                    env: HashMap::new(),
+                },
+                CompetitorDockerConfig {
+                    name: "chromadb".into(),
+                    image: "chromadb/chroma:latest".into(),
+                    port: 8000,
+                    env: HashMap::new(),
+                },
+                CompetitorDockerConfig {
+                    name: "lancedb".into(),
+                    image: "lancedb/lancedb:latest".into(),
+                    port: 8080,
+                    env: HashMap::new(),
+                },
+            ],
+        }
+    }
+}
+
+impl DockerBenchmarkConfig {
+    /// Generate a docker-compose.yml for benchmark isolation.
+    pub fn generate_docker_compose(&self) -> String {
+        let mut compose = String::from("services:\n");
+
+        // Needle service
+        compose.push_str(&format!(
+            "  needle-bench:\n    build: .\n    cpus: {}\n    mem_limit: {}\n    volumes:\n      - {}:/data\n      - {}:/results\n",
+            self.cpu_limit, self.memory_limit, self.dataset_path, self.results_path
+        ));
+
+        // Competitor services
+        for comp in &self.competitors {
+            compose.push_str(&format!(
+                "  {}-bench:\n    image: {}\n    cpus: {}\n    mem_limit: {}\n    ports:\n      - \"{}:{}\"\n    volumes:\n      - {}:/data\n",
+                comp.name, comp.image, self.cpu_limit, self.memory_limit,
+                comp.port, comp.port, self.dataset_path
+            ));
+            if !comp.env.is_empty() {
+                compose.push_str("    environment:\n");
+                for (k, v) in &comp.env {
+                    compose.push_str(&format!("      - {}={}\n", k, v));
+                }
+            }
+        }
+
+        compose
+    }
+}
+
+// ── Pareto Frontier Analysis ─────────────────────────────────────────────────
+
+/// Compute the Pareto frontier from a set of benchmark runs.
+/// A run is Pareto-optimal if no other run has both better recall AND better QPS.
+pub fn compute_pareto_frontier(runs: &[BenchmarkRun]) -> Vec<&BenchmarkRun> {
+    let mut frontier: Vec<&BenchmarkRun> = Vec::new();
+
+    for run in runs {
+        let dominated = runs.iter().any(|other| {
+            other.run_id != run.run_id
+                && other.metrics.recall_at_k >= run.metrics.recall_at_k
+                && other.metrics.qps >= run.metrics.qps
+                && (other.metrics.recall_at_k > run.metrics.recall_at_k
+                    || other.metrics.qps > run.metrics.qps)
+        });
+        if !dominated {
+            frontier.push(run);
+        }
+    }
+
+    frontier.sort_by(|a, b| {
+        a.metrics
+            .recall_at_k
+            .partial_cmp(&b.metrics.recall_at_k)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    frontier
+}
+
+/// Estimate concurrent QPS from single-threaded metrics.
+/// Uses Amdahl's law approximation: concurrent_qps ≈ single_qps × threads × efficiency.
+pub fn estimate_concurrent_qps(metrics: &BenchmarkMetrics, num_threads: usize) -> f64 {
+    let efficiency = 0.85; // Typical HNSW concurrency efficiency
+    metrics.qps * num_threads as f64 * efficiency
+}
+
+// ── Markdown Report Generator ────────────────────────────────────────────────
+
+impl BenchmarkEngine {
+    /// Generate a markdown benchmark report.
+    pub fn generate_markdown_report(&self) -> String {
+        let metrics = self.compute_metrics();
+        let mut md = String::new();
+
+        md.push_str("## Needle Benchmark Report\n\n");
+
+        md.push_str("### Key Metrics\n\n");
+        md.push_str(&format!("| Metric | Value |\n|--------|-------|\n"));
+        md.push_str(&format!("| Recall@{} | {:.3} |\n", metrics.k, metrics.recall_at_k));
+        md.push_str(&format!("| Precision@{} | {:.3} |\n", metrics.k, metrics.precision_at_k));
+        md.push_str(&format!("| QPS | {:.0} |\n", metrics.qps));
+        md.push_str(&format!("| Mean Latency | {:.0}μs |\n", metrics.mean_latency_us));
+        md.push_str(&format!("| P99 Latency | {}μs |\n", metrics.p99_latency_us));
+        md.push_str(&format!("| Total Queries | {} |\n", metrics.total_queries));
+        if metrics.peak_memory_bytes > 0 {
+            md.push_str(&format!(
+                "| Peak Memory | {:.1} MB |\n",
+                metrics.peak_memory_bytes as f64 / (1024.0 * 1024.0)
+            ));
+        }
+        md.push('\n');
+
+        md.push_str("### Latency Distribution\n\n");
+        md.push_str("| Percentile | Latency (μs) |\n|------------|-------------|\n");
+        md.push_str(&format!("| Min | {} |\n", metrics.min_latency_us));
+        md.push_str(&format!("| P50 | {} |\n", metrics.median_latency_us));
+        md.push_str(&format!("| P95 | {} |\n", metrics.p95_latency_us));
+        md.push_str(&format!("| P99 | {} |\n", metrics.p99_latency_us));
+        md.push_str(&format!("| Max | {} |\n", metrics.max_latency_us));
+        md.push('\n');
+
+        if !self.history.is_empty() {
+            md.push_str("### Run History\n\n");
+            md.push_str("| Run | Dataset | Recall | P99 (μs) | QPS |\n");
+            md.push_str("|-----|---------|--------|----------|-----|\n");
+            for run in &self.history {
+                md.push_str(&format!(
+                    "| {} | {} | {:.3} | {} | {:.0} |\n",
+                    run.label, run.dataset, run.metrics.recall_at_k,
+                    run.metrics.p99_latency_us, run.metrics.qps
+                ));
+            }
+            md.push('\n');
+
+            // Pareto frontier
+            let frontier = compute_pareto_frontier(&self.history);
+            if frontier.len() > 1 {
+                md.push_str("### Pareto Frontier (Recall vs QPS)\n\n");
+                md.push_str("| Run | Recall | QPS |\n|-----|--------|-----|\n");
+                for run in &frontier {
+                    md.push_str(&format!(
+                        "| {} | {:.3} | {:.0} |\n",
+                        run.label, run.metrics.recall_at_k, run.metrics.qps
+                    ));
+                }
+                md.push('\n');
+            }
+        }
+
+        md
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -775,5 +1243,133 @@ mod tests {
         e.record_search("q1", vec!["v2".into(), "vX".into()], 200);
         let m = e.compute_metrics();
         assert!((m.recall_at_k - 0.75).abs() < 0.01); // (1.0 + 0.5) / 2
+    }
+
+    #[test]
+    fn test_competitor_comparison() {
+        let mut e = make_engine();
+        e.add_ground_truth("q0", vec!["v0".into(), "v1".into()]);
+        e.record_search("q0", vec!["v0".into(), "v1".into()], 100);
+
+        let needle_metrics = e.compute_metrics();
+        let competitor = CompetitorResult {
+            name: "Qdrant".into(),
+            dataset: "SIFT1M".into(),
+            metrics: BenchmarkMetrics {
+                recall_at_k: 0.95,
+                precision_at_k: 0.95,
+                k: 10,
+                mean_latency_us: 500.0,
+                median_latency_us: 450,
+                p95_latency_us: 800,
+                p99_latency_us: 1200,
+                min_latency_us: 100,
+                max_latency_us: 5000,
+                qps: 2000.0,
+                total_queries: 10_000,
+                total_time_us: 5_000_000,
+            },
+            version: "1.8.0".into(),
+        };
+
+        let comparison = compare_with_competitor(&needle_metrics, &competitor);
+        assert_eq!(comparison.competitor_name, "Qdrant");
+        assert!(comparison.latency_ratio != 0.0);
+    }
+
+    #[test]
+    fn test_generate_badge() {
+        let metrics = BenchmarkMetrics {
+            recall_at_k: 0.95,
+            p99_latency_us: 1200,
+            qps: 5000.0,
+            ..Default::default()
+        };
+        let badges = generate_badges(&metrics, "SIFT1M");
+        assert!(badges.len() >= 3);
+        for badge in &badges {
+            assert!(badge.svg.contains("svg"));
+        }
+    }
+
+    #[test]
+    fn test_ann_benchmarks_export() {
+        let mut e = make_engine();
+        e.add_ground_truth("q0", vec!["v0".into()]);
+        e.record_search("q0", vec!["v0".into()], 500);
+        e.save_run("test", "SIFT1M", HnswParams::default());
+
+        let export = e.export_ann_benchmarks_format("needle", "0.1.0");
+        assert!(export.contains("needle"));
+        assert!(export.contains("recall"));
+    }
+
+    #[test]
+    fn test_docker_config_generation() {
+        let config = DockerBenchmarkConfig::default();
+        let compose = config.generate_docker_compose();
+        assert!(compose.contains("services:"));
+        assert!(compose.contains("needle-bench"));
+    }
+
+    #[test]
+    fn test_memory_tracking() {
+        let mut e = make_engine();
+        e.add_ground_truth("q0", vec!["v0".into()]);
+        e.record_search_with_memory("q0", vec!["v0".into()], 100, 1024 * 1024);
+        e.record_search_with_memory("q0", vec!["v0".into()], 200, 2 * 1024 * 1024);
+        let m = e.compute_metrics();
+        assert!(m.peak_memory_bytes > 0);
+        assert!(m.avg_memory_bytes > 0.0);
+    }
+
+    #[test]
+    fn test_pareto_frontier() {
+        let runs = vec![
+            BenchmarkRun {
+                run_id: "r1".into(), label: "low-ef".into(), dataset: "t".into(),
+                hnsw_params: HnswParams { m: 16, ef_construction: 100, ef_search: 10 },
+                metrics: BenchmarkMetrics { recall_at_k: 0.80, qps: 10000.0, ..Default::default() },
+                timestamp: "2024-01-01T00:00:00Z".into(),
+            },
+            BenchmarkRun {
+                run_id: "r2".into(), label: "high-ef".into(), dataset: "t".into(),
+                hnsw_params: HnswParams { m: 16, ef_construction: 100, ef_search: 200 },
+                metrics: BenchmarkMetrics { recall_at_k: 0.99, qps: 1000.0, ..Default::default() },
+                timestamp: "2024-01-01T00:00:00Z".into(),
+            },
+            BenchmarkRun {
+                run_id: "r3".into(), label: "dominated".into(), dataset: "t".into(),
+                hnsw_params: HnswParams { m: 16, ef_construction: 100, ef_search: 50 },
+                metrics: BenchmarkMetrics { recall_at_k: 0.75, qps: 500.0, ..Default::default() },
+                timestamp: "2024-01-01T00:00:00Z".into(),
+            },
+        ];
+        let frontier = compute_pareto_frontier(&runs);
+        assert_eq!(frontier.len(), 2); // r3 is dominated by r1
+    }
+
+    #[test]
+    fn test_markdown_report() {
+        let mut e = make_engine();
+        e.add_ground_truth("q0", vec!["v0".into()]);
+        e.record_search("q0", vec!["v0".into()], 100);
+        e.save_run("test", "Random", HnswParams::default());
+        let md = e.generate_markdown_report();
+        assert!(md.contains("## Needle Benchmark Report"));
+        assert!(md.contains("Recall"));
+        assert!(md.contains("|"));
+    }
+
+    #[test]
+    fn test_concurrent_qps() {
+        let m = BenchmarkMetrics {
+            total_queries: 1000,
+            total_time_us: 1_000_000, // 1 second
+            ..Default::default()
+        };
+        let cqps = estimate_concurrent_qps(&m, 4);
+        // With 4 threads and 1000 QPS single-threaded, should estimate ~3200-4000
+        assert!(cqps > 2000.0);
     }
 }
