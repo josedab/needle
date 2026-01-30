@@ -1,223 +1,245 @@
 //! High-level services: database-level service wrappers with builders and lifecycle management.
+//!
+//! Services are organized into domain-specific subdirectories:
+//!
+//! - **`ai/`** — agentic_memory_protocol, agentic_workflow, graph_knowledge_service, ...
+//! - **`client/`** — client_sdk, grpc_schema, notebook, ...
+//! - **`collection/`** — collection_bundle, collection_federation, collection_rbac, ...
+//! - **`compute/`** — adaptive_optimizer, adaptive_service, gpu_kernels, ...
+//! - **`embedding/`** — auto_embed_endpoint, embedding_router, inference_engine, ...
+//! - **`governance/`** — api_stability, community, compliance, ...
+//! - **`infrastructure/`** — cloud_deploy, cloud_service, cluster_bootstrap, ...
+//! - **`observability/`** — ann_benchmark, benchmark_runner, benchmark_suite, ...
+//! - **`pipeline/`** — cdc_framework, ingestion_pipeline, ingestion_service, ...
+//! - **`plugin/`** — plugin_api, plugin_ecosystem, plugin_runtime, ...
+//! - **`search/`** — adaptive_index_selector, encrypted_search, needleql_executor, ...
+//! - **`storage/`** — backup_command, hnsw_compactor, snapshot_manager, ...
+//! - **`sync/`** — change_stream, crdt_sync, distributed_federation, ...
 
 #[cfg(feature = "experimental")]
-pub mod adaptive_service;
+pub mod ai;
 #[cfg(feature = "experimental")]
-pub mod ingestion_pipeline;
-pub mod ingestion_service;
-pub mod multimodal_service;
-pub mod pitr_service;
+pub mod client;
+pub mod collection;
 #[cfg(feature = "experimental")]
-pub mod plugin_runtime;
-pub mod text_collection;
-pub mod tiered_service;
+pub mod compute;
+#[cfg(feature = "experimental")]
+pub mod embedding;
+#[cfg(feature = "experimental")]
+pub mod governance;
+#[cfg(feature = "experimental")]
+pub mod infrastructure;
+#[cfg(feature = "experimental")]
+pub mod observability;
+pub mod pipeline;
+#[cfg(feature = "experimental")]
+pub mod plugin;
+#[cfg(feature = "experimental")]
+pub mod search;
+pub mod storage;
+#[cfg(feature = "experimental")]
+pub mod sync;
 
-// ── Next-Gen Services ────────────────────────────────────────────────────────
-#[cfg(feature = "experimental")]
-pub mod adaptive_optimizer;
-#[cfg(feature = "experimental")]
-pub mod edge_runtime;
-#[cfg(feature = "experimental")]
-pub mod graphrag_service;
-#[cfg(feature = "experimental")]
-pub mod incremental_sync;
-#[cfg(feature = "experimental")]
-pub mod managed_embeddings;
-#[cfg(feature = "experimental")]
-pub mod nl_filter_parser;
-#[cfg(feature = "experimental")]
-pub mod streaming_ingest;
-#[cfg(feature = "experimental")]
-pub mod time_travel_query;
-#[cfg(feature = "experimental")]
-pub mod visual_explorer;
-#[cfg(feature = "experimental")]
-pub mod wasm_sdk;
+// ── Re-exports for backward compatibility ─────────────────────────────────
+// Modules are re-exported at the services:: level so existing code continues
+// to work with crate::services::module_name paths.
 
-// ── Next-Gen v2 Services ─────────────────────────────────────────────────────
 #[cfg(feature = "experimental")]
-pub mod inference_engine;
+pub use ai::agentic_memory_protocol;
 #[cfg(feature = "experimental")]
-pub mod plugin_api;
+pub use ai::agentic_workflow;
 #[cfg(feature = "experimental")]
-pub mod semantic_cache;
+pub use ai::graph_knowledge_service;
 #[cfg(feature = "experimental")]
-pub mod streaming_protocol;
+pub use ai::graph_query;
 #[cfg(feature = "experimental")]
-pub mod sync_engine;
+pub use ai::graphrag_service;
 #[cfg(feature = "experimental")]
-pub mod vector_transactions;
+pub use ai::llm_cache_middleware;
 #[cfg(feature = "experimental")]
-pub mod wasm_browser;
-
-// ── Next-Gen v3 Services ─────────────────────────────────────────────────────
+pub use ai::llm_tools;
 #[cfg(feature = "experimental")]
-pub mod agentic_memory_protocol;
+pub use ai::rag_sdk;
 #[cfg(feature = "experimental")]
-pub mod graph_knowledge_service;
+pub use ai::semantic_cache;
 #[cfg(feature = "experimental")]
-pub mod live_replication;
+pub use client::client_sdk;
 #[cfg(feature = "experimental")]
-pub mod llm_cache_middleware;
+pub use client::grpc_schema;
 #[cfg(feature = "experimental")]
-pub mod multimodal_collection;
+pub use client::notebook;
 #[cfg(feature = "experimental")]
-pub mod plugin_ecosystem;
+pub use client::python_sdk;
 #[cfg(feature = "experimental")]
-pub mod query_optimizer;
+pub use client::vscode_extension;
 #[cfg(feature = "experimental")]
-pub mod text_to_vector;
+pub use client::webhook_delivery;
 #[cfg(feature = "experimental")]
-pub mod transactional_api;
+pub use client::ws_protocol;
 #[cfg(feature = "experimental")]
-pub mod wasm_persistence;
-
-// ── Next-Gen v4 Services ─────────────────────────────────────────────────────
+pub use collection::collection_bundle;
 #[cfg(feature = "experimental")]
-pub mod collection_bundle;
+pub use collection::collection_federation;
 #[cfg(feature = "experimental")]
-pub mod collection_federation;
+pub use collection::collection_rbac;
 #[cfg(feature = "experimental")]
-pub mod collection_rbac;
+pub use collection::materialized_views;
 #[cfg(feature = "experimental")]
-pub mod drift_monitor;
+pub use collection::multimodal_collection;
+pub use collection::multimodal_service;
+pub use collection::pitr_service;
+pub use collection::text_collection;
 #[cfg(feature = "experimental")]
-pub mod materialized_views;
+pub use collection::typed_schema;
 #[cfg(feature = "experimental")]
-pub mod otel_tracing;
+pub use compute::adaptive_optimizer;
 #[cfg(feature = "experimental")]
-pub mod query_replay;
+pub use compute::adaptive_service;
 #[cfg(feature = "experimental")]
-pub mod smart_auto_embed;
+pub use compute::gpu_kernels;
 #[cfg(feature = "experimental")]
-pub mod snapshot_time_travel;
+pub use compute::time_travel_query;
 #[cfg(feature = "experimental")]
-pub mod vector_pipeline;
-
-// ── Next-Gen v5 Services ─────────────────────────────────────────────────────
+pub use compute::transactional_api;
 #[cfg(feature = "experimental")]
-pub mod ann_benchmark;
+pub use compute::vector_transactions;
 #[cfg(feature = "experimental")]
-pub mod api_stability;
+pub use embedding::auto_embed_endpoint;
 #[cfg(feature = "experimental")]
-pub mod cdc_framework;
+pub use embedding::embedding_router;
 #[cfg(feature = "experimental")]
-pub mod cloud_deploy;
+pub use embedding::inference_engine;
 #[cfg(feature = "experimental")]
-pub mod community;
+pub use embedding::managed_embeddings;
 #[cfg(feature = "experimental")]
-pub mod compliance;
+pub use embedding::matryoshka_service;
 #[cfg(feature = "experimental")]
-pub mod format_spec;
+pub use embedding::model_downloader;
 #[cfg(feature = "experimental")]
-pub mod model_runtime;
+pub use embedding::model_runtime;
 #[cfg(feature = "experimental")]
-pub mod module_audit;
+pub use embedding::smart_auto_embed;
 #[cfg(feature = "experimental")]
-pub mod python_sdk;
-
-// ── Next-Gen v6 Services ─────────────────────────────────────────────────────
+pub use embedding::text_to_vector;
 #[cfg(feature = "experimental")]
-pub mod adaptive_index_selector;
+pub use governance::api_stability;
 #[cfg(feature = "experimental")]
-pub mod edge_serverless;
+pub use governance::community;
 #[cfg(feature = "experimental")]
-pub mod encrypted_search;
+pub use governance::compliance;
 #[cfg(feature = "experimental")]
-pub mod gpu_kernels;
+pub use governance::format_spec;
 #[cfg(feature = "experimental")]
-pub mod graph_query;
+pub use governance::format_validator;
 #[cfg(feature = "experimental")]
-pub mod llm_tools;
+pub use governance::module_audit;
 #[cfg(feature = "experimental")]
-pub mod managed_cloud;
+pub use governance::unwrap_audit;
 #[cfg(feature = "experimental")]
-pub mod multi_writer;
+pub use governance::version_control;
 #[cfg(feature = "experimental")]
-pub mod realtime_streaming;
+pub use infrastructure::cloud_deploy;
 #[cfg(feature = "experimental")]
-pub mod vector_lineage;
-
-// ── Next-Gen v7 Services ─────────────────────────────────────────────────────
+pub use infrastructure::cloud_service;
 #[cfg(feature = "experimental")]
-pub mod benchmark_runner;
+pub use infrastructure::cluster_bootstrap;
 #[cfg(feature = "experimental")]
-pub mod cluster_bootstrap;
+pub use infrastructure::edge_runtime;
 #[cfg(feature = "experimental")]
-pub mod evidence_collector;
+pub use infrastructure::edge_serverless;
 #[cfg(feature = "experimental")]
-pub mod model_downloader;
+pub use infrastructure::managed_cloud;
 #[cfg(feature = "experimental")]
-pub mod pricing;
+pub use infrastructure::otel_tracing;
 #[cfg(feature = "experimental")]
-pub mod rag_sdk;
+pub use infrastructure::pricing;
 #[cfg(feature = "experimental")]
-pub mod triage_report;
+pub use infrastructure::readiness_probe;
 #[cfg(feature = "experimental")]
-pub mod unwrap_audit;
+pub use infrastructure::tenant_router;
 #[cfg(feature = "experimental")]
-pub mod vscode_extension;
+pub use observability::ann_benchmark;
 #[cfg(feature = "experimental")]
-pub mod ws_protocol;
-
-// ── Next-Gen v8 Services ─────────────────────────────────────────────────────
+pub use observability::benchmark_runner;
 #[cfg(feature = "experimental")]
-pub mod hnsw_compactor;
+pub use observability::benchmark_suite;
 #[cfg(feature = "experimental")]
-pub mod matryoshka_service;
+pub use observability::drift_monitor;
 #[cfg(feature = "experimental")]
-pub mod pipeline_manager;
+pub use observability::evidence_collector;
 #[cfg(feature = "experimental")]
-pub mod snapshot_manager;
+pub use observability::triage_report;
 #[cfg(feature = "experimental")]
-pub mod wasm_plugin_runtime;
-
-// ── Next-Gen v9 Services ─────────────────────────────────────────────────────
+pub use observability::vector_lineage;
 #[cfg(feature = "experimental")]
-pub mod auto_embed_endpoint;
+pub use observability::visual_explorer;
 #[cfg(feature = "experimental")]
-pub mod backup_command;
+pub use pipeline::cdc_framework;
 #[cfg(feature = "experimental")]
-pub mod change_stream;
+pub use pipeline::ingestion_pipeline;
+pub use pipeline::ingestion_service;
 #[cfg(feature = "experimental")]
-pub mod client_sdk;
+pub use pipeline::pipeline_manager;
 #[cfg(feature = "experimental")]
-pub mod format_validator;
+pub use pipeline::realtime_streaming;
 #[cfg(feature = "experimental")]
-pub mod grpc_schema;
+pub use pipeline::streaming_ingest;
 #[cfg(feature = "experimental")]
-pub mod notebook;
+pub use pipeline::streaming_protocol;
 #[cfg(feature = "experimental")]
-pub mod query_cache_middleware;
+pub use pipeline::vector_pipeline;
 #[cfg(feature = "experimental")]
-pub mod readiness_probe;
+pub use plugin::plugin_api;
 #[cfg(feature = "experimental")]
-pub mod tenant_router;
-
-// ── Next-Gen v10 Services ────────────────────────────────────────────────────
+pub use plugin::plugin_ecosystem;
 #[cfg(feature = "experimental")]
-pub mod embedding_router;
+pub use plugin::plugin_runtime;
 #[cfg(feature = "experimental")]
-pub mod webhook_delivery;
-
-// ── Next-Gen v11 Services ────────────────────────────────────────────────────
+pub use plugin::wasm_browser;
 #[cfg(feature = "experimental")]
-pub mod distributed_federation;
+pub use plugin::wasm_persistence;
 #[cfg(feature = "experimental")]
-pub mod needleql_executor;
+pub use plugin::wasm_plugin_runtime;
 #[cfg(feature = "experimental")]
-pub mod cloud_service;
+pub use plugin::wasm_sdk;
 #[cfg(feature = "experimental")]
-pub mod crdt_sync;
+pub use search::adaptive_index_selector;
 #[cfg(feature = "experimental")]
-pub mod storage_backends;
+pub use search::encrypted_search;
 #[cfg(feature = "experimental")]
-pub mod version_control;
+pub use search::needleql_executor;
 #[cfg(feature = "experimental")]
-pub mod agentic_workflow;
+pub use search::needleql_lsp;
 #[cfg(feature = "experimental")]
-pub mod benchmark_suite;
+pub use search::nl_filter_parser;
 #[cfg(feature = "experimental")]
-pub mod typed_schema;
+pub use search::query_cache_middleware;
 #[cfg(feature = "experimental")]
-pub mod needleql_lsp;
+pub use search::query_optimizer;
+#[cfg(feature = "experimental")]
+pub use search::query_replay;
+#[cfg(feature = "experimental")]
+pub use storage::backup_command;
+#[cfg(feature = "experimental")]
+pub use storage::hnsw_compactor;
+#[cfg(feature = "experimental")]
+pub use storage::snapshot_manager;
+#[cfg(feature = "experimental")]
+pub use storage::snapshot_time_travel;
+#[cfg(feature = "experimental")]
+pub use storage::storage_backends;
+pub use storage::tiered_service;
+#[cfg(feature = "experimental")]
+pub use sync::change_stream;
+#[cfg(feature = "experimental")]
+pub use sync::crdt_sync;
+#[cfg(feature = "experimental")]
+pub use sync::distributed_federation;
+#[cfg(feature = "experimental")]
+pub use sync::incremental_sync;
+#[cfg(feature = "experimental")]
+pub use sync::live_replication;
+#[cfg(feature = "experimental")]
+pub use sync::multi_writer;
+#[cfg(feature = "experimental")]
+pub use sync::sync_engine;

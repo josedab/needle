@@ -23,6 +23,7 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use tracing::warn;
 
 use crate::collection::{Collection, CollectionConfig, SearchResult};
 use crate::distance::DistanceFunction;
@@ -463,7 +464,9 @@ impl TextVectorCollection {
                     }
                     let meta = serde_json::json!({"_text": text, "_re_embedded": true});
                     // Best-effort delete: if the old entry is already gone, proceed with insert
-                    let _ = self.collection.delete(id);
+                    if let Err(e) = self.collection.delete(id) {
+                        warn!("Best-effort delete failed for '{}' during re-embed: {}", id, e);
+                    }
                     if self.collection.insert(id, &embedding, Some(meta)).is_ok() {
                         re_embedded += 1;
                     } else {

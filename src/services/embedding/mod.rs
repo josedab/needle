@@ -1,0 +1,20 @@
+//! Embedding services.
+
+#[cfg(feature = "experimental")]
+pub mod auto_embed_endpoint;
+#[cfg(feature = "experimental")]
+pub mod embedding_router;
+#[cfg(feature = "experimental")]
+pub mod inference_engine;
+#[cfg(feature = "experimental")]
+pub mod managed_embeddings;
+#[cfg(feature = "experimental")]
+pub mod matryoshka_service;
+#[cfg(feature = "experimental")]
+pub mod model_downloader;
+#[cfg(feature = "experimental")]
+pub mod model_runtime;
+#[cfg(feature = "experimental")]
+pub mod smart_auto_embed;
+#[cfg(feature = "experimental")]
+pub mod text_to_vector;

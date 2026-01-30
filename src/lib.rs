@@ -164,8 +164,15 @@ pub use integrations::{langchain, llamaindex};
 
 // ── High-Level Services ──────────────────────────────────────────────────────
 // Database-level service wrappers with builders and lifecycle management.
+// See src/services/README.md for the full directory layout.
 
 /// High-level service wrappers: ingestion, multi-modal, PITR, text collections, and more.
+///
+/// Services are organized into domain subdirectories:
+/// `ai/`, `client/`, `collection/`, `compute/`, `embedding/`, `governance/`,
+/// `infrastructure/`, `observability/`, `pipeline/`, `plugin/`, `search/`,
+/// `storage/`, `sync/`. All modules are re-exported at the `services::` level
+/// for backward compatibility.
 pub mod services;
 #[cfg(feature = "experimental")]
 pub use services::{adaptive_service, ingestion_pipeline, plugin_runtime};
@@ -173,84 +180,98 @@ pub use services::{
     ingestion_service, multimodal_service, pitr_service, text_collection, tiered_service,
 };
 
-// ── Next-Gen Services ────────────────────────────────────────────────────────
+// ── Experimental Services ────────────────────────────────────────────────────
+// Experimental service modules grouped by domain. Requires: --features experimental
+
+// AI & LLM integration
 #[cfg(feature = "experimental")]
 pub use services::{
-    adaptive_optimizer, edge_runtime, graphrag_service, incremental_sync, managed_embeddings,
-    nl_filter_parser, streaming_ingest, time_travel_query, visual_explorer, wasm_sdk,
+    agentic_memory_protocol, agentic_workflow, graph_knowledge_service, graph_query,
+    graphrag_service, llm_cache_middleware, llm_tools, rag_sdk, semantic_cache,
 };
 
-// ── Next-Gen v2 Services ─────────────────────────────────────────────────────
+// Embedding & model management
 #[cfg(feature = "experimental")]
 pub use services::{
-    inference_engine, plugin_api, streaming_protocol, sync_engine,
-    vector_transactions, wasm_browser,
+    auto_embed_endpoint, embedding_router, inference_engine, managed_embeddings,
+    matryoshka_service, model_downloader, model_runtime, smart_auto_embed, text_to_vector,
 };
+
+// Search & query
 #[cfg(feature = "experimental")]
-pub use services::semantic_cache;
+pub use services::{
+    adaptive_index_selector, encrypted_search, needleql_executor, needleql_lsp, nl_filter_parser,
+    query_cache_middleware, query_optimizer, query_replay,
+};
 #[cfg(feature = "experimental")]
 pub use search::cost_estimator;
 #[cfg(feature = "experimental")]
 pub use indexing::{graph_vector_fusion, multimodal_fusion};
 
-// ── Next-Gen v3 Services ─────────────────────────────────────────────────────
+// Pipeline & ingestion
 #[cfg(feature = "experimental")]
 pub use services::{
-    agentic_memory_protocol, graph_knowledge_service, live_replication, llm_cache_middleware,
-    multimodal_collection, plugin_ecosystem, query_optimizer, text_to_vector, transactional_api,
-    wasm_persistence,
+    cdc_framework, pipeline_manager, realtime_streaming, streaming_ingest, streaming_protocol,
+    vector_pipeline,
 };
 
-// ── Next-Gen v4 Services ─────────────────────────────────────────────────────
+// Sync & replication
 #[cfg(feature = "experimental")]
 pub use services::{
-    collection_bundle, collection_federation, collection_rbac, drift_monitor, materialized_views,
-    otel_tracing, query_replay, smart_auto_embed, snapshot_time_travel, vector_pipeline,
+    change_stream, crdt_sync, distributed_federation, incremental_sync, live_replication,
+    multi_writer, sync_engine,
 };
 
-// ── Next-Gen v5 Services ─────────────────────────────────────────────────────
+// Collection management
 #[cfg(feature = "experimental")]
 pub use services::{
-    ann_benchmark, api_stability, cdc_framework, cloud_deploy, community, compliance, format_spec,
-    model_runtime, module_audit, python_sdk,
+    collection_bundle, collection_federation, collection_rbac, materialized_views,
+    multimodal_collection, snapshot_time_travel, typed_schema,
 };
 
-// ── Next-Gen v6 Services ─────────────────────────────────────────────────────
+// Compute & transactions
 #[cfg(feature = "experimental")]
 pub use services::{
-    adaptive_index_selector, edge_serverless, encrypted_search, gpu_kernels, graph_query,
-    llm_tools, managed_cloud, multi_writer, realtime_streaming, vector_lineage,
+    adaptive_optimizer, gpu_kernels, time_travel_query, transactional_api, vector_transactions,
 };
 
-// ── Next-Gen v7 Services ─────────────────────────────────────────────────────
+// Infrastructure & deployment
 #[cfg(feature = "experimental")]
 pub use services::{
-    benchmark_runner, cluster_bootstrap, evidence_collector, model_downloader, pricing, rag_sdk,
-    triage_report, unwrap_audit, vscode_extension, ws_protocol,
+    cloud_deploy, cloud_service, cluster_bootstrap, edge_runtime, edge_serverless, managed_cloud,
+    pricing, readiness_probe, tenant_router,
 };
 
-// ── Next-Gen v8 Services ─────────────────────────────────────────────────────
+// Plugin & WASM
 #[cfg(feature = "experimental")]
 pub use services::{
-    hnsw_compactor, matryoshka_service, pipeline_manager, snapshot_manager, wasm_plugin_runtime,
+    plugin_api, plugin_ecosystem, wasm_browser, wasm_persistence, wasm_plugin_runtime, wasm_sdk,
 };
 
-// ── Next-Gen v9 Services ─────────────────────────────────────────────────────
+// Client SDKs & protocols
 #[cfg(feature = "experimental")]
 pub use services::{
-    auto_embed_endpoint, backup_command, change_stream, client_sdk, format_validator, grpc_schema,
-    notebook, query_cache_middleware, readiness_probe, tenant_router,
+    client_sdk, grpc_schema, notebook, python_sdk, vscode_extension, webhook_delivery, ws_protocol,
 };
 
-// ── Next-Gen v10 Services ────────────────────────────────────────────────────
-#[cfg(feature = "experimental")]
-pub use services::{embedding_router, webhook_delivery};
-
-// ── Next-Gen v11 Services ────────────────────────────────────────────────────
+// Observability & benchmarking
 #[cfg(feature = "experimental")]
 pub use services::{
-    agentic_workflow, benchmark_suite, cloud_service, crdt_sync, distributed_federation,
-    needleql_executor, needleql_lsp, storage_backends, typed_schema, version_control,
+    ann_benchmark, benchmark_runner, benchmark_suite, drift_monitor, evidence_collector,
+    otel_tracing, triage_report, vector_lineage, visual_explorer,
+};
+
+// Governance & compliance
+#[cfg(feature = "experimental")]
+pub use services::{
+    api_stability, community, compliance, format_spec, format_validator, module_audit,
+    unwrap_audit, version_control,
+};
+
+// Storage
+#[cfg(feature = "experimental")]
+pub use services::{
+    backup_command, hnsw_compactor, snapshot_manager, storage_backends,
 };
 
 // ── Experimental / Advanced ──────────────────────────────────────────────────
