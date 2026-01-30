@@ -701,6 +701,541 @@ pub struct ProfileComparison {
     pub is_improvement: bool,
 }
 
+// ── OpenTelemetry Distributed Tracing ────────────────────────────────────────
+
+/// Distributed trace context for propagation across gRPC/REST.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TraceContext {
+    /// W3C Trace ID (32 hex chars).
+    pub trace_id: String,
+    /// W3C Span ID (16 hex chars).
+    pub span_id: String,
+    /// Parent Span ID (if this is a child span).
+    pub parent_span_id: Option<String>,
+    /// Trace flags (e.g., sampled).
+    pub flags: u8,
+    /// Baggage items for cross-service context.
+    pub baggage: HashMap<String, String>,
+}
+
+impl TraceContext {
+    /// Create a new root trace context.
+    pub fn new_root() -> Self {
+        Self {
+            trace_id: generate_trace_id(),
+            span_id: generate_span_id(),
+            parent_span_id: None,
+            flags: 0x01, // sampled
+            baggage: HashMap::new(),
+        }
+    }
+
+    /// Create a child span context.
+    pub fn child(&self) -> Self {
+        Self {
+            trace_id: self.trace_id.clone(),
+            span_id: generate_span_id(),
+            parent_span_id: Some(self.span_id.clone()),
+            flags: self.flags,
+            baggage: self.baggage.clone(),
+        }
+    }
+
+    /// Serialize to W3C traceparent header value.
+    pub fn to_traceparent(&self) -> String {
+        format!("00-{}-{}-{:02x}", self.trace_id, self.span_id, self.flags)
+    }
+
+    /// Parse from W3C traceparent header value.
+    pub fn from_traceparent(header: &str) -> Option<Self> {
+        let parts: Vec<&str> = header.split('-').collect();
+        if parts.len() != 4 {
+            return None;
+        }
+        let flags = u8::from_str_radix(parts[3], 16).ok()?;
+        Some(Self {
+            trace_id: parts[1].to_string(),
+            span_id: parts[2].to_string(),
+            parent_span_id: None,
+            flags,
+            baggage: HashMap::new(),
+        })
+    }
+
+    /// Check if this trace is sampled.
+    pub fn is_sampled(&self) -> bool {
+        self.flags & 0x01 != 0
+    }
+}
+
+fn generate_trace_id() -> String {
+    use rand::Rng;
+    let mut rng = rand::thread_rng();
+    format!("{:032x}", rng.gen::<u128>())
+}
+
+fn generate_span_id() -> String {
+    use rand::Rng;
+    let mut rng = rand::thread_rng();
+    format!("{:016x}", rng.gen::<u64>())
+}
+
+/// A recorded span with timing and metadata.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TracedSpan {
+    /// Span name (e.g., "hnsw.search", "filter.evaluate").
+    pub name: String,
+    /// Trace context.
+    pub context: TraceContext,
+    /// Start time (epoch microseconds).
+    pub start_us: u64,
+    /// Duration in microseconds.
+    pub duration_us: u64,
+    /// Span attributes.
+    pub attributes: HashMap<String, String>,
+    /// Span status.
+    pub status: SpanStatus,
+}
+
+/// Span status.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SpanStatus {
+    /// Unset (default).
+    Unset,
+    /// Ok.
+    Ok,
+    /// Error.
+    Error,
+}
+
+impl Default for SpanStatus {
+    fn default() -> Self {
+        Self::Unset
+    }
+}
+
+// ── Slow Query Log ───────────────────────────────────────────────────────────
+
+/// Configuration for slow query logging.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SlowQueryConfig {
+    /// Threshold in microseconds; queries slower than this are logged.
+    pub threshold_us: u64,
+    /// Maximum entries in the slow query log.
+    pub max_entries: usize,
+    /// Auto-capture EXPLAIN for slow queries.
+    pub auto_explain: bool,
+    /// Sampling rate for slow queries (0.0-1.0).
+    pub sample_rate: f64,
+}
+
+impl Default for SlowQueryConfig {
+    fn default() -> Self {
+        Self {
+            threshold_us: 10_000, // 10ms
+            max_entries: 1000,
+            auto_explain: true,
+            sample_rate: 1.0,
+        }
+    }
+}
+
+/// A slow query log entry.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SlowQueryEntry {
+    /// Query ID.
+    pub query_id: String,
+    /// Query description.
+    pub description: String,
+    /// Total duration in microseconds.
+    pub duration_us: u64,
+    /// Timestamp (epoch seconds).
+    pub timestamp: u64,
+    /// Collection name.
+    pub collection: String,
+    /// Number of results returned.
+    pub results_count: usize,
+    /// Auto-captured EXPLAIN output.
+    pub explain: Option<String>,
+    /// Trace context (if distributed tracing is enabled).
+    pub trace_context: Option<TraceContext>,
+}
+
+/// Slow query log with configurable threshold and automatic EXPLAIN capture.
+pub struct SlowQueryLog {
+    config: SlowQueryConfig,
+    entries: Vec<SlowQueryEntry>,
+    next_id: u64,
+}
+
+impl SlowQueryLog {
+    /// Create a new slow query log.
+    pub fn new(config: SlowQueryConfig) -> Self {
+        Self {
+            config,
+            entries: Vec::new(),
+            next_id: 0,
+        }
+    }
+
+    /// Record a query if it exceeds the slow query threshold.
+    pub fn record(
+        &mut self,
+        duration_us: u64,
+        description: &str,
+        collection: &str,
+        results_count: usize,
+        explain: Option<String>,
+        trace_context: Option<TraceContext>,
+    ) -> Option<String> {
+        if duration_us < self.config.threshold_us {
+            return None;
+        }
+
+        // Apply sampling
+        if self.config.sample_rate < 1.0 {
+            use rand::Rng;
+            let mut rng = rand::thread_rng();
+            if rng.gen::<f64>() > self.config.sample_rate {
+                return None;
+            }
+        }
+
+        self.next_id += 1;
+        let query_id = format!("sq_{}", self.next_id);
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+
+        let entry = SlowQueryEntry {
+            query_id: query_id.clone(),
+            description: description.to_string(),
+            duration_us,
+            timestamp: now,
+            collection: collection.to_string(),
+            results_count,
+            explain,
+            trace_context,
+        };
+
+        if self.entries.len() >= self.config.max_entries {
+            self.entries.remove(0);
+        }
+        self.entries.push(entry);
+
+        Some(query_id)
+    }
+
+    /// Get all slow query entries.
+    pub fn entries(&self) -> &[SlowQueryEntry] {
+        &self.entries
+    }
+
+    /// Get entries for a specific collection.
+    pub fn entries_for_collection(&self, collection: &str) -> Vec<&SlowQueryEntry> {
+        self.entries
+            .iter()
+            .filter(|e| e.collection == collection)
+            .collect()
+    }
+
+    /// Get the top N slowest queries.
+    pub fn top_slowest(&self, n: usize) -> Vec<&SlowQueryEntry> {
+        let mut sorted: Vec<_> = self.entries.iter().collect();
+        sorted.sort_by(|a, b| b.duration_us.cmp(&a.duration_us));
+        sorted.truncate(n);
+        sorted
+    }
+
+    /// Clear the log.
+    pub fn clear(&mut self) {
+        self.entries.clear();
+    }
+
+    /// Get the number of entries.
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// Check if the log is empty.
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+}
+
+// ── Debug Profile Endpoint Data ──────────────────────────────────────────────
+
+/// Response data for the /debug/profile endpoint.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DebugProfileResponse {
+    /// HNSW layer traversal breakdown.
+    pub hnsw_layers: Vec<HnswLayerProfile>,
+    /// Filter evaluation cost.
+    pub filter_evaluation: Option<FilterProfile>,
+    /// Distance computation breakdown.
+    pub distance_computation: DistanceProfile,
+    /// Slow query summary.
+    pub slow_queries: SlowQuerySummary,
+}
+
+/// HNSW layer traversal profile.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HnswLayerProfile {
+    /// Layer number (0 = bottom).
+    pub layer: usize,
+    /// Nodes visited in this layer.
+    pub nodes_visited: usize,
+    /// Time spent in this layer (microseconds).
+    pub time_us: u64,
+    /// Distance computations in this layer.
+    pub distance_computations: usize,
+}
+
+/// Filter evaluation profile.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FilterProfile {
+    /// Filter expression.
+    pub expression: String,
+    /// Candidates before filtering.
+    pub candidates_before: usize,
+    /// Candidates after filtering.
+    pub candidates_after: usize,
+    /// Filter evaluation time (microseconds).
+    pub time_us: u64,
+    /// Selectivity ratio.
+    pub selectivity: f64,
+}
+
+/// Distance computation profile.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DistanceProfile {
+    /// Distance function used.
+    pub function: String,
+    /// Total distance computations.
+    pub total_computations: usize,
+    /// Total time (microseconds).
+    pub total_time_us: u64,
+    /// Average time per computation (nanoseconds).
+    pub avg_per_computation_ns: f64,
+    /// Vector dimensions.
+    pub dimensions: usize,
+}
+
+/// Summary of slow queries.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SlowQuerySummary {
+    /// Total slow queries recorded.
+    pub total: usize,
+    /// Slowest query time (microseconds).
+    pub max_duration_us: u64,
+    /// Average slow query time (microseconds).
+    pub avg_duration_us: f64,
+    /// Top collections by slow query count.
+    pub top_collections: Vec<(String, usize)>,
+}
+
+// ── Span Collector ───────────────────────────────────────────────────────────
+
+/// Collects spans for export to OpenTelemetry-compatible backends.
+pub struct SpanCollector {
+    spans: Vec<TracedSpan>,
+    max_capacity: usize,
+}
+
+impl SpanCollector {
+    /// Create a new span collector with a maximum capacity.
+    pub fn new(max_capacity: usize) -> Self {
+        Self {
+            spans: Vec::new(),
+            max_capacity,
+        }
+    }
+
+    /// Record a completed span.
+    pub fn record(&mut self, span: TracedSpan) {
+        if self.spans.len() >= self.max_capacity {
+            self.spans.remove(0);
+        }
+        self.spans.push(span);
+    }
+
+    /// Drain all collected spans for export.
+    pub fn drain(&mut self) -> Vec<TracedSpan> {
+        std::mem::take(&mut self.spans)
+    }
+
+    /// Number of collected spans.
+    pub fn len(&self) -> usize {
+        self.spans.len()
+    }
+
+    /// Is empty.
+    pub fn is_empty(&self) -> bool {
+        self.spans.is_empty()
+    }
+}
+
+// ── Slow Query Percentile Stats ──────────────────────────────────────────────
+
+/// Percentile statistics for slow queries.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SlowQueryPercentileStats {
+    /// Median (p50) latency in microseconds.
+    pub p50_us: u64,
+    /// P95 latency.
+    pub p95_us: u64,
+    /// P99 latency.
+    pub p99_us: u64,
+    /// Average latency.
+    pub avg_us: f64,
+    /// Total entries analyzed.
+    pub count: usize,
+}
+
+impl SlowQueryLog {
+    /// Compute percentile statistics across all slow query entries.
+    pub fn compute_stats(&self) -> SlowQueryPercentileStats {
+        if self.entries.is_empty() {
+            return SlowQueryPercentileStats {
+                p50_us: 0,
+                p95_us: 0,
+                p99_us: 0,
+                avg_us: 0.0,
+                count: 0,
+            };
+        }
+
+        let mut durations: Vec<u64> = self.entries.iter().map(|e| e.duration_us).collect();
+        durations.sort_unstable();
+        let n = durations.len();
+        let sum: u64 = durations.iter().sum();
+
+        SlowQueryPercentileStats {
+            p50_us: durations[n / 2],
+            p95_us: durations[((n as f64 * 0.95) as usize).min(n - 1)],
+            p99_us: durations[((n as f64 * 0.99) as usize).min(n - 1)],
+            avg_us: sum as f64 / n as f64,
+            count: n,
+        }
+    }
+}
+
+// ── Profile Endpoint Builder ─────────────────────────────────────────────────
+
+/// Builder for constructing /debug/profile responses incrementally.
+pub struct ProfileEndpointBuilder {
+    hnsw_layers: Vec<HnswLayerProfile>,
+    filter: Option<FilterProfile>,
+    distance: DistanceProfile,
+    slow_queries: SlowQuerySummary,
+}
+
+impl ProfileEndpointBuilder {
+    /// Create a new builder.
+    pub fn new() -> Self {
+        Self {
+            hnsw_layers: Vec::new(),
+            filter: None,
+            distance: DistanceProfile {
+                function: String::new(),
+                total_computations: 0,
+                total_time_us: 0,
+                avg_per_computation_ns: 0.0,
+                dimensions: 0,
+            },
+            slow_queries: SlowQuerySummary {
+                total: 0,
+                max_duration_us: 0,
+                avg_duration_us: 0.0,
+                top_collections: Vec::new(),
+            },
+        }
+    }
+
+    /// Add an HNSW layer profile.
+    #[must_use]
+    pub fn add_hnsw_layer(
+        mut self,
+        layer: usize,
+        nodes_visited: usize,
+        time_us: u64,
+        distance_computations: usize,
+    ) -> Self {
+        self.hnsw_layers.push(HnswLayerProfile {
+            layer,
+            nodes_visited,
+            time_us,
+            distance_computations,
+        });
+        self
+    }
+
+    /// Set filter evaluation profile.
+    #[must_use]
+    pub fn with_filter(
+        mut self,
+        expression: &str,
+        candidates_before: usize,
+        candidates_after: usize,
+        time_us: u64,
+    ) -> Self {
+        let selectivity = if candidates_before > 0 {
+            candidates_after as f64 / candidates_before as f64
+        } else {
+            0.0
+        };
+        self.filter = Some(FilterProfile {
+            expression: expression.to_string(),
+            candidates_before,
+            candidates_after,
+            time_us,
+            selectivity,
+        });
+        self
+    }
+
+    /// Set distance computation profile.
+    #[must_use]
+    pub fn with_distance(
+        mut self,
+        function: &str,
+        total_computations: usize,
+        total_time_us: u64,
+        dimensions: usize,
+    ) -> Self {
+        let avg_ns = if total_computations > 0 {
+            (total_time_us as f64 * 1000.0) / total_computations as f64
+        } else {
+            0.0
+        };
+        self.distance = DistanceProfile {
+            function: function.to_string(),
+            total_computations,
+            total_time_us,
+            avg_per_computation_ns: avg_ns,
+            dimensions,
+        };
+        self
+    }
+
+    /// Build the final response.
+    pub fn build(self) -> DebugProfileResponse {
+        DebugProfileResponse {
+            hnsw_layers: self.hnsw_layers,
+            filter_evaluation: self.filter,
+            distance_computation: self.distance,
+            slow_queries: self.slow_queries,
+        }
+    }
+}
+
+impl Default for ProfileEndpointBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -914,5 +1449,183 @@ mod tests {
 
         assert!(output.contains("vectors_scanned"));
         assert!(output.contains("10000"));
+    }
+
+    #[test]
+    fn test_trace_context_creation() {
+        let root = TraceContext::new_root();
+        assert_eq!(root.trace_id.len(), 32);
+        assert_eq!(root.span_id.len(), 16);
+        assert!(root.parent_span_id.is_none());
+        assert!(root.is_sampled());
+    }
+
+    #[test]
+    fn test_trace_context_child() {
+        let root = TraceContext::new_root();
+        let child = root.child();
+        assert_eq!(child.trace_id, root.trace_id);
+        assert_ne!(child.span_id, root.span_id);
+        assert_eq!(child.parent_span_id, Some(root.span_id));
+    }
+
+    #[test]
+    fn test_traceparent_roundtrip() {
+        let root = TraceContext::new_root();
+        let header = root.to_traceparent();
+        assert!(header.starts_with("00-"));
+
+        let parsed = TraceContext::from_traceparent(&header).unwrap();
+        assert_eq!(parsed.trace_id, root.trace_id);
+        assert_eq!(parsed.span_id, root.span_id);
+        assert_eq!(parsed.flags, root.flags);
+    }
+
+    #[test]
+    fn test_traceparent_parse_invalid() {
+        assert!(TraceContext::from_traceparent("invalid").is_none());
+        assert!(TraceContext::from_traceparent("").is_none());
+    }
+
+    #[test]
+    fn test_slow_query_log() {
+        let mut log = SlowQueryLog::new(SlowQueryConfig {
+            threshold_us: 5000,
+            max_entries: 100,
+            auto_explain: false,
+            sample_rate: 1.0,
+        });
+
+        // Below threshold — not recorded
+        assert!(log.record(1000, "fast query", "docs", 10, None, None).is_none());
+        assert!(log.is_empty());
+
+        // Above threshold — recorded
+        let id = log.record(10_000, "slow search", "docs", 5, Some("EXPLAIN".into()), None);
+        assert!(id.is_some());
+        assert_eq!(log.len(), 1);
+
+        let id = log.record(50_000, "very slow", "users", 3, None, None);
+        assert!(id.is_some());
+        assert_eq!(log.len(), 2);
+    }
+
+    #[test]
+    fn test_slow_query_top_slowest() {
+        let mut log = SlowQueryLog::new(SlowQueryConfig {
+            threshold_us: 1000,
+            max_entries: 100,
+            auto_explain: false,
+            sample_rate: 1.0,
+        });
+
+        log.record(5000, "medium", "docs", 10, None, None);
+        log.record(50000, "very slow", "docs", 10, None, None);
+        log.record(2000, "fast-ish", "docs", 10, None, None);
+
+        let top = log.top_slowest(2);
+        assert_eq!(top.len(), 2);
+        assert_eq!(top[0].duration_us, 50000);
+        assert_eq!(top[1].duration_us, 5000);
+    }
+
+    #[test]
+    fn test_slow_query_by_collection() {
+        let mut log = SlowQueryLog::new(SlowQueryConfig {
+            threshold_us: 1000,
+            max_entries: 100,
+            auto_explain: false,
+            sample_rate: 1.0,
+        });
+
+        log.record(5000, "q1", "docs", 10, None, None);
+        log.record(5000, "q2", "users", 10, None, None);
+        log.record(5000, "q3", "docs", 10, None, None);
+
+        let docs = log.entries_for_collection("docs");
+        assert_eq!(docs.len(), 2);
+    }
+
+    #[test]
+    fn test_slow_query_max_entries() {
+        let mut log = SlowQueryLog::new(SlowQueryConfig {
+            threshold_us: 100,
+            max_entries: 3,
+            auto_explain: false,
+            sample_rate: 1.0,
+        });
+
+        for i in 0..5 {
+            log.record(1000 * (i + 1), &format!("q{}", i), "c", 1, None, None);
+        }
+        assert_eq!(log.len(), 3);
+    }
+
+    #[test]
+    fn test_span_collector() {
+        let mut collector = SpanCollector::new(100);
+        collector.record(TracedSpan {
+            name: "hnsw.search".into(),
+            context: TraceContext::new_root(),
+            start_us: 0,
+            duration_us: 500,
+            attributes: HashMap::new(),
+            status: SpanStatus::Ok,
+        });
+        collector.record(TracedSpan {
+            name: "filter.evaluate".into(),
+            context: TraceContext::new_root(),
+            start_us: 500,
+            duration_us: 200,
+            attributes: HashMap::new(),
+            status: SpanStatus::Ok,
+        });
+        assert_eq!(collector.len(), 2);
+
+        let spans = collector.drain();
+        assert_eq!(spans.len(), 2);
+        assert_eq!(collector.len(), 0);
+    }
+
+    #[test]
+    fn test_slow_query_percentiles() {
+        let mut log = SlowQueryLog::new(SlowQueryConfig {
+            threshold_us: 100,
+            max_entries: 1000,
+            auto_explain: false,
+            sample_rate: 1.0,
+        });
+        for i in 0..100 {
+            log.record(100 + i * 10, &format!("q{i}"), "docs", 5, None, None);
+        }
+        let stats = log.compute_stats();
+        assert!(stats.p50_us > 0);
+        assert!(stats.p95_us > stats.p50_us);
+        assert!(stats.p99_us >= stats.p95_us);
+        assert!(stats.avg_us > 0.0);
+    }
+
+    #[test]
+    fn test_profile_endpoint_builder() {
+        let builder = ProfileEndpointBuilder::new()
+            .add_hnsw_layer(0, 100, 500, 200)
+            .add_hnsw_layer(1, 20, 100, 40)
+            .with_filter("category = 'books'", 1000, 50, 300)
+            .with_distance("cosine", 240, 450, 128);
+
+        let response = builder.build();
+        assert_eq!(response.hnsw_layers.len(), 2);
+        assert!(response.filter_evaluation.is_some());
+        assert_eq!(response.distance_computation.function, "cosine");
+    }
+
+    #[test]
+    fn test_sampling_trace_context() {
+        let sampled = TraceContext::new_root();
+        assert!(sampled.is_sampled());
+
+        let mut not_sampled = TraceContext::new_root();
+        not_sampled.flags = 0x00;
+        assert!(!not_sampled.is_sampled());
     }
 }
