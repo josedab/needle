@@ -17,11 +17,24 @@ t            = "test --features full"
 [env]
 RUST_BACKTRACE = "1"
 
-# Platform-specific linker settings for faster linking during development.
-# Uncomment the section matching your OS (requires mold or lld to be installed).
+# ── Platform-specific linker settings ─────────────────────────────────────────
+# Faster linking significantly reduces incremental build times.
+# Uncomment the section matching your OS after installing the required linker.
 
+# --- Linux (x86_64) ---
+# Install mold: sudo apt install mold  (or: https://github.com/rui314/mold/releases)
+# Alternatively, install lld: sudo apt install lld
 # [target.x86_64-unknown-linux-gnu]
 # rustflags = ["-C", "link-arg=-fuse-ld=mold"]
 
+# --- Linux (aarch64) ---
 # [target.aarch64-unknown-linux-gnu]
 # rustflags = ["-C", "link-arg=-fuse-ld=mold"]
+
+# --- macOS ---
+# The default Apple linker is already fast. For even faster linking, use lld:
+# Install: brew install llvm
+# [target.x86_64-apple-darwin]
+# rustflags = ["-C", "link-arg=-fuse-ld=/opt/homebrew/opt/llvm/bin/ld64.lld"]
+# [target.aarch64-apple-darwin]
+# rustflags = ["-C", "link-arg=-fuse-ld=/opt/homebrew/opt/llvm/bin/ld64.lld"]
