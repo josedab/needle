@@ -493,7 +493,9 @@ impl<B: StorageBackend> TieredCacheBackend<B> {
 
             let ssd_path = self.config.ssd_cache_path.join(key_to_filename(key));
             if let Some(parent) = ssd_path.parent() {
-                let _ = std::fs::create_dir_all(parent);
+                if let Err(e) = std::fs::create_dir_all(parent) {
+                    warn!("Failed to create SSD cache directory {:?}: {}", parent, e);
+                }
             }
 
             if std::fs::write(&ssd_path, data).is_ok() {
