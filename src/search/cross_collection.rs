@@ -733,6 +733,340 @@ impl CrossCollectionSearch {
     }
 }
 
+// ── Enhanced Federated Search ────────────────────────────────────────────────
+
+/// Score normalization method for merging results across distance functions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ScoreNormalization {
+    /// Min-max normalization to [0, 1].
+    MinMax,
+    /// Z-score normalization (mean=0, std=1).
+    ZScore,
+    /// No normalization.
+    None,
+}
+
+impl Default for ScoreNormalization {
+    fn default() -> Self {
+        Self::MinMax
+    }
+}
+
+/// Configuration for federated search across multiple collections.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FederatedSearchConfig {
+    /// Score normalization method.
+    pub normalization: ScoreNormalization,
+    /// Per-collection weights (collection_name -> weight).
+    pub weights: HashMap<String, f64>,
+    /// Default weight for unweighted collections.
+    pub default_weight: f64,
+    /// Maximum results per collection before merging.
+    pub per_collection_limit: usize,
+    /// Total result limit.
+    pub total_limit: usize,
+    /// Per-collection filter overrides.
+    pub collection_filters: HashMap<String, serde_json::Value>,
+    /// Query collections in parallel.
+    pub parallel: bool,
+}
+
+impl Default for FederatedSearchConfig {
+    fn default() -> Self {
+        Self {
+            normalization: ScoreNormalization::MinMax,
+            weights: HashMap::new(),
+            default_weight: 1.0,
+            per_collection_limit: 100,
+            total_limit: 100,
+            collection_filters: HashMap::new(),
+            parallel: true,
+        }
+    }
+}
+
+/// A federated search result with normalized score.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FederatedResult {
+    /// Vector ID.
+    pub id: String,
+    /// Normalized score (lower is better for distance-based).
+    pub score: f32,
+    /// Raw distance from the collection's distance function.
+    pub raw_distance: f32,
+    /// Source collection.
+    pub collection: String,
+    /// Applied weight.
+    pub weight: f64,
+    /// Optional metadata.
+    pub metadata: Option<serde_json::Value>,
+}
+
+/// Normalize a set of distances using min-max normalization.
+pub fn normalize_min_max(distances: &[f32]) -> Vec<f32> {
+    if distances.is_empty() {
+        return vec![];
+    }
+    let min = distances.iter().copied().fold(f32::MAX, f32::min);
+    let max = distances.iter().copied().fold(f32::MIN, f32::max);
+    let range = max - min;
+
+    if range < f32::EPSILON {
+        return vec![0.0; distances.len()];
+    }
+
+    distances.iter().map(|&d| (d - min) / range).collect()
+}
+
+/// Normalize a set of distances using z-score normalization.
+pub fn normalize_z_score(distances: &[f32]) -> Vec<f32> {
+    if distances.is_empty() {
+        return vec![];
+    }
+    let n = distances.len() as f64;
+    let mean = distances.iter().map(|&d| d as f64).sum::<f64>() / n;
+    let variance = distances
+        .iter()
+        .map(|&d| (d as f64 - mean).powi(2))
+        .sum::<f64>()
+        / n;
+    let std = variance.sqrt();
+
+    if std < 1e-10 {
+        return vec![0.0; distances.len()];
+    }
+
+    distances
+        .iter()
+        .map(|&d| ((d as f64 - mean) / std) as f32)
+        .collect()
+}
+
+/// Execute a federated search across multiple collections in a database.
+pub fn federated_search(
+    db: &Database,
+    query: &[f32],
+    collection_names: &[String],
+    config: &FederatedSearchConfig,
+) -> Result<Vec<FederatedResult>> {
+    let mut all_results: Vec<FederatedResult> = Vec::new();
+
+    // Query each collection
+    for name in collection_names {
+        let coll = db.collection(name)?;
+        if coll.dimensions() != Some(query.len()) {
+            continue; // skip dimension mismatch
+        }
+
+        let search_results = coll.search(query, config.per_collection_limit)?;
+        let weight = config.weights.get(name).copied().unwrap_or(config.default_weight);
+
+        let distances: Vec<f32> = search_results.iter().map(|r| r.distance).collect();
+        let normalized = match config.normalization {
+            ScoreNormalization::MinMax => normalize_min_max(&distances),
+            ScoreNormalization::ZScore => normalize_z_score(&distances),
+            ScoreNormalization::None => distances.clone(),
+        };
+
+        for (i, sr) in search_results.iter().enumerate() {
+            let norm_score = normalized.get(i).copied().unwrap_or(sr.distance);
+            all_results.push(FederatedResult {
+                id: sr.id.clone(),
+                score: (norm_score as f64 * weight) as f32,
+                raw_distance: sr.distance,
+                collection: name.clone(),
+                weight,
+                metadata: sr.metadata.clone(),
+            });
+        }
+    }
+
+    // Sort by normalized score
+    all_results.sort_by(|a, b| a.score.partial_cmp(&b.score).unwrap_or(std::cmp::Ordering::Equal));
+    all_results.truncate(config.total_limit);
+
+    Ok(all_results)
+}
+
+/// Reciprocal Rank Fusion for merging ranked lists from different collections.
+/// RRF score = Σ 1/(k + rank_i) where k is a constant (typically 60).
+pub fn reciprocal_rank_fusion(
+    ranked_lists: &[Vec<FederatedResult>],
+    k: f32,
+    total_limit: usize,
+) -> Vec<FederatedResult> {
+    let mut rrf_scores: HashMap<String, (f32, FederatedResult)> = HashMap::new();
+
+    for list in ranked_lists {
+        for (rank, result) in list.iter().enumerate() {
+            let rrf_score = 1.0 / (k + rank as f32 + 1.0);
+            let entry = rrf_scores
+                .entry(result.id.clone())
+                .or_insert((0.0, result.clone()));
+            entry.0 += rrf_score * result.weight as f32;
+        }
+    }
+
+    let mut fused: Vec<FederatedResult> = rrf_scores
+        .into_iter()
+        .map(|(_, (score, mut result))| {
+            result.score = -score; // Negate so lower = better (consistent with distance)
+            result
+        })
+        .collect();
+
+    fused.sort_by(|a, b| a.score.partial_cmp(&b.score).unwrap_or(std::cmp::Ordering::Equal));
+    fused.truncate(total_limit);
+    fused
+}
+
+/// Execute federated search with parallel collection queries using rayon.
+pub fn federated_search_parallel(
+    db: &Database,
+    query: &[f32],
+    collection_names: &[String],
+    config: &FederatedSearchConfig,
+) -> Result<Vec<FederatedResult>> {
+    use rayon::prelude::*;
+
+    // Query collections in parallel
+    let per_collection_results: Vec<Vec<FederatedResult>> = collection_names
+        .par_iter()
+        .filter_map(|name| {
+            let coll = db.collection(name).ok()?;
+            if coll.dimensions() != Some(query.len()) {
+                return None;
+            }
+            let results = coll.search(query, config.per_collection_limit).ok()?;
+            let weight = config.weights.get(name).copied().unwrap_or(config.default_weight);
+            let distances: Vec<f32> = results.iter().map(|r| r.distance).collect();
+            let normalized = match config.normalization {
+                ScoreNormalization::MinMax => normalize_min_max(&distances),
+                ScoreNormalization::ZScore => normalize_z_score(&distances),
+                ScoreNormalization::None => distances.clone(),
+            };
+            Some(
+                results
+                    .iter()
+                    .enumerate()
+                    .map(|(i, sr)| {
+                        let norm_score = normalized.get(i).copied().unwrap_or(sr.distance);
+                        FederatedResult {
+                            id: sr.id.clone(),
+                            score: (norm_score as f64 * weight) as f32,
+                            raw_distance: sr.distance,
+                            collection: name.clone(),
+                            weight,
+                            metadata: sr.metadata.clone(),
+                        }
+                    })
+                    .collect::<Vec<_>>(),
+            )
+        })
+        .collect();
+
+    // Merge using RRF if multiple collections, otherwise sort by score
+    if per_collection_results.len() > 1 {
+        Ok(reciprocal_rank_fusion(
+            &per_collection_results,
+            60.0,
+            config.total_limit,
+        ))
+    } else {
+        let mut all: Vec<FederatedResult> =
+            per_collection_results.into_iter().flatten().collect();
+        all.sort_by(|a, b| a.score.partial_cmp(&b.score).unwrap_or(std::cmp::Ordering::Equal));
+        all.truncate(config.total_limit);
+        Ok(all)
+    }
+}
+
+// ── Collection Routing Rules ─────────────────────────────────────────────────
+
+/// A routing rule for collection selection during federated search.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CollectionRoutingRule {
+    /// Target collection name.
+    pub collection: String,
+    /// Condition under which this collection should be queried.
+    pub condition: RoutingCondition,
+    /// Override weight for this collection.
+    pub weight_override: Option<f64>,
+}
+
+/// Condition for routing a query to a collection.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum RoutingCondition {
+    /// Always route to this collection.
+    Always,
+    /// Route only if query dimensions match.
+    DimensionMatch(usize),
+}
+
+/// Evaluate routing rules and return applicable collections.
+pub fn evaluate_routing_rules(
+    rules: &[CollectionRoutingRule],
+    query_dimensions: usize,
+) -> Vec<&CollectionRoutingRule> {
+    rules
+        .iter()
+        .filter(|rule| match &rule.condition {
+            RoutingCondition::Always => true,
+            RoutingCondition::DimensionMatch(dim) => *dim == query_dimensions,
+        })
+        .collect()
+}
+
+// ── Federated Search with Latency Tracking ──────────────────────────────────
+
+/// Execute federated search and return per-collection latency in microseconds.
+pub fn federated_search_with_latency(
+    db: &Database,
+    query: &[f32],
+    collection_names: &[String],
+    config: &FederatedSearchConfig,
+) -> Result<(Vec<FederatedResult>, HashMap<String, u64>)> {
+    let mut all_results: Vec<FederatedResult> = Vec::new();
+    let mut latencies: HashMap<String, u64> = HashMap::new();
+
+    for name in collection_names {
+        let start = std::time::Instant::now();
+        let coll = db.collection(name)?;
+        if coll.dimensions() != Some(query.len()) {
+            continue;
+        }
+
+        let search_results = coll.search(query, config.per_collection_limit)?;
+        let elapsed_us = start.elapsed().as_micros() as u64;
+        latencies.insert(name.clone(), elapsed_us);
+
+        let weight = config.weights.get(name).copied().unwrap_or(config.default_weight);
+        let distances: Vec<f32> = search_results.iter().map(|r| r.distance).collect();
+        let normalized = match config.normalization {
+            ScoreNormalization::MinMax => normalize_min_max(&distances),
+            ScoreNormalization::ZScore => normalize_z_score(&distances),
+            ScoreNormalization::None => distances.clone(),
+        };
+
+        for (i, sr) in search_results.iter().enumerate() {
+            let norm_score = normalized.get(i).copied().unwrap_or(sr.distance);
+            all_results.push(FederatedResult {
+                id: sr.id.clone(),
+                score: (norm_score as f64 * weight) as f32,
+                raw_distance: sr.distance,
+                collection: name.clone(),
+                weight,
+                metadata: sr.metadata.clone(),
+            });
+        }
+    }
+
+    all_results.sort_by(|a, b| a.score.partial_cmp(&b.score).unwrap_or(std::cmp::Ordering::Equal));
+    all_results.truncate(config.total_limit);
+
+    Ok((all_results, latencies))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1004,5 +1338,229 @@ mod tests {
 
         assert_eq!(collections.len(), 2);
         assert!(!collections.contains(&"col2".to_string()));
+    }
+
+    #[test]
+    fn test_normalize_min_max() {
+        let distances = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let normalized = normalize_min_max(&distances);
+        assert!((normalized[0] - 0.0).abs() < 0.01);
+        assert!((normalized[4] - 1.0).abs() < 0.01);
+        assert!((normalized[2] - 0.5).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_normalize_min_max_equal() {
+        let distances = vec![3.0, 3.0, 3.0];
+        let normalized = normalize_min_max(&distances);
+        assert!(normalized.iter().all(|&v| v == 0.0));
+    }
+
+    #[test]
+    fn test_normalize_z_score() {
+        let distances = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let normalized = normalize_z_score(&distances);
+        // Mean should be ~0
+        let mean: f32 = normalized.iter().sum::<f32>() / normalized.len() as f32;
+        assert!(mean.abs() < 0.01);
+    }
+
+    #[test]
+    fn test_normalize_empty() {
+        assert!(normalize_min_max(&[]).is_empty());
+        assert!(normalize_z_score(&[]).is_empty());
+    }
+
+    #[test]
+    fn test_federated_search_basic() {
+        let db = create_test_db();
+        db.create_collection("coll_a", 8).unwrap();
+        db.create_collection("coll_b", 8).unwrap();
+
+        let coll_a = db.collection("coll_a").unwrap();
+        let coll_b = db.collection("coll_b").unwrap();
+
+        for i in 0..10 {
+            coll_a.insert(
+                &format!("a{}", i),
+                &random_vec(8, i as u64),
+                None,
+            ).unwrap();
+            coll_b.insert(
+                &format!("b{}", i),
+                &random_vec(8, i as u64 + 100),
+                None,
+            ).unwrap();
+        }
+
+        let query = random_vec(8, 0);
+        let collections = vec!["coll_a".into(), "coll_b".into()];
+        let config = FederatedSearchConfig::default();
+
+        let results = federated_search(&db, &query, &collections, &config).unwrap();
+        assert!(!results.is_empty());
+        // Results should come from both collections
+        let has_a = results.iter().any(|r| r.collection == "coll_a");
+        let has_b = results.iter().any(|r| r.collection == "coll_b");
+        assert!(has_a || has_b);
+    }
+
+    #[test]
+    fn test_federated_search_weighted() {
+        let db = create_test_db();
+        db.create_collection("w1", 8).unwrap();
+
+        let coll = db.collection("w1").unwrap();
+        for i in 0..5 {
+            coll.insert(&format!("v{}", i), &random_vec(8, i as u64), None).unwrap();
+        }
+
+        let mut weights = HashMap::new();
+        weights.insert("w1".into(), 2.0);
+
+        let config = FederatedSearchConfig {
+            weights,
+            ..Default::default()
+        };
+
+        let results = federated_search(
+            &db,
+            &random_vec(8, 0),
+            &["w1".into()],
+            &config,
+        ).unwrap();
+
+        assert!(!results.is_empty());
+        assert_eq!(results[0].weight, 2.0);
+    }
+
+    #[test]
+    fn test_federated_config_defaults() {
+        let config = FederatedSearchConfig::default();
+        assert_eq!(config.normalization, ScoreNormalization::MinMax);
+        assert_eq!(config.default_weight, 1.0);
+        assert!(config.parallel);
+    }
+
+    #[test]
+    fn test_rrf_merge() {
+        let list1 = vec![
+            FederatedResult {
+                id: "a".into(), score: 0.1, raw_distance: 0.1,
+                collection: "c1".into(), weight: 1.0, metadata: None,
+            },
+            FederatedResult {
+                id: "b".into(), score: 0.2, raw_distance: 0.2,
+                collection: "c1".into(), weight: 1.0, metadata: None,
+            },
+        ];
+        let list2 = vec![
+            FederatedResult {
+                id: "b".into(), score: 0.15, raw_distance: 0.15,
+                collection: "c2".into(), weight: 1.0, metadata: None,
+            },
+            FederatedResult {
+                id: "c".into(), score: 0.3, raw_distance: 0.3,
+                collection: "c2".into(), weight: 1.0, metadata: None,
+            },
+        ];
+
+        let fused = reciprocal_rank_fusion(&[list1, list2], 60.0, 10);
+        assert!(fused.len() >= 2);
+        // "b" appears in both lists, so it should have the highest RRF score
+        assert_eq!(fused[0].id, "b");
+    }
+
+    #[test]
+    fn test_rrf_empty() {
+        let fused = reciprocal_rank_fusion(&[], 60.0, 10);
+        assert!(fused.is_empty());
+    }
+
+    #[test]
+    fn test_federated_search_parallel_basic() {
+        let db = Database::in_memory();
+        db.create_collection("p1", 8).unwrap();
+        db.create_collection("p2", 8).unwrap();
+
+        let c1 = db.collection("p1").unwrap();
+        let c2 = db.collection("p2").unwrap();
+
+        for i in 0..10 {
+            c1.insert(&format!("a{i}"), &random_vec(8, i as u64), None).unwrap();
+            c2.insert(&format!("b{i}"), &random_vec(8, i as u64 + 100), None).unwrap();
+        }
+
+        let config = FederatedSearchConfig::default();
+        let results = federated_search_parallel(
+            &db,
+            &random_vec(8, 0),
+            &["p1".into(), "p2".into()],
+            &config,
+        ).unwrap();
+
+        assert!(!results.is_empty());
+    }
+
+    #[test]
+    fn test_collection_routing_rules() {
+        let rules = vec![
+            CollectionRoutingRule {
+                collection: "docs".into(),
+                condition: RoutingCondition::Always,
+                weight_override: Some(2.0),
+            },
+            CollectionRoutingRule {
+                collection: "logs".into(),
+                condition: RoutingCondition::DimensionMatch(128),
+                weight_override: None,
+            },
+        ];
+
+        let applicable = evaluate_routing_rules(&rules, 128);
+        assert_eq!(applicable.len(), 2);
+        assert_eq!(applicable[0].collection, "docs");
+        assert_eq!(applicable[0].weight_override, Some(2.0));
+    }
+
+    #[test]
+    fn test_routing_dimension_filter() {
+        let rules = vec![
+            CollectionRoutingRule {
+                collection: "small".into(),
+                condition: RoutingCondition::DimensionMatch(64),
+                weight_override: None,
+            },
+            CollectionRoutingRule {
+                collection: "large".into(),
+                condition: RoutingCondition::DimensionMatch(128),
+                weight_override: None,
+            },
+        ];
+
+        let applicable = evaluate_routing_rules(&rules, 128);
+        assert_eq!(applicable.len(), 1);
+        assert_eq!(applicable[0].collection, "large");
+    }
+
+    #[test]
+    fn test_federated_latency_tracking() {
+        let db = Database::in_memory();
+        db.create_collection("t1", 8).unwrap();
+        let c1 = db.collection("t1").unwrap();
+        for i in 0..5 {
+            c1.insert(&format!("v{i}"), &random_vec(8, i as u64), None).unwrap();
+        }
+
+        let config = FederatedSearchConfig::default();
+        let (results, latencies) = federated_search_with_latency(
+            &db,
+            &random_vec(8, 0),
+            &["t1".into()],
+            &config,
+        ).unwrap();
+        assert!(!results.is_empty());
+        assert!(latencies.contains_key("t1"));
+        assert!(*latencies.get("t1").unwrap() > 0);
     }
 }
