@@ -43,6 +43,7 @@
 //! ```
 
 use serde::{Deserialize, Serialize};
+use tracing::warn;
 
 /// Pipeline configuration for CDC-to-Needle sync.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1048,7 +1049,9 @@ pub fn execute_ingestion_pipeline(
             && (doc_idx + 1) % pipeline.checkpoint.interval == 0
         {
             if let Some(path) = &pipeline.checkpoint.path {
-                let _ = checkpoint.save(std::path::Path::new(path));
+                if let Err(e) = checkpoint.save(std::path::Path::new(path)) {
+                    warn!("Failed to save pipeline checkpoint to {}: {}", path, e);
+                }
             }
         }
     }
