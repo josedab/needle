@@ -78,6 +78,7 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
+use tracing::warn;
 
 /// Configuration for DiskANN index.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1443,7 +1444,9 @@ impl DiskAnnIndex {
         let neighbors: Vec<usize> = self.nodes[node_index].neighbors.clone();
         for neighbor in neighbors {
             if !self.vector_cache.contains_key(&neighbor) {
-                let _ = self.load_vector(neighbor);
+                if let Err(e) = self.load_vector(neighbor) {
+                    warn!("Failed to prefetch neighbor vector {}: {}", neighbor, e);
+                }
             }
         }
         Ok(())
