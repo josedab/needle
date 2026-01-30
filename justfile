@@ -17,6 +17,10 @@ fmt-check:
 lint:
     cargo clippy --features full -- -D warnings
 
+# Auto-fix clippy suggestions
+lint-fix:
+    cargo clippy --features full --fix --allow-dirty --allow-staged
+
 # Run all tests
 test:
     cargo test --features full
@@ -31,6 +35,11 @@ test-integration:
 
 # Continuous check on save (requires: cargo install cargo-watch)
 watch:
+    #!/usr/bin/env bash
+    if ! command -v cargo-watch &> /dev/null; then
+        echo "Error: cargo-watch not found. Install with: cargo install cargo-watch"
+        exit 1
+    fi
     cargo watch -x 'check --features full'
 
 # Full pre-commit check: format, lint, test
@@ -55,6 +64,15 @@ doc:
 # Run benchmarks
 bench:
     cargo bench
+
+# Check for outdated dependencies (requires: cargo install cargo-outdated)
+outdated:
+    #!/usr/bin/env bash
+    if ! command -v cargo-outdated &> /dev/null; then
+        echo "Error: cargo-outdated not found. Install with: cargo install cargo-outdated"
+        exit 1
+    fi
+    cargo outdated -R
 
 # Clean build artifacts
 clean:
@@ -88,3 +106,7 @@ setup:
 # Run a single test with output: just test-single test_name
 test-single NAME:
     cargo test {{NAME}} -- --nocapture
+
+# Scaffold a new service module: just new-module search my_feature
+new-module DOMAIN MODULE:
+    ./scripts/new-module.sh {{DOMAIN}} {{MODULE}}
