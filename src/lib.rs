@@ -103,7 +103,7 @@ pub mod indexing;
 #[cfg(feature = "diskann")]
 pub use indexing::{diskann, tiered_ann};
 pub use indexing::{
-    float16, graph_vector_index, hnsw, hybrid_ann, incremental, ivf, multimodal_index, multivec,
+    float16, graph_vector_index, hnsw, cow_hnsw, compression_advisor, cli_playground, hybrid_ann, incremental, ivf, multimodal_index, multivec,
     quantization, sparse,
 };
 
