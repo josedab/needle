@@ -11,3 +11,4 @@ pub mod query_planner;
 pub mod reranker;
 pub mod cost_estimator;
 pub mod routing;
+pub mod collection_federation;
