@@ -62,3 +62,5 @@ pub mod vector_streaming;
 pub mod zero_copy;
 #[cfg(feature = "experimental")]
 pub mod ipc_protocol;
+#[cfg(feature = "experimental")]
+pub mod wasm_plugin_runtime;
