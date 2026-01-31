@@ -40,6 +40,7 @@ use chrono::Utc;
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -402,6 +403,297 @@ impl SyncManager {
     }
 }
 
+// ─── Differential Sync Protocol ──────────────────────────────────────────────
+
+/// Hash of a vector entry for Merkle tree diffing.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+pub struct VectorHash {
+    pub id: String,
+    pub hash: [u8; 32],
+    pub timestamp: u64,
+}
+
+/// Merkle tree node for efficient collection diffing.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MerkleNode {
+    pub hash: [u8; 32],
+    pub children: Vec<MerkleNode>,
+    pub range_start: usize,
+    pub range_end: usize,
+    pub is_leaf: bool,
+}
+
+/// Vector clock for conflict resolution.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct VectorClock {
+    pub clocks: HashMap<String, u64>,
+}
+
+impl VectorClock {
+    /// Increment the clock for a node.
+    pub fn increment(&mut self, node_id: &str) {
+        let counter = self.clocks.entry(node_id.to_string()).or_insert(0);
+        *counter += 1;
+    }
+
+    /// Merge two vector clocks by taking the maximum for each node.
+    pub fn merge(&mut self, other: &VectorClock) {
+        for (node_id, &other_val) in &other.clocks {
+            let entry = self.clocks.entry(node_id.clone()).or_insert(0);
+            *entry = (*entry).max(other_val);
+        }
+    }
+
+    /// Returns true if `self` causally happens before `other`.
+    pub fn happens_before(&self, other: &VectorClock) -> bool {
+        let mut at_least_one_less = false;
+        for (node_id, &self_val) in &self.clocks {
+            let other_val = other.clocks.get(node_id).copied().unwrap_or(0);
+            if self_val > other_val {
+                return false;
+            }
+            if self_val < other_val {
+                at_least_one_less = true;
+            }
+        }
+        // Check keys in other that are not in self
+        for (node_id, &other_val) in &other.clocks {
+            if !self.clocks.contains_key(node_id) && other_val > 0 {
+                at_least_one_less = true;
+            }
+        }
+        at_least_one_less
+    }
+
+    /// Returns true if the two vector clocks are concurrent (neither happens before the other).
+    pub fn is_concurrent(&self, other: &VectorClock) -> bool {
+        !self.happens_before(other) && !other.happens_before(self) && self.clocks != other.clocks
+    }
+}
+
+/// A single vector change to be synced.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SyncDelta {
+    pub vector_id: String,
+    pub collection: String,
+    pub operation: SyncOperation,
+    pub vector_data: Option<Vec<f32>>,
+    pub metadata: Option<serde_json::Value>,
+    pub vector_clock: VectorClock,
+    pub timestamp: u64,
+}
+
+/// The type of sync operation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum SyncOperation {
+    Insert,
+    Update,
+    Delete,
+}
+
+/// Result of a sync operation.
+#[derive(Debug, Clone)]
+pub struct SyncResult {
+    pub vectors_sent: usize,
+    pub vectors_received: usize,
+    pub conflicts_resolved: usize,
+    pub duration_ms: u64,
+}
+
+/// Configuration for differential sync.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DiffSyncConfig {
+    pub node_id: String,
+    pub merkle_branch_factor: usize,
+    pub batch_size: usize,
+    pub conflict_resolution: ConflictResolution,
+}
+
+/// Strategy for resolving conflicting edits.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum ConflictResolution {
+    LastWriterWins,
+    VectorClockMerge,
+    HigherTimestamp,
+}
+
+/// Manages bidirectional sync using Merkle-tree diffing.
+pub struct DiffSyncManager {
+    config: DiffSyncConfig,
+    vector_clock: VectorClock,
+    pending_deltas: Vec<SyncDelta>,
+}
+
+impl DiffSyncManager {
+    /// Create a new differential sync manager.
+    pub fn new(config: DiffSyncConfig) -> Self {
+        Self {
+            config,
+            vector_clock: VectorClock::default(),
+            pending_deltas: Vec::new(),
+        }
+    }
+
+    /// Build a Merkle tree from a sorted slice of vector hashes.
+    pub fn build_merkle_tree(hashes: &[VectorHash]) -> MerkleNode {
+        Self::build_merkle_subtree(hashes, 0, hashes.len(), 4)
+    }
+
+    fn build_merkle_subtree(
+        hashes: &[VectorHash],
+        range_start: usize,
+        range_end: usize,
+        branch_factor: usize,
+    ) -> MerkleNode {
+        let count = range_end - range_start;
+        if count <= branch_factor {
+            // Leaf node: hash all entries in this range
+            let mut hasher = Sha256::new();
+            for h in &hashes[range_start..range_end] {
+                hasher.update(&h.hash);
+            }
+            return MerkleNode {
+                hash: hasher.finalize().into(),
+                children: Vec::new(),
+                range_start,
+                range_end,
+                is_leaf: true,
+            };
+        }
+
+        // Internal node: split into branch_factor children
+        let chunk_size = (count + branch_factor - 1) / branch_factor;
+        let mut children = Vec::new();
+        let mut pos = range_start;
+        while pos < range_end {
+            let child_end = (pos + chunk_size).min(range_end);
+            children.push(Self::build_merkle_subtree(
+                hashes,
+                pos,
+                child_end,
+                branch_factor,
+            ));
+            pos = child_end;
+        }
+
+        let mut hasher = Sha256::new();
+        for child in &children {
+            hasher.update(&child.hash);
+        }
+
+        MerkleNode {
+            hash: hasher.finalize().into(),
+            children,
+            range_start,
+            range_end,
+            is_leaf: false,
+        }
+    }
+
+    /// Compare two Merkle trees and return the `(start, end)` ranges that differ.
+    pub fn compute_diff(local: &MerkleNode, remote: &MerkleNode) -> Vec<(usize, usize)> {
+        if local.hash == remote.hash {
+            return Vec::new();
+        }
+
+        // If either is a leaf, the whole range differs
+        if local.is_leaf || remote.is_leaf {
+            let start = local.range_start.min(remote.range_start);
+            let end = local.range_end.max(remote.range_end);
+            return vec![(start, end)];
+        }
+
+        // Recursively diff children
+        let mut diffs = Vec::new();
+        let max_children = local.children.len().max(remote.children.len());
+        for i in 0..max_children {
+            match (local.children.get(i), remote.children.get(i)) {
+                (Some(lc), Some(rc)) => {
+                    diffs.extend(Self::compute_diff(lc, rc));
+                }
+                (Some(lc), None) => {
+                    diffs.push((lc.range_start, lc.range_end));
+                }
+                (None, Some(rc)) => {
+                    diffs.push((rc.range_start, rc.range_end));
+                }
+                (None, None) => {}
+            }
+        }
+        diffs
+    }
+
+    /// Record a change for syncing.
+    pub fn record_change(&mut self, delta: SyncDelta) {
+        self.vector_clock
+            .increment(&self.config.node_id);
+        self.pending_deltas.push(delta);
+    }
+
+    /// Drain and return all pending deltas.
+    pub fn take_pending_deltas(&mut self) -> Vec<SyncDelta> {
+        std::mem::take(&mut self.pending_deltas)
+    }
+
+    /// Resolve a conflict between a local and remote delta using the configured strategy.
+    pub fn resolve_conflict(&self, local: &SyncDelta, remote: &SyncDelta) -> SyncDelta {
+        match self.config.conflict_resolution {
+            ConflictResolution::LastWriterWins | ConflictResolution::HigherTimestamp => {
+                if local.timestamp >= remote.timestamp {
+                    local.clone()
+                } else {
+                    remote.clone()
+                }
+            }
+            ConflictResolution::VectorClockMerge => {
+                if remote.vector_clock.happens_before(&local.vector_clock) {
+                    local.clone()
+                } else if local.vector_clock.happens_before(&remote.vector_clock) {
+                    remote.clone()
+                } else {
+                    // Concurrent: fall back to higher timestamp
+                    if local.timestamp >= remote.timestamp {
+                        local.clone()
+                    } else {
+                        remote.clone()
+                    }
+                }
+            }
+        }
+    }
+
+    /// Apply received deltas, merging vector clocks and counting conflicts.
+    pub fn apply_deltas(&mut self, deltas: Vec<SyncDelta>) -> Result<SyncResult> {
+        let start = Instant::now();
+        let mut conflicts_resolved = 0;
+        let received = deltas.len();
+
+        for delta in &deltas {
+            // Check for conflicts against pending deltas
+            let conflict_idx = self
+                .pending_deltas
+                .iter()
+                .position(|p| p.vector_id == delta.vector_id && p.collection == delta.collection);
+
+            if let Some(idx) = conflict_idx {
+                let local = self.pending_deltas[idx].clone();
+                let resolved = self.resolve_conflict(&local, delta);
+                self.pending_deltas[idx] = resolved;
+                conflicts_resolved += 1;
+            }
+
+            self.vector_clock.merge(&delta.vector_clock);
+        }
+
+        Ok(SyncResult {
+            vectors_sent: 0,
+            vectors_received: received,
+            conflicts_resolved,
+            duration_ms: start.elapsed().as_millis() as u64,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -535,5 +827,177 @@ mod tests {
         // Cloud shipping is a stub but should not error
         let info = sync.ship_snapshot(&db).unwrap();
         assert!(info.size_bytes > 0);
+    }
+
+    // ── Differential Sync Tests ──────────────────────────────────────
+
+    #[test]
+    fn test_vector_clock_increment_and_merge() {
+        let mut vc1 = VectorClock::default();
+        vc1.increment("node_a");
+        vc1.increment("node_a");
+        assert_eq!(*vc1.clocks.get("node_a").unwrap_or(&0), 2);
+
+        let mut vc2 = VectorClock::default();
+        vc2.increment("node_b");
+        vc2.increment("node_b");
+        vc2.increment("node_b");
+
+        vc1.merge(&vc2);
+        assert_eq!(*vc1.clocks.get("node_a").unwrap_or(&0), 2);
+        assert_eq!(*vc1.clocks.get("node_b").unwrap_or(&0), 3);
+    }
+
+    #[test]
+    fn test_vector_clock_ordering() {
+        let mut vc1 = VectorClock::default();
+        vc1.increment("a");
+
+        let mut vc2 = VectorClock::default();
+        vc2.increment("a");
+        vc2.increment("a");
+
+        assert!(vc1.happens_before(&vc2));
+        assert!(!vc2.happens_before(&vc1));
+        assert!(!vc1.is_concurrent(&vc2));
+
+        // Concurrent: vc1 has (a:1), vc3 has (b:1)
+        let mut vc3 = VectorClock::default();
+        vc3.increment("b");
+        assert!(vc1.is_concurrent(&vc3));
+    }
+
+    #[test]
+    fn test_merkle_tree_identical() {
+        let hashes: Vec<VectorHash> = (0..8)
+            .map(|i| VectorHash {
+                id: format!("v{i}"),
+                hash: {
+                    use sha2::{Digest, Sha256};
+                    let mut h = Sha256::new();
+                    h.update(format!("v{i}").as_bytes());
+                    h.finalize().into()
+                },
+                timestamp: i,
+            })
+            .collect();
+        let tree1 = DiffSyncManager::build_merkle_tree(&hashes);
+        let tree2 = DiffSyncManager::build_merkle_tree(&hashes);
+        let diffs = DiffSyncManager::compute_diff(&tree1, &tree2);
+        assert!(diffs.is_empty(), "Identical trees should have no diffs");
+    }
+
+    #[test]
+    fn test_merkle_tree_detects_change() {
+        let mut hashes1: Vec<VectorHash> = (0..8)
+            .map(|i| VectorHash {
+                id: format!("v{i}"),
+                hash: [i as u8; 32],
+                timestamp: i,
+            })
+            .collect();
+
+        let mut hashes2 = hashes1.clone();
+        // Modify one entry
+        hashes2[3].hash = [99; 32];
+
+        let tree1 = DiffSyncManager::build_merkle_tree(&hashes1);
+        let tree2 = DiffSyncManager::build_merkle_tree(&hashes2);
+        let diffs = DiffSyncManager::compute_diff(&tree1, &tree2);
+        assert!(!diffs.is_empty(), "Modified entry should produce diffs");
+        // The differing range should include index 3
+        let covers_3 = diffs.iter().any(|(s, e)| *s <= 3 && *e > 3);
+        assert!(covers_3, "Diff should cover modified index 3");
+    }
+
+    #[test]
+    fn test_conflict_resolution_last_writer_wins() {
+        let config = DiffSyncConfig {
+            node_id: "node1".into(),
+            merkle_branch_factor: 4,
+            batch_size: 100,
+            conflict_resolution: ConflictResolution::LastWriterWins,
+        };
+        let mgr = DiffSyncManager::new(config);
+
+        let local = SyncDelta {
+            vector_id: "v1".into(),
+            collection: "col".into(),
+            operation: SyncOperation::Update,
+            vector_data: Some(vec![1.0]),
+            metadata: None,
+            vector_clock: VectorClock::default(),
+            timestamp: 100,
+        };
+        let remote = SyncDelta {
+            timestamp: 200,
+            ..local.clone()
+        };
+        let winner = mgr.resolve_conflict(&local, &remote);
+        assert_eq!(winner.timestamp, 200);
+    }
+
+    #[test]
+    fn test_diff_sync_record_and_take() {
+        let config = DiffSyncConfig {
+            node_id: "n1".into(),
+            merkle_branch_factor: 4,
+            batch_size: 100,
+            conflict_resolution: ConflictResolution::VectorClockMerge,
+        };
+        let mut mgr = DiffSyncManager::new(config);
+        mgr.record_change(SyncDelta {
+            vector_id: "v1".into(),
+            collection: "col".into(),
+            operation: SyncOperation::Insert,
+            vector_data: Some(vec![1.0, 2.0]),
+            metadata: None,
+            vector_clock: VectorClock::default(),
+            timestamp: 1,
+        });
+        assert_eq!(mgr.pending_deltas.len(), 1);
+        let taken = mgr.take_pending_deltas();
+        assert_eq!(taken.len(), 1);
+        assert!(mgr.pending_deltas.is_empty());
+    }
+
+    #[test]
+    fn test_apply_deltas_with_conflict() {
+        let config = DiffSyncConfig {
+            node_id: "n1".into(),
+            merkle_branch_factor: 4,
+            batch_size: 100,
+            conflict_resolution: ConflictResolution::HigherTimestamp,
+        };
+        let mut mgr = DiffSyncManager::new(config);
+
+        // Record a local change
+        mgr.record_change(SyncDelta {
+            vector_id: "v1".into(),
+            collection: "col".into(),
+            operation: SyncOperation::Update,
+            vector_data: Some(vec![1.0]),
+            metadata: None,
+            vector_clock: VectorClock::default(),
+            timestamp: 50,
+        });
+
+        // Apply a remote change for the same vector with higher timestamp
+        let remote_deltas = vec![SyncDelta {
+            vector_id: "v1".into(),
+            collection: "col".into(),
+            operation: SyncOperation::Update,
+            vector_data: Some(vec![2.0]),
+            metadata: None,
+            vector_clock: VectorClock::default(),
+            timestamp: 100,
+        }];
+
+        let result = mgr.apply_deltas(remote_deltas).unwrap();
+        assert_eq!(result.vectors_received, 1);
+        assert_eq!(result.conflicts_resolved, 1);
+
+        // The pending delta should be resolved to the remote version (higher timestamp)
+        assert_eq!(mgr.pending_deltas[0].timestamp, 100);
     }
 }

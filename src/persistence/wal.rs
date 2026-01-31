@@ -146,6 +146,7 @@ use crate::error::{NeedleError, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::VecDeque;
+use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -229,6 +230,13 @@ pub enum WalEntry {
 
     /// Transaction rollback marker.
     TxnRollback { txn_id: u64 },
+
+    /// Sync operation checkpoint for differential sync protocol.
+    SyncCheckpoint {
+        node_id: String,
+        vector_clock: HashMap<String, u64>,
+        timestamp: u64,
+    },
 }
 
 /// Entry in a batch insert operation.
