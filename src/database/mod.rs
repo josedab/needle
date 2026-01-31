@@ -1577,6 +1577,30 @@ impl Database {
         Ok(coll.stats())
     }
 
+    fn get_provenance_internal(
+        &self,
+        collection: &str,
+        vector_id: &str,
+    ) -> Option<crate::persistence::vector_versioning::ProvenanceRecord> {
+        let state = self.state.read();
+        let coll = state.collections.get(collection)?;
+        coll.get_provenance(vector_id).cloned()
+    }
+
+    fn evaluate_internal(
+        &self,
+        collection: &str,
+        ground_truth: &[crate::collection::GroundTruthEntry],
+        k: usize,
+    ) -> Result<crate::collection::EvaluationReport> {
+        let state = self.state.read();
+        let coll = state
+            .collections
+            .get(collection)
+            .ok_or_else(|| NeedleError::CollectionNotFound(collection.to_string()))?;
+        coll.evaluate(ground_truth, k)
+    }
+
     fn export_internal(&self, collection: &str) -> Result<Vec<ExportEntry>> {
         let state = self.state.read();
         let coll = state
@@ -1709,6 +1733,56 @@ impl Database {
             .ok_or_else(|| NeedleError::CollectionNotFound(collection.to_string()))?;
 
         coll.search_ids(query, k)
+    }
+
+    pub(crate) fn export_bundle_internal(
+        &self,
+        collection: &str,
+        path: &std::path::Path,
+    ) -> Result<crate::collection::BundleManifest> {
+        let state = self.state.read();
+        let coll = state
+            .collections
+            .get(collection)
+            .ok_or_else(|| NeedleError::CollectionNotFound(collection.to_string()))?;
+        coll.export_bundle(path)
+    }
+
+    /// Import a collection from a portable bundle file into this database.
+    ///
+    /// # Errors
+    /// Returns an error if the bundle is invalid or I/O fails.
+    pub fn import_bundle(
+        &mut self,
+        path: &std::path::Path,
+        name_override: Option<&str>,
+    ) -> Result<crate::collection::BundleManifest> {
+        let mut collection = Collection::import_bundle(path)?;
+
+        let name = if let Some(n) = name_override {
+            collection.set_name(n.to_string());
+            n.to_string()
+        } else {
+            collection.name().to_string()
+        };
+
+        let manifest = crate::collection::BundleManifest {
+            format_version: 1,
+            collection_name: name.clone(),
+            dimensions: collection.dimensions(),
+            distance_function: format!("{:?}", collection.config().distance),
+            vector_count: collection.len(),
+            embedding_model: None,
+            created_at: 0,
+            data_hash: None,
+        };
+
+        let mut state = self.state.write();
+        state.collections.insert(name, collection);
+        drop(state);
+        self.mark_modified();
+
+        Ok(manifest)
     }
 }
 

@@ -531,6 +531,17 @@ impl<'a> CollectionRef<'a> {
         self.db.get_internal(&self.name, id)
     }
 
+    /// Get provenance record for a vector.
+    ///
+    /// Returns the provenance metadata (source document, embedding model, pipeline, etc.)
+    /// if one was recorded during insertion.
+    pub fn get_provenance(
+        &self,
+        vector_id: &str,
+    ) -> Option<crate::persistence::vector_versioning::ProvenanceRecord> {
+        self.db.get_provenance_internal(&self.name, vector_id)
+    }
+
     /// Delete a vector by its ID.
     ///
     /// Removes the vector from the index. Storage space is not immediately
@@ -956,5 +967,24 @@ impl<'a> CollectionRef<'a> {
     /// List all snapshots for this collection.
     pub fn list_snapshots(&self) -> Vec<String> {
         self.db.list_snapshots(&self.name)
+    }
+
+    /// Evaluate search quality using ground truth data.
+    ///
+    /// Computes recall@k, precision@k, MAP, MRR, and NDCG metrics.
+    pub fn evaluate(
+        &self,
+        ground_truth: &[crate::collection::GroundTruthEntry],
+        k: usize,
+    ) -> Result<crate::collection::EvaluationReport> {
+        self.db.evaluate_internal(&self.name, ground_truth, k)
+    }
+
+    /// Export the collection as a portable bundle file.
+    pub fn export_bundle(
+        &self,
+        path: &std::path::Path,
+    ) -> Result<crate::collection::BundleManifest> {
+        self.db.export_bundle_internal(&self.name, path)
     }
 }

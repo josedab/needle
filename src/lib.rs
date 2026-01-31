@@ -465,8 +465,9 @@ uniffi::setup_scaffolding!();
 // ── Stable API ───────────────────────────────────────────────────────────────
 // These types form the core stable API surface. Breaking changes follow semver.
 pub use collection::{
-    Collection, CollectionConfig, CollectionIter, CollectionStats, QueryCacheConfig,
-    QueryCacheStats, SearchExplain, SearchResult,
+    BundleManifest, Collection, CollectionConfig, CollectionIter, CollectionStats,
+    EvaluationReport, GroundTruthEntry, QueryCacheConfig, QueryCacheStats, QueryMetrics,
+    SearchExplain, SearchResult, SemanticQueryCacheConfig,
 };
 pub use database::collection_ref::SearchParams;
 pub use database::{CollectionRef, Database, DatabaseConfig, ExportEntry};

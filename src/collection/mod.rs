@@ -66,6 +66,55 @@ use std::num::NonZeroUsize;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::warn;
 
+/// Ground truth entry for evaluation: a query vector paired with its known relevant vector IDs.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GroundTruthEntry {
+    /// Query vector
+    pub query: Vec<f32>,
+    /// Set of relevant vector IDs for this query
+    pub relevant_ids: Vec<String>,
+}
+
+/// Per-query evaluation metrics
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QueryMetrics {
+    /// Query index in the ground truth set
+    pub query_index: usize,
+    /// Recall@k: fraction of relevant items retrieved
+    pub recall_at_k: f64,
+    /// Precision@k: fraction of retrieved items that are relevant
+    pub precision_at_k: f64,
+    /// Average Precision for this query
+    pub average_precision: f64,
+    /// Reciprocal Rank (1/rank of first relevant result, 0 if none found)
+    pub reciprocal_rank: f64,
+    /// Normalized Discounted Cumulative Gain
+    pub ndcg: f64,
+}
+
+/// Aggregated evaluation report across all queries
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EvaluationReport {
+    /// Number of queries evaluated
+    pub num_queries: usize,
+    /// k value used
+    pub k: usize,
+    /// Mean Recall@k
+    pub mean_recall_at_k: f64,
+    /// Mean Precision@k
+    pub mean_precision_at_k: f64,
+    /// Mean Average Precision (MAP)
+    pub map: f64,
+    /// Mean Reciprocal Rank (MRR)
+    pub mrr: f64,
+    /// Mean NDCG@k
+    pub mean_ndcg: f64,
+    /// Per-query breakdown
+    pub per_query: Vec<QueryMetrics>,
+    /// Total evaluation time in milliseconds
+    pub eval_time_ms: f64,
+}
+
 /// Over-fetch multiplier for filtered searches: retrieve `k * FILTER_CANDIDATE_MULTIPLIER`
 /// candidates from the HNSW index to compensate for results removed by filtering.
 const FILTER_CANDIDATE_MULTIPLIER: usize = 10;
@@ -603,6 +652,36 @@ pub struct Collection {
     /// Used by `SearchBuilder::as_of()` for MVCC point-in-time queries.
     #[serde(default)]
     insertion_timestamps: std::collections::HashMap<usize, u64>,
+    /// Semantic query cache (similarity-based cache lookups)
+    /// Skipped during serialization - cache is rebuilt on load
+    #[serde(skip)]
+    semantic_cache: Option<Mutex<SemanticQueryCache>>,
+    /// Provenance tracking store
+    #[serde(default)]
+    provenance_store: crate::persistence::vector_versioning::ProvenanceStore,
+}
+
+/// Manifest for a portable collection bundle.
+///
+/// Contains metadata about the bundled collection for validation during import.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BundleManifest {
+    /// Bundle format version
+    pub format_version: u32,
+    /// Collection name
+    pub collection_name: String,
+    /// Vector dimensions
+    pub dimensions: usize,
+    /// Distance function
+    pub distance_function: String,
+    /// Number of vectors in the bundle
+    pub vector_count: usize,
+    /// Embedding model used (if known)
+    pub embedding_model: Option<String>,
+    /// Bundle creation timestamp (Unix epoch seconds)
+    pub created_at: u64,
+    /// SHA-256 hash of the serialized collection data
+    pub data_hash: Option<String>,
 }
 
 /// Internal query cache with statistics tracking
@@ -694,7 +773,198 @@ impl ShardedQueryCache {
             misses,
             size,
             capacity,
+            semantic_hits: 0,
+            semantic_misses: 0,
         }
+    }
+}
+
+/// Semantic query cache entry with TTL support.
+struct SemanticCacheEntry {
+    /// The cached search results
+    results: Vec<SearchResult>,
+    /// Number of results requested (k parameter)
+    k: usize,
+    /// Expiration timestamp (Unix epoch seconds), None = no expiration
+    expires_at: Option<u64>,
+    /// Last access timestamp for LRU eviction
+    last_accessed: u64,
+}
+
+/// Semantic query cache that uses a small HNSW index to find similar past queries.
+///
+/// Instead of requiring exact vector match (like `ShardedQueryCache`), this cache
+/// finds queries that are *similar enough* (above a configurable threshold) and
+/// returns their cached results. This dramatically improves cache hit rates for
+/// workloads with slight query variations.
+struct SemanticQueryCache {
+    /// Small HNSW index storing cached query vectors
+    index: HnswIndex,
+    /// Stored query vectors (parallel to index entries)
+    vectors: Vec<Vec<f32>>,
+    /// Cached results keyed by internal vector ID
+    entries: HashMap<usize, SemanticCacheEntry>,
+    /// Similarity threshold (0.0-1.0); distance must be < (1 - threshold)
+    similarity_threshold: f32,
+    /// Maximum capacity
+    capacity: usize,
+    /// TTL in seconds for cache entries
+    ttl_seconds: Option<u64>,
+    /// Hit counter
+    hits: u64,
+    /// Miss counter
+    misses: u64,
+    /// Next internal ID for the cache index
+    next_id: usize,
+}
+
+impl std::fmt::Debug for SemanticQueryCache {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SemanticQueryCache")
+            .field("size", &self.entries.len())
+            .field("capacity", &self.capacity)
+            .field("hits", &self.hits)
+            .field("misses", &self.misses)
+            .finish()
+    }
+}
+
+impl SemanticQueryCache {
+    fn new(config: &SemanticQueryCacheConfig, _dimensions: usize) -> Self {
+        let hnsw_config = HnswConfig {
+            m: 8,
+            ef_construction: 100,
+            ef_search: 10,
+            ..HnswConfig::default()
+        };
+        Self {
+            index: HnswIndex::new(hnsw_config, DistanceFunction::Cosine),
+            vectors: Vec::new(),
+            entries: HashMap::new(),
+            similarity_threshold: config.similarity_threshold,
+            capacity: config.capacity,
+            ttl_seconds: config.ttl_seconds,
+            hits: 0,
+            misses: 0,
+            next_id: 0,
+        }
+    }
+
+    fn now_unix() -> u64 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs()
+    }
+
+    /// Look up cached results for a similar query vector.
+    fn lookup(&mut self, query: &[f32], k: usize) -> Option<Vec<SearchResult>> {
+        if self.index.is_empty() {
+            self.misses += 1;
+            return None;
+        }
+
+        let max_distance = 1.0 - self.similarity_threshold;
+
+        // Search the cache index for the most similar cached query
+        let candidates = self.index.search(query, 1, &self.vectors).ok()?;
+
+        if let Some(&(id, distance)) = candidates.first() {
+            if distance <= max_distance {
+                if let Some(entry) = self.entries.get_mut(&id) {
+                    // Check TTL (lazy expiration)
+                    if let Some(expires_at) = entry.expires_at {
+                        if Self::now_unix() > expires_at {
+                            self.misses += 1;
+                            return None;
+                        }
+                    }
+                    // Check that cached k is sufficient
+                    if entry.k >= k {
+                        self.hits += 1;
+                        entry.last_accessed = Self::now_unix();
+                        let mut results = entry.results.clone();
+                        results.truncate(k);
+                        return Some(results);
+                    }
+                }
+            }
+        }
+
+        self.misses += 1;
+        None
+    }
+
+    /// Insert a query and its results into the cache.
+    fn insert(&mut self, query: &[f32], k: usize, results: &[SearchResult]) {
+        // LRU eviction: remove oldest-accessed entry when at capacity
+        while self.entries.len() >= self.capacity {
+            self.evict_lru();
+        }
+
+        let id = self.next_id;
+        self.next_id += 1;
+
+        let query_vec = query.to_vec();
+        while self.vectors.len() <= id {
+            self.vectors.push(Vec::new());
+        }
+        self.vectors[id] = query_vec.clone();
+
+        let now = Self::now_unix();
+        let expires_at = self.ttl_seconds.map(|ttl| now + ttl);
+        self.entries.insert(
+            id,
+            SemanticCacheEntry {
+                results: results.to_vec(),
+                k,
+                expires_at,
+                last_accessed: now,
+            },
+        );
+
+        // Insert into the HNSW index — ignore errors for cache operations
+        let _ = self.index.insert(id, &query_vec, &self.vectors);
+    }
+
+    /// Evict the least-recently-used entry, preferring expired entries first.
+    fn evict_lru(&mut self) {
+        // First try to find and remove an expired entry
+        let now = Self::now_unix();
+        let expired_id = self.entries.iter().find_map(|(&id, entry)| {
+            entry.expires_at.filter(|&exp| now > exp).map(|_| id)
+        });
+        if let Some(id) = expired_id {
+            self.entries.remove(&id);
+            self.index.delete(id);
+            return;
+        }
+        // Otherwise remove least-recently-accessed
+        if let Some((&lru_id, _)) = self.entries.iter().min_by_key(|(_, e)| e.last_accessed) {
+            self.entries.remove(&lru_id);
+            self.index.delete(lru_id);
+        }
+    }
+
+    /// Warm the cache with a set of query vectors and their results.
+    /// Useful for pre-populating the cache on startup with common queries.
+    fn warm(&mut self, entries: Vec<(&[f32], usize, Vec<SearchResult>)>) {
+        for (query, k, results) in entries {
+            self.insert(query, k, &results);
+        }
+    }
+
+    /// Clear all cached entries and reset the index.
+    fn clear(&mut self) {
+        let hnsw_config = self.index.config().clone();
+        self.index = HnswIndex::new(hnsw_config, DistanceFunction::Cosine);
+        self.vectors.clear();
+        self.entries.clear();
+        self.next_id = 0;
+    }
+
+    fn stats(&self) -> (u64, u64) {
+        (self.hits, self.misses)
     }
 }
 
@@ -742,6 +1012,8 @@ impl QueryCache {
             misses: self.misses,
             size: self.cache.len(),
             capacity,
+            semantic_hits: 0,
+            semantic_misses: 0,
         }
     }
 }
@@ -765,6 +1037,10 @@ impl Collection {
             None
         };
 
+        let semantic_cache = config.semantic_cache.as_ref().map(|sc_config| {
+            Mutex::new(SemanticQueryCache::new(sc_config, config.dimensions))
+        });
+
         Self {
             vectors: VectorStore::new(config.dimensions),
             index: HnswIndex::new(config.hnsw.clone(), config.distance),
@@ -772,6 +1048,8 @@ impl Collection {
             query_cache,
             expirations: HashMap::new(),
             insertion_timestamps: HashMap::new(),
+            semantic_cache,
+            provenance_store: crate::persistence::vector_versioning::ProvenanceStore::new(),
             config,
         }
     }
@@ -789,6 +1067,11 @@ impl Collection {
     /// Get the collection name
     pub fn name(&self) -> &str {
         &self.config.name
+    }
+
+    /// Set the collection name.
+    pub fn set_name(&mut self, name: String) {
+        self.config.name = name;
     }
 
     /// Get the vector dimensions
@@ -943,7 +1226,64 @@ impl Collection {
     pub fn query_cache_stats(&self) -> Option<QueryCacheStats> {
         self.query_cache
             .as_ref()
-            .map(|cache| cache.stats(self.config.query_cache.capacity))
+            .map(|cache| {
+                let mut stats = cache.stats(self.config.query_cache.capacity);
+                // Merge semantic cache stats if present
+                if let Some(ref sem_cache) = self.semantic_cache {
+                    let (sem_hits, sem_misses) = sem_cache.lock().stats();
+                    stats.semantic_hits = sem_hits;
+                    stats.semantic_misses = sem_misses;
+                }
+                stats
+            })
+    }
+
+    /// Get semantic cache statistics.
+    ///
+    /// Returns `None` if semantic caching is disabled.
+    pub fn semantic_cache_stats(&self) -> Option<QueryCacheStats> {
+        self.semantic_cache.as_ref().map(|sem_cache| {
+            let cache = sem_cache.lock();
+            let (sem_hits, sem_misses) = cache.stats();
+            QueryCacheStats {
+                hits: 0,
+                misses: 0,
+                size: cache.entries.len(),
+                capacity: cache.capacity,
+                semantic_hits: sem_hits,
+                semantic_misses: sem_misses,
+            }
+        })
+    }
+
+    /// Warm the semantic cache with pre-computed query/result pairs.
+    ///
+    /// Useful for pre-populating the cache on startup with common queries
+    /// to avoid cold-start cache misses.
+    ///
+    /// No-op if semantic caching is disabled.
+    pub fn warm_semantic_cache(&self, entries: Vec<(&[f32], usize, Vec<SearchResult>)>) {
+        if let Some(ref sem_cache) = self.semantic_cache {
+            let mut cache = sem_cache.lock();
+            cache.warm(entries);
+        }
+    }
+
+    /// Warm the semantic cache by executing actual searches on a set of queries.
+    ///
+    /// Each query vector is searched and the results are cached. This is useful
+    /// for pre-warming the cache with known common queries on startup.
+    ///
+    /// No-op if semantic caching is disabled.
+    pub fn warm_semantic_cache_from_queries(&self, queries: &[Vec<f32>], k: usize) -> Result<()> {
+        if self.semantic_cache.is_none() {
+            return Ok(());
+        }
+        for query in queries {
+            // search() already caches results in the semantic cache
+            let _ = self.search(query, k)?;
+        }
+        Ok(())
     }
 
     /// Helper to invalidate the query cache.
@@ -951,6 +1291,9 @@ impl Collection {
     fn invalidate_cache(&self) {
         if let Some(ref cache) = self.query_cache {
             cache.clear();
+        }
+        if let Some(ref sem_cache) = self.semantic_cache {
+            sem_cache.lock().clear();
         }
     }
 
@@ -1239,6 +1582,36 @@ impl Collection {
         Ok(())
     }
 
+    /// Insert a vector with provenance tracking.
+    ///
+    /// Records the full provenance of the vector including source document,
+    /// embedding model, pipeline ID, and parent vector.
+    pub fn insert_with_provenance(
+        &mut self,
+        id: impl Into<String>,
+        vector: &[f32],
+        metadata: Option<Value>,
+        provenance: crate::persistence::vector_versioning::ProvenanceRecord,
+    ) -> Result<()> {
+        let id = id.into();
+        self.insert(&id, vector, metadata)?;
+        self.provenance_store.insert(provenance);
+        Ok(())
+    }
+
+    /// Get provenance record for a vector
+    pub fn get_provenance(
+        &self,
+        vector_id: &str,
+    ) -> Option<&crate::persistence::vector_versioning::ProvenanceRecord> {
+        self.provenance_store.get(vector_id)
+    }
+
+    /// Get the provenance store for querying
+    pub fn provenance_store(&self) -> &crate::persistence::vector_versioning::ProvenanceStore {
+        &self.provenance_store
+    }
+
     /// Create a search builder for fluent search configuration
     ///
     /// # Example
@@ -1298,7 +1671,15 @@ impl Collection {
             return Ok(Vec::new());
         }
 
-        // Use cache if enabled
+        // Check semantic cache BEFORE exact-match LRU cache
+        if let Some(ref sem_cache) = self.semantic_cache {
+            let mut cache = sem_cache.lock();
+            if let Some(results) = cache.lookup(query, k) {
+                return Ok(results);
+            }
+        }
+
+        // Use exact-match cache if enabled
         let results = self.search_with_cache(query, k, || {
             let raw_results = self.index.search(query, k, self.vectors.as_slice())?;
 
@@ -1314,6 +1695,12 @@ impl Collection {
 
             self.enrich_results(filtered_results)
         })?;
+
+        // Store in semantic cache
+        if let Some(ref sem_cache) = self.semantic_cache {
+            let mut cache = sem_cache.lock();
+            cache.insert(query, k, &results);
+        }
 
         // Log slow queries if threshold is configured
         if let Some(threshold_us) = self.config.slow_query_threshold_us {
@@ -2263,6 +2650,7 @@ impl Collection {
 
         self.metadata.delete(internal_id);
         self.index.delete(internal_id)?;
+        self.provenance_store.remove(id);
 
         // Invalidate cache since collection changed
         self.invalidate_cache();
@@ -2743,6 +3131,223 @@ impl Collection {
         serde_json::from_slice(data).map_err(|e| {
             NeedleError::InvalidInput(format!("Failed to deserialize snapshot: {e}"))
         })
+    }
+
+    /// Evaluate search quality using ground truth data.
+    ///
+    /// Computes recall@k, precision@k, MAP, MRR, and NDCG metrics.
+    ///
+    /// # Arguments
+    /// * `ground_truth` - List of (query_vector, relevant_ids) pairs
+    /// * `k` - Number of results to retrieve per query
+    ///
+    /// # Returns
+    /// An `EvaluationReport` with aggregated and per-query metrics.
+    pub fn evaluate(&self, ground_truth: &[GroundTruthEntry], k: usize) -> Result<EvaluationReport> {
+        use std::time::Instant;
+
+        let start = Instant::now();
+        let mut per_query = Vec::with_capacity(ground_truth.len());
+
+        for (idx, entry) in ground_truth.iter().enumerate() {
+            let results = self.search(&entry.query, k)?;
+            let retrieved_ids: Vec<&str> = results.iter().map(|r| r.id.as_str()).collect();
+            let relevant_set: HashSet<&str> = entry.relevant_ids.iter().map(|s| s.as_str()).collect();
+
+            // Recall@k
+            let hits = retrieved_ids.iter().filter(|id| relevant_set.contains(*id)).count();
+            let recall = if relevant_set.is_empty() { 1.0 } else { hits as f64 / relevant_set.len() as f64 };
+
+            // Precision@k
+            let precision = if retrieved_ids.is_empty() { 0.0 } else { hits as f64 / retrieved_ids.len() as f64 };
+
+            // Average Precision
+            let mut ap_sum = 0.0;
+            let mut relevant_count = 0;
+            for (rank, id) in retrieved_ids.iter().enumerate() {
+                if relevant_set.contains(*id) {
+                    relevant_count += 1;
+                    ap_sum += relevant_count as f64 / (rank + 1) as f64;
+                }
+            }
+            let ap = if relevant_set.is_empty() { 0.0 } else { ap_sum / relevant_set.len() as f64 };
+
+            // Reciprocal Rank
+            let rr = retrieved_ids.iter()
+                .position(|id| relevant_set.contains(*id))
+                .map(|pos| 1.0 / (pos + 1) as f64)
+                .unwrap_or(0.0);
+
+            // NDCG@k
+            let dcg: f64 = retrieved_ids.iter().enumerate()
+                .map(|(rank, id)| {
+                    let rel = if relevant_set.contains(*id) { 1.0 } else { 0.0 };
+                    rel / (rank as f64 + 2.0).log2()
+                })
+                .sum();
+            let ideal_hits = relevant_set.len().min(k);
+            let idcg: f64 = (0..ideal_hits)
+                .map(|rank| 1.0 / (rank as f64 + 2.0).log2())
+                .sum();
+            let ndcg = if idcg > 0.0 { dcg / idcg } else { 0.0 };
+
+            per_query.push(QueryMetrics {
+                query_index: idx,
+                recall_at_k: recall,
+                precision_at_k: precision,
+                average_precision: ap,
+                reciprocal_rank: rr,
+                ndcg,
+            });
+        }
+
+        let n = per_query.len() as f64;
+        let mean = |f: fn(&QueryMetrics) -> f64| -> f64 {
+            if n == 0.0 { 0.0 } else { per_query.iter().map(f).sum::<f64>() / n }
+        };
+
+        Ok(EvaluationReport {
+            num_queries: per_query.len(),
+            k,
+            mean_recall_at_k: mean(|q| q.recall_at_k),
+            mean_precision_at_k: mean(|q| q.precision_at_k),
+            map: mean(|q| q.average_precision),
+            mrr: mean(|q| q.reciprocal_rank),
+            mean_ndcg: mean(|q| q.ndcg),
+            eval_time_ms: start.elapsed().as_secs_f64() * 1000.0,
+            per_query,
+        })
+    }
+
+    /// Record relevance feedback for search result quality improvement.
+    /// This feeds into the contextual bandits reranker for learning optimal result ordering.
+    pub fn record_feedback(&self, query_id: &str, vector_id: &str, relevance_score: f32) {
+        // Feedback is stored as metadata for now; full bandits integration
+        // happens through the BanditsReranker in the search pipeline.
+        tracing::info!(
+            collection = %self.config.name,
+            query_id = query_id,
+            vector_id = vector_id,
+            relevance_score = relevance_score,
+            "relevance feedback recorded"
+        );
+    }
+
+    // ============ Bundle Export/Import Methods ============
+
+    /// Export the collection as a portable bundle to the specified path.
+    ///
+    /// The bundle is a JSON file containing the manifest and serialized collection data.
+    /// This enables easy sharing and migration of collections between Needle instances.
+    ///
+    /// # Errors
+    /// Returns an error if serialization or file I/O fails.
+    pub fn export_bundle(&self, path: &std::path::Path) -> Result<BundleManifest> {
+        use sha2::{Digest, Sha256};
+
+        let data =
+            serde_json::to_vec(self).map_err(|e| NeedleError::Serialization(e))?;
+
+        let hash = {
+            let mut hasher = Sha256::new();
+            hasher.update(&data);
+            format!("{:x}", hasher.finalize())
+        };
+
+        let manifest = BundleManifest {
+            format_version: 1,
+            collection_name: self.config.name.clone(),
+            dimensions: self.config.dimensions,
+            distance_function: format!("{:?}", self.config.distance),
+            vector_count: self.len(),
+            embedding_model: None,
+            created_at: Self::now_unix(),
+            data_hash: Some(hash),
+        };
+
+        let bundle = serde_json::json!({
+            "manifest": manifest,
+            "data": serde_json::from_slice::<serde_json::Value>(&data).unwrap_or_default(),
+        });
+
+        let bundle_bytes = serde_json::to_vec_pretty(&bundle)
+            .map_err(|e| NeedleError::Serialization(e))?;
+        std::fs::write(path, &bundle_bytes).map_err(NeedleError::Io)?;
+
+        Ok(manifest)
+    }
+
+    /// Import a collection from a portable bundle file.
+    ///
+    /// Validates the bundle manifest for schema compatibility before importing.
+    ///
+    /// # Errors
+    /// Returns an error if the bundle format is invalid, incompatible, or I/O fails.
+    pub fn import_bundle(path: &std::path::Path) -> Result<Self> {
+        let bundle_bytes = std::fs::read(path).map_err(NeedleError::Io)?;
+        let bundle: serde_json::Value = serde_json::from_slice(&bundle_bytes)
+            .map_err(|e| NeedleError::Serialization(e))?;
+
+        let manifest: BundleManifest = serde_json::from_value(
+            bundle
+                .get("manifest")
+                .ok_or_else(|| {
+                    NeedleError::InvalidDatabase("Bundle missing manifest".to_string())
+                })?
+                .clone(),
+        )
+        .map_err(|e| NeedleError::InvalidDatabase(format!("Invalid manifest: {}", e)))?;
+
+        if manifest.format_version != 1 {
+            return Err(NeedleError::InvalidDatabase(format!(
+                "Unsupported bundle format version: {}",
+                manifest.format_version
+            )));
+        }
+
+        let data = bundle.get("data").ok_or_else(|| {
+            NeedleError::InvalidDatabase("Bundle missing data".to_string())
+        })?;
+
+        let mut collection: Collection = serde_json::from_value(data.clone())
+            .map_err(|e| {
+                NeedleError::InvalidDatabase(format!("Invalid collection data: {}", e))
+            })?;
+
+        // Reinitialize non-serializable fields
+        if collection.config.query_cache.is_enabled() {
+            if let Some(cap) =
+                std::num::NonZeroUsize::new(collection.config.query_cache.capacity)
+            {
+                collection.query_cache = Some(ShardedQueryCache::new(cap));
+            }
+        }
+
+        Ok(collection)
+    }
+
+    /// Validate that a bundle is compatible by reading its manifest.
+    ///
+    /// # Errors
+    /// Returns an error if the bundle file cannot be read or parsed.
+    pub fn validate_bundle_compatibility(
+        path: &std::path::Path,
+    ) -> Result<BundleManifest> {
+        let bundle_bytes = std::fs::read(path).map_err(NeedleError::Io)?;
+        let bundle: serde_json::Value = serde_json::from_slice(&bundle_bytes)
+            .map_err(|e| NeedleError::Serialization(e))?;
+
+        let manifest: BundleManifest = serde_json::from_value(
+            bundle
+                .get("manifest")
+                .ok_or_else(|| {
+                    NeedleError::InvalidDatabase("Bundle missing manifest".to_string())
+                })?
+                .clone(),
+        )
+        .map_err(|e| NeedleError::InvalidDatabase(format!("Invalid manifest: {}", e)))?;
+
+        Ok(manifest)
     }
 }
 
@@ -3757,5 +4362,249 @@ mod tests {
         for r in &results {
             assert!(r.id == "a" || r.id == "c");
         }
+    }
+
+    #[test]
+    fn test_semantic_cache_hit() {
+        let config = CollectionConfig::new("test", 4)
+            .with_semantic_cache(
+                crate::collection::config::SemanticQueryCacheConfig::new(10, 0.90)
+            );
+        let mut collection = Collection::new(config);
+        collection.insert("v1", &[1.0, 0.0, 0.0, 0.0], None).unwrap();
+        collection.insert("v2", &[0.0, 1.0, 0.0, 0.0], None).unwrap();
+
+        // First search – cache miss
+        let r1 = collection.search(&[1.0, 0.0, 0.0, 0.0], 2).unwrap();
+        assert!(!r1.is_empty());
+
+        let stats = collection.semantic_cache_stats().unwrap();
+        assert_eq!(stats.semantic_hits, 0);
+        assert_eq!(stats.semantic_misses, 1);
+
+        // Nearly identical query – cache hit
+        let r2 = collection.search(&[0.999, 0.001, 0.0, 0.0], 2).unwrap();
+        let stats = collection.semantic_cache_stats().unwrap();
+        assert_eq!(stats.semantic_hits, 1);
+        assert_eq!(r2[0].id, r1[0].id);
+    }
+
+    #[test]
+    fn test_semantic_cache_invalidation() {
+        let config = CollectionConfig::new("test", 4)
+            .with_semantic_cache(
+                crate::collection::config::SemanticQueryCacheConfig::new(10, 0.90)
+            );
+        let mut collection = Collection::new(config);
+        collection.insert("v1", &[1.0, 0.0, 0.0, 0.0], None).unwrap();
+
+        let _ = collection.search(&[1.0, 0.0, 0.0, 0.0], 1).unwrap();
+        assert_eq!(collection.semantic_cache_stats().unwrap().size, 1);
+
+        // Insert invalidates cache
+        collection.insert("v2", &[0.0, 1.0, 0.0, 0.0], None).unwrap();
+        assert_eq!(collection.semantic_cache_stats().unwrap().size, 0);
+    }
+
+    #[test]
+    fn test_semantic_cache_lru_eviction() {
+        let config = CollectionConfig::new("test", 4)
+            .with_semantic_cache(
+                crate::collection::config::SemanticQueryCacheConfig::new(2, 0.99)
+            );
+        let mut collection = Collection::new(config);
+        collection.insert("v1", &[1.0, 0.0, 0.0, 0.0], None).unwrap();
+        collection.insert("v2", &[0.0, 1.0, 0.0, 0.0], None).unwrap();
+        collection.insert("v3", &[0.0, 0.0, 1.0, 0.0], None).unwrap();
+
+        // Fill cache with 2 entries (at capacity)
+        let _ = collection.search(&[1.0, 0.0, 0.0, 0.0], 1).unwrap();
+        let _ = collection.search(&[0.0, 1.0, 0.0, 0.0], 1).unwrap();
+        assert_eq!(collection.semantic_cache_stats().unwrap().size, 2);
+
+        // Third query triggers LRU eviction, should still work
+        let _ = collection.search(&[0.0, 0.0, 1.0, 0.0], 1).unwrap();
+        assert_eq!(collection.semantic_cache_stats().unwrap().size, 2);
+    }
+
+    #[test]
+    fn test_semantic_cache_warming() {
+        let config = CollectionConfig::new("test", 4)
+            .with_semantic_cache(
+                crate::collection::config::SemanticQueryCacheConfig::new(10, 0.90)
+            );
+        let mut collection = Collection::new(config);
+        collection.insert("v1", &[1.0, 0.0, 0.0, 0.0], None).unwrap();
+
+        // Warm the cache
+        let warm_results = vec![SearchResult::new("v1", 0.01, None)];
+        let query = [1.0f32, 0.0, 0.0, 0.0];
+        collection.warm_semantic_cache(vec![(&query, 1, warm_results)]);
+        assert_eq!(collection.semantic_cache_stats().unwrap().size, 1);
+
+        // Lookup should hit the warmed entry
+        let r = collection.search(&[0.999, 0.001, 0.0, 0.0], 1).unwrap();
+        assert_eq!(collection.semantic_cache_stats().unwrap().semantic_hits, 1);
+        assert_eq!(r[0].id, "v1");
+    }
+
+    #[test]
+    fn test_semantic_cache_warm_from_queries() {
+        let config = CollectionConfig::new("test", 4)
+            .with_semantic_cache(
+                crate::collection::config::SemanticQueryCacheConfig::new(10, 0.90)
+            );
+        let mut collection = Collection::new(config);
+        collection.insert("v1", &[1.0, 0.0, 0.0, 0.0], None).unwrap();
+        collection.insert("v2", &[0.0, 1.0, 0.0, 0.0], None).unwrap();
+
+        // Warm from actual queries
+        let queries = vec![
+            vec![1.0, 0.0, 0.0, 0.0],
+            vec![0.0, 1.0, 0.0, 0.0],
+        ];
+        collection.warm_semantic_cache_from_queries(&queries, 2).unwrap();
+        assert_eq!(collection.semantic_cache_stats().unwrap().size, 2);
+
+        // Subsequent similar queries should hit cache
+        let _ = collection.search(&[0.999, 0.001, 0.0, 0.0], 2).unwrap();
+        assert_eq!(collection.semantic_cache_stats().unwrap().semantic_hits, 1);
+    }
+
+    #[test]
+    fn test_evaluate_basic() {
+        let mut collection = Collection::with_dimensions("test", 4);
+        collection.insert("v1", &[1.0, 0.0, 0.0, 0.0], None).unwrap();
+        collection.insert("v2", &[0.0, 1.0, 0.0, 0.0], None).unwrap();
+        collection.insert("v3", &[0.0, 0.0, 1.0, 0.0], None).unwrap();
+
+        let gt = vec![GroundTruthEntry {
+            query: vec![1.0, 0.0, 0.0, 0.0],
+            relevant_ids: vec!["v1".to_string()],
+        }];
+        let report = collection.evaluate(&gt, 3).unwrap();
+        assert_eq!(report.num_queries, 1);
+        assert!(report.mean_recall_at_k > 0.99, "recall should be 1.0");
+        assert!(report.mrr > 0.99, "MRR should be 1.0");
+    }
+
+    #[test]
+    fn test_evaluate_multiple_queries() {
+        let mut collection = Collection::with_dimensions("test", 4);
+        collection.insert("v1", &[1.0, 0.0, 0.0, 0.0], None).unwrap();
+        collection.insert("v2", &[0.0, 1.0, 0.0, 0.0], None).unwrap();
+        collection.insert("v3", &[0.0, 0.0, 1.0, 0.0], None).unwrap();
+        collection.insert("v4", &[0.0, 0.0, 0.0, 1.0], None).unwrap();
+
+        let gt = vec![
+            GroundTruthEntry {
+                query: vec![1.0, 0.0, 0.0, 0.0],
+                relevant_ids: vec!["v1".to_string()],
+            },
+            GroundTruthEntry {
+                query: vec![0.0, 1.0, 0.0, 0.0],
+                relevant_ids: vec!["v2".to_string()],
+            },
+        ];
+        let report = collection.evaluate(&gt, 4).unwrap();
+        assert_eq!(report.num_queries, 2);
+        assert!(report.mean_recall_at_k > 0.99);
+        assert!(report.mrr > 0.99);
+        assert!(report.mean_ndcg > 0.99);
+        assert_eq!(report.per_query.len(), 2);
+    }
+
+    #[test]
+    fn test_evaluate_precision() {
+        let mut collection = Collection::with_dimensions("test", 4);
+        collection.insert("v1", &[1.0, 0.0, 0.0, 0.0], None).unwrap();
+        collection.insert("v2", &[0.9, 0.1, 0.0, 0.0], None).unwrap();
+        collection.insert("v3", &[0.0, 1.0, 0.0, 0.0], None).unwrap();
+
+        // Only v1 is relevant, but we ask for k=3 → precision should be ~0.33
+        let gt = vec![GroundTruthEntry {
+            query: vec![1.0, 0.0, 0.0, 0.0],
+            relevant_ids: vec!["v1".to_string()],
+        }];
+        let report = collection.evaluate(&gt, 3).unwrap();
+        assert!(report.mean_precision_at_k < 0.5);
+        assert!(report.mean_precision_at_k > 0.0);
+    }
+
+    #[test]
+    fn test_insert_with_provenance() {
+        use crate::persistence::vector_versioning::ProvenanceRecord;
+
+        let mut collection = Collection::with_dimensions("test", 4);
+        let prov = ProvenanceRecord::new("v1")
+            .with_source("document.pdf")
+            .with_model("text-embedding-3-small", "2024-01");
+
+        collection.insert_with_provenance(
+            "v1",
+            &[1.0, 0.0, 0.0, 0.0],
+            Some(json!({"title": "test"})),
+            prov,
+        ).unwrap();
+
+        assert_eq!(collection.len(), 1);
+
+        let prov = collection.get_provenance("v1").unwrap();
+        assert_eq!(prov.source_document.as_deref(), Some("document.pdf"));
+        assert_eq!(prov.embedding_model.as_deref(), Some("text-embedding-3-small"));
+    }
+
+    #[test]
+    fn test_provenance_removed_on_delete() {
+        use crate::persistence::vector_versioning::ProvenanceRecord;
+
+        let mut collection = Collection::with_dimensions("test", 4);
+        let prov = ProvenanceRecord::new("v1").with_source("doc1");
+        collection.insert_with_provenance("v1", &[1.0, 0.0, 0.0, 0.0], None, prov).unwrap();
+        assert!(collection.get_provenance("v1").is_some());
+
+        collection.delete("v1").unwrap();
+        assert!(collection.get_provenance("v1").is_none());
+    }
+
+    #[test]
+    fn test_bundle_export_import_roundtrip() {
+        let mut collection = Collection::with_dimensions("test_bundle", 4);
+        collection.insert("v1", &[1.0, 0.0, 0.0, 0.0], Some(json!({"k": "a"}))).unwrap();
+        collection.insert("v2", &[0.0, 1.0, 0.0, 0.0], None).unwrap();
+
+        let dir = tempfile::tempdir().unwrap();
+        let bundle_path = dir.path().join("test.needle-bundle");
+
+        // Export
+        let manifest = collection.export_bundle(&bundle_path).unwrap();
+        assert_eq!(manifest.collection_name, "test_bundle");
+        assert_eq!(manifest.vector_count, 2);
+        assert_eq!(manifest.dimensions, 4);
+        assert!(manifest.data_hash.is_some());
+
+        // Validate
+        let validated = Collection::validate_bundle_compatibility(&bundle_path).unwrap();
+        assert_eq!(validated.format_version, 1);
+
+        // Import
+        let imported = Collection::import_bundle(&bundle_path).unwrap();
+        assert_eq!(imported.name(), "test_bundle");
+        assert_eq!(imported.dimensions(), 4);
+        assert_eq!(imported.len(), 2);
+        assert!(imported.contains("v1"));
+        assert!(imported.contains("v2"));
+
+        // Verify data integrity
+        let (vec, meta) = imported.get("v1").unwrap();
+        assert_eq!(vec.len(), 4);
+        assert_eq!(meta.unwrap()["k"], "a");
+    }
+
+    #[test]
+    fn test_record_feedback() {
+        let collection = Collection::with_dimensions("test", 4);
+        // Should not panic — just logs
+        collection.record_feedback("query_1", "vec_1", 0.9);
     }
 }

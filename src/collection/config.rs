@@ -70,6 +70,49 @@ pub struct QueryCacheStats {
     pub size: usize,
     /// Maximum cache capacity
     pub capacity: usize,
+    /// Semantic cache hits (similarity-based matches)
+    pub semantic_hits: u64,
+    /// Semantic cache misses
+    pub semantic_misses: u64,
+}
+
+/// Configuration for semantic query caching (similarity-based cache lookups)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SemanticQueryCacheConfig {
+    /// Maximum number of cached query results
+    pub capacity: usize,
+    /// Similarity threshold (0.0-1.0) for cache hits. Higher = stricter matching.
+    pub similarity_threshold: f32,
+    /// TTL in seconds for cache entries (None = no expiration)
+    pub ttl_seconds: Option<u64>,
+}
+
+impl Default for SemanticQueryCacheConfig {
+    fn default() -> Self {
+        Self {
+            capacity: 100,
+            similarity_threshold: 0.95,
+            ttl_seconds: None,
+        }
+    }
+}
+
+impl SemanticQueryCacheConfig {
+    /// Create a new semantic query cache configuration.
+    pub fn new(capacity: usize, similarity_threshold: f32) -> Self {
+        Self {
+            capacity,
+            similarity_threshold,
+            ttl_seconds: None,
+        }
+    }
+
+    /// Set TTL in seconds for cache entries.
+    #[must_use]
+    pub fn with_ttl_seconds(mut self, ttl: u64) -> Self {
+        self.ttl_seconds = Some(ttl);
+        self
+    }
 }
 
 impl QueryCacheStats {
@@ -164,6 +207,9 @@ pub struct CollectionConfig {
     /// When false, expired vectors remain until explicitly swept or compacted.
     #[serde(default = "default_lazy_expiration")]
     pub lazy_expiration: bool,
+    /// Semantic query cache configuration (similarity-based cache lookups)
+    #[serde(default)]
+    pub semantic_cache: Option<SemanticQueryCacheConfig>,
 }
 
 fn default_lazy_expiration() -> bool {
@@ -187,6 +233,7 @@ impl CollectionConfig {
             query_cache: QueryCacheConfig::default(),
             default_ttl_seconds: None,
             lazy_expiration: true,
+            semantic_cache: None,
         }
     }
 
@@ -330,6 +377,25 @@ impl CollectionConfig {
     #[must_use]
     pub fn with_lazy_expiration(mut self, enabled: bool) -> Self {
         self.lazy_expiration = enabled;
+        self
+    }
+
+    /// Enable semantic query caching with the specified configuration.
+    ///
+    /// Semantic caching uses similarity-based lookup to return cached results
+    /// for queries that are similar (but not necessarily identical) to previous queries.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use needle::{CollectionConfig, SemanticQueryCacheConfig};
+    ///
+    /// let config = CollectionConfig::new("embeddings", 128)
+    ///     .with_semantic_cache(SemanticQueryCacheConfig::new(100, 0.95));
+    /// ```
+    #[must_use]
+    pub fn with_semantic_cache(mut self, config: SemanticQueryCacheConfig) -> Self {
+        self.semantic_cache = Some(config);
         self
     }
 }
