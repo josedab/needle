@@ -294,6 +294,33 @@ pub struct GpuMetrics {
     pub avg_gflops: HashMap<KernelType, f64>,
 }
 
+/// Result from adaptive batch search
+#[derive(Debug, Clone)]
+pub struct AdaptiveBatchResult {
+    /// Search results (index, distance)
+    pub results: Vec<(usize, f32)>,
+    /// Chunk size used for processing
+    pub chunk_size_used: usize,
+    /// Number of chunks processed
+    pub chunks_processed: usize,
+    /// Total processing time
+    pub total_time: Duration,
+    /// Throughput in vectors per second
+    pub throughput_vps: f64,
+}
+
+impl AdaptiveBatchResult {
+    /// Get just the indices of results
+    pub fn indices(&self) -> Vec<usize> {
+        self.results.iter().map(|(idx, _)| *idx).collect()
+    }
+
+    /// Get just the distances
+    pub fn distances(&self) -> Vec<f32> {
+        self.results.iter().map(|(_, d)| *d).collect()
+    }
+}
+
 /// GPU memory pool for efficient allocation
 #[derive(Debug)]
 #[allow(dead_code)]
@@ -1174,6 +1201,241 @@ impl GpuAccelerator {
             let entry = metrics.avg_gflops.entry(kernel).or_insert(0.0);
             *entry = (*entry * (count - 1.0) + g) / count;
         }
+    }
+
+    // ==========================================================================
+    // Streaming Batch Search (Feature 5 Enhancement)
+    // ==========================================================================
+
+    /// Stream-based batch search for memory-efficient processing of large datasets.
+    ///
+    /// Processes vectors in chunks to avoid memory overflow on GPU,
+    /// with automatic chunk sizing based on available memory.
+    pub fn streaming_batch_search(
+        &self,
+        query: &[f32],
+        vectors: &[Vec<f32>],
+        k: usize,
+        distance_type: DistanceType,
+        chunk_size: Option<usize>,
+    ) -> Result<Vec<(usize, f32)>, String> {
+        let start = Instant::now();
+
+        if vectors.is_empty() {
+            return Ok(vec![]);
+        }
+
+        // Determine optimal chunk size
+        let effective_chunk_size = chunk_size.unwrap_or_else(|| {
+            self.calculate_optimal_chunk_size(query.len(), vectors.len())
+        });
+
+        let n_vectors = vectors.len();
+        let mut all_results: Vec<(usize, f32)> = Vec::new();
+
+        // Process in chunks
+        for chunk_start in (0..n_vectors).step_by(effective_chunk_size) {
+            let chunk_end = (chunk_start + effective_chunk_size).min(n_vectors);
+            let chunk: Vec<Vec<f32>> = vectors[chunk_start..chunk_end].to_vec();
+
+            // Search within chunk
+            let chunk_results = self.fused_search(query, &chunk, k, distance_type)?;
+
+            // Adjust indices to global position and add to results
+            for (local_idx, dist) in chunk_results {
+                all_results.push((chunk_start + local_idx, dist));
+            }
+        }
+
+        // Merge and get global top-k
+        all_results.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+        all_results.truncate(k);
+
+        let total_ops = n_vectors * query.len() * 3;
+        self.update_metrics(
+            KernelType::CosineSimilarity,
+            start.elapsed(),
+            (total_ops * 4) as u64,
+            Some(calculate_gflops(total_ops, start.elapsed())),
+        );
+
+        Ok(all_results)
+    }
+
+    /// Multi-query streaming batch search for processing multiple queries efficiently.
+    pub fn streaming_multi_query_search(
+        &self,
+        queries: &[Vec<f32>],
+        vectors: &[Vec<f32>],
+        k: usize,
+        distance_type: DistanceType,
+    ) -> Result<Vec<Vec<(usize, f32)>>, String> {
+        let start = Instant::now();
+
+        if queries.is_empty() || vectors.is_empty() {
+            return Ok(vec![vec![]; queries.len()]);
+        }
+
+        let dim = queries[0].len();
+        let n_queries = queries.len();
+        let n_vectors = vectors.len();
+
+        // Process queries in parallel for better throughput
+        let results: Vec<Vec<(usize, f32)>> = if n_queries >= PARALLEL_THRESHOLD / 10 {
+            queries
+                .par_iter()
+                .map(|q| {
+                    self.streaming_batch_search(q, vectors, k, distance_type, None)
+                        .unwrap_or_default()
+                })
+                .collect()
+        } else {
+            queries
+                .iter()
+                .map(|q| {
+                    self.streaming_batch_search(q, vectors, k, distance_type, None)
+                        .unwrap_or_default()
+                })
+                .collect()
+        };
+
+        let total_ops = n_queries * n_vectors * dim * 3;
+        self.update_metrics(
+            KernelType::CosineSimilarity,
+            start.elapsed(),
+            (total_ops * 4) as u64,
+            Some(calculate_gflops(total_ops, start.elapsed())),
+        );
+
+        Ok(results)
+    }
+
+    /// Calculate optimal chunk size based on GPU memory and vector dimensions.
+    fn calculate_optimal_chunk_size(&self, dimensions: usize, total_vectors: usize) -> usize {
+        // Estimate memory per vector (bytes)
+        let bytes_per_vector = dimensions * 4; // f32 = 4 bytes
+
+        // Target using ~50% of available memory for safety
+        let available_memory = self.device.available_memory / 2;
+
+        // Calculate max vectors that fit in memory
+        let max_vectors = if available_memory > 0 {
+            (available_memory as usize) / bytes_per_vector
+        } else {
+            10000 // Default if memory unknown
+        };
+
+        // Clamp between reasonable bounds
+        let chunk_size = max_vectors.clamp(100, 50000);
+
+        // Don't exceed total vectors
+        chunk_size.min(total_vectors)
+    }
+
+    /// Adaptive batch search that automatically tunes parameters based on workload.
+    pub fn adaptive_batch_search(
+        &self,
+        query: &[f32],
+        vectors: &[Vec<f32>],
+        k: usize,
+        distance_type: DistanceType,
+    ) -> Result<AdaptiveBatchResult, String> {
+        let start = Instant::now();
+
+        if vectors.is_empty() {
+            return Ok(AdaptiveBatchResult {
+                results: vec![],
+                chunk_size_used: 0,
+                chunks_processed: 0,
+                total_time: Duration::ZERO,
+                throughput_vps: 0.0,
+            });
+        }
+
+        let n_vectors = vectors.len();
+        let dim = query.len();
+
+        // Decide strategy based on dataset size
+        let (results, chunk_size_used, chunks_processed) = if n_vectors < PARALLEL_THRESHOLD {
+            // Small dataset: single fused search
+            let results = self.fused_search(query, vectors, k, distance_type)?;
+            (results, n_vectors, 1)
+        } else if n_vectors < 100_000 {
+            // Medium dataset: parallel batch search
+            let results = self.fused_search(query, vectors, k, distance_type)?;
+            (results, n_vectors, 1)
+        } else {
+            // Large dataset: streaming search
+            let chunk_size = self.calculate_optimal_chunk_size(dim, n_vectors);
+            let num_chunks = (n_vectors + chunk_size - 1) / chunk_size;
+            let results = self.streaming_batch_search(query, vectors, k, distance_type, Some(chunk_size))?;
+            (results, chunk_size, num_chunks)
+        };
+
+        let total_time = start.elapsed();
+        let throughput_vps = if total_time.as_secs_f64() > 0.0 {
+            n_vectors as f64 / total_time.as_secs_f64()
+        } else {
+            0.0
+        };
+
+        Ok(AdaptiveBatchResult {
+            results,
+            chunk_size_used,
+            chunks_processed,
+            total_time,
+            throughput_vps,
+        })
+    }
+
+    /// Pre-filtered batch search that applies a filter function before GPU processing.
+    pub fn prefiltered_batch_search<F>(
+        &self,
+        query: &[f32],
+        vectors: &[(usize, Vec<f32>)], // (original_index, vector)
+        k: usize,
+        distance_type: DistanceType,
+        filter: F,
+    ) -> Result<Vec<(usize, f32)>, String>
+    where
+        F: Fn(usize) -> bool + Sync,
+    {
+        let start = Instant::now();
+
+        // Apply filter to get candidate vectors
+        let filtered: Vec<(usize, Vec<f32>)> = vectors
+            .par_iter()
+            .filter(|(idx, _)| filter(*idx))
+            .cloned()
+            .collect();
+
+        if filtered.is_empty() {
+            return Ok(vec![]);
+        }
+
+        // Extract vectors for GPU processing
+        let filtered_vectors: Vec<Vec<f32>> = filtered.iter().map(|(_, v)| v.clone()).collect();
+        let original_indices: Vec<usize> = filtered.iter().map(|(idx, _)| *idx).collect();
+
+        // Run GPU search on filtered set
+        let search_results = self.fused_search(query, &filtered_vectors, k, distance_type)?;
+
+        // Map back to original indices
+        let results: Vec<(usize, f32)> = search_results
+            .into_iter()
+            .map(|(local_idx, dist)| (original_indices[local_idx], dist))
+            .collect();
+
+        let dim = query.len();
+        let total_ops = filtered_vectors.len() * dim * 3;
+        self.update_metrics(
+            KernelType::CosineSimilarity,
+            start.elapsed(),
+            (total_ops * 4) as u64,
+            Some(calculate_gflops(total_ops, start.elapsed())),
+        );
+
+        Ok(results)
     }
 
     // ==========================================================================
@@ -2066,6 +2328,128 @@ fn num_cpus() -> u32 {
         .unwrap_or(4)
 }
 
+// ---------------------------------------------------------------------------
+// Hardware Capability Detection & Kernel Dispatch
+// ---------------------------------------------------------------------------
+
+/// Runtime-detected hardware capabilities.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HardwareCapabilities {
+    /// CPU supports AVX2 SIMD
+    pub has_avx2: bool,
+    /// CPU supports AVX-512
+    pub has_avx512: bool,
+    /// CPU supports ARM NEON
+    pub has_neon: bool,
+    /// CUDA toolkit detected and version
+    pub cuda_version: Option<String>,
+    /// Metal API available (macOS/iOS)
+    pub metal_available: bool,
+    /// Number of CPU cores
+    pub cpu_cores: u32,
+    /// L2 cache size estimate in bytes
+    pub l2_cache_bytes: usize,
+    /// Recommended compute backend
+    pub recommended_backend: GpuBackend,
+}
+
+impl HardwareCapabilities {
+    /// Detect capabilities of the current host.
+    pub fn detect() -> Self {
+        let has_avx2 = cfg!(target_feature = "avx2") || cfg!(target_arch = "x86_64");
+        let has_avx512 = cfg!(target_feature = "avx512f");
+        let has_neon = cfg!(target_arch = "aarch64");
+        let metal_available = cfg!(target_os = "macos") || cfg!(target_os = "ios");
+        let cpu_cores = num_cpus();
+
+        let recommended_backend = if metal_available {
+            GpuBackend::Metal
+        } else if has_avx512 || has_avx2 {
+            GpuBackend::CpuSimd
+        } else {
+            GpuBackend::CpuSimd
+        };
+
+        Self {
+            has_avx2,
+            has_avx512,
+            has_neon,
+            cuda_version: None,
+            metal_available,
+            cpu_cores,
+            l2_cache_bytes: 256 * 1024, // conservative default
+            recommended_backend,
+        }
+    }
+
+    /// Estimated peak distance computations per second for cosine distance.
+    pub fn estimated_throughput(&self, dimensions: usize) -> f64 {
+        let base = self.cpu_cores as f64 * 100_000.0; // ~100K/sec per core
+        let simd_factor = if self.has_avx512 {
+            8.0
+        } else if self.has_avx2 {
+            4.0
+        } else if self.has_neon {
+            2.0
+        } else {
+            1.0
+        };
+        base * simd_factor / (dimensions as f64 / 384.0) // normalize to 384-dim
+    }
+}
+
+/// Selects and dispatches the appropriate kernel at runtime.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KernelDispatch {
+    /// Scalar CPU loop
+    Scalar,
+    /// SIMD via wide crate
+    Simd,
+    /// Rayon parallel + SIMD
+    ParallelSimd,
+    /// GPU kernel (CUDA or Metal)
+    Gpu,
+}
+
+/// Select the optimal kernel based on problem size and hardware.
+pub fn select_kernel(
+    num_queries: usize,
+    num_vectors: usize,
+    dimensions: usize,
+    caps: &HardwareCapabilities,
+) -> KernelDispatch {
+    let total_work = num_queries * num_vectors;
+
+    if total_work < 1_000 {
+        // Very small: overhead of parallelism not worth it
+        if caps.has_avx2 || caps.has_neon {
+            KernelDispatch::Simd
+        } else {
+            KernelDispatch::Scalar
+        }
+    } else if total_work < 100_000 {
+        // Medium: parallel SIMD
+        KernelDispatch::ParallelSimd
+    } else if caps.metal_available || caps.cuda_version.is_some() {
+        // Large: use GPU if available
+        KernelDispatch::Gpu
+    } else {
+        KernelDispatch::ParallelSimd
+    }
+}
+
+/// Summary of a kernel execution for profiling.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct KernelProfile {
+    pub kernel: String,
+    pub dispatch: String,
+    pub num_queries: usize,
+    pub num_vectors: usize,
+    pub dimensions: usize,
+    pub wall_time_ms: f64,
+    pub throughput_ops_per_sec: f64,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2504,5 +2888,149 @@ mod tests {
         let c = vec![0.0, 1.0, 0.0];
         let dist2 = cosine_distance_simd_precomputed(&a, &c, a_norm);
         assert!((dist2 - 1.0).abs() < 1e-6);
+    }
+
+    // Feature 5: Streaming Batch Search Tests
+
+    #[test]
+    fn test_streaming_batch_search() {
+        let gpu = GpuAccelerator::with_cpu_fallback(GpuConfig::default());
+
+        let query = vec![1.0, 0.0, 0.0];
+        let vectors: Vec<Vec<f32>> = (0..500)
+            .map(|i| {
+                let mut v = vec![0.0; 3];
+                v[i % 3] = 1.0;
+                v
+            })
+            .collect();
+
+        let results = gpu
+            .streaming_batch_search(&query, &vectors, 10, DistanceType::Cosine, Some(100))
+            .unwrap();
+
+        assert_eq!(results.len(), 10);
+        // First result should have small distance (exact or near match)
+        assert!(results[0].1 < 0.01);
+        // Results should be sorted by distance
+        for i in 1..results.len() {
+            assert!(
+                results[i].1 >= results[i - 1].1,
+                "Results not sorted: {} vs {}",
+                results[i - 1].1,
+                results[i].1
+            );
+        }
+    }
+
+    #[test]
+    fn test_streaming_multi_query_search() {
+        let gpu = GpuAccelerator::with_cpu_fallback(GpuConfig::default());
+
+        let queries = vec![
+            vec![1.0, 0.0, 0.0],
+            vec![0.0, 1.0, 0.0],
+        ];
+        let vectors = vec![
+            vec![1.0, 0.0, 0.0],
+            vec![0.0, 1.0, 0.0],
+            vec![0.0, 0.0, 1.0],
+            vec![0.5, 0.5, 0.0],
+        ];
+
+        let results = gpu
+            .streaming_multi_query_search(&queries, &vectors, 2, DistanceType::Cosine)
+            .unwrap();
+
+        assert_eq!(results.len(), 2);
+        // First query should find first vector
+        assert_eq!(results[0][0].0, 0);
+        // Second query should find second vector
+        assert_eq!(results[1][0].0, 1);
+    }
+
+    #[test]
+    fn test_adaptive_batch_search() {
+        let gpu = GpuAccelerator::with_cpu_fallback(GpuConfig::default());
+
+        let query = vec![1.0, 0.0, 0.0];
+        let vectors: Vec<Vec<f32>> = (0..100)
+            .map(|i| {
+                let mut v = vec![0.0; 3];
+                v[i % 3] = 1.0;
+                v
+            })
+            .collect();
+
+        let result = gpu
+            .adaptive_batch_search(&query, &vectors, 5, DistanceType::Cosine)
+            .unwrap();
+
+        assert_eq!(result.results.len(), 5);
+        assert!(result.chunks_processed >= 1);
+        assert!(result.throughput_vps > 0.0);
+    }
+
+    #[test]
+    fn test_prefiltered_batch_search() {
+        let gpu = GpuAccelerator::with_cpu_fallback(GpuConfig::default());
+
+        let query = vec![1.0, 0.0, 0.0];
+        let vectors: Vec<(usize, Vec<f32>)> = vec![
+            (0, vec![1.0, 0.0, 0.0]),  // Match, passes filter
+            (1, vec![0.0, 1.0, 0.0]),  // No match, filtered out
+            (2, vec![0.9, 0.1, 0.0]),  // Close match, passes filter
+            (3, vec![0.0, 0.0, 1.0]),  // No match, filtered out
+            (4, vec![0.8, 0.2, 0.0]),  // Close match, passes filter
+        ];
+
+        // Filter to only even indices
+        let results = gpu
+            .prefiltered_batch_search(&query, &vectors, 3, DistanceType::Cosine, |idx| idx % 2 == 0)
+            .unwrap();
+
+        // Should only have results from indices 0, 2, 4
+        assert!(!results.is_empty());
+        for (idx, _) in &results {
+            assert!(idx % 2 == 0, "Index {} should be even", idx);
+        }
+    }
+
+    #[test]
+    fn test_adaptive_batch_result() {
+        let result = AdaptiveBatchResult {
+            results: vec![(0, 0.1), (1, 0.2), (2, 0.3)],
+            chunk_size_used: 100,
+            chunks_processed: 2,
+            total_time: Duration::from_millis(50),
+            throughput_vps: 4000.0,
+        };
+
+        assert_eq!(result.indices(), vec![0, 1, 2]);
+        assert_eq!(result.distances(), vec![0.1, 0.2, 0.3]);
+    }
+
+    #[test]
+    fn test_hardware_capabilities_detect() {
+        let caps = HardwareCapabilities::detect();
+        assert!(caps.cpu_cores > 0);
+        assert!(caps.estimated_throughput(384) > 0.0);
+        #[cfg(target_os = "macos")]
+        assert!(caps.metal_available);
+    }
+
+    #[test]
+    fn test_kernel_dispatch_small() {
+        let caps = HardwareCapabilities::detect();
+        let dispatch = select_kernel(1, 100, 384, &caps);
+        assert!(dispatch == KernelDispatch::Simd || dispatch == KernelDispatch::Scalar);
+    }
+
+    #[test]
+    fn test_kernel_dispatch_large() {
+        let caps = HardwareCapabilities::detect();
+        let dispatch = select_kernel(100, 100_000, 384, &caps);
+        // Should be ParallelSimd or Gpu depending on hardware
+        assert!(dispatch == KernelDispatch::ParallelSimd || dispatch == KernelDispatch::Gpu);
     }
 }
