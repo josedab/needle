@@ -160,6 +160,12 @@ pub struct Database {
     saved_gen: AtomicU64,
     /// Optional adaptive tuner for online index-tuning feedback
     adaptive_tuner: Option<Arc<AdaptiveTuner>>,
+    /// Optional adaptive index manager for workload-driven index selection
+    adaptive_index_manager: Option<Arc<crate::indexing::adaptive_index_manager::AdaptiveIndexManager>>,
+    /// Optional metrics aggregator for the observability dashboard
+    dashboard_metrics: Option<Arc<crate::observe::dashboard::MetricsAggregator>>,
+    /// Optional replica manager for snapshot-based replication
+    replica_manager: Option<Arc<crate::persistence::replica_manager::ReplicaManager>>,
 }
 
 impl Database {
@@ -284,7 +290,7 @@ impl Database {
             dirty: AtomicBool::new(false),
             modification_gen: AtomicU64::new(0),
             saved_gen: AtomicU64::new(0),
-            adaptive_tuner: None,
+            adaptive_tuner: None, adaptive_index_manager: None, dashboard_metrics: None, replica_manager: None,
         })
     }
 
@@ -314,7 +320,7 @@ impl Database {
             dirty: AtomicBool::new(false),
             modification_gen: AtomicU64::new(0),
             saved_gen: AtomicU64::new(0),
-            adaptive_tuner: None,
+            adaptive_tuner: None, adaptive_index_manager: None, dashboard_metrics: None, replica_manager: None,
         }
     }
 
@@ -327,6 +333,51 @@ impl Database {
     /// Get a reference to the adaptive tuner, if one is attached.
     pub fn adaptive_tuner(&self) -> Option<&Arc<AdaptiveTuner>> {
         self.adaptive_tuner.as_ref()
+    }
+
+    /// Attach an adaptive index manager for workload-driven index selection.
+    pub fn set_adaptive_index_manager(
+        &mut self,
+        manager: Arc<crate::indexing::adaptive_index_manager::AdaptiveIndexManager>,
+    ) {
+        self.adaptive_index_manager = Some(manager);
+    }
+
+    /// Get a reference to the adaptive index manager, if one is attached.
+    pub fn adaptive_index_manager(
+        &self,
+    ) -> Option<&Arc<crate::indexing::adaptive_index_manager::AdaptiveIndexManager>> {
+        self.adaptive_index_manager.as_ref()
+    }
+
+    /// Attach a metrics aggregator for the observability dashboard.
+    pub fn set_dashboard_metrics(
+        &mut self,
+        metrics: Arc<crate::observe::dashboard::MetricsAggregator>,
+    ) {
+        self.dashboard_metrics = Some(metrics);
+    }
+
+    /// Get a reference to the dashboard metrics aggregator.
+    pub fn dashboard_metrics(
+        &self,
+    ) -> Option<&Arc<crate::observe::dashboard::MetricsAggregator>> {
+        self.dashboard_metrics.as_ref()
+    }
+
+    /// Attach a replica manager for snapshot-based replication.
+    pub fn set_replica_manager(
+        &mut self,
+        manager: Arc<crate::persistence::replica_manager::ReplicaManager>,
+    ) {
+        self.replica_manager = Some(manager);
+    }
+
+    /// Get a reference to the replica manager.
+    pub fn replica_manager(
+        &self,
+    ) -> Option<&Arc<crate::persistence::replica_manager::ReplicaManager>> {
+        self.replica_manager.as_ref()
     }
 
     /// Get the database file path.
@@ -1009,8 +1060,13 @@ impl Database {
 
     /// Mark the database as modified. Thread-safe and race-condition free.
     fn mark_modified(&self) {
-        self.modification_gen.fetch_add(1, Ordering::Release);
+        let gen = self.modification_gen.fetch_add(1, Ordering::Release);
         self.dirty.store(true, Ordering::Release);
+
+        // Advance replica manager LSN if attached
+        if let Some(rm) = &self.replica_manager {
+            rm.advance_leader_lsn(gen + 1);
+        }
     }
 
     /// Get total number of vectors across all collections.
@@ -1140,6 +1196,12 @@ impl Database {
 
         coll.insert_vec(id, vector, metadata)?;
         self.mark_modified();
+        if let Some(aim) = &self.adaptive_index_manager {
+            aim.record_insert();
+        }
+        if let Some(metrics) = &self.dashboard_metrics {
+            metrics.record_insert(collection);
+        }
         Ok(())
     }
 
@@ -1233,6 +1295,16 @@ impl Database {
             tuner.feedback(&obs, 1.0, latency_ms);
         }
 
+        // Feed workload data to adaptive index manager if attached
+        if let Some(aim) = &self.adaptive_index_manager {
+            aim.record_query(latency_ms, results.len());
+        }
+
+        // Record metrics for observability dashboard
+        if let Some(metrics) = &self.dashboard_metrics {
+            metrics.record_query(collection, (latency_ms * 1000.0) as u64, results.len());
+        }
+
         Ok(results)
     }
 
@@ -1285,6 +1357,65 @@ impl Database {
         }
 
         builder.execute()
+    }
+
+    /// Search across multiple collections and merge results.
+    ///
+    /// Uses the federated search module with min-max normalization and RRF merge by default.
+    pub(crate) fn federated_search_internal(
+        &self,
+        query: &[f32],
+        k: usize,
+        collection_names: &[&str],
+    ) -> Result<Vec<SearchResult>> {
+        let state = self.state.read();
+
+        // Search each collection and collect results with collection name
+        let mut all_results: Vec<(String, Vec<SearchResult>)> = Vec::new();
+        for &name in collection_names {
+            let coll = state
+                .collections
+                .get(name)
+                .ok_or_else(|| NeedleError::CollectionNotFound(name.to_string()))?;
+
+            // Truncate or pad query to match collection dimensions
+            let dims = coll.dimensions();
+            let adapted_query: Vec<f32> = if query.len() == dims {
+                query.to_vec()
+            } else if query.len() > dims {
+                query[..dims].to_vec()
+            } else {
+                let mut padded = query.to_vec();
+                padded.resize(dims, 0.0);
+                padded
+            };
+
+            let results = coll.search(&adapted_query, k * 2)?;
+            all_results.push((name.to_string(), results));
+        }
+
+        // Merge using RRF (reciprocal rank fusion)
+        let rrf_k = 60;
+        let mut scores: std::collections::HashMap<String, (f64, SearchResult)> =
+            std::collections::HashMap::new();
+
+        for (_collection, results) in &all_results {
+            for (rank, result) in results.iter().enumerate() {
+                let rrf_score = 1.0 / (rrf_k as f64 + rank as f64 + 1.0);
+                let entry = scores
+                    .entry(result.id.clone())
+                    .or_insert((0.0, result.clone()));
+                entry.0 += rrf_score;
+            }
+        }
+
+        let mut merged: Vec<(f64, SearchResult)> = scores.into_values().collect();
+        merged.sort_by(|a, b| {
+            b.0.partial_cmp(&a.0)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        Ok(merged.into_iter().take(k).map(|(_, r)| r).collect())
     }
 
     fn search_explain_internal(
