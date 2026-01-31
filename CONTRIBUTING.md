@@ -318,6 +318,11 @@ cargo clippy --features full -- -D warnings
    **`unwrap()` and `expect()` policy:**
    - `unwrap()` is **denied** by workspace lint (`clippy::unwrap_used = "deny"`).
      Use `?` with `Result<T>` or pattern matching instead.
+   - **Tech debt note:** Many existing modules have per-module `#[allow(clippy::unwrap_used)]`
+     overrides (marked with `// tech debt: unwrap cleanup needed` in `src/lib.rs`).
+     These allow the existing `unwrap()` calls while ensuring **new** modules and crates
+     are protected by the workspace deny lint. When working in a module that has this
+     override, prefer `?` for new code even though `unwrap()` is allowed.
    - `expect()` is audited in CI. Prefer proper error propagation over `expect()`.
    - **Acceptable uses of `expect()`:** Lock poisoning recovery (`lock().expect("...")`),
      compile-time-proven invariants, or one-time init. Add `// allow-expect` on the same

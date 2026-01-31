@@ -3,6 +3,7 @@
 pub mod anomaly;
 pub mod dashboard;
 pub mod drift;
+pub mod lineage;
 pub mod observability;
 pub mod otel_service;
 pub mod profiler;

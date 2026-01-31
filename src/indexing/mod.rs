@@ -50,6 +50,7 @@ pub mod sparse;
 pub mod graph_vector_fusion;
 pub mod multimodal_fusion;
 pub mod concurrent_hnsw;
+pub mod columnar;
 pub mod compression_pipeline;
 pub mod adaptive_index_manager;
 #[cfg(feature = "diskann")]
