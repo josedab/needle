@@ -662,6 +662,587 @@ pub struct GraphStats {
     pub relation_counts: HashMap<String, usize>,
 }
 
+// ============================================================================
+// GraphRAG Integration
+// ============================================================================
+
+/// Configuration for GraphRAG retrieval
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GraphRAGConfig {
+    /// Maximum hops for multi-hop reasoning
+    pub max_hops: usize,
+    /// Weight for vector similarity in final score
+    pub similarity_weight: f32,
+    /// Weight for graph relevance in final score
+    pub graph_weight: f32,
+    /// Weight for entity type matching
+    pub type_weight: f32,
+    /// Minimum similarity threshold for retrieval
+    pub min_similarity: f32,
+    /// Maximum context tokens (approximate)
+    pub max_context_tokens: usize,
+    /// Include relation descriptions in context
+    pub include_relations: bool,
+    /// Include entity properties in context
+    pub include_properties: bool,
+    /// Deduplicate entities in context
+    pub deduplicate: bool,
+}
+
+impl Default for GraphRAGConfig {
+    fn default() -> Self {
+        Self {
+            max_hops: 2,
+            similarity_weight: 0.6,
+            graph_weight: 0.4,
+            type_weight: 0.1,
+            min_similarity: 0.0,
+            max_context_tokens: 4000,
+            include_relations: true,
+            include_properties: true,
+            deduplicate: true,
+        }
+    }
+}
+
+/// A chunk of context for RAG
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChunkContext {
+    /// Entity this context is about
+    pub entity_id: String,
+    /// Entity label
+    pub label: String,
+    /// Entity type
+    pub entity_type: String,
+    /// Text content
+    pub content: String,
+    /// Relevance score
+    pub score: f32,
+    /// Hop distance from query (0 = directly matched)
+    pub hop_distance: usize,
+    /// Related entity IDs
+    pub related_entities: Vec<String>,
+    /// Relation descriptions
+    pub relation_descriptions: Vec<String>,
+}
+
+/// GraphRAG retriever for knowledge-enhanced RAG
+pub struct GraphRAGRetriever<'a> {
+    kg: &'a KnowledgeGraph,
+    config: GraphRAGConfig,
+}
+
+impl<'a> GraphRAGRetriever<'a> {
+    /// Create a new GraphRAG retriever
+    pub fn new(kg: &'a KnowledgeGraph, config: GraphRAGConfig) -> Self {
+        Self { kg, config }
+    }
+
+    /// Create with default config
+    pub fn with_defaults(kg: &'a KnowledgeGraph) -> Self {
+        Self::new(kg, GraphRAGConfig::default())
+    }
+
+    /// Retrieve context for a query embedding
+    pub fn retrieve(&self, query: &[f32], k: usize) -> Vec<ChunkContext> {
+        let mut contexts = Vec::new();
+        let mut seen = HashSet::new();
+
+        // Get initial results from vector search
+        let initial_results = self.kg.search(query, k * 2);
+
+        // Process each result with multi-hop expansion
+        for (rank, result) in initial_results.iter().enumerate() {
+            if seen.contains(&result.entity.id) {
+                continue;
+            }
+            seen.insert(result.entity.id.clone());
+
+            // Add the entity itself
+            let context = self.build_chunk_context(&result.entity, result.combined_score, 0);
+            contexts.push(context);
+
+            // Multi-hop expansion
+            if self.config.max_hops > 0 {
+                let expanded = self.expand_hops(&result.entity.id, query, 1, &mut seen);
+                contexts.extend(expanded);
+            }
+
+            // Check if we have enough context
+            if contexts.len() >= k && rank > k / 2 {
+                break;
+            }
+        }
+
+        // Sort by score and truncate
+        contexts.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        contexts.truncate(k);
+
+        contexts
+    }
+
+    /// Expand from an entity through multiple hops
+    fn expand_hops(
+        &self,
+        entity_id: &str,
+        query: &[f32],
+        current_hop: usize,
+        seen: &mut HashSet<String>,
+    ) -> Vec<ChunkContext> {
+        if current_hop > self.config.max_hops {
+            return vec![];
+        }
+
+        let mut contexts = Vec::new();
+
+        // Get related entities (neighbors)
+        let neighbors = self.kg.get_neighbors(entity_id);
+
+        for related in neighbors {
+            let related_id = &related.entity.id;
+            if seen.contains(related_id) {
+                continue;
+            }
+            seen.insert(related_id.clone());
+
+            // Calculate score with decay for hops
+            let similarity = self.cosine_similarity(query, &related.entity.embedding);
+            let hop_decay = 1.0 / (1.0 + current_hop as f32 * 0.5);
+            let score = similarity * hop_decay * self.config.graph_weight;
+
+            if score >= self.config.min_similarity {
+                let mut context = self.build_chunk_context(&related.entity, score, current_hop);
+                context.relation_descriptions.push(format!(
+                    "Related via '{}' from previous entity",
+                    related.relation
+                ));
+                contexts.push(context);
+
+                // Continue expanding if more hops allowed
+                if current_hop < self.config.max_hops {
+                    let deeper = self.expand_hops(related_id, query, current_hop + 1, seen);
+                    contexts.extend(deeper);
+                }
+            }
+        }
+
+        contexts
+    }
+
+    /// Build a chunk context from an entity
+    fn build_chunk_context(&self, entity: &Entity, score: f32, hop_distance: usize) -> ChunkContext {
+        let mut content = format!("{} ({})", entity.label, entity.entity_type);
+
+        // Add properties if configured
+        if self.config.include_properties && !entity.properties.is_empty() {
+            let props: Vec<String> = entity
+                .properties
+                .iter()
+                .map(|(k, v)| format!("{}: {}", k, v))
+                .collect();
+            content.push_str(&format!(". Properties: {}", props.join(", ")));
+        }
+
+        // Get related entities
+        let related: Vec<String> = self
+            .kg
+            .get_neighbors(&entity.id)
+            .iter()
+            .map(|r| r.entity.id.clone())
+            .collect();
+
+        // Get relation descriptions
+        let mut relation_descriptions = Vec::new();
+        if self.config.include_relations {
+            for rel in self.kg.get_outgoing(&entity.id) {
+                if let Some(target) = self.kg.get_entity(&rel.target) {
+                    relation_descriptions.push(format!(
+                        "{} {} {}",
+                        entity.label, rel.relation_type, target.label
+                    ));
+                }
+            }
+            for rel in self.kg.get_incoming(&entity.id) {
+                if let Some(source) = self.kg.get_entity(&rel.source) {
+                    relation_descriptions.push(format!(
+                        "{} {} {}",
+                        source.label, rel.relation_type, entity.label
+                    ));
+                }
+            }
+        }
+
+        ChunkContext {
+            entity_id: entity.id.clone(),
+            label: entity.label.clone(),
+            entity_type: entity.entity_type.clone(),
+            content,
+            score,
+            hop_distance,
+            related_entities: related,
+            relation_descriptions,
+        }
+    }
+
+    fn cosine_similarity(&self, a: &[f32], b: &[f32]) -> f32 {
+        if a.len() != b.len() {
+            return 0.0;
+        }
+        let dot: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
+        let mag_a: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
+        let mag_b: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
+        if mag_a < f32::EPSILON || mag_b < f32::EPSILON {
+            return 0.0;
+        }
+        (dot / (mag_a * mag_b)).clamp(0.0, 1.0)
+    }
+
+    /// Retrieve and format context as text
+    pub fn retrieve_text(&self, query: &[f32], k: usize) -> String {
+        let contexts = self.retrieve(query, k);
+        self.format_context(&contexts)
+    }
+
+    /// Format contexts as text for LLM consumption
+    pub fn format_context(&self, contexts: &[ChunkContext]) -> String {
+        let mut text = String::new();
+
+        for (i, ctx) in contexts.iter().enumerate() {
+            text.push_str(&format!("{}. {}\n", i + 1, ctx.content));
+
+            if !ctx.relation_descriptions.is_empty() {
+                text.push_str("   Relationships:\n");
+                for rel in &ctx.relation_descriptions {
+                    text.push_str(&format!("   - {}\n", rel));
+                }
+            }
+            text.push('\n');
+        }
+
+        text
+    }
+}
+
+/// Entity linker for connecting query terms to graph entities
+pub struct EntityLinker<'a> {
+    kg: &'a KnowledgeGraph,
+    type_preferences: HashMap<String, f32>,
+}
+
+impl<'a> EntityLinker<'a> {
+    /// Create a new entity linker
+    pub fn new(kg: &'a KnowledgeGraph) -> Self {
+        Self {
+            kg,
+            type_preferences: HashMap::new(),
+        }
+    }
+
+    /// Set preference weights for entity types
+    pub fn with_type_preferences(mut self, prefs: HashMap<String, f32>) -> Self {
+        self.type_preferences = prefs;
+        self
+    }
+
+    /// Link a query embedding to the most relevant entity
+    pub fn link(&self, query: &[f32]) -> Option<(String, f32)> {
+        let results = self.kg.search(query, 1);
+        results.first().map(|r| (r.entity.id.clone(), r.combined_score))
+    }
+
+    /// Link a query embedding to multiple entities
+    pub fn link_multiple(&self, query: &[f32], k: usize) -> Vec<(String, f32)> {
+        self.kg
+            .search(query, k)
+            .iter()
+            .map(|r| (r.entity.id.clone(), r.combined_score))
+            .collect()
+    }
+
+    /// Link by entity type
+    pub fn link_by_type(&self, query: &[f32], entity_type: &str, k: usize) -> Vec<(String, f32)> {
+        let entities = self.kg.get_by_type(entity_type);
+        let mut scored: Vec<(String, f32)> = entities
+            .iter()
+            .map(|e| {
+                let similarity = self.cosine_similarity(query, &e.embedding);
+                (e.id.clone(), similarity)
+            })
+            .collect();
+
+        scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        scored.truncate(k);
+        scored
+    }
+
+    fn cosine_similarity(&self, a: &[f32], b: &[f32]) -> f32 {
+        if a.len() != b.len() {
+            return 0.0;
+        }
+        let dot: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
+        let mag_a: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
+        let mag_b: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
+        if mag_a < f32::EPSILON || mag_b < f32::EPSILON {
+            return 0.0;
+        }
+        (dot / (mag_a * mag_b)).clamp(0.0, 1.0)
+    }
+}
+
+/// Multi-hop reasoning result
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReasoningPath {
+    /// Starting entity
+    pub start: String,
+    /// Ending entity
+    pub end: String,
+    /// Path of entity IDs
+    pub path: Vec<String>,
+    /// Relation types along the path
+    pub relations: Vec<String>,
+    /// Confidence score
+    pub confidence: f32,
+    /// Explanation
+    pub explanation: String,
+}
+
+/// Multi-hop reasoner for deeper context retrieval
+pub struct MultiHopReasoner<'a> {
+    kg: &'a KnowledgeGraph,
+    max_depth: usize,
+}
+
+impl<'a> MultiHopReasoner<'a> {
+    /// Create a new multi-hop reasoner
+    pub fn new(kg: &'a KnowledgeGraph, max_depth: usize) -> Self {
+        Self { kg, max_depth }
+    }
+
+    /// Find all paths between two entities
+    pub fn find_paths(&self, start: &str, end: &str) -> Vec<ReasoningPath> {
+        let mut paths = Vec::new();
+        let mut visited = HashSet::new();
+        let mut current_path = vec![start.to_string()];
+        let mut current_relations = Vec::new();
+
+        self.dfs_paths(
+            start,
+            end,
+            &mut visited,
+            &mut current_path,
+            &mut current_relations,
+            &mut paths,
+            0,
+        );
+
+        // Sort by shortest path
+        paths.sort_by(|a, b| a.path.len().cmp(&b.path.len()));
+        paths
+    }
+
+    fn dfs_paths(
+        &self,
+        current: &str,
+        target: &str,
+        visited: &mut HashSet<String>,
+        path: &mut Vec<String>,
+        relations: &mut Vec<String>,
+        paths: &mut Vec<ReasoningPath>,
+        depth: usize,
+    ) {
+        if depth > self.max_depth {
+            return;
+        }
+
+        if current == target {
+            let explanation = self.generate_explanation(path, relations);
+            let confidence = 1.0 / (1.0 + depth as f32 * 0.2);
+
+            paths.push(ReasoningPath {
+                start: path[0].clone(),
+                end: current.to_string(),
+                path: path.clone(),
+                relations: relations.clone(),
+                confidence,
+                explanation,
+            });
+            return;
+        }
+
+        visited.insert(current.to_string());
+
+        for rel in self.kg.get_outgoing(current) {
+            if !visited.contains(&rel.target) {
+                path.push(rel.target.clone());
+                relations.push(rel.relation_type.clone());
+
+                self.dfs_paths(
+                    &rel.target,
+                    target,
+                    visited,
+                    path,
+                    relations,
+                    paths,
+                    depth + 1,
+                );
+
+                path.pop();
+                relations.pop();
+            }
+        }
+
+        visited.remove(current);
+    }
+
+    fn generate_explanation(&self, path: &[String], relations: &[String]) -> String {
+        let mut explanation = String::new();
+
+        for (i, entity_id) in path.iter().enumerate() {
+            if let Some(entity) = self.kg.get_entity(entity_id) {
+                if i > 0 {
+                    explanation.push_str(&format!(" --[{}]--> ", relations[i - 1]));
+                }
+                explanation.push_str(&entity.label);
+            }
+        }
+
+        explanation
+    }
+
+    /// Get reasoning chains starting from an entity
+    pub fn reason_from(&self, start: &str, depth: usize) -> Vec<ReasoningPath> {
+        let mut paths = Vec::new();
+        let mut visited = HashSet::new();
+        visited.insert(start.to_string());
+
+        let mut queue: VecDeque<(String, Vec<String>, Vec<String>, usize)> = VecDeque::new();
+        queue.push_back((
+            start.to_string(),
+            vec![start.to_string()],
+            vec![],
+            0,
+        ));
+
+        while let Some((current, path, relations, current_depth)) = queue.pop_front() {
+            if current_depth >= depth {
+                if path.len() > 1 {
+                    let explanation = self.generate_explanation(&path, &relations);
+                    let confidence = 1.0 / (1.0 + current_depth as f32 * 0.2);
+
+                    paths.push(ReasoningPath {
+                        start: start.to_string(),
+                        end: current.clone(),
+                        path: path.clone(),
+                        relations: relations.clone(),
+                        confidence,
+                        explanation,
+                    });
+                }
+                continue;
+            }
+
+            for rel in self.kg.get_outgoing(&current) {
+                if !visited.contains(&rel.target) {
+                    visited.insert(rel.target.clone());
+
+                    let mut new_path = path.clone();
+                    new_path.push(rel.target.clone());
+
+                    let mut new_relations = relations.clone();
+                    new_relations.push(rel.relation_type.clone());
+
+                    queue.push_back((
+                        rel.target.clone(),
+                        new_path,
+                        new_relations,
+                        current_depth + 1,
+                    ));
+                }
+            }
+        }
+
+        paths
+    }
+}
+
+/// GraphRAG query builder
+pub struct GraphRAGQueryBuilder<'a> {
+    retriever: GraphRAGRetriever<'a>,
+    query: Vec<f32>,
+    k: usize,
+    entity_filter: Option<String>,
+    include_paths: bool,
+}
+
+impl<'a> GraphRAGQueryBuilder<'a> {
+    /// Create a new query builder
+    pub fn new(kg: &'a KnowledgeGraph, query: Vec<f32>) -> Self {
+        Self {
+            retriever: GraphRAGRetriever::with_defaults(kg),
+            query,
+            k: 10,
+            entity_filter: None,
+            include_paths: false,
+        }
+    }
+
+    /// Set number of results
+    #[must_use]
+    pub fn k(mut self, k: usize) -> Self {
+        self.k = k;
+        self
+    }
+
+    /// Set GraphRAG config
+    #[must_use]
+    pub fn config(mut self, config: GraphRAGConfig) -> Self {
+        self.retriever = GraphRAGRetriever::new(self.retriever.kg, config);
+        self
+    }
+
+    /// Filter by entity type
+    #[must_use]
+    pub fn filter_type(mut self, entity_type: &str) -> Self {
+        self.entity_filter = Some(entity_type.to_string());
+        self
+    }
+
+    /// Include reasoning paths
+    #[must_use]
+    pub fn include_paths(mut self) -> Self {
+        self.include_paths = true;
+        self
+    }
+
+    /// Execute the query
+    pub fn execute(self) -> Vec<ChunkContext> {
+        let mut results = self.retriever.retrieve(&self.query, self.k);
+
+        // Apply entity type filter if set
+        if let Some(ref filter) = self.entity_filter {
+            results.retain(|r| &r.entity_type == filter);
+        }
+
+        results
+    }
+
+    /// Execute and get formatted text
+    pub fn execute_text(self) -> String {
+        let mut results = self.retriever.retrieve(&self.query, self.k);
+
+        // Apply entity type filter if set
+        if let Some(ref filter) = self.entity_filter {
+            results.retain(|r| &r.entity_type == filter);
+        }
+
+        self.retriever.format_context(&results)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -856,5 +1437,237 @@ mod tests {
 
         let kg = KnowledgeGraph::with_config(config);
         assert_eq!(kg.config.similarity_weight, 0.5);
+    }
+
+    // ==========================================================================
+    // GraphRAG Tests
+    // ==========================================================================
+
+    #[test]
+    fn test_graphrag_config_default() {
+        let config = GraphRAGConfig::default();
+        assert_eq!(config.max_hops, 2);
+        assert_eq!(config.similarity_weight, 0.6);
+        assert_eq!(config.graph_weight, 0.4);
+    }
+
+    #[test]
+    fn test_graphrag_retriever_creation() {
+        let kg = create_test_graph();
+        let config = GraphRAGConfig::default();
+        let _retriever = GraphRAGRetriever::new(&kg, config);
+    }
+
+    #[test]
+    fn test_graphrag_retriever_retrieve() {
+        let kg = create_test_graph();
+        let retriever = GraphRAGRetriever::with_defaults(&kg);
+
+        let query = vec![1.0, 0.0, 0.0];
+        let contexts = retriever.retrieve(&query, 3);
+
+        assert!(!contexts.is_empty());
+        // First result should have hop_distance 0
+        assert_eq!(contexts[0].hop_distance, 0);
+    }
+
+    #[test]
+    fn test_graphrag_retrieve_text() {
+        let kg = create_test_graph();
+        let retriever = GraphRAGRetriever::with_defaults(&kg);
+
+        let query = vec![1.0, 0.0, 0.0];
+        let text = retriever.retrieve_text(&query, 3);
+
+        assert!(!text.is_empty());
+        // Should contain numbered items
+        assert!(text.contains("1."));
+    }
+
+    #[test]
+    fn test_chunk_context_fields() {
+        let context = ChunkContext {
+            entity_id: "test".to_string(),
+            label: "Test Entity".to_string(),
+            entity_type: "type".to_string(),
+            content: "Test content".to_string(),
+            score: 0.8,
+            hop_distance: 1,
+            related_entities: vec!["other".to_string()],
+            relation_descriptions: vec!["test relation".to_string()],
+        };
+
+        assert_eq!(context.entity_id, "test");
+        assert_eq!(context.hop_distance, 1);
+        assert_eq!(context.related_entities.len(), 1);
+    }
+
+    #[test]
+    fn test_entity_linker_link() {
+        let kg = create_test_graph();
+        let linker = EntityLinker::new(&kg);
+
+        let query = vec![1.0, 0.0, 0.0];
+        let linked = linker.link(&query);
+
+        assert!(linked.is_some());
+        let (id, _score) = linked.unwrap();
+        assert_eq!(id, "rust"); // Should link to rust as it's closest to [1.0, 0.0, 0.0]
+    }
+
+    #[test]
+    fn test_entity_linker_multiple() {
+        let kg = create_test_graph();
+        let linker = EntityLinker::new(&kg);
+
+        let query = vec![0.5, 0.5, 0.0];
+        let linked = linker.link_multiple(&query, 3);
+
+        assert_eq!(linked.len(), 3);
+    }
+
+    #[test]
+    fn test_entity_linker_by_type() {
+        let kg = create_test_graph();
+        let linker = EntityLinker::new(&kg);
+
+        let query = vec![1.0, 0.0, 0.0];
+        let linked = linker.link_by_type(&query, "language", 2);
+
+        assert_eq!(linked.len(), 2);
+        // All results should be languages
+        for (id, _) in &linked {
+            let entity = kg.get_entity(id).unwrap();
+            assert_eq!(entity.entity_type, "language");
+        }
+    }
+
+    #[test]
+    fn test_multi_hop_reasoner_find_paths() {
+        let kg = create_test_graph();
+        let reasoner = MultiHopReasoner::new(&kg, 3);
+
+        // Find paths from rust to programming
+        let paths = reasoner.find_paths("rust", "programming");
+
+        assert!(!paths.is_empty());
+        assert_eq!(paths[0].start, "rust");
+        assert_eq!(paths[0].end, "programming");
+    }
+
+    #[test]
+    fn test_multi_hop_reasoner_reason_from() {
+        let kg = create_test_graph();
+        let reasoner = MultiHopReasoner::new(&kg, 3);
+
+        // Use depth=1 to find direct neighbors
+        let paths = reasoner.reason_from("rust", 1);
+
+        // Should find paths to connected entities (programming and systems)
+        assert!(!paths.is_empty());
+        for path in &paths {
+            assert_eq!(path.start, "rust");
+            assert!(path.confidence > 0.0);
+            assert!(path.path.len() >= 2); // At least start + end
+        }
+    }
+
+    #[test]
+    fn test_reasoning_path_fields() {
+        let path = ReasoningPath {
+            start: "a".to_string(),
+            end: "b".to_string(),
+            path: vec!["a".to_string(), "b".to_string()],
+            relations: vec!["connected".to_string()],
+            confidence: 0.8,
+            explanation: "A --[connected]--> B".to_string(),
+        };
+
+        assert_eq!(path.path.len(), 2);
+        assert_eq!(path.relations.len(), 1);
+        assert!(path.confidence > 0.0);
+    }
+
+    #[test]
+    fn test_graphrag_query_builder() {
+        let kg = create_test_graph();
+        let query = vec![1.0, 0.0, 0.0];
+
+        let results = GraphRAGQueryBuilder::new(&kg, query)
+            .k(5)
+            .execute();
+
+        assert!(!results.is_empty());
+    }
+
+    #[test]
+    fn test_graphrag_query_builder_filter() {
+        let kg = create_test_graph();
+        let query = vec![0.5, 0.5, 0.0];
+
+        let results = GraphRAGQueryBuilder::new(&kg, query)
+            .k(10)
+            .filter_type("language")
+            .execute();
+
+        // All results should be of type "language"
+        for ctx in &results {
+            assert_eq!(ctx.entity_type, "language");
+        }
+    }
+
+    #[test]
+    fn test_graphrag_query_builder_text() {
+        let kg = create_test_graph();
+        let query = vec![1.0, 0.0, 0.0];
+
+        let text = GraphRAGQueryBuilder::new(&kg, query)
+            .k(3)
+            .execute_text();
+
+        assert!(!text.is_empty());
+    }
+
+    #[test]
+    fn test_graphrag_config_custom() {
+        let config = GraphRAGConfig {
+            max_hops: 3,
+            similarity_weight: 0.7,
+            graph_weight: 0.3,
+            min_similarity: 0.1,
+            ..Default::default()
+        };
+
+        assert_eq!(config.max_hops, 3);
+        assert_eq!(config.similarity_weight, 0.7);
+    }
+
+    #[test]
+    fn test_graphrag_multi_hop_expansion() {
+        let mut kg = KnowledgeGraph::new();
+
+        // Create a chain: a -> b -> c -> d
+        kg.add_entity("a", "type", "A", &[1.0, 0.0, 0.0], HashMap::new()).unwrap();
+        kg.add_entity("b", "type", "B", &[0.8, 0.2, 0.0], HashMap::new()).unwrap();
+        kg.add_entity("c", "type", "C", &[0.6, 0.4, 0.0], HashMap::new()).unwrap();
+        kg.add_entity("d", "type", "D", &[0.4, 0.6, 0.0], HashMap::new()).unwrap();
+
+        kg.add_relation("a", "b", "link").unwrap();
+        kg.add_relation("b", "c", "link").unwrap();
+        kg.add_relation("c", "d", "link").unwrap();
+
+        let config = GraphRAGConfig {
+            max_hops: 3,
+            ..Default::default()
+        };
+        let retriever = GraphRAGRetriever::new(&kg, config);
+
+        let query = vec![1.0, 0.0, 0.0];
+        let contexts = retriever.retrieve(&query, 10);
+
+        // Should find entities through multi-hop
+        let ids: Vec<_> = contexts.iter().map(|c| c.entity_id.as_str()).collect();
+        assert!(ids.contains(&"a"));
+        // Should also find b through the relation
     }
 }
