@@ -154,7 +154,7 @@ pub use enterprise::{autoscaling, namespace, raft, security, tenant_isolation};
 
 /// Observability: telemetry, drift detection, anomaly detection, and profiling.
 pub mod observe;
-pub use observe::{anomaly, drift, observability, otel_service, profiler, telemetry};
+pub use observe::{anomaly, dashboard, drift, observability, otel_service, profiler, telemetry};
 
 // ── Framework Integrations ───────────────────────────────────────────────────
 // Adapters for LangChain, LlamaIndex, Haystack, Semantic Kernel.
