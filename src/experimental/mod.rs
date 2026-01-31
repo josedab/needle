@@ -60,3 +60,5 @@ pub mod temporal;
 pub mod vector_streaming;
 #[cfg(feature = "experimental")]
 pub mod zero_copy;
+#[cfg(feature = "experimental")]
+pub mod ipc_protocol;
