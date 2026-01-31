@@ -79,6 +79,10 @@ cargo build --features full
 > The root library uses `crate-type = ["rlib"]` so regular `cargo build` and
 > `cargo test` are fast. Build Python bindings with `maturin develop`.
 
+> **Faster builds**: For faster incremental builds, configure a faster linker in
+> `.cargo/config.toml`. See the commented-out platform-specific sections for
+> `mold` (Linux) or `lld` (macOS) configuration.
+
 ```bash
 # Debug build
 cargo build
