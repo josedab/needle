@@ -128,7 +128,7 @@ pub use search::{
 pub mod persistence;
 pub use persistence::{
     backup, cloud_storage, managed_backup, migrations, shard, snapshot_replication, sync_protocol,
-    tiered, time_travel, transaction, versioning, wal,
+    tiered, time_travel, transaction, vector_versioning, versioning, wal,
 };
 
 // ── Embeddings & ML ──────────────────────────────────────────────────────────

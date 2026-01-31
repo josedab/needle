@@ -10,4 +10,5 @@ pub mod tiered;
 pub mod time_travel;
 pub mod transaction;
 pub mod versioning;
+pub mod vector_versioning;
 pub mod wal;
