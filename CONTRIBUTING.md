@@ -11,6 +11,7 @@ Thank you for your interest in contributing to Needle! This document provides gu
 - [Testing](#testing)
 - [Code Style](#code-style)
 - [Pull Request Process](#pull-request-process)
+- [Repository Layout](#repository-layout)
 - [Architecture Overview](#architecture-overview)
 - [CI Architecture](#ci-architecture)
 - [Troubleshooting](#troubleshooting)
@@ -403,6 +404,44 @@ Describe how you tested your changes.
 3. Maintainer review
 4. Address feedback
 5. Merge when approved
+
+---
+
+## Repository Layout
+
+### Directory Structure
+
+| Directory | Purpose |
+|-----------|---------|
+| `src/` | Main library and binary source code |
+| `crates/` | Workspace sub-crates (`needle-core`, `needle-cli`, `needle-python`) |
+| `tests/` | Integration, property-based, and edge-case tests |
+| `examples/` | Runnable example programs for each feature |
+| `benches/` | Criterion benchmarks |
+| `docs/` | Supplementary documentation (OpenAPI spec, guides) |
+| `proto/` | Protocol Buffer definitions |
+| `sdk/` | Client SDK packages (TypeScript, etc.) |
+| `python/` | Python package configuration and stubs |
+| `scripts/` | Developer scripts (doctor, quickstart, scaffolding) |
+| `deploy/` | Deployment configurations |
+| `helm/` | Helm charts for Kubernetes |
+| `fuzz/` | Fuzz testing targets (requires nightly Rust) |
+| `website/` | Docusaurus documentation website |
+
+### Root Configuration Files
+
+| File | Purpose |
+|------|---------|
+| `clippy.toml` | Clippy lint configuration (e.g., type complexity threshold) |
+| `rustfmt.toml` | Rust formatter settings |
+| `rust-toolchain.toml` | Pinned Rust toolchain version for reproducible builds |
+| `deny.toml` | `cargo-deny` config — license auditing and banned dependency checks |
+| `codecov.yml` | Codecov coverage upload and threshold settings |
+| `pyproject.toml` | Python package metadata (used by maturin for PyO3 bindings) |
+| `mcp-registry.json` | Model Context Protocol tool manifest for AI agent integration |
+| `docker-compose.yml` | Docker Compose for running Needle from pre-built images |
+| `docker-compose.source.yml` | Docker Compose for building from source |
+| `.pre-commit-config.yaml` | Pre-commit hook definitions (fmt, clippy, audit) |
 
 ---
 
