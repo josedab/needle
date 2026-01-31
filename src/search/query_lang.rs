@@ -1108,6 +1108,45 @@ impl QueryParser {
         };
         self.advance()?;
 
+        // Check for cosine_similarity(column, $param) > threshold
+        // Translates to SimilarTo expression for the search pipeline
+        if column.eq_ignore_ascii_case("cosine_similarity") && self.current == Token::LParen {
+            self.advance()?; // consume (
+            let sim_column = if let Token::Identifier(name) = &self.current {
+                name.clone()
+            } else {
+                return Err(QueryError::UnexpectedToken {
+                    expected: "column name".to_string(),
+                    found: format!("{:?}", self.current),
+                    position: self.lexer.position(),
+                });
+            };
+            self.advance()?;
+            self.expect(Token::Comma)?;
+            let query_param = if let Token::Parameter(name) = &self.current {
+                name.clone()
+            } else {
+                return Err(QueryError::UnexpectedToken {
+                    expected: "query parameter ($param)".to_string(),
+                    found: format!("{:?}", self.current),
+                    position: self.lexer.position(),
+                });
+            };
+            self.advance()?;
+            self.expect(Token::RParen)?;
+            // Expect comparison operator (> or >=) and threshold, but map to SimilarTo
+            // The threshold is informational; actual search uses k-NN
+            if self.current == Token::Gt || self.current == Token::Ge {
+                self.advance()?;
+                // Consume the threshold value
+                let _threshold = self.parse_literal_value()?;
+            }
+            return Ok(Expression::SimilarTo(SimilarToExpr {
+                column: sim_column,
+                query_param,
+            }));
+        }
+
         // Check for SIMILAR TO
         if self.current == Token::Similar {
             self.advance()?;
@@ -1725,6 +1764,14 @@ impl QueryExecutor {
         });
 
         QueryPlan { nodes }
+    }
+
+    /// Build a filter from a WHERE clause (public API for server integration)
+    pub fn build_filter_from_where(
+        where_clause: &WhereClause,
+        context: &QueryContext,
+    ) -> QueryResult<Filter> {
+        Self::build_filter(&where_clause.expression, context)
     }
 }
 
@@ -2839,5 +2886,25 @@ mod tests {
         let help = QuerySession::help_text();
         assert!(help.contains("NeedleQL"));
         assert!(help.contains("SELECT"));
+    }
+
+    #[test]
+    fn test_cosine_similarity_function_syntax() {
+        let query = QueryParser::parse(
+            "SELECT * FROM vectors WHERE cosine_similarity(embedding, $query) > 0.8 LIMIT 10"
+        ).unwrap();
+        assert_eq!(query.from.collection, "vectors");
+        assert_eq!(query.limit, Some(10));
+        // The cosine_similarity function should be parsed as a SimilarTo expression
+        assert!(query.where_clause.is_some());
+    }
+
+    #[test]
+    fn test_cosine_similarity_with_and_filter() {
+        let query = QueryParser::parse(
+            "SELECT * FROM docs WHERE cosine_similarity(embedding, $query) > 0.9 AND category = 'science' LIMIT 5"
+        ).unwrap();
+        assert_eq!(query.from.collection, "docs");
+        assert_eq!(query.limit, Some(5));
     }
 }
