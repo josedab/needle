@@ -28,7 +28,7 @@ use crate::error::{NeedleError, Result};
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 
 /// Configuration for a tenant
@@ -85,6 +85,152 @@ impl TenantConfig {
             ..Default::default()
         }
     }
+}
+
+/// Detailed resource quota for a tenant
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TenantQuota {
+    /// Maximum total vectors across all collections
+    pub max_vectors: Option<u64>,
+    /// Maximum number of collections
+    pub max_collections: Option<u32>,
+    /// Maximum queries per second
+    pub max_qps: Option<u32>,
+    /// Maximum storage in bytes
+    pub max_storage_bytes: Option<u64>,
+    /// Quota period for rate limiting (seconds)
+    pub period_seconds: u64,
+}
+
+impl Default for TenantQuota {
+    fn default() -> Self {
+        Self {
+            max_vectors: Some(1_000_000),
+            max_collections: Some(100),
+            max_qps: None,
+            max_storage_bytes: Some(10 * 1024 * 1024 * 1024), // 10GB
+            period_seconds: 1,
+        }
+    }
+}
+
+impl TenantQuota {
+    pub fn unlimited() -> Self {
+        Self {
+            max_vectors: None,
+            max_collections: None,
+            max_qps: None,
+            max_storage_bytes: None,
+            period_seconds: 1,
+        }
+    }
+}
+
+/// Token bucket rate limiter for per-tenant QPS control
+pub struct TokenBucketRateLimiter {
+    /// Maximum tokens (burst capacity)
+    capacity: u32,
+    /// Current tokens available
+    tokens: AtomicU32,
+    /// Tokens added per second
+    refill_rate: u32,
+    /// Last refill timestamp (unix epoch millis)
+    last_refill: AtomicU64,
+}
+
+impl TokenBucketRateLimiter {
+    /// Create a new rate limiter with the given QPS limit
+    pub fn new(qps: u32) -> Self {
+        Self {
+            capacity: qps,
+            tokens: AtomicU32::new(qps),
+            refill_rate: qps,
+            last_refill: AtomicU64::new(Self::now_ms()),
+        }
+    }
+
+    fn now_ms() -> u64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64
+    }
+
+    /// Try to acquire a token. Returns true if allowed, false if rate limited.
+    pub fn try_acquire(&self) -> bool {
+        self.refill();
+        let current = self.tokens.load(Ordering::Relaxed);
+        if current > 0 {
+            self.tokens.fetch_sub(1, Ordering::Relaxed);
+            true
+        } else {
+            false
+        }
+    }
+
+    fn refill(&self) {
+        let now = Self::now_ms();
+        let last = self.last_refill.load(Ordering::Relaxed);
+        let elapsed_ms = now.saturating_sub(last);
+        if elapsed_ms >= 1000 {
+            let tokens_to_add = (elapsed_ms / 1000) as u32 * self.refill_rate;
+            let current = self.tokens.load(Ordering::Relaxed);
+            let new_tokens = (current + tokens_to_add).min(self.capacity);
+            self.tokens.store(new_tokens, Ordering::Relaxed);
+            self.last_refill.store(now, Ordering::Relaxed);
+        }
+    }
+
+    /// Current available tokens
+    pub fn available_tokens(&self) -> u32 {
+        self.refill();
+        self.tokens.load(Ordering::Relaxed)
+    }
+}
+
+/// Quota check result
+#[derive(Debug, Clone)]
+pub struct QuotaCheckResult {
+    pub allowed: bool,
+    pub reason: Option<String>,
+    pub current_usage: u64,
+    pub limit: u64,
+}
+
+/// Billing event for chargeback
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BillingEvent {
+    /// Tenant ID
+    pub tenant_id: String,
+    /// Event type
+    pub event_type: BillingEventType,
+    /// Quantity
+    pub quantity: u64,
+    /// Timestamp
+    pub timestamp: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum BillingEventType {
+    VectorInsert,
+    VectorDelete,
+    SearchQuery,
+    StorageUsed,
+    CollectionCreated,
+    CollectionDeleted,
+}
+
+/// Usage report for a tenant
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TenantUsageReport {
+    pub tenant_id: String,
+    pub total_vectors: u64,
+    pub total_collections: u64,
+    pub total_storage_bytes: u64,
+    pub total_queries: u64,
+    pub total_writes: u64,
+    pub billing_events: Vec<BillingEvent>,
+    pub quota: TenantQuota,
 }
 
 /// Namespace for tenant isolation
@@ -270,6 +416,41 @@ impl Namespace {
     /// Prefixed collection name
     fn prefixed_name(&self, name: &str) -> String {
         format!("{}{}", self.prefix, name)
+    }
+
+    /// Check if inserting a vector would exceed quotas
+    pub fn check_vector_quota(&self) -> Result<()> {
+        if let Some(max_vectors) = self.config.max_vectors {
+            let current = self.stats.total_vectors.load(Ordering::Relaxed) as usize;
+            if current >= max_vectors {
+                return Err(NeedleError::QuotaExceeded(format!(
+                    "Vector quota exceeded: {}/{} vectors",
+                    current, max_vectors
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    /// Generate a usage report for this namespace
+    pub fn usage_report(&self) -> TenantUsageReport {
+        let snapshot = self.stats.snapshot();
+        TenantUsageReport {
+            tenant_id: self.id.clone(),
+            total_vectors: snapshot.total_vectors,
+            total_collections: snapshot.total_collections,
+            total_storage_bytes: snapshot.storage_bytes,
+            total_queries: snapshot.searches,
+            total_writes: snapshot.writes,
+            billing_events: Vec::new(),
+            quota: TenantQuota {
+                max_vectors: self.config.max_vectors.map(|v| v as u64),
+                max_collections: self.config.max_collections.map(|v| v as u32),
+                max_qps: self.config.rate_limit_ops,
+                max_storage_bytes: self.config.max_storage_bytes,
+                period_seconds: 1,
+            },
+        }
     }
 
     /// Check write access
@@ -768,5 +949,61 @@ mod tests {
         assert!(namespaces.contains(&"tenant1".to_string()));
         assert!(namespaces.contains(&"tenant2".to_string()));
         assert!(namespaces.contains(&"tenant3".to_string()));
+    }
+
+    #[test]
+    fn test_tenant_quota_defaults() {
+        let quota = TenantQuota::default();
+        assert_eq!(quota.max_vectors, Some(1_000_000));
+        assert_eq!(quota.max_collections, Some(100));
+        assert!(quota.max_storage_bytes.is_some());
+    }
+
+    #[test]
+    fn test_tenant_quota_unlimited() {
+        let quota = TenantQuota::unlimited();
+        assert!(quota.max_vectors.is_none());
+        assert!(quota.max_collections.is_none());
+        assert!(quota.max_qps.is_none());
+        assert!(quota.max_storage_bytes.is_none());
+    }
+
+    #[test]
+    fn test_token_bucket_rate_limiter() {
+        let limiter = TokenBucketRateLimiter::new(5);
+        // Should allow up to 5 requests
+        for _ in 0..5 {
+            assert!(limiter.try_acquire());
+        }
+        // 6th should fail (no time for refill)
+        assert!(!limiter.try_acquire());
+    }
+
+    #[test]
+    fn test_billing_event_types() {
+        let event = BillingEvent {
+            tenant_id: "tenant1".into(),
+            event_type: BillingEventType::VectorInsert,
+            quantity: 100,
+            timestamp: 1000,
+        };
+        assert_eq!(event.tenant_id, "tenant1");
+        assert_eq!(event.quantity, 100);
+    }
+
+    #[test]
+    fn test_usage_report_structure() {
+        let report = TenantUsageReport {
+            tenant_id: "t1".into(),
+            total_vectors: 5000,
+            total_collections: 3,
+            total_storage_bytes: 1024 * 1024,
+            total_queries: 100,
+            total_writes: 50,
+            billing_events: vec![],
+            quota: TenantQuota::default(),
+        };
+        assert_eq!(report.total_vectors, 5000);
+        assert_eq!(report.total_collections, 3);
     }
 }
