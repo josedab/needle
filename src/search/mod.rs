@@ -12,3 +12,4 @@ pub mod reranker;
 pub mod cost_estimator;
 pub mod routing;
 pub mod collection_federation;
+pub mod graphql_api;
