@@ -133,6 +133,24 @@ jobs:
             echo "If an expect() is intentional, add '// allow-expect' on the same line."
           fi
 
+      - name: Audit let _ = patterns that discard Results
+        run: |
+          # Find 'let _ =' patterns that may silently discard Results in production code
+          LET_DISCARD_HITS=$(grep -rn 'let _ =' src/ \
+            --include='*.rs' \
+            | grep -v '#\[cfg(test)\]' \
+            | grep -v 'mod tests' \
+            | grep -v 'src/experimental/' \
+            | grep -v '#\[test\]' \
+            | grep -v '// allow-discard' \
+            || true)
+          if [ -n "$LET_DISCARD_HITS" ]; then
+            echo "::warning::Found 'let _ =' patterns that may silently discard Results. Prefer explicit error handling."
+            echo "$LET_DISCARD_HITS"
+            echo ""
+            echo "If the discard is intentional, add '// allow-discard' on the same line."
+          fi
+
   docs:
     needs: quick-check
     name: Documentation

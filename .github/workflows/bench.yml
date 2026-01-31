@@ -42,7 +42,7 @@ jobs:
       # Run benchmarks and save results
       - name: Run benchmarks
         run: |
-          cargo bench --bench benchmarks -- --noplot --save-baseline current
+          cargo bench --bench benchmarks -- --noplot --save-baseline current 2>&1 | tee benchmark-results.txt
 
       # Compare against baseline on PRs
       - name: Compare against baseline
