@@ -50,5 +50,6 @@ pub mod sparse;
 pub mod graph_vector_fusion;
 pub mod multimodal_fusion;
 pub mod concurrent_hnsw;
+pub mod compression_pipeline;
 #[cfg(feature = "diskann")]
 pub mod tiered_ann;
