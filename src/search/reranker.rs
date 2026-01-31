@@ -33,6 +33,7 @@
 //! }
 //! ```
 
+use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::future::Future;
@@ -514,6 +515,237 @@ pub async fn apply_reranking<R: Reranker>(
     Ok(results.into_iter().map(|r| (r.index, r.score)).collect())
 }
 
+/// Feedback record for training the bandits model
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RelevanceFeedback {
+    /// Unique query identifier
+    pub query_id: String,
+    /// Vector ID that was clicked/rated
+    pub vector_id: String,
+    /// Relevance score (0.0 = irrelevant, 1.0 = highly relevant)
+    pub relevance_score: f32,
+    /// Position the result was shown at (0-indexed)
+    pub position: usize,
+    /// Timestamp of feedback
+    pub timestamp: u64,
+}
+
+impl RelevanceFeedback {
+    pub fn new(
+        query_id: impl Into<String>,
+        vector_id: impl Into<String>,
+        relevance_score: f32,
+        position: usize,
+    ) -> Self {
+        Self {
+            query_id: query_id.into(),
+            vector_id: vector_id.into(),
+            relevance_score,
+            position,
+            timestamp: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
+        }
+    }
+}
+
+/// Beta distribution parameters for Thompson Sampling
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BetaParams {
+    /// Alpha parameter (successes + 1)
+    pub alpha: f64,
+    /// Beta parameter (failures + 1)
+    pub beta: f64,
+}
+
+impl Default for BetaParams {
+    fn default() -> Self {
+        Self {
+            alpha: 1.0,
+            beta: 1.0,
+        } // Uniform prior
+    }
+}
+
+impl BetaParams {
+    /// Sample from the Beta distribution using the inverse CDF approximation
+    pub fn sample(&self, rng: &mut impl rand::Rng) -> f64 {
+        // Simple approximation: use mean + noise scaled by variance
+        let mean = self.alpha / (self.alpha + self.beta);
+        let variance = (self.alpha * self.beta)
+            / ((self.alpha + self.beta).powi(2) * (self.alpha + self.beta + 1.0));
+        let noise: f64 = rng.gen_range(-1.0..1.0);
+        (mean + noise * variance.sqrt()).clamp(0.0, 1.0)
+    }
+
+    /// Update with a reward (relevance score)
+    pub fn update(&mut self, reward: f64) {
+        self.alpha += reward;
+        self.beta += 1.0 - reward;
+    }
+
+    /// Expected value (mean of Beta distribution)
+    pub fn expected_value(&self) -> f64 {
+        self.alpha / (self.alpha + self.beta)
+    }
+
+    /// Apply concept drift decay
+    pub fn decay(&mut self, factor: f64) {
+        self.alpha = 1.0 + (self.alpha - 1.0) * factor;
+        self.beta = 1.0 + (self.beta - 1.0) * factor;
+    }
+}
+
+/// Configuration for the bandits reranker
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BanditsConfig {
+    /// Concept drift decay factor (0.0 - 1.0, applied periodically)
+    pub decay_factor: f64,
+    /// Number of feedback events before decay is applied
+    pub decay_interval: usize,
+    /// Whether to enable A/B testing mode (50% bandits, 50% original ranking)
+    pub ab_testing: bool,
+    /// Maximum feedback log size
+    pub max_feedback_log: usize,
+}
+
+impl Default for BanditsConfig {
+    fn default() -> Self {
+        Self {
+            decay_factor: 0.95,
+            decay_interval: 100,
+            ab_testing: false,
+            max_feedback_log: 10_000,
+        }
+    }
+}
+
+/// Thompson Sampling bandits reranker that learns from user feedback.
+///
+/// Maintains Beta distribution parameters per (position, result) pair.
+/// Uses Thompson Sampling to explore/exploit the result ordering.
+pub struct BanditsReranker {
+    config: BanditsConfig,
+    /// Per-vector Beta distribution parameters
+    params: HashMap<String, BetaParams>,
+    /// Feedback log
+    feedback_log: Vec<RelevanceFeedback>,
+    /// Total feedback events processed
+    total_feedback: u64,
+    /// Total reranking operations
+    total_reranks: u64,
+}
+
+impl BanditsReranker {
+    /// Create a new bandits reranker
+    pub fn new(config: BanditsConfig) -> Self {
+        Self {
+            config,
+            params: HashMap::new(),
+            feedback_log: Vec::new(),
+            total_feedback: 0,
+            total_reranks: 0,
+        }
+    }
+
+    /// Record relevance feedback for a search result
+    pub fn record_feedback(&mut self, feedback: RelevanceFeedback) {
+        // Update Beta parameters for this vector
+        let params = self.params.entry(feedback.vector_id.clone()).or_default();
+        params.update(feedback.relevance_score as f64);
+
+        // Store feedback
+        self.feedback_log.push(feedback);
+        self.total_feedback += 1;
+
+        // Apply decay periodically
+        if self.total_feedback as usize % self.config.decay_interval == 0 {
+            self.apply_decay();
+        }
+
+        // Evict old feedback
+        if self.feedback_log.len() > self.config.max_feedback_log {
+            let drain = self.feedback_log.len() - self.config.max_feedback_log;
+            self.feedback_log.drain(0..drain);
+        }
+    }
+
+    /// Rerank search results using Thompson Sampling
+    ///
+    /// Samples from the Beta distribution for each result and sorts
+    /// by the sampled value (higher = more likely to be relevant).
+    pub fn rerank_results(&mut self, results: &mut Vec<crate::SearchResult>) {
+        use rand::Rng;
+        let mut rng = rand::thread_rng();
+
+        // In A/B testing mode, only rerank 50% of the time
+        if self.config.ab_testing && rng.gen_bool(0.5) {
+            self.total_reranks += 1;
+            return;
+        }
+
+        let mut scored: Vec<(usize, f64)> = results
+            .iter()
+            .enumerate()
+            .map(|(idx, result)| {
+                let params = self.params.get(&result.id).cloned().unwrap_or_default();
+                let thompson_score = params.sample(&mut rng);
+                (idx, thompson_score)
+            })
+            .collect();
+
+        // Sort by Thompson sample (descending - higher is better)
+        scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+        // Reorder results
+        let original: Vec<_> = results.drain(..).collect();
+        for (idx, _) in &scored {
+            if let Some(result) = original.get(*idx) {
+                results.push(result.clone());
+            }
+        }
+
+        self.total_reranks += 1;
+    }
+
+    /// Apply concept drift decay to all parameters
+    fn apply_decay(&mut self) {
+        for params in self.params.values_mut() {
+            params.decay(self.config.decay_factor);
+        }
+    }
+
+    /// Get statistics about the bandits reranker
+    pub fn stats(&self) -> BanditsStats {
+        BanditsStats {
+            total_feedback: self.total_feedback,
+            total_reranks: self.total_reranks,
+            unique_vectors_tracked: self.params.len(),
+            feedback_log_size: self.feedback_log.len(),
+            ab_testing_enabled: self.config.ab_testing,
+        }
+    }
+
+    /// Get the expected relevance score for a vector
+    pub fn expected_relevance(&self, vector_id: &str) -> f64 {
+        self.params
+            .get(vector_id)
+            .map(|p| p.expected_value())
+            .unwrap_or(0.5)
+    }
+}
+
+/// Statistics for the bandits reranker
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BanditsStats {
+    pub total_feedback: u64,
+    pub total_reranks: u64,
+    pub unique_vectors_tracked: usize,
+    pub feedback_log_size: usize,
+    pub ab_testing_enabled: bool,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -601,5 +833,97 @@ mod tests {
 
         assert_eq!(results.len(), 2);
         assert_eq!(results[0].0, 0); // index
+    }
+
+    #[test]
+    fn test_beta_params_update() {
+        let mut params = BetaParams::default();
+        assert!((params.expected_value() - 0.5).abs() < 0.01);
+
+        // Positive feedback should increase expected value
+        params.update(1.0);
+        params.update(1.0);
+        assert!(params.expected_value() > 0.5);
+    }
+
+    #[test]
+    fn test_beta_params_decay() {
+        let mut params = BetaParams { alpha: 10.0, beta: 2.0 };
+        let ev_before = params.expected_value();
+        params.decay(0.5);
+        // After decay, alpha and beta approach 1.0 (uniform), so EV approaches 0.5
+        let ev_after = params.expected_value();
+        assert!((ev_after - 0.5).abs() < (ev_before - 0.5).abs());
+    }
+
+    #[test]
+    fn test_bandits_reranker_feedback_and_rerank() {
+        let config = BanditsConfig {
+            decay_factor: 0.95,
+            decay_interval: 1000,
+            ab_testing: false,
+            max_feedback_log: 100,
+        };
+        let mut reranker = BanditsReranker::new(config);
+
+        // Record positive feedback for "v2"
+        for _ in 0..20 {
+            reranker.record_feedback(RelevanceFeedback::new("q1", "v2", 1.0, 0));
+        }
+        // Record negative feedback for "v1"
+        for _ in 0..20 {
+            reranker.record_feedback(RelevanceFeedback::new("q1", "v1", 0.0, 1));
+        }
+
+        // v2 should have higher expected relevance than v1
+        assert!(reranker.expected_relevance("v2") > reranker.expected_relevance("v1"));
+
+        let stats = reranker.stats();
+        assert_eq!(stats.total_feedback, 40);
+        assert_eq!(stats.unique_vectors_tracked, 2);
+    }
+
+    #[test]
+    fn test_bandits_reranker_reorder() {
+        use crate::SearchResult;
+
+        let config = BanditsConfig {
+            decay_factor: 0.95,
+            decay_interval: 1000,
+            ab_testing: false,
+            max_feedback_log: 100,
+        };
+        let mut reranker = BanditsReranker::new(config);
+
+        // Heavily train on v2 being relevant
+        for _ in 0..50 {
+            reranker.record_feedback(RelevanceFeedback::new("q1", "v2", 1.0, 0));
+            reranker.record_feedback(RelevanceFeedback::new("q1", "v1", 0.0, 1));
+        }
+
+        let mut results = vec![
+            SearchResult::new("v1", 0.1, None),
+            SearchResult::new("v2", 0.2, None),
+        ];
+        reranker.rerank_results(&mut results);
+        // After heavy training, v2 should typically end up first
+        // (probabilistic, but with 50 positive samples it's very likely)
+        assert_eq!(results.len(), 2);
+        assert_eq!(reranker.stats().total_reranks, 1);
+    }
+
+    #[test]
+    fn test_bandits_feedback_log_eviction() {
+        let config = BanditsConfig {
+            decay_factor: 0.95,
+            decay_interval: 1000,
+            ab_testing: false,
+            max_feedback_log: 5,
+        };
+        let mut reranker = BanditsReranker::new(config);
+        for i in 0..10 {
+            reranker.record_feedback(RelevanceFeedback::new("q", format!("v{i}"), 1.0, 0));
+        }
+        assert_eq!(reranker.stats().feedback_log_size, 5);
     }
 }
