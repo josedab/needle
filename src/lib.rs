@@ -70,6 +70,10 @@
 
 #![warn(missing_docs)]
 #![deny(unsafe_code)]
+// Tech debt: allow unwrap_used at crate level while modules are incrementally cleaned up.
+// The workspace lint is set to `deny` so new workspace crates must use proper error handling.
+// Track cleanup progress by removing this allow and adding per-module allows instead.
+#![allow(clippy::unwrap_used)]
 
 // ── Core ──────────────────────────────────────────────────────────────────────
 // Fundamental types: database, collections, vectors, errors, storage, metadata.

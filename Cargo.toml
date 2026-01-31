@@ -44,8 +44,9 @@ option_if_let_else = "allow"
 struct_field_names = "allow"
 redundant_closure_for_method_calls = "allow"
 uninlined_format_args = "allow"
-# Warn on unwrap() in new code — existing unwraps are tracked for elimination
-unwrap_used = "warn"
+# Deny unwrap() — use expect() with context or proper error handling instead.
+# Modules still being cleaned up have #[allow(clippy::unwrap_used)] as visible tech debt.
+unwrap_used = "deny"
 
 [package]
 name = "needle"
