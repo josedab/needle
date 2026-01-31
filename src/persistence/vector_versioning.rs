@@ -469,6 +469,137 @@ impl VersionedStore {
     }
 }
 
+/// Provenance record tracking the full lifecycle of a vector.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProvenanceRecord {
+    /// ID of the vector this record belongs to
+    pub vector_id: String,
+    /// Source document or data origin
+    pub source_document: Option<String>,
+    /// Embedding model used to generate this vector
+    pub embedding_model: Option<String>,
+    /// Model version
+    pub model_version: Option<String>,
+    /// Pipeline ID that produced this vector
+    pub pipeline_id: Option<String>,
+    /// Unix timestamp of creation
+    pub created_at: u64,
+    /// Unix timestamp of last update
+    pub updated_at: u64,
+    /// Parent vector ID (if derived from another vector)
+    pub parent_vector_id: Option<String>,
+    /// Additional provenance metadata
+    pub extra: Option<serde_json::Value>,
+}
+
+impl ProvenanceRecord {
+    /// Create a new provenance record with minimal info
+    pub fn new(vector_id: impl Into<String>) -> Self {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        Self {
+            vector_id: vector_id.into(),
+            source_document: None,
+            embedding_model: None,
+            model_version: None,
+            pipeline_id: None,
+            created_at: now,
+            updated_at: now,
+            parent_vector_id: None,
+            extra: None,
+        }
+    }
+
+    #[must_use]
+    pub fn with_source(mut self, source: impl Into<String>) -> Self {
+        self.source_document = Some(source.into());
+        self
+    }
+
+    #[must_use]
+    pub fn with_model(mut self, model: impl Into<String>, version: impl Into<String>) -> Self {
+        self.embedding_model = Some(model.into());
+        self.model_version = Some(version.into());
+        self
+    }
+
+    #[must_use]
+    pub fn with_pipeline(mut self, pipeline_id: impl Into<String>) -> Self {
+        self.pipeline_id = Some(pipeline_id.into());
+        self
+    }
+
+    #[must_use]
+    pub fn with_parent(mut self, parent_id: impl Into<String>) -> Self {
+        self.parent_vector_id = Some(parent_id.into());
+        self
+    }
+
+    #[must_use]
+    pub fn with_extra(mut self, extra: serde_json::Value) -> Self {
+        self.extra = Some(extra);
+        self
+    }
+}
+
+/// In-memory provenance store keyed by vector ID.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ProvenanceStore {
+    records: HashMap<String, ProvenanceRecord>,
+}
+
+impl ProvenanceStore {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn insert(&mut self, record: ProvenanceRecord) {
+        self.records.insert(record.vector_id.clone(), record);
+    }
+
+    pub fn get(&self, vector_id: &str) -> Option<&ProvenanceRecord> {
+        self.records.get(vector_id)
+    }
+
+    pub fn remove(&mut self, vector_id: &str) -> Option<ProvenanceRecord> {
+        self.records.remove(vector_id)
+    }
+
+    pub fn len(&self) -> usize {
+        self.records.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.records.is_empty()
+    }
+
+    /// Find all vectors derived from a source document
+    pub fn find_by_source(&self, source: &str) -> Vec<&ProvenanceRecord> {
+        self.records
+            .values()
+            .filter(|r| r.source_document.as_deref() == Some(source))
+            .collect()
+    }
+
+    /// Find all vectors produced by a specific model
+    pub fn find_by_model(&self, model: &str) -> Vec<&ProvenanceRecord> {
+        self.records
+            .values()
+            .filter(|r| r.embedding_model.as_deref() == Some(model))
+            .collect()
+    }
+
+    /// Find all vectors derived from a parent vector
+    pub fn find_children(&self, parent_id: &str) -> Vec<&ProvenanceRecord> {
+        self.records
+            .values()
+            .filter(|r| r.parent_vector_id.as_deref() == Some(parent_id))
+            .collect()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -569,5 +700,60 @@ mod tests {
     fn test_delete_nonexistent() {
         let mut store = VersionedStore::new(VersioningConfig::default());
         assert!(store.delete("nonexistent").is_err());
+    }
+
+    #[test]
+    fn test_provenance_record_builder() {
+        let record = ProvenanceRecord::new("vec1")
+            .with_source("doc_abc")
+            .with_model("text-embedding-3-small", "1.0")
+            .with_pipeline("pipeline_42")
+            .with_parent("vec0");
+        assert_eq!(record.vector_id, "vec1");
+        assert_eq!(record.source_document.as_deref(), Some("doc_abc"));
+        assert_eq!(record.embedding_model.as_deref(), Some("text-embedding-3-small"));
+        assert_eq!(record.model_version.as_deref(), Some("1.0"));
+        assert_eq!(record.pipeline_id.as_deref(), Some("pipeline_42"));
+        assert_eq!(record.parent_vector_id.as_deref(), Some("vec0"));
+    }
+
+    #[test]
+    fn test_provenance_store_crud() {
+        let mut store = ProvenanceStore::new();
+        assert!(store.is_empty());
+
+        store.insert(ProvenanceRecord::new("v1").with_source("doc1"));
+        store.insert(ProvenanceRecord::new("v2").with_source("doc1"));
+        store.insert(ProvenanceRecord::new("v3").with_source("doc2").with_model("embed", "1.0"));
+        assert_eq!(store.len(), 3);
+
+        // Get
+        let r = store.get("v1").unwrap();
+        assert_eq!(r.source_document.as_deref(), Some("doc1"));
+
+        // Find by source
+        let by_doc1 = store.find_by_source("doc1");
+        assert_eq!(by_doc1.len(), 2);
+
+        // Find by model
+        let by_model = store.find_by_model("embed");
+        assert_eq!(by_model.len(), 1);
+
+        // Remove
+        store.remove("v1");
+        assert_eq!(store.len(), 2);
+        assert!(store.get("v1").is_none());
+    }
+
+    #[test]
+    fn test_provenance_find_children() {
+        let mut store = ProvenanceStore::new();
+        store.insert(ProvenanceRecord::new("parent"));
+        store.insert(ProvenanceRecord::new("child1").with_parent("parent"));
+        store.insert(ProvenanceRecord::new("child2").with_parent("parent"));
+        store.insert(ProvenanceRecord::new("other").with_parent("different"));
+
+        let children = store.find_children("parent");
+        assert_eq!(children.len(), 2);
     }
 }
