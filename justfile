@@ -5,6 +5,17 @@
 default:
     @just --list
 
+# Show common feature flag combinations
+help-features:
+    @echo "Feature flag combinations:"
+    @echo "  --features full              All stable features (server, metrics, hybrid, encryption, …)"
+    @echo "  --features server            HTTP REST API (Axum)"
+    @echo "  --features hybrid            BM25 + vector hybrid search"
+    @echo "  --features metrics           Prometheus metrics export"
+    @echo "  --features encryption        ChaCha20-Poly1305 at-rest encryption"
+    @echo "  --features experimental      Unstable/preview modules"
+    @echo "  --features server,metrics    Server with Prometheus (common combo)"
+
 # Format code
 fmt:
     cargo fmt
@@ -45,6 +56,12 @@ watch:
 # Full pre-commit check: format, lint, test
 check: fmt-check lint test
 
+# Full CI equivalent: fmt, lint, test, doc-check, examples, bench compile
+check-all: fmt-check lint test
+    RUSTDOCFLAGS='-D warnings' cargo doc --no-deps --features full
+    cargo build --examples --features full
+    cargo bench --no-run
+
 # Build with default features
 build:
     cargo build
@@ -80,6 +97,7 @@ clean:
 
 # Run the HTTP server locally
 serve:
+    @echo "Tip: RUST_LOG=debug just serve (for verbose logging)"
     cargo run --features server -- serve -a 127.0.0.1:8080
 
 # Run the quickstart demo (builds, seeds, searches)
@@ -99,13 +117,26 @@ playground:
 
 # First-time setup: doctor + pre-commit + build
 setup:
+    #!/usr/bin/env bash
     ./scripts/doctor.sh
-    (command -v pre-commit && pre-commit install) || true
+    if command -v pre-commit &> /dev/null; then
+        pre-commit install
+    else
+        echo ""
+        echo "⚠  pre-commit not found — git hooks not installed."
+        echo "   Install with: pip install pre-commit"
+        echo "   Then run:     pre-commit install"
+        echo ""
+    fi
     cargo build
 
 # Run a single test with output: just test-single test_name
 test-single NAME:
     cargo test {{NAME}} -- --nocapture
+
+# Verify markdown links in documentation files
+verify-docs:
+    ./scripts/verify-docs.sh
 
 # Scaffold a new service module: just new-module search my_feature
 new-module DOMAIN MODULE:

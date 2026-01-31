@@ -1,15 +1,16 @@
 # Needle Development Task Runner (zero-install alternative to justfile)
 # Usage: make <recipe>
 
-.PHONY: help quick check build build-all build-release test test-unit test-integration \
+.PHONY: help quick check check-all build build-all build-release test test-unit test-integration \
         fmt fmt-check lint lint-fix watch serve demo doctor doc bench clean playground setup test-single coverage \
-        new-module
+        new-module verify-docs
 
 help:
 	@echo "Available recipes:"
 	@echo "  make setup         — First-time setup: doctor + pre-commit + build"
 	@echo "  make quick         — Fast feedback: format check + lint + unit tests"
 	@echo "  make check         — Full pre-commit: format check + lint + all tests"
+	@echo "  make check-all     — Full CI equivalent: fmt, lint, test, doc-check, examples"
 	@echo "  make build         — Debug build (default features)"
 	@echo "  make build-all     — Debug build (all features)"
 	@echo "  make build-release — Release build (all features)"
@@ -28,15 +29,31 @@ help:
 	@echo "  make bench         — Run benchmarks"
 	@echo "  make coverage      — Generate HTML coverage report (requires cargo-llvm-cov)"
 	@echo "  make outdated      — Check for outdated dependencies (requires cargo-outdated)"
+	@echo "  make verify-docs   — Check that all markdown links resolve"
 	@echo "  make playground    — Interactive guided walkthrough"
 	@echo "  make new-module    — Scaffold a new service module (DOMAIN=x NAME=y)"
 	@echo "  make clean         — Clean build artifacts"
+	@echo ""
+	@echo "Feature flag combinations:"
+	@echo "  --features full              All stable features (server, metrics, hybrid, encryption, …)"
+	@echo "  --features server            HTTP REST API (Axum)"
+	@echo "  --features hybrid            BM25 + vector hybrid search"
+	@echo "  --features metrics           Prometheus metrics export"
+	@echo "  --features encryption        ChaCha20-Poly1305 at-rest encryption"
+	@echo "  --features experimental      Unstable/preview modules"
+	@echo "  --features server,metrics    Server with Prometheus (common combo)"
 
 # Fast feedback loop
 quick: fmt-check lint test-unit
 
 # Full pre-commit check
 check: fmt-check lint test
+
+# Full CI equivalent: everything CI runs, locally
+check-all: fmt-check lint test
+	RUSTDOCFLAGS='-D warnings' cargo doc --no-deps --features full
+	cargo build --examples --features full
+	cargo bench --no-run
 
 build:
 	cargo build
@@ -78,6 +95,7 @@ NEEDLE_PORT ?= 8080
 serve:
 	@echo "Starting Needle server on 127.0.0.1:$(NEEDLE_PORT)"
 	@echo "Tip: change port with NEEDLE_PORT=9090 make serve"
+	@echo "Tip: RUST_LOG=debug make serve (for verbose logging)"
 	cargo run --features server -- serve -a 127.0.0.1:$(NEEDLE_PORT)
 
 demo:
@@ -109,11 +127,22 @@ clean:
 
 setup:
 	./scripts/doctor.sh
-	@(command -v pre-commit > /dev/null 2>&1 && pre-commit install) || true
+	@if command -v pre-commit > /dev/null 2>&1; then \
+		pre-commit install; \
+	else \
+		echo ""; \
+		echo "⚠  pre-commit not found — git hooks not installed."; \
+		echo "   Install with: pip install pre-commit"; \
+		echo "   Then run:     pre-commit install"; \
+		echo ""; \
+	fi
 	cargo build
 
 test-single:
 	cargo test $(NAME) -- --nocapture
+
+verify-docs:
+	./scripts/verify-docs.sh
 
 # Scaffold a new service module: make new-module DOMAIN=search NAME=my_feature
 new-module:
