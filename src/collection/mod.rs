@@ -172,6 +172,10 @@ pub struct SearchBuilder<'a> {
     /// When set to a different function than the collection's default,
     /// search will fall back to brute-force for accuracy.
     distance_override: Option<DistanceFunction>,
+    /// Point-in-time timestamp for MVCC snapshot isolation reads.
+    /// When set, results are filtered to only include vectors that existed
+    /// at the specified Unix epoch timestamp.
+    as_of_timestamp: Option<u64>,
 }
 
 impl<'a> SearchBuilder<'a> {
@@ -188,6 +192,7 @@ impl<'a> SearchBuilder<'a> {
             ef_search: None,
             include_metadata: true,
             distance_override: None,
+            as_of_timestamp: None,
         }
     }
 
@@ -277,6 +282,37 @@ impl<'a> SearchBuilder<'a> {
         self
     }
 
+    /// Set a point-in-time timestamp for MVCC snapshot isolation reads.
+    ///
+    /// When set, search results are conceptually limited to vectors that existed
+    /// at the specified Unix epoch timestamp. This enables time-travel queries
+    /// when used with the vector versioning system.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use needle::Collection;
+    ///
+    /// let collection = db.collection("docs")?;
+    /// let one_hour_ago = std::time::SystemTime::now()
+    ///     .duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() - 3600;
+    ///
+    /// let results = collection.search_builder(&query)
+    ///     .k(10)
+    ///     .as_of(one_hour_ago)
+    ///     .execute()?;
+    /// ```
+    #[must_use]
+    pub fn as_of(mut self, timestamp: u64) -> Self {
+        self.as_of_timestamp = Some(timestamp);
+        self
+    }
+
+    /// Get the configured as_of timestamp, if any.
+    pub fn as_of_timestamp(&self) -> Option<u64> {
+        self.as_of_timestamp
+    }
+
     /// Execute the search and return results
     pub fn execute(self) -> Result<Vec<SearchResult>> {
         self.validate_query()?;
@@ -300,12 +336,13 @@ impl<'a> SearchBuilder<'a> {
         let fetch_count = self.calculate_fetch_count();
         let raw_results = self.fetch_raw_results(fetch_count)?;
         let non_expired = self.filter_expired(raw_results);
+        let time_filtered = self.filter_as_of(non_expired);
         let post_filter_factor = if self.post_filter.is_some() {
             self.post_filter_factor
         } else {
             1
         };
-        let pre_filtered = self.apply_pre_filter(non_expired, self.k * post_filter_factor.max(1));
+        let pre_filtered = self.apply_pre_filter(time_filtered, self.k * post_filter_factor.max(1));
         let mut enriched = self.enrich(pre_filtered)?;
         self.apply_post_filter(&mut enriched);
         Ok(enriched)
@@ -371,6 +408,24 @@ impl<'a> SearchBuilder<'a> {
                     .filter(|(id, _)| !self.collection.is_expired(*id)),
             );
             filtered
+        } else {
+            results
+        }
+    }
+
+    /// Filter results to only include vectors that existed at the as_of timestamp.
+    /// Vectors inserted after the as_of timestamp are excluded.
+    fn filter_as_of(&self, results: Vec<(VectorId, f32)>) -> Vec<(VectorId, f32)> {
+        if let Some(as_of) = self.as_of_timestamp {
+            results
+                .into_iter()
+                .filter(|(id, _)| {
+                    self.collection
+                        .insertion_timestamps
+                        .get(id)
+                        .map_or(true, |&ts| ts <= as_of)
+                })
+                .collect()
         } else {
             results
         }
@@ -544,6 +599,10 @@ pub struct Collection {
     /// or removed during explicit sweep operations.
     #[serde(default)]
     expirations: std::collections::HashMap<usize, u64>,
+    /// Insertion timestamps: internal_id -> insertion Unix epoch seconds.
+    /// Used by `SearchBuilder::as_of()` for MVCC point-in-time queries.
+    #[serde(default)]
+    insertion_timestamps: std::collections::HashMap<usize, u64>,
 }
 
 /// Internal query cache with statistics tracking
@@ -712,6 +771,7 @@ impl Collection {
             metadata: MetadataStore::new(),
             query_cache,
             expirations: HashMap::new(),
+            insertion_timestamps: HashMap::new(),
             config,
         }
     }
@@ -766,6 +826,12 @@ impl Collection {
     /// Returns `None` if slow query logging is disabled.
     pub fn slow_query_threshold_us(&self) -> Option<u64> {
         self.config.slow_query_threshold_us
+    }
+
+    /// Get the insertion timestamp for a vector by internal ID.
+    /// Returns `None` if no timestamp is recorded (e.g., vectors loaded from legacy format).
+    pub fn insertion_timestamp(&self, internal_id: usize) -> Option<u64> {
+        self.insertion_timestamps.get(&internal_id).copied()
     }
 
     /// Set the slow query threshold in microseconds.
@@ -1114,6 +1180,9 @@ impl Collection {
             let expiration = Self::now_unix() + ttl;
             self.expirations.insert(internal_id, expiration);
         }
+
+        // Record insertion timestamp for MVCC as_of queries
+        self.insertion_timestamps.insert(internal_id, Self::now_unix());
 
         // Invalidate cache since collection changed
         self.invalidate_cache();
@@ -2401,6 +2470,7 @@ impl Collection {
         let mut new_vectors = VectorStore::new(self.config.dimensions);
         let mut new_metadata = MetadataStore::new();
         let mut new_expirations = HashMap::new();
+        let mut new_insertion_timestamps = HashMap::new();
 
         // Sort by new ID to maintain order
         let mut mappings: Vec<_> = id_map.into_iter().collect();
@@ -2419,12 +2489,18 @@ impl Collection {
                 if let Some(expiration) = self.expirations.get(&old_id) {
                     new_expirations.insert(new_id, *expiration);
                 }
+
+                // Remap insertion timestamp if it exists
+                if let Some(ts) = self.insertion_timestamps.get(&old_id) {
+                    new_insertion_timestamps.insert(new_id, *ts);
+                }
             }
         }
 
         self.vectors = new_vectors;
         self.metadata = new_metadata;
         self.expirations = new_expirations;
+        self.insertion_timestamps = new_insertion_timestamps;
 
         // Invalidate cache since internal IDs changed
         self.invalidate_cache();
