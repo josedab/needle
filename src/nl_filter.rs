@@ -53,7 +53,7 @@ pub struct TemporalConstraint {
 }
 
 /// Query intent
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub enum QueryIntent {
     /// Looking for similar items
     Search,
@@ -604,6 +604,561 @@ impl QueryBuilder {
             confidence: 1.0,
             intents: vec![QueryIntent::Search],
         }
+    }
+}
+
+// =============================================================================
+// Advanced Natural Language Query Interface (Next-Gen)
+// =============================================================================
+
+/// Query intent classification result
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IntentClassification {
+    /// Primary intent
+    pub primary_intent: QueryIntent,
+    /// Secondary intents
+    pub secondary_intents: Vec<QueryIntent>,
+    /// Confidence scores for each intent
+    pub confidence_scores: std::collections::HashMap<String, f32>,
+    /// Detected entities
+    pub entities: Vec<Entity>,
+}
+
+/// Extracted entity from query
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Entity {
+    /// Entity type (e.g., "category", "date", "number")
+    pub entity_type: String,
+    /// Entity value
+    pub value: String,
+    /// Start position in original query
+    pub start: usize,
+    /// End position in original query
+    pub end: usize,
+    /// Confidence score
+    pub confidence: f32,
+}
+
+/// Conversational context for multi-turn queries
+#[derive(Debug, Clone, Default)]
+pub struct ConversationContext {
+    /// Previous queries in the conversation
+    pub history: Vec<ContextEntry>,
+    /// Current active filters (persisted across turns)
+    pub active_filters: Vec<Filter>,
+    /// Current topic/domain
+    pub current_topic: Option<String>,
+    /// Referenced entities
+    pub referenced_entities: std::collections::HashMap<String, serde_json::Value>,
+    /// Maximum history size
+    pub max_history: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct ContextEntry {
+    /// The query text
+    pub query: String,
+    /// Parsed result
+    pub parsed: ParsedQuery,
+    /// Timestamp
+    pub timestamp: u64,
+}
+
+impl ConversationContext {
+    /// Create a new conversation context
+    pub fn new() -> Self {
+        Self {
+            history: Vec::new(),
+            active_filters: Vec::new(),
+            current_topic: None,
+            referenced_entities: std::collections::HashMap::new(),
+            max_history: 10,
+        }
+    }
+
+    /// Add a query to the context
+    pub fn add_query(&mut self, query: &str, parsed: ParsedQuery) {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+
+        self.history.push(ContextEntry {
+            query: query.to_string(),
+            parsed,
+            timestamp: now,
+        });
+
+        // Trim history if too long
+        while self.history.len() > self.max_history {
+            self.history.remove(0);
+        }
+    }
+
+    /// Add a persistent filter
+    pub fn add_filter(&mut self, filter: Filter) {
+        self.active_filters.push(filter);
+    }
+
+    /// Clear all persistent filters
+    pub fn clear_filters(&mut self) {
+        self.active_filters.clear();
+    }
+
+    /// Set the current topic
+    pub fn set_topic(&mut self, topic: impl Into<String>) {
+        self.current_topic = Some(topic.into());
+    }
+
+    /// Store a referenced entity
+    pub fn store_entity(&mut self, name: impl Into<String>, value: serde_json::Value) {
+        self.referenced_entities.insert(name.into(), value);
+    }
+
+    /// Get a referenced entity
+    pub fn get_entity(&self, name: &str) -> Option<&serde_json::Value> {
+        self.referenced_entities.get(name)
+    }
+
+    /// Get the last query
+    pub fn last_query(&self) -> Option<&ContextEntry> {
+        self.history.last()
+    }
+
+    /// Check if there's active context
+    pub fn has_context(&self) -> bool {
+        !self.history.is_empty() || !self.active_filters.is_empty() || self.current_topic.is_some()
+    }
+}
+
+/// Advanced NL query parser with context and intent classification
+pub struct ConversationalQueryParser {
+    base_parser: NLFilterParser,
+    context: parking_lot::RwLock<ConversationContext>,
+    intent_patterns: Vec<IntentPattern>,
+}
+
+struct IntentPattern {
+    intent: QueryIntent,
+    keywords: Vec<&'static str>,
+    weight: f32,
+}
+
+impl ConversationalQueryParser {
+    /// Create a new conversational query parser
+    pub fn new() -> Self {
+        Self {
+            base_parser: NLFilterParser::new(),
+            context: parking_lot::RwLock::new(ConversationContext::new()),
+            intent_patterns: Self::default_intent_patterns(),
+        }
+    }
+
+    fn default_intent_patterns() -> Vec<IntentPattern> {
+        vec![
+            IntentPattern {
+                intent: QueryIntent::Search,
+                keywords: vec![
+                    "find", "search", "show", "get", "display", "list", "fetch",
+                    "what", "which", "where", "look for", "similar to", "like",
+                ],
+                weight: 1.0,
+            },
+            IntentPattern {
+                intent: QueryIntent::Filter,
+                keywords: vec![
+                    "where", "with", "having", "only", "just", "specific",
+                    "category", "type", "status", "by", "from", "to",
+                ],
+                weight: 0.9,
+            },
+            IntentPattern {
+                intent: QueryIntent::Aggregate,
+                keywords: vec![
+                    "how many", "count", "total", "sum", "average", "min", "max",
+                    "statistics", "stats", "distribution", "breakdown",
+                ],
+                weight: 1.0,
+            },
+            IntentPattern {
+                intent: QueryIntent::Compare,
+                keywords: vec![
+                    "compare", "versus", "vs", "difference", "between",
+                    "better", "worse", "more", "less", "than",
+                ],
+                weight: 0.95,
+            },
+            IntentPattern {
+                intent: QueryIntent::Temporal,
+                keywords: vec![
+                    "when", "today", "yesterday", "week", "month", "year",
+                    "recent", "latest", "newest", "oldest", "last", "before", "after",
+                ],
+                weight: 0.9,
+            },
+            IntentPattern {
+                intent: QueryIntent::Exclude,
+                keywords: vec![
+                    "not", "without", "except", "exclude", "excluding",
+                    "ignore", "skip", "no", "doesn't", "don't",
+                ],
+                weight: 0.95,
+            },
+        ]
+    }
+
+    /// Parse a query with conversation context
+    pub fn parse_with_context(&self, query: &str) -> ParsedQuery {
+        let mut parsed = self.base_parser.parse(query);
+
+        // Resolve pronouns and references
+        let resolved_query = self.resolve_references(query);
+        if resolved_query != query {
+            // Re-parse with resolved query
+            parsed = self.base_parser.parse(&resolved_query);
+        }
+
+        // Apply context filters
+        let context = self.context.read();
+        if !context.active_filters.is_empty() {
+            let mut all_filters = context.active_filters.clone();
+            if let Some(f) = parsed.filter {
+                all_filters.push(f);
+            }
+            parsed.filter = Some(if all_filters.len() == 1 {
+                all_filters.into_iter().next().unwrap()
+            } else {
+                Filter::And(all_filters)
+            });
+        }
+
+        // Classify intent
+        let classification = self.classify_intent(query);
+        parsed.intents = std::iter::once(classification.primary_intent)
+            .chain(classification.secondary_intents)
+            .collect();
+
+        drop(context);
+
+        // Add to context
+        self.context.write().add_query(query, parsed.clone());
+
+        parsed
+    }
+
+    fn resolve_references(&self, query: &str) -> String {
+        let query_lower = query.to_lowercase();
+        let context = self.context.read();
+
+        // Check for pronouns that refer to previous context
+        let pronouns = ["it", "that", "those", "them", "this", "these"];
+
+        for pronoun in pronouns {
+            if query_lower.contains(pronoun) {
+                // Try to find what it refers to
+                if let Some(last) = context.last_query() {
+                    // Simple heuristic: use the last search text
+                    let replacement = &last.parsed.search_text;
+                    if !replacement.is_empty() {
+                        // Replace pronoun with reference (simple word boundary check)
+                        return self.replace_word(&query, pronoun, replacement);
+                    }
+                }
+            }
+        }
+
+        // Check for "more" or "another" (continuation queries)
+        if query_lower.contains("more") || query_lower.contains("another") {
+            if let Some(last) = context.last_query() {
+                // Combine with previous search
+                return format!("{} {}", last.parsed.search_text, query);
+            }
+        }
+
+        query.to_string()
+    }
+
+    fn replace_word(&self, text: &str, word: &str, replacement: &str) -> String {
+        let mut result = String::new();
+        let text_lower = text.to_lowercase();
+        let word_lower = word.to_lowercase();
+        let mut i = 0;
+
+        while i < text.len() {
+            if let Some(pos) = text_lower[i..].find(&word_lower) {
+                let abs_pos = i + pos;
+                // Check word boundaries
+                let at_start = abs_pos == 0 || !text.chars().nth(abs_pos - 1).unwrap_or(' ').is_alphanumeric();
+                let at_end = abs_pos + word.len() >= text.len()
+                    || !text.chars().nth(abs_pos + word.len()).unwrap_or(' ').is_alphanumeric();
+
+                if at_start && at_end {
+                    result.push_str(&text[i..abs_pos]);
+                    result.push_str(replacement);
+                    i = abs_pos + word.len();
+                } else {
+                    result.push_str(&text[i..abs_pos + 1]);
+                    i = abs_pos + 1;
+                }
+            } else {
+                result.push_str(&text[i..]);
+                break;
+            }
+        }
+
+        result
+    }
+
+    /// Classify the intent of a query
+    pub fn classify_intent(&self, query: &str) -> IntentClassification {
+        let query_lower = query.to_lowercase();
+        let words: Vec<&str> = query_lower.split_whitespace().collect();
+        let word_set: std::collections::HashSet<&str> = words.iter().copied().collect();
+
+        let mut scores: std::collections::HashMap<QueryIntent, f32> =
+            std::collections::HashMap::new();
+
+        // Score each intent based on keyword matches
+        for pattern in &self.intent_patterns {
+            let mut score = 0.0f32;
+            for keyword in &pattern.keywords {
+                if keyword.contains(' ') {
+                    // Multi-word keyword
+                    if query_lower.contains(keyword) {
+                        score += pattern.weight * 1.5;
+                    }
+                } else if word_set.contains(keyword) {
+                    score += pattern.weight;
+                }
+            }
+            if score > 0.0 {
+                *scores.entry(pattern.intent.clone()).or_insert(0.0) += score;
+            }
+        }
+
+        // Default to Search if no clear intent
+        if scores.is_empty() {
+            scores.insert(QueryIntent::Search, 1.0);
+        }
+
+        // Normalize scores
+        let max_score = scores.values().cloned().fold(0.0f32, f32::max);
+        let confidence_scores: std::collections::HashMap<String, f32> = scores
+            .iter()
+            .map(|(k, v)| (format!("{:?}", k), v / max_score.max(1.0)))
+            .collect();
+
+        // Sort intents by score
+        let mut sorted: Vec<_> = scores.into_iter().collect();
+        sorted.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+        let primary_intent = sorted.first().map(|(i, _)| i.clone()).unwrap_or(QueryIntent::Search);
+        let secondary_intents: Vec<_> = sorted
+            .iter()
+            .skip(1)
+            .filter(|(_, s)| *s > 0.3 * max_score)
+            .map(|(i, _)| i.clone())
+            .collect();
+
+        // Extract entities
+        let entities = self.extract_entities(&query);
+
+        IntentClassification {
+            primary_intent,
+            secondary_intents,
+            confidence_scores,
+            entities,
+        }
+    }
+
+    fn extract_entities(&self, query: &str) -> Vec<Entity> {
+        let mut entities = Vec::new();
+
+        // Extract numbers (without regex)
+        let mut i = 0;
+        let chars: Vec<char> = query.chars().collect();
+        while i < chars.len() {
+            if chars[i].is_ascii_digit() {
+                let start = i;
+                while i < chars.len() && (chars[i].is_ascii_digit() || chars[i] == '.') {
+                    i += 1;
+                }
+                // Check it's a word boundary
+                let at_start = start == 0 || !chars[start - 1].is_alphanumeric();
+                let at_end = i >= chars.len() || !chars[i].is_alphanumeric();
+                if at_start && at_end {
+                    let value: String = chars[start..i].iter().collect();
+                    if value.parse::<f64>().is_ok() {
+                        entities.push(Entity {
+                            entity_type: "number".to_string(),
+                            value,
+                            start,
+                            end: i,
+                            confidence: 0.95,
+                        });
+                    }
+                }
+            } else {
+                i += 1;
+            }
+        }
+
+        // Extract quoted strings
+        let mut in_quote: Option<char> = None;
+        let mut quote_start = 0;
+        for (i, c) in query.chars().enumerate() {
+            match in_quote {
+                None if c == '"' || c == '\'' => {
+                    in_quote = Some(c);
+                    quote_start = i + 1;
+                }
+                Some(q) if c == q => {
+                    let value = query[quote_start..i].to_string();
+                    if !value.is_empty() {
+                        entities.push(Entity {
+                            entity_type: "quoted_string".to_string(),
+                            value,
+                            start: quote_start,
+                            end: i,
+                            confidence: 0.99,
+                        });
+                    }
+                    in_quote = None;
+                }
+                _ => {}
+            }
+        }
+
+        // Extract date-like expressions (simple keyword matching)
+        let relative_dates = ["today", "yesterday", "tomorrow"];
+        for date_word in relative_dates {
+            if let Some(pos) = query.to_lowercase().find(date_word) {
+                entities.push(Entity {
+                    entity_type: "relative_date".to_string(),
+                    value: date_word.to_string(),
+                    start: pos,
+                    end: pos + date_word.len(),
+                    confidence: 0.9,
+                });
+            }
+        }
+
+        // Extract relative periods
+        let period_prefixes = ["last", "next", "this"];
+        let period_suffixes = ["week", "month", "year", "day"];
+        let query_lower = query.to_lowercase();
+
+        for prefix in period_prefixes {
+            for suffix in period_suffixes {
+                let pattern = format!("{} {}", prefix, suffix);
+                if let Some(pos) = query_lower.find(&pattern) {
+                    entities.push(Entity {
+                        entity_type: "relative_period".to_string(),
+                        value: pattern.clone(),
+                        start: pos,
+                        end: pos + pattern.len(),
+                        confidence: 0.9,
+                    });
+                }
+            }
+        }
+
+        entities
+    }
+
+    /// Get the conversation context
+    pub fn context(&self) -> parking_lot::RwLockReadGuard<ConversationContext> {
+        self.context.read()
+    }
+
+    /// Get mutable conversation context
+    pub fn context_mut(&self) -> parking_lot::RwLockWriteGuard<ConversationContext> {
+        self.context.write()
+    }
+
+    /// Reset the conversation context
+    pub fn reset_context(&self) {
+        *self.context.write() = ConversationContext::new();
+    }
+}
+
+impl Default for ConversationalQueryParser {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Query suggestion generator
+pub struct QuerySuggester {
+    common_patterns: Vec<&'static str>,
+    field_hints: std::collections::HashMap<String, Vec<String>>,
+}
+
+impl QuerySuggester {
+    /// Create a new query suggester
+    pub fn new() -> Self {
+        Self {
+            common_patterns: vec![
+                "find {} in category {}",
+                "show me {} from last week",
+                "get {} with score above {}",
+                "list {} by {}",
+                "{} similar to {}",
+                "compare {} and {}",
+            ],
+            field_hints: std::collections::HashMap::new(),
+        }
+    }
+
+    /// Add field hints for autocomplete
+    pub fn add_field_hints(&mut self, field: impl Into<String>, values: Vec<String>) {
+        self.field_hints.insert(field.into(), values);
+    }
+
+    /// Generate suggestions for a partial query
+    pub fn suggest(&self, partial_query: &str, limit: usize) -> Vec<String> {
+        let mut suggestions = Vec::new();
+
+        // If query is short, suggest patterns
+        if partial_query.split_whitespace().count() <= 2 {
+            for pattern in &self.common_patterns {
+                if pattern.to_lowercase().contains(&partial_query.to_lowercase()) {
+                    suggestions.push(pattern.to_string());
+                }
+            }
+        }
+
+        // Suggest field values if a field name is detected
+        for (field, values) in &self.field_hints {
+            if partial_query.to_lowercase().contains(&field.to_lowercase()) {
+                for value in values.iter().take(3) {
+                    suggestions.push(format!("{} {}", partial_query, value));
+                }
+            }
+        }
+
+        suggestions.truncate(limit);
+        suggestions
+    }
+
+    /// Generate example queries
+    pub fn examples(&self) -> Vec<&'static str> {
+        vec![
+            "find documents about machine learning",
+            "show me articles from last week",
+            "get products with rating above 4.5",
+            "list users by registration date",
+            "similar to 'artificial intelligence'",
+            "compare product A and product B",
+            "how many items in category electronics",
+            "recent updates without status draft",
+        ]
+    }
+}
+
+impl Default for QuerySuggester {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
