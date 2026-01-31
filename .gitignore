@@ -9,6 +9,11 @@
 *.swp
 *.swo
 *~
+\#*\#
+.#*
+*.sublime-workspace
+*.sublime-project
+.fleet/
 
 # OS
 .DS_Store
