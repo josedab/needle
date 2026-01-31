@@ -314,6 +314,15 @@ cargo clippy --features full -- -D warnings
    }
    ```
 
+   **`unwrap()` and `expect()` policy:**
+   - `unwrap()` is **denied** by workspace lint (`clippy::unwrap_used = "deny"`).
+     Use `?` with `Result<T>` or pattern matching instead.
+   - `expect()` is audited in CI. Prefer proper error propagation over `expect()`.
+   - **Acceptable uses of `expect()`:** Lock poisoning recovery (`lock().expect("...")`),
+     compile-time-proven invariants, or one-time init. Add `// allow-expect` on the same
+     line to suppress the CI warning.
+   - `unwrap()` and `expect()` are fine in `#[cfg(test)]` modules and `src/experimental/`.
+
 2. **Documentation**: Add rustdoc comments for public APIs
    ```rust
    /// Searches for similar vectors.
