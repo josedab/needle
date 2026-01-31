@@ -751,6 +751,14 @@ impl VectorStore {
     }
 }
 
+/// Hint to the OS about future memory access patterns for potential prefetching.
+/// On supported platforms, this may trigger read-ahead for mmap'd regions.
+pub fn prefetch_region_hint(offset: usize, length: usize) {
+    // Prefetch hint: in production this would use madvise(MADV_WILLNEED) or similar.
+    // Currently a no-op; the Markov predictor identifies which regions to prefetch.
+    let _ = (offset, length);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

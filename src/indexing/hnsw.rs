@@ -363,6 +363,12 @@ pub struct HnswIndex {
     /// Bit-packed set of deleted vector IDs for cache-efficient lookups
     #[serde(default)]
     deleted: BitSet,
+    /// Access tracker for recording node access patterns
+    #[serde(skip)]
+    access_tracker: Option<AccessTracker>,
+    /// Markov predictor for prefetching
+    #[serde(skip)]
+    markov_predictor: Option<MarkovPredictor>,
 }
 
 impl HnswIndex {
@@ -377,6 +383,8 @@ impl HnswIndex {
             distance,
             count: 0,
             deleted: BitSet::new(),
+            access_tracker: None,
+            markov_predictor: None,
         }
     }
 
@@ -962,6 +970,52 @@ impl HnswIndex {
 
         base_size + layer_memory + node_levels_memory
     }
+
+    /// Enable access tracking for prefetch learning
+    pub fn enable_prefetch(&mut self, buffer_size: usize) {
+        self.access_tracker = Some(AccessTracker::new(buffer_size));
+        self.markov_predictor = Some(MarkovPredictor::new());
+    }
+
+    /// Record access to a node (for external callers to feed access data)
+    pub fn record_access(&mut self, node_id: VectorId) {
+        if let Some(tracker) = &mut self.access_tracker {
+            tracker.record(node_id);
+        }
+    }
+
+    /// Train the Markov predictor from recorded access patterns
+    pub fn train_predictor(&mut self) {
+        if let (Some(tracker), Some(predictor)) = (&self.access_tracker, &mut self.markov_predictor)
+        {
+            let sequence = tracker.recent(tracker.buffer.len());
+            predictor.train(&sequence);
+        }
+    }
+
+    /// Get prefetch predictions for the given access context
+    pub fn predict_prefetch(&self, prev: VectorId, current: VectorId, n: usize) -> Vec<VectorId> {
+        self.markov_predictor
+            .as_ref()
+            .map(|p| p.predict(prev, current, n))
+            .unwrap_or_default()
+    }
+
+    /// Get prefetch statistics
+    pub fn prefetch_stats(&self) -> PrefetchStats {
+        PrefetchStats {
+            predictions_made: 0,
+            predictions_hit: 0,
+            pattern_count: self
+                .markov_predictor
+                .as_ref()
+                .map_or(0, MarkovPredictor::pattern_count),
+            training_samples: self
+                .markov_predictor
+                .as_ref()
+                .map_or(0, MarkovPredictor::training_samples),
+        }
+    }
 }
 
 impl super::VectorIndex for HnswIndex {
@@ -1015,6 +1069,158 @@ pub struct HnswStats {
     pub ef_construction: usize,
     /// ef_search parameter
     pub ef_search: usize,
+}
+
+/// Ring buffer for tracking node access sequences during HNSW traversal.
+/// Used by the Markov predictor to learn access patterns.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct AccessTracker {
+    /// Ring buffer of recently accessed node IDs
+    buffer: Vec<VectorId>,
+    /// Current write position in the ring buffer
+    write_pos: usize,
+    /// Maximum buffer size
+    capacity: usize,
+    /// Total accesses recorded
+    total_accesses: u64,
+}
+
+impl AccessTracker {
+    /// Create a new access tracker with given capacity
+    pub fn new(capacity: usize) -> Self {
+        Self {
+            buffer: Vec::with_capacity(capacity),
+            write_pos: 0,
+            capacity: capacity.max(16),
+            total_accesses: 0,
+        }
+    }
+
+    /// Record an access to a node
+    pub fn record(&mut self, node_id: VectorId) {
+        if self.buffer.len() < self.capacity {
+            self.buffer.push(node_id);
+        } else {
+            self.buffer[self.write_pos] = node_id;
+        }
+        self.write_pos = (self.write_pos + 1) % self.capacity;
+        self.total_accesses += 1;
+    }
+
+    /// Get the last N accessed nodes
+    pub fn recent(&self, n: usize) -> Vec<VectorId> {
+        let n = n.min(self.buffer.len());
+        let mut result = Vec::with_capacity(n);
+        let start = if self.buffer.len() < self.capacity {
+            self.buffer.len().saturating_sub(n)
+        } else {
+            (self.write_pos + self.capacity - n) % self.capacity
+        };
+        for i in 0..n {
+            let idx = (start + i) % self.buffer.len();
+            result.push(self.buffer[idx]);
+        }
+        result
+    }
+
+    /// Total accesses recorded
+    pub fn total_accesses(&self) -> u64 {
+        self.total_accesses
+    }
+
+    /// Get all recorded access pairs for Markov training
+    pub fn access_pairs(&self) -> Vec<(VectorId, VectorId)> {
+        if self.buffer.len() < 2 {
+            return Vec::new();
+        }
+        let ordered = self.recent(self.buffer.len());
+        ordered.windows(2).map(|w| (w[0], w[1])).collect()
+    }
+}
+
+/// Order-2 Markov model for predicting next HNSW nodes to access.
+/// Learns transition probabilities from (prev, current) -> next node patterns.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct MarkovPredictor {
+    /// Transition counts: (prev, current) -> {next -> count}
+    transitions: HashMap<(VectorId, VectorId), HashMap<VectorId, u32>>,
+    /// Order-1 fallback: current -> {next -> count}
+    fallback: HashMap<VectorId, HashMap<VectorId, u32>>,
+    /// Total training samples
+    training_samples: u64,
+}
+
+impl MarkovPredictor {
+    /// Create a new empty predictor
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Train the model on a sequence of node accesses
+    pub fn train(&mut self, sequence: &[VectorId]) {
+        // Order-1 transitions
+        for pair in sequence.windows(2) {
+            *self
+                .fallback
+                .entry(pair[0])
+                .or_default()
+                .entry(pair[1])
+                .or_insert(0) += 1;
+        }
+        // Order-2 transitions
+        for triple in sequence.windows(3) {
+            *self
+                .transitions
+                .entry((triple[0], triple[1]))
+                .or_default()
+                .entry(triple[2])
+                .or_insert(0) += 1;
+            self.training_samples += 1;
+        }
+    }
+
+    /// Predict the next N most likely nodes given the last two accessed nodes
+    pub fn predict(&self, prev: VectorId, current: VectorId, n: usize) -> Vec<VectorId> {
+        // Try order-2 first
+        if let Some(next_map) = self.transitions.get(&(prev, current)) {
+            let mut candidates: Vec<_> = next_map.iter().collect();
+            candidates.sort_by(|a, b| b.1.cmp(a.1));
+            let result: Vec<VectorId> = candidates.iter().take(n).map(|(&id, _)| id).collect();
+            if !result.is_empty() {
+                return result;
+            }
+        }
+        // Fallback to order-1
+        if let Some(next_map) = self.fallback.get(&current) {
+            let mut candidates: Vec<_> = next_map.iter().collect();
+            candidates.sort_by(|a, b| b.1.cmp(a.1));
+            return candidates.iter().take(n).map(|(&id, _)| id).collect();
+        }
+        Vec::new()
+    }
+
+    /// Number of training samples
+    pub fn training_samples(&self) -> u64 {
+        self.training_samples
+    }
+
+    /// Number of unique transition patterns learned
+    pub fn pattern_count(&self) -> usize {
+        self.transitions.len()
+    }
+}
+
+/// Prefetch statistics
+#[derive(Debug, Clone, Default)]
+pub struct PrefetchStats {
+    /// Total prefetch predictions made
+    pub predictions_made: u64,
+    /// Predictions that were actually used (hit)
+    pub predictions_hit: u64,
+    /// Current pattern count in the Markov model
+    pub pattern_count: usize,
+    /// Total training samples
+    pub training_samples: u64,
 }
 
 #[cfg(test)]
@@ -1201,5 +1407,67 @@ mod tests {
         let stats = index.stats();
         assert_eq!(stats.num_vectors, 18);
         assert_eq!(stats.num_deleted, 2);
+    }
+
+    #[test]
+    fn test_access_tracker_ring_buffer() {
+        let mut tracker = AccessTracker::new(4);
+        tracker.record(10);
+        tracker.record(20);
+        tracker.record(30);
+        assert_eq!(tracker.total_accesses(), 3);
+        let recent = tracker.recent(3);
+        assert_eq!(recent, vec![10, 20, 30]);
+
+        // Overflow ring buffer
+        tracker.record(40);
+        tracker.record(50);
+        assert_eq!(tracker.total_accesses(), 5);
+        let recent = tracker.recent(4);
+        assert_eq!(recent, vec![20, 30, 40, 50]);
+    }
+
+    #[test]
+    fn test_access_tracker_pairs() {
+        let mut tracker = AccessTracker::new(16);
+        tracker.record(1);
+        tracker.record(2);
+        tracker.record(3);
+        let pairs = tracker.access_pairs();
+        assert_eq!(pairs, vec![(1, 2), (2, 3)]);
+    }
+
+    #[test]
+    fn test_markov_predictor_train_and_predict() {
+        let mut predictor = MarkovPredictor::new();
+        // Train on a repeating pattern: 1->2->3->1->2->3
+        predictor.train(&[1, 2, 3, 1, 2, 3]);
+        assert!(predictor.training_samples() > 0);
+
+        // After seeing (1, 2), predict 3
+        let predictions = predictor.predict(1, 2, 3);
+        assert!(!predictions.is_empty());
+        assert_eq!(predictions[0], 3);
+    }
+
+    #[test]
+    fn test_hnsw_prefetch_integration() {
+        let mut index = HnswIndex::new(HnswConfig::default(), DistanceFunction::Cosine);
+        index.enable_prefetch(64);
+
+        let v1 = vec![1.0, 0.0, 0.0, 0.0];
+        let v2 = vec![0.0, 1.0, 0.0, 0.0];
+        let vectors = vec![v1.clone(), v2.clone()];
+        index.insert(0, &v1, &vectors).unwrap();
+        index.insert(1, &v2, &vectors).unwrap();
+
+        // Record some accesses
+        index.record_access(0);
+        index.record_access(1);
+        index.record_access(0);
+        index.train_predictor();
+
+        let stats = index.prefetch_stats();
+        assert!(stats.training_samples > 0);
     }
 }
