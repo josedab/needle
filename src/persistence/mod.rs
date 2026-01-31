@@ -11,4 +11,5 @@ pub mod time_travel;
 pub mod transaction;
 pub mod versioning;
 pub mod vector_versioning;
+pub mod replica_manager;
 pub mod wal;
