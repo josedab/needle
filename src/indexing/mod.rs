@@ -49,5 +49,6 @@ pub mod quantization;
 pub mod sparse;
 pub mod graph_vector_fusion;
 pub mod multimodal_fusion;
+pub mod concurrent_hnsw;
 #[cfg(feature = "diskann")]
 pub mod tiered_ann;
