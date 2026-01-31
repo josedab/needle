@@ -111,6 +111,9 @@ doctor:
 # Quick check: format + lint + unit tests (fast feedback)
 quick: fmt-check lint test-unit
 
+# Start developing: first-time setup + continuous check on save
+dev: setup watch
+
 # Interactive guided walkthrough of the HTTP API
 playground:
     ./scripts/playground.sh
@@ -129,6 +132,12 @@ setup:
         echo ""
     fi
     cargo build
+
+# Install optional Cargo tools used by other recipes (watch, coverage, outdated, audit)
+setup-tools:
+    @echo "Installing optional Cargo tools…"
+    cargo install cargo-watch cargo-outdated cargo-llvm-cov cargo-audit
+    @echo "Done. You can now use: just watch, just coverage, just outdated"
 
 # Run a single test with output: just test-single test_name
 test-single NAME:

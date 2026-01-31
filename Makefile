@@ -2,12 +2,14 @@
 # Usage: make <recipe>
 
 .PHONY: help quick check check-all build build-all build-release test test-unit test-integration \
-        fmt fmt-check lint lint-fix watch serve demo doctor doc bench clean playground setup test-single coverage \
+        fmt fmt-check lint lint-fix watch serve demo doctor doc bench clean playground setup setup-tools dev test-single coverage \
         new-module verify-docs
 
 help:
 	@echo "Available recipes:"
 	@echo "  make setup         — First-time setup: doctor + pre-commit + build"
+	@echo "  make setup-tools   — Install optional Cargo tools (cargo-watch, cargo-llvm-cov, …)"
+	@echo "  make dev           — Start developing: setup + continuous check on save"
 	@echo "  make quick         — Fast feedback: format check + lint + unit tests"
 	@echo "  make check         — Full pre-commit: format check + lint + all tests"
 	@echo "  make check-all     — Full CI equivalent: fmt, lint, test, doc-check, examples"
@@ -45,6 +47,9 @@ help:
 
 # Fast feedback loop
 quick: fmt-check lint test-unit
+
+# Start developing: first-time setup + continuous check on save
+dev: setup watch
 
 # Full pre-commit check
 check: fmt-check lint test
@@ -137,6 +142,12 @@ setup:
 		echo ""; \
 	fi
 	cargo build
+
+# Install optional Cargo tools used by other targets (watch, coverage, outdated, audit)
+setup-tools:
+	@echo "Installing optional Cargo tools…"
+	cargo install cargo-watch cargo-outdated cargo-llvm-cov cargo-audit
+	@echo "Done. You can now use: make watch, make coverage, make outdated"
 
 test-single:
 	cargo test $(NAME) -- --nocapture
