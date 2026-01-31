@@ -115,6 +115,24 @@ jobs:
       - name: Run Clippy
         run: cargo clippy --all-targets --features full -- -D warnings
 
+      - name: Audit expect() calls in production code
+        run: |
+          # Find expect() calls in src/ excluding test modules and experimental/
+          EXPECT_HITS=$(grep -rn '\.expect(' src/ \
+            --include='*.rs' \
+            | grep -v '#\[cfg(test)\]' \
+            | grep -v 'mod tests' \
+            | grep -v 'src/experimental/' \
+            | grep -v '#\[test\]' \
+            | grep -v '// allow-expect' \
+            || true)
+          if [ -n "$EXPECT_HITS" ]; then
+            echo "::warning::Found expect() calls in production code. Prefer proper error handling with ? and Result<T>."
+            echo "$EXPECT_HITS"
+            echo ""
+            echo "If an expect() is intentional, add '// allow-expect' on the same line."
+          fi
+
   docs:
     needs: quick-check
     name: Documentation
