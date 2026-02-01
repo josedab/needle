@@ -1495,6 +1495,10 @@ impl GpuAccelerator {
         let block_size = 256;
         let grid_size = (n_vectors + block_size - 1) / block_size;
 
+        // SAFETY: All GPU buffers (query_gpu, vectors_gpu, results_gpu) are allocated above
+        // with correct sizes. Grid/block dimensions are computed to cover n_vectors elements.
+        // The kernel reads dim×n_vectors floats from vectors_gpu and writes n_vectors floats
+        // to results_gpu, both matching their allocation sizes.
         unsafe {
             kernel
                 .clone()
@@ -1556,6 +1560,10 @@ impl GpuAccelerator {
         let block_size = 256;
         let grid_size = (n_vectors + block_size - 1) / block_size;
 
+        // SAFETY: All GPU buffers (query_gpu, vectors_gpu, results_gpu) are allocated above
+        // with correct sizes. Grid/block dimensions are computed to cover n_vectors elements.
+        // The kernel reads dim×n_vectors floats from vectors_gpu and writes n_vectors floats
+        // to results_gpu, both matching their allocation sizes.
         unsafe {
             kernel
                 .clone()
@@ -1616,6 +1624,10 @@ impl GpuAccelerator {
         let block_size = 256;
         let grid_size = (n_vectors + block_size - 1) / block_size;
 
+        // SAFETY: All GPU buffers (query_gpu, vectors_gpu, results_gpu) are allocated above
+        // with correct sizes. Grid/block dimensions are computed to cover n_vectors elements.
+        // The kernel reads dim×n_vectors floats from vectors_gpu and writes n_vectors floats
+        // to results_gpu, both matching their allocation sizes.
         unsafe {
             kernel
                 .clone()
@@ -1958,6 +1970,9 @@ impl GpuAccelerator {
 
         // Read results
         let results_ptr = results_buffer.contents() as *const f32;
+        // SAFETY: results_buffer was allocated with n_vectors × sizeof(f32) bytes above.
+        // The Metal command buffer has completed (wait_until_completed), so the data is
+        // fully written. The pointer is valid for the lifetime of results_buffer.
         let results: Vec<f32> =
             unsafe { std::slice::from_raw_parts(results_ptr, n_vectors).to_vec() };
 
@@ -2028,6 +2043,9 @@ impl GpuAccelerator {
         command_buffer.wait_until_completed();
 
         let results_ptr = results_buffer.contents() as *const f32;
+        // SAFETY: results_buffer was allocated with n_vectors × sizeof(f32) bytes above.
+        // The Metal command buffer has completed (wait_until_completed), so the data is
+        // fully written. The pointer is valid for the lifetime of results_buffer.
         let results: Vec<f32> =
             unsafe { std::slice::from_raw_parts(results_ptr, n_vectors).to_vec() };
 
@@ -2100,6 +2118,9 @@ impl GpuAccelerator {
         command_buffer.wait_until_completed();
 
         let results_ptr = results_buffer.contents() as *const f32;
+        // SAFETY: results_buffer was allocated with n_vectors × sizeof(f32) bytes above.
+        // The Metal command buffer has completed (wait_until_completed), so the data is
+        // fully written. The pointer is valid for the lifetime of results_buffer.
         let results: Vec<f32> =
             unsafe { std::slice::from_raw_parts(results_ptr, n_vectors).to_vec() };
 

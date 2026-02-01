@@ -465,7 +465,8 @@ impl SharedMemoryFile {
             file.set_len(needed).map_err(|e| NeedleError::Io(e))?;
         }
 
-        // Safety: we own the file and control all access through atomic ops
+        // SAFETY: We own the file handle, the file has been sized to at least `needed` bytes
+        // above, and all concurrent access is coordinated through atomic fields in the header.
         let mmap = unsafe {
             memmap2::MmapMut::map_mut(&file).map_err(|e| NeedleError::Io(e))?
         };
