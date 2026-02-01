@@ -24,9 +24,9 @@ fmt:
 fmt-check:
     cargo fmt -- --check
 
-# Run clippy linter with all features (matches CI's -D warnings)
+# Run clippy linter with all features and targets (matches CI and Makefile)
 lint:
-    cargo clippy --features full -- -D warnings
+    cargo clippy --all-targets --features full -- -D warnings
 
 # Auto-fix clippy suggestions
 lint-fix:
@@ -57,6 +57,7 @@ watch:
 check: fmt-check lint test
 
 # Full CI equivalent: fmt, lint, test, doc-check, examples, bench compile
+# NOTE: Keep flags in sync with Makefile check-all target
 check-all: fmt-check lint test
     RUSTDOCFLAGS='-D warnings' cargo doc --no-deps --features full
     cargo build --examples --features full
@@ -131,6 +132,11 @@ setup:
         echo "   Then run:     pre-commit install"
         echo ""
     fi
+    if ! command -v cargo-audit &> /dev/null; then
+        echo "⚠  cargo-audit not found — push hooks won't run audit."
+        echo "   Install with: cargo install cargo-audit"
+        echo ""
+    fi
     cargo build
 
 # Install optional Cargo tools used by other recipes (watch, coverage, outdated, audit)
@@ -150,3 +156,20 @@ verify-docs:
 # Scaffold a new service module: just new-module search my_feature
 new-module DOMAIN MODULE:
     ./scripts/new-module.sh {{DOMAIN}} {{MODULE}}
+
+# Quick CI gate: fmt-check + lint (all-targets) + unit tests (~3 min)
+check-quick: fmt-check lint test-unit
+
+# Run tests with specific feature flags: just test-feature "server,metrics"
+test-feature FEATURES:
+    cargo test --features {{FEATURES}}
+
+# Show tech debt dashboard (unwrap, expect, let _ = counts in src/)
+count-debt:
+    #!/usr/bin/env bash
+    unwrap=$(grep -r 'unwrap()' src/ --include='*.rs' | wc -l | tr -d ' ')
+    expect=$(grep -r 'expect(' src/ --include='*.rs' | wc -l | tr -d ' ')
+    let_discard=$(grep -r 'let _ =' src/ --include='*.rs' | wc -l | tr -d ' ')
+    echo "Tech Debt Dashboard"
+    echo "==================="
+    echo "  unwrap(): $unwrap | expect(): $expect | let _ =: $let_discard"

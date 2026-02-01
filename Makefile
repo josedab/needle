@@ -3,7 +3,7 @@
 
 .PHONY: help quick check check-all build build-all build-release test test-unit test-integration \
         fmt fmt-check lint lint-fix watch serve demo doctor doc bench clean playground setup setup-tools dev test-single coverage \
-        new-module verify-docs
+        new-module verify-docs check-quick test-feature count-debt
 
 help:
 	@echo "Available recipes:"
@@ -12,6 +12,7 @@ help:
 	@echo "  make dev           — Start developing: setup + continuous check on save"
 	@echo "  make quick         — Fast feedback: format check + lint + unit tests"
 	@echo "  make check         — Full pre-commit: format check + lint + all tests"
+	@echo "  make check-quick   — Quick CI gate: fmt-check + lint + unit tests (~3 min)"
 	@echo "  make check-all     — Full CI equivalent: fmt, lint, test, doc-check, examples"
 	@echo "  make build         — Debug build (default features)"
 	@echo "  make build-all     — Debug build (all features)"
@@ -19,6 +20,7 @@ help:
 	@echo "  make test          — Run all tests (all features)"
 	@echo "  make test-unit     — Run unit tests only (fast)"
 	@echo "  make test-single   — Run a single test: make test-single NAME=test_name"
+	@echo "  make test-feature  — Test with specific features: make test-feature FEATURES=server,metrics"
 	@echo "  make fmt           — Format code"
 	@echo "  make fmt-check     — Check formatting"
 	@echo "  make lint          — Run clippy linter"
@@ -31,6 +33,7 @@ help:
 	@echo "  make bench         — Run benchmarks"
 	@echo "  make coverage      — Generate HTML coverage report (requires cargo-llvm-cov)"
 	@echo "  make outdated      — Check for outdated dependencies (requires cargo-outdated)"
+	@echo "  make count-debt    — Show tech debt dashboard (unwrap, expect, let _ = counts)"
 	@echo "  make verify-docs   — Check that all markdown links resolve"
 	@echo "  make playground    — Interactive guided walkthrough"
 	@echo "  make new-module    — Scaffold a new service module (DOMAIN=x NAME=y)"
@@ -55,6 +58,7 @@ dev: setup watch
 check: fmt-check lint test
 
 # Full CI equivalent: everything CI runs, locally
+# NOTE: Keep flags in sync with justfile check-all recipe
 check-all: fmt-check lint test
 	RUSTDOCFLAGS='-D warnings' cargo doc --no-deps --features full
 	cargo build --examples --features full
@@ -141,6 +145,11 @@ setup:
 		echo "   Then run:     pre-commit install"; \
 		echo ""; \
 	fi
+	@if ! command -v cargo-audit > /dev/null 2>&1; then \
+		echo "⚠  cargo-audit not found — push hooks won't run audit."; \
+		echo "   Install with: cargo install cargo-audit"; \
+		echo ""; \
+	fi
 	cargo build
 
 # Install optional Cargo tools used by other targets (watch, coverage, outdated, audit)
@@ -160,3 +169,20 @@ new-module:
 	@test -n "$(DOMAIN)" || { echo "Usage: make new-module DOMAIN=<domain> NAME=<module_name>"; exit 1; }
 	@test -n "$(NAME)" || { echo "Usage: make new-module DOMAIN=<domain> NAME=<module_name>"; exit 1; }
 	./scripts/new-module.sh $(DOMAIN) $(NAME)
+
+# Quick CI gate: fmt-check + lint (all-targets) + unit tests (~3 min)
+check-quick: fmt-check lint test-unit
+
+# Run tests with specific feature flags: make test-feature FEATURES=server,metrics
+test-feature:
+	@test -n "$(FEATURES)" || { echo "Usage: make test-feature FEATURES=server,metrics"; exit 1; }
+	cargo test --features $(FEATURES)
+
+# Show tech debt dashboard (unwrap, expect, let _ = counts in src/)
+count-debt:
+	@unwrap=$$(grep -r 'unwrap()' src/ --include='*.rs' | wc -l | tr -d ' '); \
+	expect=$$(grep -r 'expect(' src/ --include='*.rs' | wc -l | tr -d ' '); \
+	let_discard=$$(grep -r 'let _ =' src/ --include='*.rs' | wc -l | tr -d ' '); \
+	echo "Tech Debt Dashboard"; \
+	echo "==================="; \
+	echo "  unwrap(): $$unwrap | expect(): $$expect | let _ =: $$let_discard"
