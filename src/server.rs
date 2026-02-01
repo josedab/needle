@@ -1761,7 +1761,9 @@ pub fn create_router_with_config(state: Arc<AppState>, config: &ServerConfig) ->
         .route("/aliases/:alias", put(update_alias_handler))
         // TTL endpoints
         .route("/collections/:name/expire", post(expire_vectors_handler))
-        .route("/collections/:name/ttl-stats", get(ttl_stats_handler));
+        .route("/collections/:name/ttl-stats", get(ttl_stats_handler))
+        // OpenAPI spec
+        .route("/openapi.json", get(serve_openapi_spec));
 
     // Add metrics endpoint when metrics feature is enabled
     #[cfg(feature = "metrics")]
@@ -2063,6 +2065,267 @@ pub async fn serve(config: ServerConfig) -> Result<(), Box<dyn std::error::Error
 /// Start server with default config
 pub async fn serve_default() -> Result<(), Box<dyn std::error::Error>> {
     serve(ServerConfig::default()).await
+}
+
+// ---------------------------------------------------------------------------
+// OpenAPI Specification Generator
+// ---------------------------------------------------------------------------
+
+/// Generates an OpenAPI 3.1 specification for the Needle REST API.
+pub fn generate_openapi_spec() -> serde_json::Value {
+    serde_json::json!({
+        "openapi": "3.1.0",
+        "info": {
+            "title": "Needle Vector Database API",
+            "description": "REST API for the Needle embedded vector database",
+            "version": "0.1.0",
+            "license": { "name": "MIT" },
+            "contact": { "name": "Needle Team" }
+        },
+        "servers": [
+            { "url": "http://localhost:8080", "description": "Local development" }
+        ],
+        "paths": {
+            "/health": {
+                "get": {
+                    "summary": "Health check",
+                    "operationId": "healthCheck",
+                    "tags": ["System"],
+                    "responses": {
+                        "200": {
+                            "description": "Server is healthy",
+                            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/HealthResponse" } } }
+                        }
+                    }
+                }
+            },
+            "/collections": {
+                "get": {
+                    "summary": "List all collections",
+                    "operationId": "listCollections",
+                    "tags": ["Collections"],
+                    "responses": {
+                        "200": {
+                            "description": "List of collections",
+                            "content": { "application/json": { "schema": { "type": "array", "items": { "$ref": "#/components/schemas/CollectionInfo" } } } }
+                        }
+                    }
+                },
+                "post": {
+                    "summary": "Create a new collection",
+                    "operationId": "createCollection",
+                    "tags": ["Collections"],
+                    "requestBody": {
+                        "required": true,
+                        "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CreateCollectionRequest" } } }
+                    },
+                    "responses": {
+                        "201": { "description": "Collection created" },
+                        "409": { "description": "Collection already exists" }
+                    }
+                }
+            },
+            "/collections/{name}": {
+                "get": {
+                    "summary": "Get collection info",
+                    "operationId": "getCollection",
+                    "tags": ["Collections"],
+                    "parameters": [{ "name": "name", "in": "path", "required": true, "schema": { "type": "string" } }],
+                    "responses": {
+                        "200": { "description": "Collection info", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CollectionInfo" } } } },
+                        "404": { "description": "Collection not found" }
+                    }
+                },
+                "delete": {
+                    "summary": "Delete a collection",
+                    "operationId": "deleteCollection",
+                    "tags": ["Collections"],
+                    "parameters": [{ "name": "name", "in": "path", "required": true, "schema": { "type": "string" } }],
+                    "responses": {
+                        "200": { "description": "Collection deleted" },
+                        "404": { "description": "Collection not found" }
+                    }
+                }
+            },
+            "/collections/{collection}/vectors": {
+                "get": {
+                    "summary": "List vectors in collection",
+                    "operationId": "listVectors",
+                    "tags": ["Vectors"],
+                    "parameters": [
+                        { "name": "collection", "in": "path", "required": true, "schema": { "type": "string" } },
+                        { "name": "limit", "in": "query", "schema": { "type": "integer", "default": 100 } },
+                        { "name": "offset", "in": "query", "schema": { "type": "integer", "default": 0 } }
+                    ],
+                    "responses": { "200": { "description": "List of vectors" } }
+                },
+                "post": {
+                    "summary": "Insert a vector",
+                    "operationId": "insertVector",
+                    "tags": ["Vectors"],
+                    "parameters": [{ "name": "collection", "in": "path", "required": true, "schema": { "type": "string" } }],
+                    "requestBody": {
+                        "required": true,
+                        "content": { "application/json": { "schema": { "$ref": "#/components/schemas/InsertVectorRequest" } } }
+                    },
+                    "responses": {
+                        "201": { "description": "Vector inserted" },
+                        "400": { "description": "Invalid input" }
+                    }
+                }
+            },
+            "/collections/{collection}/vectors/{id}": {
+                "get": {
+                    "summary": "Get a vector by ID",
+                    "operationId": "getVector",
+                    "tags": ["Vectors"],
+                    "parameters": [
+                        { "name": "collection", "in": "path", "required": true, "schema": { "type": "string" } },
+                        { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }
+                    ],
+                    "responses": {
+                        "200": { "description": "Vector data", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/VectorResponse" } } } },
+                        "404": { "description": "Vector not found" }
+                    }
+                },
+                "delete": {
+                    "summary": "Delete a vector",
+                    "operationId": "deleteVector",
+                    "tags": ["Vectors"],
+                    "parameters": [
+                        { "name": "collection", "in": "path", "required": true, "schema": { "type": "string" } },
+                        { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }
+                    ],
+                    "responses": { "200": { "description": "Vector deleted" }, "404": { "description": "Not found" } }
+                }
+            },
+            "/collections/{collection}/search": {
+                "post": {
+                    "summary": "Search for similar vectors",
+                    "operationId": "searchVectors",
+                    "tags": ["Search"],
+                    "parameters": [{ "name": "collection", "in": "path", "required": true, "schema": { "type": "string" } }],
+                    "requestBody": {
+                        "required": true,
+                        "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SearchRequest" } } }
+                    },
+                    "responses": {
+                        "200": {
+                            "description": "Search results",
+                            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SearchResponse" } } }
+                        }
+                    }
+                }
+            },
+            "/save": {
+                "post": {
+                    "summary": "Save database to disk",
+                    "operationId": "saveDatabase",
+                    "tags": ["System"],
+                    "responses": { "200": { "description": "Database saved" } }
+                }
+            }
+        },
+        "components": {
+            "schemas": {
+                "HealthResponse": {
+                    "type": "object",
+                    "properties": {
+                        "status": { "type": "string", "example": "healthy" }
+                    }
+                },
+                "CollectionInfo": {
+                    "type": "object",
+                    "properties": {
+                        "name": { "type": "string" },
+                        "dimensions": { "type": "integer" },
+                        "vector_count": { "type": "integer" },
+                        "distance_function": { "type": "string", "enum": ["cosine", "euclidean", "dot_product", "manhattan"] }
+                    }
+                },
+                "CreateCollectionRequest": {
+                    "type": "object",
+                    "required": ["name", "dimensions"],
+                    "properties": {
+                        "name": { "type": "string" },
+                        "dimensions": { "type": "integer", "minimum": 1 },
+                        "distance": { "type": "string", "enum": ["cosine", "euclidean", "dot_product", "manhattan"], "default": "cosine" },
+                        "m": { "type": "integer", "default": 16 },
+                        "ef_construction": { "type": "integer", "default": 200 }
+                    }
+                },
+                "InsertVectorRequest": {
+                    "type": "object",
+                    "required": ["id", "vector"],
+                    "properties": {
+                        "id": { "type": "string" },
+                        "vector": { "type": "array", "items": { "type": "number", "format": "float" } },
+                        "metadata": { "type": "object", "additionalProperties": true }
+                    }
+                },
+                "VectorResponse": {
+                    "type": "object",
+                    "properties": {
+                        "id": { "type": "string" },
+                        "vector": { "type": "array", "items": { "type": "number" } },
+                        "metadata": { "type": "object", "nullable": true }
+                    }
+                },
+                "SearchRequest": {
+                    "type": "object",
+                    "required": ["vector"],
+                    "properties": {
+                        "vector": { "type": "array", "items": { "type": "number", "format": "float" } },
+                        "k": { "type": "integer", "default": 10, "minimum": 1 },
+                        "filter": { "type": "object", "description": "MongoDB-style metadata filter" },
+                        "ef_search": { "type": "integer" }
+                    }
+                },
+                "SearchResponse": {
+                    "type": "object",
+                    "properties": {
+                        "results": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "id": { "type": "string" },
+                                    "distance": { "type": "number" },
+                                    "metadata": { "type": "object", "nullable": true }
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            "securitySchemes": {
+                "ApiKeyAuth": {
+                    "type": "apiKey",
+                    "in": "header",
+                    "name": "X-API-Key"
+                },
+                "BearerAuth": {
+                    "type": "http",
+                    "scheme": "bearer",
+                    "bearerFormat": "JWT"
+                }
+            }
+        },
+        "security": [
+            { "ApiKeyAuth": [] },
+            { "BearerAuth": [] }
+        ]
+    })
+}
+
+/// Return the OpenAPI spec as a formatted JSON string.
+pub fn openapi_spec_json() -> String {
+    serde_json::to_string_pretty(&generate_openapi_spec()).unwrap_or_default()
+}
+
+/// Axum handler that serves the OpenAPI spec as JSON.
+async fn serve_openapi_spec() -> impl IntoResponse {
+    Json(generate_openapi_spec())
 }
 
 #[cfg(test)]
@@ -2456,5 +2719,26 @@ mod tests {
 
         assert!(server_config.auth.require_auth);
         assert_eq!(server_config.auth.api_keys.len(), 1);
+    }
+
+    #[test]
+    fn test_openapi_spec_generation() {
+        let spec = generate_openapi_spec();
+        assert_eq!(spec["openapi"], "3.1.0");
+        assert_eq!(spec["info"]["title"], "Needle Vector Database API");
+        assert!(spec["paths"]["/health"].is_object());
+        assert!(spec["paths"]["/collections"].is_object());
+        assert!(spec["paths"]["/collections/{collection}/search"].is_object());
+        assert!(spec["components"]["schemas"]["SearchRequest"].is_object());
+        assert!(spec["components"]["schemas"]["SearchResponse"].is_object());
+    }
+
+    #[test]
+    fn test_openapi_spec_json_string() {
+        let json = openapi_spec_json();
+        assert!(json.contains("Needle Vector Database API"));
+        assert!(json.contains("searchVectors"));
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert!(parsed.is_object());
     }
 }
