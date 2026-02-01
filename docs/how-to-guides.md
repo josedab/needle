@@ -199,6 +199,8 @@ let config = CollectionConfig::new("auto_tuned", 384)
 
 Quantization reduces memory usage by compressing vectors. Choose based on your accuracy/memory trade-off.
 
+> **Note:** Quantization types (`ScalarQuantizer`, `ProductQuantizer`, `BinaryQuantizer`) are available with default features. Training requires sample vectors from your dataset.
+
 ### When to Use Each Strategy
 
 | Strategy | Compression | Recall Loss | Best For |
@@ -278,6 +280,8 @@ let hamming_distance = bq.hamming_distance(&binary1, &binary2);
 ## Hybrid Search Setup
 
 Combine vector similarity with keyword search for better results.
+
+> **Feature gate:** Requires `--features hybrid` (included in `--features full`).
 
 ### Setting Up BM25 + Vector Search
 
@@ -382,6 +386,8 @@ println!("Learned BM25 weight: {:.2}", stats.bm25_weight);
 ---
 
 ## Backup and Restore
+
+> **Note:** Backup APIs (`BackupManager`, `BackupConfig`) are part of the `persistence` module, available with default features.
 
 ### Creating Backups
 

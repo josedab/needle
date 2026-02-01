@@ -602,6 +602,8 @@ curl http://localhost:8080/info
 
 Prometheus-format metrics (requires `metrics` feature).
 
+> **Feature gate:** Only available when compiled with `--features metrics` (included in `--features full`).
+
 ```bash
 curl http://localhost:8080/metrics
 # needle_vectors_total{collection="docs"} 1500
@@ -1668,6 +1670,28 @@ Get MCP client configuration (e.g., for Claude Desktop).
 ```bash
 curl http://localhost:8080/mcp/config
 # {"mcpServers":{"needle":{"command":"needle","args":["mcp","--database","vectors.needle"]}}}
+```
+
+### UI Endpoints
+
+#### `GET /playground`
+
+Serves an interactive API explorer (HTML page). Open in a browser to try out search,
+insert, and collection management without writing curl commands. No authentication required.
+
+```bash
+# Open in a browser
+open http://localhost:8080/playground
+```
+
+> **Note:** The playground is always available when the server is running.
+
+#### `GET /dashboard`
+
+Admin dashboard (HTML page) for monitoring collections, vector counts, and system health.
+
+```bash
+open http://localhost:8080/dashboard
 ```
 
 ### Example Requests
