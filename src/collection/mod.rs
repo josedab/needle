@@ -923,8 +923,12 @@ impl SemanticQueryCache {
             },
         );
 
-        // Insert into the HNSW index — ignore errors for cache operations
-        let _ = self.index.insert(id, &query_vec, &self.vectors);
+        // Insert into the HNSW index for similarity-based lookups.
+        // Cache index failures are non-fatal: the entry is still stored in the
+        // entries map and available for exact-match lookups.
+        if let Err(e) = self.index.insert(id, &query_vec, &self.vectors) {
+            tracing::debug!("Semantic cache index insert failed (non-fatal): {}", e);
+        }
     }
 
     /// Evict the least-recently-used entry, preferring expired entries first.
