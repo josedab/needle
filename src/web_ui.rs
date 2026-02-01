@@ -1423,6 +1423,622 @@ pub async fn serve_web_ui_default(db: Database) -> Result<(), Box<dyn std::error
 }
 
 // ============================================================================
+// Visual Query Builder & Admin Dashboard (Next-Gen)
+// ============================================================================
+
+/// Visual query builder state
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VisualQueryState {
+    /// Selected collection
+    pub collection: Option<String>,
+    /// Query vector (can be pasted or generated)
+    pub query_vector: Option<Vec<f32>>,
+    /// Number of results
+    pub limit: usize,
+    /// Filter conditions
+    pub filters: Vec<FilterCondition>,
+    /// Distance function
+    pub distance: String,
+    /// Include metadata in results
+    pub include_metadata: bool,
+    /// Use HNSW index
+    pub use_index: bool,
+}
+
+impl Default for VisualQueryState {
+    fn default() -> Self {
+        Self {
+            collection: None,
+            query_vector: None,
+            limit: 10,
+            filters: Vec::new(),
+            distance: "cosine".to_string(),
+            include_metadata: true,
+            use_index: true,
+        }
+    }
+}
+
+/// Filter condition for the visual builder
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FilterCondition {
+    /// Field name
+    pub field: String,
+    /// Operator (eq, ne, gt, gte, lt, lte, in, contains)
+    pub operator: String,
+    /// Value
+    pub value: serde_json::Value,
+}
+
+impl FilterCondition {
+    /// Convert to Filter
+    pub fn to_filter(&self) -> Option<crate::metadata::Filter> {
+        Some(match self.operator.as_str() {
+            "eq" => crate::metadata::Filter::eq(self.field.clone(), self.value.clone()),
+            "ne" => crate::metadata::Filter::ne(self.field.clone(), self.value.clone()),
+            "gt" => crate::metadata::Filter::gt(self.field.clone(), self.value.clone()),
+            "gte" => crate::metadata::Filter::gte(self.field.clone(), self.value.clone()),
+            "lt" => crate::metadata::Filter::lt(self.field.clone(), self.value.clone()),
+            "lte" => crate::metadata::Filter::lte(self.field.clone(), self.value.clone()),
+            "in" => {
+                if let serde_json::Value::Array(arr) = &self.value {
+                    crate::metadata::Filter::In {
+                        field: self.field.clone(),
+                        values: arr.clone(),
+                    }
+                } else {
+                    return None;
+                }
+            }
+            _ => return None,
+        })
+    }
+}
+
+/// Admin dashboard section
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdminSection {
+    /// Section name
+    pub name: String,
+    /// Section description
+    pub description: String,
+    /// Available actions
+    pub actions: Vec<AdminAction>,
+}
+
+/// Admin action
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdminAction {
+    /// Action ID
+    pub id: String,
+    /// Display name
+    pub name: String,
+    /// Description
+    pub description: String,
+    /// HTTP method
+    pub method: String,
+    /// Endpoint
+    pub endpoint: String,
+    /// Required parameters
+    pub params: Vec<ActionParam>,
+    /// Whether action is dangerous
+    pub dangerous: bool,
+}
+
+/// Action parameter
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ActionParam {
+    /// Parameter name
+    pub name: String,
+    /// Parameter type (string, number, boolean, array)
+    pub param_type: String,
+    /// Whether required
+    pub required: bool,
+    /// Default value
+    pub default: Option<serde_json::Value>,
+    /// Description
+    pub description: String,
+}
+
+/// Generate admin sections
+pub fn get_admin_sections() -> Vec<AdminSection> {
+    vec![
+        AdminSection {
+            name: "Collection Management".to_string(),
+            description: "Create, modify, and delete collections".to_string(),
+            actions: vec![
+                AdminAction {
+                    id: "create_collection".to_string(),
+                    name: "Create Collection".to_string(),
+                    description: "Create a new vector collection".to_string(),
+                    method: "POST".to_string(),
+                    endpoint: "/api/collections".to_string(),
+                    params: vec![
+                        ActionParam {
+                            name: "name".to_string(),
+                            param_type: "string".to_string(),
+                            required: true,
+                            default: None,
+                            description: "Collection name".to_string(),
+                        },
+                        ActionParam {
+                            name: "dimensions".to_string(),
+                            param_type: "number".to_string(),
+                            required: true,
+                            default: Some(serde_json::json!(384)),
+                            description: "Vector dimensions".to_string(),
+                        },
+                        ActionParam {
+                            name: "distance".to_string(),
+                            param_type: "string".to_string(),
+                            required: false,
+                            default: Some(serde_json::json!("cosine")),
+                            description: "Distance function".to_string(),
+                        },
+                    ],
+                    dangerous: false,
+                },
+                AdminAction {
+                    id: "delete_collection".to_string(),
+                    name: "Delete Collection".to_string(),
+                    description: "Delete a collection and all its data".to_string(),
+                    method: "DELETE".to_string(),
+                    endpoint: "/api/collections/{name}".to_string(),
+                    params: vec![
+                        ActionParam {
+                            name: "name".to_string(),
+                            param_type: "string".to_string(),
+                            required: true,
+                            default: None,
+                            description: "Collection to delete".to_string(),
+                        },
+                    ],
+                    dangerous: true,
+                },
+                AdminAction {
+                    id: "compact_collection".to_string(),
+                    name: "Compact Collection".to_string(),
+                    description: "Remove deleted vectors and reclaim space".to_string(),
+                    method: "POST".to_string(),
+                    endpoint: "/api/collections/{name}/compact".to_string(),
+                    params: vec![
+                        ActionParam {
+                            name: "name".to_string(),
+                            param_type: "string".to_string(),
+                            required: true,
+                            default: None,
+                            description: "Collection to compact".to_string(),
+                        },
+                    ],
+                    dangerous: false,
+                },
+            ],
+        },
+        AdminSection {
+            name: "Data Management".to_string(),
+            description: "Import, export, and backup data".to_string(),
+            actions: vec![
+                AdminAction {
+                    id: "export_collection".to_string(),
+                    name: "Export Collection".to_string(),
+                    description: "Export collection data to JSON".to_string(),
+                    method: "GET".to_string(),
+                    endpoint: "/api/collections/{name}/export".to_string(),
+                    params: vec![
+                        ActionParam {
+                            name: "name".to_string(),
+                            param_type: "string".to_string(),
+                            required: true,
+                            default: None,
+                            description: "Collection to export".to_string(),
+                        },
+                    ],
+                    dangerous: false,
+                },
+                AdminAction {
+                    id: "save_database".to_string(),
+                    name: "Save Database".to_string(),
+                    description: "Persist all changes to disk".to_string(),
+                    method: "POST".to_string(),
+                    endpoint: "/api/save".to_string(),
+                    params: vec![],
+                    dangerous: false,
+                },
+            ],
+        },
+        AdminSection {
+            name: "Monitoring".to_string(),
+            description: "View metrics and health status".to_string(),
+            actions: vec![
+                AdminAction {
+                    id: "health_check".to_string(),
+                    name: "Health Check".to_string(),
+                    description: "Check database health status".to_string(),
+                    method: "GET".to_string(),
+                    endpoint: "/health".to_string(),
+                    params: vec![],
+                    dangerous: false,
+                },
+                AdminAction {
+                    id: "get_stats".to_string(),
+                    name: "Get Statistics".to_string(),
+                    description: "Get database statistics".to_string(),
+                    method: "GET".to_string(),
+                    endpoint: "/api/stats".to_string(),
+                    params: vec![],
+                    dangerous: false,
+                },
+            ],
+        },
+    ]
+}
+
+/// Generate the visual query builder HTML
+pub fn generate_query_builder_html(state: &VisualQueryState, collections: &[String]) -> String {
+    let collection_options: String = collections
+        .iter()
+        .map(|c| {
+            let selected = state.collection.as_ref() == Some(c);
+            format!(
+                r#"<option value="{}" {}>{}</option>"#,
+                c,
+                if selected { "selected" } else { "" },
+                c
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let filters_html: String = state
+        .filters
+        .iter()
+        .enumerate()
+        .map(|(i, f)| {
+            format!(
+                r#"
+                <div class="filter-row" data-index="{}">
+                    <input type="text" name="filter_field_{}" value="{}" placeholder="Field" class="field-input">
+                    <select name="filter_op_{}">
+                        <option value="eq" {}>equals</option>
+                        <option value="ne" {}>not equals</option>
+                        <option value="gt" {}>greater than</option>
+                        <option value="gte" {}>greater or equal</option>
+                        <option value="lt" {}>less than</option>
+                        <option value="lte" {}>less or equal</option>
+                        <option value="in" {}>in list</option>
+                    </select>
+                    <input type="text" name="filter_value_{}" value="{}" placeholder="Value" class="value-input">
+                    <button type="button" class="remove-filter" onclick="removeFilter({})">✕</button>
+                </div>
+                "#,
+                i,
+                i, f.field,
+                i,
+                if f.operator == "eq" { "selected" } else { "" },
+                if f.operator == "ne" { "selected" } else { "" },
+                if f.operator == "gt" { "selected" } else { "" },
+                if f.operator == "gte" { "selected" } else { "" },
+                if f.operator == "lt" { "selected" } else { "" },
+                if f.operator == "lte" { "selected" } else { "" },
+                if f.operator == "in" { "selected" } else { "" },
+                i, serde_json::to_string(&f.value).unwrap_or_default(),
+                i
+            )
+        })
+        .collect();
+
+    format!(
+        r#"
+        <div class="query-builder">
+            <h2>Visual Query Builder</h2>
+            
+            <div class="builder-section">
+                <label>Collection</label>
+                <select id="collection-select" name="collection">
+                    <option value="">Select collection...</option>
+                    {}
+                </select>
+            </div>
+
+            <div class="builder-section">
+                <label>Query Vector</label>
+                <div class="vector-input-group">
+                    <textarea id="query-vector" name="query_vector" 
+                        placeholder="Paste vector as JSON array, e.g., [0.1, 0.2, ...]"
+                        rows="3">{}</textarea>
+                    <button type="button" onclick="generateRandomVector()">Generate Random</button>
+                </div>
+            </div>
+
+            <div class="builder-section">
+                <label>Filters</label>
+                <div id="filters-container">
+                    {}
+                </div>
+                <button type="button" onclick="addFilter()">+ Add Filter</button>
+            </div>
+
+            <div class="builder-section options">
+                <div class="option-group">
+                    <label>Results Limit</label>
+                    <input type="number" name="limit" value="{}" min="1" max="1000">
+                </div>
+                <div class="option-group">
+                    <label>Distance Function</label>
+                    <select name="distance">
+                        <option value="cosine" {}>Cosine</option>
+                        <option value="euclidean" {}>Euclidean</option>
+                        <option value="dot" {}>Dot Product</option>
+                    </select>
+                </div>
+                <div class="option-group">
+                    <label>
+                        <input type="checkbox" name="include_metadata" {}> Include Metadata
+                    </label>
+                </div>
+                <div class="option-group">
+                    <label>
+                        <input type="checkbox" name="use_index" {}> Use HNSW Index
+                    </label>
+                </div>
+            </div>
+
+            <div class="builder-actions">
+                <button type="submit" class="primary">Execute Query</button>
+                <button type="button" onclick="resetBuilder()">Reset</button>
+                <button type="button" onclick="generateCurl()">Generate cURL</button>
+            </div>
+        </div>
+
+        <script>
+        let filterIndex = {};
+        
+        function addFilter() {{
+            const container = document.getElementById('filters-container');
+            const html = `
+                <div class="filter-row" data-index="${{filterIndex}}">
+                    <input type="text" name="filter_field_${{filterIndex}}" placeholder="Field" class="field-input">
+                    <select name="filter_op_${{filterIndex}}">
+                        <option value="eq">equals</option>
+                        <option value="ne">not equals</option>
+                        <option value="gt">greater than</option>
+                        <option value="gte">greater or equal</option>
+                        <option value="lt">less than</option>
+                        <option value="lte">less or equal</option>
+                        <option value="in">in list</option>
+                    </select>
+                    <input type="text" name="filter_value_${{filterIndex}}" placeholder="Value" class="value-input">
+                    <button type="button" class="remove-filter" onclick="removeFilter(${{filterIndex}})">✕</button>
+                </div>
+            `;
+            container.insertAdjacentHTML('beforeend', html);
+            filterIndex++;
+        }}
+
+        function removeFilter(index) {{
+            const row = document.querySelector(`.filter-row[data-index="${{index}}"]`);
+            if (row) row.remove();
+        }}
+
+        function generateRandomVector() {{
+            const collection = document.getElementById('collection-select').value;
+            // Default to 384 dimensions
+            const dims = 384;
+            const vector = Array.from({{length: dims}}, () => Math.random() * 2 - 1);
+            document.getElementById('query-vector').value = JSON.stringify(vector);
+        }}
+
+        function resetBuilder() {{
+            document.getElementById('collection-select').value = '';
+            document.getElementById('query-vector').value = '';
+            document.getElementById('filters-container').innerHTML = '';
+            filterIndex = 0;
+        }}
+
+        function generateCurl() {{
+            const collection = document.getElementById('collection-select').value;
+            const vector = document.getElementById('query-vector').value;
+            const limit = document.querySelector('input[name="limit"]').value;
+            
+            if (!collection || !vector) {{
+                alert('Please select a collection and enter a query vector');
+                return;
+            }}
+
+            const curl = `curl -X POST http://localhost:8080/collections/${{collection}}/search \\
+  -H "Content-Type: application/json" \\
+  -d '{{"vector": ${{vector}}, "k": ${{limit}}}}'`;
+            
+            navigator.clipboard.writeText(curl);
+            alert('cURL command copied to clipboard!');
+        }}
+        </script>
+        "#,
+        collection_options,
+        state.query_vector.as_ref().map(|v| serde_json::to_string(v).unwrap_or_default()).unwrap_or_default(),
+        filters_html,
+        state.limit,
+        if state.distance == "cosine" { "selected" } else { "" },
+        if state.distance == "euclidean" { "selected" } else { "" },
+        if state.distance == "dot" { "selected" } else { "" },
+        if state.include_metadata { "checked" } else { "" },
+        if state.use_index { "checked" } else { "" },
+        state.filters.len()
+    )
+}
+
+/// Generate the admin dashboard HTML
+pub fn generate_admin_dashboard_html() -> String {
+    let sections = get_admin_sections();
+
+    let sections_html: String = sections
+        .iter()
+        .map(|section| {
+            let actions_html: String = section
+                .actions
+                .iter()
+                .map(|action| {
+                    let params_html: String = action
+                        .params
+                        .iter()
+                        .map(|p| {
+                            let input_type = match p.param_type.as_str() {
+                                "number" => "number",
+                                "boolean" => "checkbox",
+                                _ => "text",
+                            };
+                            format!(
+                                r#"
+                                <div class="param-row">
+                                    <label>{}{}</label>
+                                    <input type="{}" name="{}" value="{}" placeholder="{}">
+                                </div>
+                                "#,
+                                p.name,
+                                if p.required { " *" } else { "" },
+                                input_type,
+                                p.name,
+                                p.default.as_ref().map(|v| v.to_string()).unwrap_or_default(),
+                                p.description
+                            )
+                        })
+                        .collect();
+
+                    let danger_class = if action.dangerous { "danger" } else { "" };
+
+                    format!(
+                        r#"
+                        <div class="action-card {}">
+                            <h4>{}</h4>
+                            <p class="description">{}</p>
+                            <div class="action-details">
+                                <span class="method method-{}">{}</span>
+                                <code>{}</code>
+                            </div>
+                            <form class="action-form" data-endpoint="{}" data-method="{}">
+                                {}
+                                <button type="submit" class="{}">{}</button>
+                            </form>
+                        </div>
+                        "#,
+                        danger_class,
+                        action.name,
+                        action.description,
+                        action.method.to_lowercase(),
+                        action.method,
+                        action.endpoint,
+                        action.endpoint,
+                        action.method,
+                        params_html,
+                        danger_class,
+                        if action.dangerous { "⚠ Execute" } else { "Execute" }
+                    )
+                })
+                .collect();
+
+            format!(
+                r#"
+                <div class="admin-section">
+                    <h3>{}</h3>
+                    <p class="section-desc">{}</p>
+                    <div class="actions-grid">
+                        {}
+                    </div>
+                </div>
+                "#,
+                section.name, section.description, actions_html
+            )
+        })
+        .collect();
+
+    format!(
+        r#"
+        <div class="admin-dashboard">
+            <h2>Admin Dashboard</h2>
+            <p class="warning">⚠️ Actions here can modify or delete data. Use with caution.</p>
+            {}
+        </div>
+
+        <style>
+        .admin-dashboard {{ padding: 20px; max-width: 1200px; margin: 0 auto; }}
+        .warning {{ color: #f59e0b; background: #fef3c7; padding: 10px; border-radius: 4px; }}
+        .admin-section {{ margin: 30px 0; padding: 20px; background: #f8fafc; border-radius: 8px; }}
+        .section-desc {{ color: #64748b; margin-bottom: 20px; }}
+        .actions-grid {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(350px, 1fr)); gap: 20px; }}
+        .action-card {{ background: white; padding: 20px; border-radius: 8px; border: 1px solid #e2e8f0; }}
+        .action-card.danger {{ border-color: #ef4444; }}
+        .action-card h4 {{ margin: 0 0 10px 0; }}
+        .action-card .description {{ color: #64748b; font-size: 14px; }}
+        .action-details {{ margin: 15px 0; }}
+        .method {{ padding: 2px 8px; border-radius: 4px; font-size: 12px; font-weight: bold; }}
+        .method-get {{ background: #22c55e; color: white; }}
+        .method-post {{ background: #3b82f6; color: white; }}
+        .method-delete {{ background: #ef4444; color: white; }}
+        .action-form {{ margin-top: 15px; }}
+        .param-row {{ margin: 10px 0; }}
+        .param-row label {{ display: block; font-size: 14px; margin-bottom: 4px; }}
+        .param-row input {{ width: 100%; padding: 8px; border: 1px solid #d1d5db; border-radius: 4px; }}
+        .action-form button {{ margin-top: 10px; padding: 8px 16px; border: none; border-radius: 4px; cursor: pointer; }}
+        .action-form button {{ background: #3b82f6; color: white; }}
+        .action-form button.danger {{ background: #ef4444; }}
+        </style>
+
+        <script>
+        document.querySelectorAll('.action-form').forEach(form => {{
+            form.addEventListener('submit', async (e) => {{
+                e.preventDefault();
+                const endpoint = form.dataset.endpoint;
+                const method = form.dataset.method;
+                
+                // Confirm dangerous actions
+                if (form.querySelector('button.danger')) {{
+                    if (!confirm('Are you sure you want to perform this action?')) {{
+                        return;
+                    }}
+                }}
+
+                // Build the request
+                const formData = new FormData(form);
+                let url = endpoint;
+                let body = null;
+
+                // Replace path params
+                formData.forEach((value, key) => {{
+                    if (url.includes(`{{${{key}}}`)) {{
+                        url = url.replace(`{{${{key}}}}`, value);
+                    }}
+                }});
+
+                if (method !== 'GET') {{
+                    const data = {{}};
+                    formData.forEach((value, key) => {{
+                        if (!endpoint.includes(`{{${{key}}}`)) {{
+                            data[key] = value;
+                        }}
+                    }});
+                    body = JSON.stringify(data);
+                }}
+
+                try {{
+                    const response = await fetch(url, {{
+                        method: method,
+                        headers: {{ 'Content-Type': 'application/json' }},
+                        body: body
+                    }});
+                    const result = await response.json();
+                    alert(response.ok ? 'Success!' : 'Error: ' + JSON.stringify(result));
+                }} catch (err) {{
+                    alert('Error: ' + err.message);
+                }}
+            }});
+        }});
+        </script>
+        "#,
+        sections_html
+    )
+}
+
+// ============================================================================
 // Tests
 // ============================================================================
 
