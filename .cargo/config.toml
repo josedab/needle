@@ -15,7 +15,8 @@ lint         = "clippy --features full"
 t            = "test --features full"
 
 [env]
-RUST_BACKTRACE = "1"
+# Use "full" for detailed debugging with complete stack frames
+RUST_BACKTRACE = "short"
 
 # ── Platform-specific linker settings ─────────────────────────────────────────
 # Faster linking significantly reduces incremental build times.
