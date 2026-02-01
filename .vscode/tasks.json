@@ -1,0 +1,65 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Quick Check (fmt + lint + unit tests)",
+      "type": "shell",
+      "command": "make quick",
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "problemMatcher": ["$rustc"],
+      "presentation": { "reveal": "always", "panel": "shared" }
+    },
+    {
+      "label": "Full Check (fmt + lint + all tests)",
+      "type": "shell",
+      "command": "make check",
+      "group": "build",
+      "problemMatcher": ["$rustc"],
+      "presentation": { "reveal": "always", "panel": "shared" }
+    },
+    {
+      "label": "Full CI Check (check-all)",
+      "type": "shell",
+      "command": "make check-all",
+      "group": "build",
+      "problemMatcher": ["$rustc"],
+      "presentation": { "reveal": "always", "panel": "shared" }
+    },
+    {
+      "label": "Run Single Test",
+      "type": "shell",
+      "command": "cargo test ${input:testName} -- --nocapture",
+      "group": "test",
+      "problemMatcher": ["$rustc"],
+      "presentation": { "reveal": "always", "panel": "shared" }
+    },
+    {
+      "label": "Serve (HTTP server)",
+      "type": "shell",
+      "command": "cargo run --features server -- serve -a 127.0.0.1:8080",
+      "group": "none",
+      "isBackground": true,
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "dedicated" }
+    },
+    {
+      "label": "Demo (quickstart)",
+      "type": "shell",
+      "command": "make demo",
+      "group": "none",
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "shared" }
+    }
+  ],
+  "inputs": [
+    {
+      "id": "testName",
+      "description": "Test name or pattern to run",
+      "type": "promptString",
+      "default": "test_"
+    }
+  ]
+}

@@ -1,0 +1,47 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "type": "lldb",
+      "request": "launch",
+      "name": "CLI: info",
+      "cargo": {
+        "args": ["build", "--bin=needle", "--package=needle"],
+        "filter": {
+          "name": "needle",
+          "kind": "bin"
+        }
+      },
+      "args": ["info", "test.needle"],
+      "cwd": "${workspaceFolder}"
+    },
+    {
+      "type": "lldb",
+      "request": "launch",
+      "name": "HTTP Server: serve",
+      "cargo": {
+        "args": ["build", "--bin=needle", "--package=needle", "--features=server"],
+        "filter": {
+          "name": "needle",
+          "kind": "bin"
+        }
+      },
+      "args": ["serve", "-a", "127.0.0.1:8080", "-d", "test.needle"],
+      "cwd": "${workspaceFolder}"
+    },
+    {
+      "type": "lldb",
+      "request": "launch",
+      "name": "MCP Server: mcp",
+      "cargo": {
+        "args": ["build", "--bin=needle", "--package=needle"],
+        "filter": {
+          "name": "needle",
+          "kind": "bin"
+        }
+      },
+      "args": ["mcp", "--database", "test.needle"],
+      "cwd": "${workspaceFolder}"
+    }
+  ]
+}

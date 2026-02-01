@@ -6,6 +6,9 @@
 .idea/
 .vscode/*
 !.vscode/settings.json
+!.vscode/launch.json
+!.vscode/extensions.json
+!.vscode/tasks.json
 *.swp
 *.swo
 *~
