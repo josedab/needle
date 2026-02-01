@@ -354,6 +354,12 @@ cargo clippy --features full -- -D warnings
    - External crates
    - Internal modules
 
+5. **Compile-time version info**: Needle uses `env!("CARGO_PKG_VERSION")` and
+   `env!("CARGO_PKG_RUST_VERSION")` across many modules (server, CLI, bindings,
+   telemetry, backups) to embed version strings at compile time. When adding code
+   that reports version information, prefer these Cargo-provided environment
+   variables over hardcoded strings so the value stays in sync with `Cargo.toml`.
+
 ---
 
 ## Pull Request Process
@@ -466,6 +472,7 @@ Understanding the codebase structure will help you contribute effectively.
 | `distance.rs` | Distance functions (Cosine, Euclidean, Dot, Manhattan) |
 | `server.rs` | HTTP REST API (feature: server) |
 | `error.rs` | Error types with structured codes |
+| `services/` | Higher-level service modules (adaptive indexing, ingestion pipelines, plugin runtime) |
 
 ### Adding Features
 
