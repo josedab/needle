@@ -492,3 +492,454 @@ mod tests {
         assert!(output.contains("needle_http_request_duration_seconds"));
     }
 }
+
+// ============================================================================
+// Grafana Dashboard Generation
+// ============================================================================
+
+/// Generate a Grafana dashboard JSON for Needle metrics
+pub fn generate_grafana_dashboard(config: GrafanaDashboardConfig) -> String {
+    let panels = vec![
+        // Operations panel
+        grafana_panel(
+            1,
+            "Operations per Second",
+            "rate(needle_operations_total[5m])",
+            "timeseries",
+            GridPos { x: 0, y: 0, w: 12, h: 8 },
+        ),
+        // Errors panel
+        grafana_panel(
+            2,
+            "Error Rate",
+            "rate(needle_errors_total[5m])",
+            "timeseries",
+            GridPos { x: 12, y: 0, w: 12, h: 8 },
+        ),
+        // Latency panel
+        grafana_panel(
+            3,
+            "Operation Latency (p95)",
+            "histogram_quantile(0.95, rate(needle_operation_duration_seconds_bucket[5m]))",
+            "timeseries",
+            GridPos { x: 0, y: 8, w: 12, h: 8 },
+        ),
+        // Vector count panel
+        grafana_panel(
+            4,
+            "Total Vectors",
+            "sum(needle_collection_vectors_total)",
+            "stat",
+            GridPos { x: 12, y: 8, w: 6, h: 8 },
+        ),
+        // Memory usage panel
+        grafana_panel(
+            5,
+            "Memory Usage",
+            "sum(needle_collection_memory_bytes)",
+            "gauge",
+            GridPos { x: 18, y: 8, w: 6, h: 8 },
+        ),
+        // Search results panel
+        grafana_panel(
+            6,
+            "Search Results per Query",
+            "rate(needle_search_results_total[5m]) / rate(needle_operations_total{operation=\"search\"}[5m])",
+            "timeseries",
+            GridPos { x: 0, y: 16, w: 12, h: 8 },
+        ),
+        // HTTP requests panel
+        grafana_panel(
+            7,
+            "HTTP Requests per Second",
+            "rate(needle_http_requests_total[5m])",
+            "timeseries",
+            GridPos { x: 12, y: 16, w: 12, h: 8 },
+        ),
+    ];
+
+    let dashboard = serde_json::json!({
+        "annotations": {
+            "list": []
+        },
+        "editable": true,
+        "fiscalYearStartMonth": 0,
+        "graphTooltip": 0,
+        "id": null,
+        "links": [],
+        "liveNow": false,
+        "panels": panels,
+        "refresh": config.refresh_interval,
+        "schemaVersion": 38,
+        "tags": ["needle", "vector-db"],
+        "templating": {
+            "list": [
+                {
+                    "current": { "selected": false, "text": "All", "value": "$__all" },
+                    "datasource": { "type": "prometheus", "uid": config.datasource_uid },
+                    "definition": "label_values(needle_operations_total, collection)",
+                    "hide": 0,
+                    "includeAll": true,
+                    "label": "Collection",
+                    "multi": true,
+                    "name": "collection",
+                    "options": [],
+                    "query": { "query": "label_values(needle_operations_total, collection)", "refId": "PrometheusVariableQueryEditor-VariableQuery" },
+                    "refresh": 1,
+                    "regex": "",
+                    "skipUrlSync": false,
+                    "sort": 1,
+                    "type": "query"
+                }
+            ]
+        },
+        "time": {
+            "from": "now-1h",
+            "to": "now"
+        },
+        "timepicker": {},
+        "timezone": "",
+        "title": config.title,
+        "uid": config.uid,
+        "version": 1,
+        "weekStart": ""
+    });
+
+    serde_json::to_string_pretty(&dashboard).unwrap_or_default()
+}
+
+/// Configuration for Grafana dashboard generation
+#[derive(Debug, Clone)]
+pub struct GrafanaDashboardConfig {
+    /// Dashboard title
+    pub title: String,
+    /// Dashboard UID (for unique identification)
+    pub uid: String,
+    /// Prometheus datasource UID
+    pub datasource_uid: String,
+    /// Refresh interval (e.g., "5s", "30s", "1m")
+    pub refresh_interval: String,
+}
+
+impl Default for GrafanaDashboardConfig {
+    fn default() -> Self {
+        Self {
+            title: "Needle Vector Database".to_string(),
+            uid: "needle-dashboard".to_string(),
+            datasource_uid: "prometheus".to_string(),
+            refresh_interval: "30s".to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct GridPos {
+    x: u8,
+    y: u8,
+    w: u8,
+    h: u8,
+}
+
+fn grafana_panel(id: u8, title: &str, expr: &str, panel_type: &str, grid: GridPos) -> serde_json::Value {
+    serde_json::json!({
+        "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+        "fieldConfig": {
+            "defaults": {
+                "color": { "mode": "palette-classic" },
+                "custom": {
+                    "axisCenteredZero": false,
+                    "axisColorMode": "text",
+                    "axisLabel": "",
+                    "axisPlacement": "auto",
+                    "barAlignment": 0,
+                    "drawStyle": "line",
+                    "fillOpacity": 10,
+                    "gradientMode": "none",
+                    "hideFrom": { "legend": false, "tooltip": false, "viz": false },
+                    "lineInterpolation": "linear",
+                    "lineWidth": 1,
+                    "pointSize": 5,
+                    "scaleDistribution": { "type": "linear" },
+                    "showPoints": "never",
+                    "spanNulls": false,
+                    "stacking": { "group": "A", "mode": "none" },
+                    "thresholdsStyle": { "mode": "off" }
+                },
+                "mappings": [],
+                "thresholds": {
+                    "mode": "absolute",
+                    "steps": [
+                        { "color": "green", "value": null },
+                        { "color": "red", "value": 80 }
+                    ]
+                },
+                "unit": "short"
+            },
+            "overrides": []
+        },
+        "gridPos": { "h": grid.h, "w": grid.w, "x": grid.x, "y": grid.y },
+        "id": id,
+        "options": {
+            "legend": { "calcs": [], "displayMode": "list", "placement": "bottom", "showLegend": true },
+            "tooltip": { "mode": "single", "sort": "none" }
+        },
+        "pluginVersion": "10.0.0",
+        "targets": [{
+            "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+            "editorMode": "code",
+            "expr": expr,
+            "legendFormat": "__auto",
+            "range": true,
+            "refId": "A"
+        }],
+        "title": title,
+        "type": panel_type
+    })
+}
+
+// ============================================================================
+// Alerting Rules Generation
+// ============================================================================
+
+/// Generate Prometheus alerting rules for Needle
+pub fn generate_alerting_rules(config: AlertingConfig) -> String {
+    let rules = vec![
+        AlertRule {
+            name: "NeedleHighErrorRate".to_string(),
+            expr: format!(
+                "rate(needle_errors_total[5m]) / rate(needle_operations_total[5m]) > {}",
+                config.error_rate_threshold
+            ),
+            for_duration: "5m".to_string(),
+            severity: "warning".to_string(),
+            summary: "High error rate in Needle operations".to_string(),
+            description: "Error rate is above {{ $value | printf \"%.2f\" }}% of operations".to_string(),
+        },
+        AlertRule {
+            name: "NeedleHighLatency".to_string(),
+            expr: format!(
+                "histogram_quantile(0.95, rate(needle_operation_duration_seconds_bucket[5m])) > {}",
+                config.latency_threshold_ms / 1000.0
+            ),
+            for_duration: "5m".to_string(),
+            severity: "warning".to_string(),
+            summary: "High latency in Needle operations".to_string(),
+            description: "P95 latency is {{ $value | printf \"%.2f\" }}s".to_string(),
+        },
+        AlertRule {
+            name: "NeedleHighMemoryUsage".to_string(),
+            expr: format!(
+                "sum(needle_collection_memory_bytes) > {}",
+                config.memory_threshold_bytes
+            ),
+            for_duration: "10m".to_string(),
+            severity: "warning".to_string(),
+            summary: "High memory usage in Needle".to_string(),
+            description: "Total memory usage is {{ $value | humanize1024 }}".to_string(),
+        },
+        AlertRule {
+            name: "NeedleNoOperations".to_string(),
+            expr: "rate(needle_operations_total[10m]) == 0".to_string(),
+            for_duration: "15m".to_string(),
+            severity: "info".to_string(),
+            summary: "No Needle operations detected".to_string(),
+            description: "No operations have been recorded for 15 minutes".to_string(),
+        },
+        AlertRule {
+            name: "NeedleIndexUnhealthy".to_string(),
+            expr: "needle_index_health < 1".to_string(),
+            for_duration: "5m".to_string(),
+            severity: "critical".to_string(),
+            summary: "Needle index is unhealthy".to_string(),
+            description: "Index health check is failing for collection {{ $labels.collection }}".to_string(),
+        },
+    ];
+
+    let yaml = format!(
+        r#"groups:
+  - name: needle_alerts
+    rules:
+{}
+"#,
+        rules
+            .iter()
+            .map(|r| r.to_yaml())
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+
+    yaml
+}
+
+/// Configuration for alerting rules
+#[derive(Debug, Clone)]
+pub struct AlertingConfig {
+    /// Error rate threshold (0.0 to 1.0)
+    pub error_rate_threshold: f64,
+    /// Latency threshold in milliseconds
+    pub latency_threshold_ms: f64,
+    /// Memory threshold in bytes
+    pub memory_threshold_bytes: u64,
+}
+
+impl Default for AlertingConfig {
+    fn default() -> Self {
+        Self {
+            error_rate_threshold: 0.05, // 5% error rate
+            latency_threshold_ms: 100.0, // 100ms p95 latency
+            memory_threshold_bytes: 8 * 1024 * 1024 * 1024, // 8GB
+        }
+    }
+}
+
+struct AlertRule {
+    name: String,
+    expr: String,
+    for_duration: String,
+    severity: String,
+    summary: String,
+    description: String,
+}
+
+impl AlertRule {
+    fn to_yaml(&self) -> String {
+        format!(
+            r#"      - alert: {}
+        expr: {}
+        for: {}
+        labels:
+          severity: {}
+        annotations:
+          summary: "{}"
+          description: "{}""#,
+            self.name, self.expr, self.for_duration, self.severity, self.summary, self.description
+        )
+    }
+}
+
+// ============================================================================
+// Anomaly Detection
+// ============================================================================
+
+/// Simple anomaly detector for metrics
+pub struct AnomalyDetector {
+    /// Rolling window of values
+    window: std::collections::VecDeque<f64>,
+    /// Window size
+    window_size: usize,
+    /// Number of standard deviations for anomaly threshold
+    threshold_sigmas: f64,
+}
+
+impl AnomalyDetector {
+    /// Create a new anomaly detector
+    pub fn new(window_size: usize, threshold_sigmas: f64) -> Self {
+        Self {
+            window: std::collections::VecDeque::with_capacity(window_size),
+            window_size,
+            threshold_sigmas,
+        }
+    }
+
+    /// Add a value and check if it's anomalous
+    pub fn check(&mut self, value: f64) -> AnomalyResult {
+        if self.window.len() < self.window_size {
+            self.window.push_back(value);
+            return AnomalyResult {
+                is_anomaly: false,
+                value,
+                mean: value,
+                std_dev: 0.0,
+                z_score: 0.0,
+            };
+        }
+
+        let mean = self.window.iter().sum::<f64>() / self.window.len() as f64;
+        let variance = self.window.iter().map(|x| (x - mean).powi(2)).sum::<f64>()
+            / self.window.len() as f64;
+        let std_dev = variance.sqrt();
+
+        let z_score = if std_dev > 0.0 {
+            (value - mean) / std_dev
+        } else {
+            0.0
+        };
+
+        let is_anomaly = z_score.abs() > self.threshold_sigmas;
+
+        // Update window
+        self.window.pop_front();
+        self.window.push_back(value);
+
+        AnomalyResult {
+            is_anomaly,
+            value,
+            mean,
+            std_dev,
+            z_score,
+        }
+    }
+
+    /// Reset the detector
+    pub fn reset(&mut self) {
+        self.window.clear();
+    }
+}
+
+/// Result of anomaly detection
+#[derive(Debug, Clone)]
+pub struct AnomalyResult {
+    /// Whether the value is anomalous
+    pub is_anomaly: bool,
+    /// The value checked
+    pub value: f64,
+    /// Mean of the window
+    pub mean: f64,
+    /// Standard deviation of the window
+    pub std_dev: f64,
+    /// Z-score of the value
+    pub z_score: f64,
+}
+
+#[cfg(test)]
+mod dashboard_tests {
+    use super::*;
+
+    #[test]
+    fn test_grafana_dashboard_generation() {
+        let config = GrafanaDashboardConfig::default();
+        let dashboard = generate_grafana_dashboard(config);
+        
+        assert!(dashboard.contains("Needle Vector Database"));
+        assert!(dashboard.contains("needle_operations_total"));
+        assert!(dashboard.contains("timeseries"));
+    }
+
+    #[test]
+    fn test_alerting_rules_generation() {
+        let config = AlertingConfig::default();
+        let rules = generate_alerting_rules(config);
+        
+        assert!(rules.contains("NeedleHighErrorRate"));
+        assert!(rules.contains("NeedleHighLatency"));
+        assert!(rules.contains("severity: warning"));
+    }
+
+    #[test]
+    fn test_anomaly_detector() {
+        let mut detector = AnomalyDetector::new(10, 2.0);
+        
+        // Add normal values
+        for i in 0..15 {
+            let result = detector.check(100.0 + (i as f64 % 5.0));
+            if i >= 10 {
+                assert!(!result.is_anomaly);
+            }
+        }
+        
+        // Add anomalous value
+        let result = detector.check(200.0);
+        assert!(result.is_anomaly);
+        assert!(result.z_score.abs() > 2.0);
+    }
+}
