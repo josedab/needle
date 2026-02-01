@@ -344,3 +344,1011 @@ impl WasmCollection {
 pub fn init() {
     // Initialization code can go here if needed
 }
+
+// ============================================================================
+// Browser Runtime Enhancements
+// ============================================================================
+
+/// Performance metrics for browser monitoring
+#[wasm_bindgen]
+pub struct PerformanceMetrics {
+    operation: String,
+    duration_ms: f64,
+    vectors_processed: usize,
+    memory_used_bytes: usize,
+}
+
+#[wasm_bindgen]
+impl PerformanceMetrics {
+    /// Get operation name
+    #[wasm_bindgen(getter)]
+    pub fn operation(&self) -> String {
+        self.operation.clone()
+    }
+
+    /// Get duration in milliseconds
+    #[wasm_bindgen(getter, js_name = "durationMs")]
+    pub fn duration_ms(&self) -> f64 {
+        self.duration_ms
+    }
+
+    /// Get number of vectors processed
+    #[wasm_bindgen(getter, js_name = "vectorsProcessed")]
+    pub fn vectors_processed(&self) -> usize {
+        self.vectors_processed
+    }
+
+    /// Get estimated memory used in bytes
+    #[wasm_bindgen(getter, js_name = "memoryUsedBytes")]
+    pub fn memory_used_bytes(&self) -> usize {
+        self.memory_used_bytes
+    }
+
+    /// Convert to JavaScript object
+    #[wasm_bindgen(js_name = "toObject")]
+    pub fn to_object(&self) -> JsValue {
+        let obj = js_sys::Object::new();
+        let _ = js_sys::Reflect::set(&obj, &"operation".into(), &self.operation.clone().into());
+        let _ = js_sys::Reflect::set(&obj, &"durationMs".into(), &self.duration_ms.into());
+        let _ = js_sys::Reflect::set(
+            &obj,
+            &"vectorsProcessed".into(),
+            &(self.vectors_processed as u32).into(),
+        );
+        let _ = js_sys::Reflect::set(
+            &obj,
+            &"memoryUsedBytes".into(),
+            &(self.memory_used_bytes as u32).into(),
+        );
+        obj.into()
+    }
+}
+
+/// Memory usage statistics
+#[wasm_bindgen]
+pub struct MemoryStats {
+    vectors_count: usize,
+    dimensions: usize,
+    estimated_vector_bytes: usize,
+    estimated_index_bytes: usize,
+    estimated_metadata_bytes: usize,
+}
+
+#[wasm_bindgen]
+impl MemoryStats {
+    /// Get vector count
+    #[wasm_bindgen(getter, js_name = "vectorsCount")]
+    pub fn vectors_count(&self) -> usize {
+        self.vectors_count
+    }
+
+    /// Get dimensions
+    #[wasm_bindgen(getter)]
+    pub fn dimensions(&self) -> usize {
+        self.dimensions
+    }
+
+    /// Get estimated vector storage in bytes
+    #[wasm_bindgen(getter, js_name = "estimatedVectorBytes")]
+    pub fn estimated_vector_bytes(&self) -> usize {
+        self.estimated_vector_bytes
+    }
+
+    /// Get estimated index storage in bytes
+    #[wasm_bindgen(getter, js_name = "estimatedIndexBytes")]
+    pub fn estimated_index_bytes(&self) -> usize {
+        self.estimated_index_bytes
+    }
+
+    /// Get estimated metadata storage in bytes
+    #[wasm_bindgen(getter, js_name = "estimatedMetadataBytes")]
+    pub fn estimated_metadata_bytes(&self) -> usize {
+        self.estimated_metadata_bytes
+    }
+
+    /// Get total estimated bytes
+    #[wasm_bindgen(getter, js_name = "totalBytes")]
+    pub fn total_bytes(&self) -> usize {
+        self.estimated_vector_bytes + self.estimated_index_bytes + self.estimated_metadata_bytes
+    }
+
+    /// Convert to JavaScript object
+    #[wasm_bindgen(js_name = "toObject")]
+    pub fn to_object(&self) -> JsValue {
+        let obj = js_sys::Object::new();
+        let _ = js_sys::Reflect::set(
+            &obj,
+            &"vectorsCount".into(),
+            &(self.vectors_count as u32).into(),
+        );
+        let _ =
+            js_sys::Reflect::set(&obj, &"dimensions".into(), &(self.dimensions as u32).into());
+        let _ = js_sys::Reflect::set(
+            &obj,
+            &"estimatedVectorBytes".into(),
+            &(self.estimated_vector_bytes as u32).into(),
+        );
+        let _ = js_sys::Reflect::set(
+            &obj,
+            &"estimatedIndexBytes".into(),
+            &(self.estimated_index_bytes as u32).into(),
+        );
+        let _ = js_sys::Reflect::set(
+            &obj,
+            &"estimatedMetadataBytes".into(),
+            &(self.estimated_metadata_bytes as u32).into(),
+        );
+        let _ = js_sys::Reflect::set(
+            &obj,
+            &"totalBytes".into(),
+            &(self.total_bytes() as u32).into(),
+        );
+        obj.into()
+    }
+}
+
+/// Batch insert result
+#[wasm_bindgen]
+pub struct BatchInsertResult {
+    successful: usize,
+    failed: usize,
+    errors: Vec<String>,
+    duration_ms: f64,
+}
+
+#[wasm_bindgen]
+impl BatchInsertResult {
+    /// Get successful insert count
+    #[wasm_bindgen(getter)]
+    pub fn successful(&self) -> usize {
+        self.successful
+    }
+
+    /// Get failed insert count
+    #[wasm_bindgen(getter)]
+    pub fn failed(&self) -> usize {
+        self.failed
+    }
+
+    /// Get duration in milliseconds
+    #[wasm_bindgen(getter, js_name = "durationMs")]
+    pub fn duration_ms(&self) -> f64 {
+        self.duration_ms
+    }
+
+    /// Get errors as JavaScript array
+    #[wasm_bindgen(getter)]
+    pub fn errors(&self) -> js_sys::Array {
+        let arr = js_sys::Array::new();
+        for err in &self.errors {
+            arr.push(&JsValue::from_str(err));
+        }
+        arr
+    }
+}
+
+/// Streaming search result chunk
+#[wasm_bindgen]
+pub struct SearchChunk {
+    results: Vec<SearchResult>,
+    is_final: bool,
+    chunk_index: usize,
+}
+
+#[wasm_bindgen]
+impl SearchChunk {
+    /// Get results in this chunk
+    #[wasm_bindgen(getter)]
+    pub fn results(&self) -> js_sys::Array {
+        let arr = js_sys::Array::new();
+        for result in &self.results {
+            let obj = js_sys::Object::new();
+            let _ = js_sys::Reflect::set(&obj, &"id".into(), &result.id.clone().into());
+            let _ = js_sys::Reflect::set(&obj, &"distance".into(), &result.distance.into());
+            if let Some(ref meta) = result.metadata_json {
+                if let Ok(parsed) = js_sys::JSON::parse(meta) {
+                    let _ = js_sys::Reflect::set(&obj, &"metadata".into(), &parsed);
+                }
+            }
+            arr.push(&obj);
+        }
+        arr
+    }
+
+    /// Check if this is the final chunk
+    #[wasm_bindgen(getter, js_name = "isFinal")]
+    pub fn is_final(&self) -> bool {
+        self.is_final
+    }
+
+    /// Get chunk index
+    #[wasm_bindgen(getter, js_name = "chunkIndex")]
+    pub fn chunk_index(&self) -> usize {
+        self.chunk_index
+    }
+}
+
+// Additional methods for WasmCollection
+#[wasm_bindgen]
+impl WasmCollection {
+    /// Get memory statistics
+    #[wasm_bindgen(js_name = "getMemoryStats")]
+    pub fn get_memory_stats(&self) -> Result<MemoryStats, JsValue> {
+        let coll = self
+            .inner
+            .read()
+            .map_err(|_| JsValue::from_str("Lock poisoned"))?;
+
+        let vectors_count = coll.len();
+        let dimensions = coll.dimensions();
+
+        // Estimate memory usage
+        let estimated_vector_bytes = vectors_count * dimensions * 4; // f32 = 4 bytes
+        let estimated_index_bytes = vectors_count * 64 * 4; // Rough HNSW estimate
+        let estimated_metadata_bytes = vectors_count * 100; // Average metadata estimate
+
+        Ok(MemoryStats {
+            vectors_count,
+            dimensions,
+            estimated_vector_bytes,
+            estimated_index_bytes,
+            estimated_metadata_bytes,
+        })
+    }
+
+    /// Batch insert multiple vectors
+    #[wasm_bindgen(js_name = "batchInsert")]
+    pub fn batch_insert(
+        &self,
+        ids: js_sys::Array,
+        vectors: js_sys::Array,
+        metadata_array: Option<js_sys::Array>,
+    ) -> Result<BatchInsertResult, JsValue> {
+        let start = js_sys::Date::now();
+
+        let mut successful = 0;
+        let mut failed = 0;
+        let mut errors = Vec::new();
+
+        let mut coll = self
+            .inner
+            .write()
+            .map_err(|_| JsValue::from_str("Lock poisoned"))?;
+
+        let len = ids.length() as usize;
+
+        for i in 0..len {
+            let id = ids
+                .get(i as u32)
+                .as_string()
+                .ok_or_else(|| JsValue::from_str(&format!("Invalid ID at index {}", i)))?;
+
+            let vec_value = vectors.get(i as u32);
+            let vector: Vec<f32> = if let Some(arr) = vec_value.dyn_ref::<js_sys::Float32Array>() {
+                arr.to_vec()
+            } else if let Some(arr) = vec_value.dyn_ref::<js_sys::Array>() {
+                let mut v = Vec::with_capacity(arr.length() as usize);
+                for j in 0..arr.length() {
+                    v.push(arr.get(j).as_f64().unwrap_or(0.0) as f32);
+                }
+                v
+            } else {
+                errors.push(format!("Invalid vector at index {}", i));
+                failed += 1;
+                continue;
+            };
+
+            let metadata: Option<Value> = metadata_array.as_ref().and_then(|arr| {
+                let meta_val = arr.get(i as u32);
+                if meta_val.is_null() || meta_val.is_undefined() {
+                    None
+                } else {
+                    js_sys::JSON::stringify(&meta_val)
+                        .ok()
+                        .and_then(|s| serde_json::from_str(&s.as_string()?).ok())
+                }
+            });
+
+            match coll.insert(&id, &vector, metadata) {
+                Ok(_) => successful += 1,
+                Err(e) => {
+                    errors.push(format!("Failed to insert {}: {}", id, e));
+                    failed += 1;
+                }
+            }
+        }
+
+        let duration_ms = js_sys::Date::now() - start;
+
+        Ok(BatchInsertResult {
+            successful,
+            failed,
+            errors,
+            duration_ms,
+        })
+    }
+
+    /// Search with performance metrics
+    #[wasm_bindgen(js_name = "searchWithMetrics")]
+    pub fn search_with_metrics(
+        &self,
+        query: Vec<f32>,
+        k: usize,
+    ) -> Result<js_sys::Object, JsValue> {
+        let start = js_sys::Date::now();
+
+        let coll = self
+            .inner
+            .read()
+            .map_err(|_| JsValue::from_str("Lock poisoned"))?;
+
+        let results = coll
+            .search(&query, k)
+            .map_err(|e| JsValue::from_str(&e.to_string()))?;
+
+        let duration_ms = js_sys::Date::now() - start;
+
+        let result_array = js_sys::Array::new();
+        for result in results.iter() {
+            let obj = js_sys::Object::new();
+            let _ = js_sys::Reflect::set(&obj, &"id".into(), &result.id.clone().into());
+            let _ = js_sys::Reflect::set(&obj, &"distance".into(), &result.distance.into());
+            if let Some(ref meta) = result.metadata {
+                if let Ok(parsed) = js_sys::JSON::parse(&meta.to_string()) {
+                    let _ = js_sys::Reflect::set(&obj, &"metadata".into(), &parsed);
+                }
+            }
+            result_array.push(&obj);
+        }
+
+        let response = js_sys::Object::new();
+        let _ = js_sys::Reflect::set(&response, &"results".into(), &result_array);
+        let _ = js_sys::Reflect::set(&response, &"durationMs".into(), &duration_ms.into());
+        let _ = js_sys::Reflect::set(
+            &response,
+            &"vectorsSearched".into(),
+            &(coll.len() as u32).into(),
+        );
+
+        Ok(response)
+    }
+
+    /// Chunked search for streaming results
+    #[wasm_bindgen(js_name = "searchChunked")]
+    pub fn search_chunked(
+        &self,
+        query: Vec<f32>,
+        k: usize,
+        chunk_size: usize,
+    ) -> Result<js_sys::Array, JsValue> {
+        let coll = self
+            .inner
+            .read()
+            .map_err(|_| JsValue::from_str("Lock poisoned"))?;
+
+        let results = coll
+            .search(&query, k)
+            .map_err(|e| JsValue::from_str(&e.to_string()))?;
+
+        let chunks_array = js_sys::Array::new();
+        let chunk_count = (results.len() + chunk_size - 1) / chunk_size;
+
+        for (i, chunk) in results.chunks(chunk_size).enumerate() {
+            let chunk_results: Vec<SearchResult> =
+                chunk.iter().map(|r| SearchResult::from(r.clone())).collect();
+
+            let search_chunk = SearchChunk {
+                results: chunk_results,
+                is_final: i == chunk_count - 1,
+                chunk_index: i,
+            };
+
+            let chunk_obj = js_sys::Object::new();
+            let _ = js_sys::Reflect::set(&chunk_obj, &"results".into(), &search_chunk.results());
+            let _ =
+                js_sys::Reflect::set(&chunk_obj, &"isFinal".into(), &search_chunk.is_final.into());
+            let _ = js_sys::Reflect::set(
+                &chunk_obj,
+                &"chunkIndex".into(),
+                &(search_chunk.chunk_index as u32).into(),
+            );
+
+            chunks_array.push(&chunk_obj);
+        }
+
+        Ok(chunks_array)
+    }
+
+    /// Export to base64 string for storage
+    #[wasm_bindgen(js_name = "toBase64")]
+    pub fn to_base64(&self) -> Result<String, JsValue> {
+        let bytes = self.to_bytes()?;
+        Ok(base64_encode(&bytes))
+    }
+
+    /// Import from base64 string
+    #[wasm_bindgen(js_name = "fromBase64")]
+    pub fn from_base64(base64_str: &str) -> Result<WasmCollection, JsValue> {
+        let bytes =
+            base64_decode(base64_str).map_err(|e| JsValue::from_str(&format!("Invalid base64: {}", e)))?;
+        Self::from_bytes(&bytes)
+    }
+
+    /// Get collection info as JavaScript object
+    #[wasm_bindgen(js_name = "getInfo")]
+    pub fn get_info(&self) -> Result<js_sys::Object, JsValue> {
+        let coll = self
+            .inner
+            .read()
+            .map_err(|_| JsValue::from_str("Lock poisoned"))?;
+
+        let info = js_sys::Object::new();
+        let _ = js_sys::Reflect::set(&info, &"name".into(), &coll.name().into());
+        let _ = js_sys::Reflect::set(&info, &"dimensions".into(), &(coll.dimensions() as u32).into());
+        let _ = js_sys::Reflect::set(&info, &"vectorCount".into(), &(coll.len() as u32).into());
+
+        Ok(info)
+    }
+
+    /// Clear all vectors from the collection
+    pub fn clear(&self) -> Result<(), JsValue> {
+        let mut guard = self.inner
+            .write()
+            .map_err(|_| JsValue::from_str("Lock poisoned"))?;
+        
+        // Get all IDs and delete them
+        let ids: Vec<String> = guard.all_ids();
+        for id in ids {
+            let _ = guard.delete(&id);
+        }
+        Ok(())
+    }
+}
+
+// Simple base64 encoding/decoding for browser persistence
+fn base64_encode(data: &[u8]) -> String {
+    const CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut result = String::new();
+
+    for chunk in data.chunks(3) {
+        let b0 = chunk[0] as usize;
+        let b1 = chunk.get(1).copied().unwrap_or(0) as usize;
+        let b2 = chunk.get(2).copied().unwrap_or(0) as usize;
+
+        result.push(CHARS[(b0 >> 2) & 0x3F] as char);
+        result.push(CHARS[((b0 << 4) | (b1 >> 4)) & 0x3F] as char);
+
+        if chunk.len() > 1 {
+            result.push(CHARS[((b1 << 2) | (b2 >> 6)) & 0x3F] as char);
+        } else {
+            result.push('=');
+        }
+
+        if chunk.len() > 2 {
+            result.push(CHARS[b2 & 0x3F] as char);
+        } else {
+            result.push('=');
+        }
+    }
+
+    result
+}
+
+fn base64_decode(data: &str) -> Result<Vec<u8>, &'static str> {
+    const CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+    fn char_to_val(c: u8) -> Option<u8> {
+        CHARS.iter().position(|&x| x == c).map(|p| p as u8)
+    }
+
+    let data = data.trim_end_matches('=');
+    let bytes: Vec<u8> = data.bytes().collect();
+
+    if bytes.len() % 4 == 1 {
+        return Err("Invalid base64 length");
+    }
+
+    let mut result = Vec::new();
+
+    for chunk in bytes.chunks(4) {
+        let vals: Vec<u8> = chunk
+            .iter()
+            .filter_map(|&c| char_to_val(c))
+            .collect();
+
+        if vals.len() < 2 {
+            continue;
+        }
+
+        result.push((vals[0] << 2) | (vals[1] >> 4));
+
+        if vals.len() > 2 {
+            result.push((vals[1] << 4) | (vals[2] >> 2));
+        }
+        if vals.len() > 3 {
+            result.push((vals[2] << 6) | vals[3]);
+        }
+    }
+
+    Ok(result)
+}
+
+// ============================================================================
+// IndexedDB Persistence Support
+// ============================================================================
+
+/// Configuration for IndexedDB persistence
+#[wasm_bindgen]
+pub struct IndexedDbConfig {
+    db_name: String,
+    store_name: String,
+    auto_save: bool,
+    save_interval_ms: u32,
+}
+
+#[wasm_bindgen]
+impl IndexedDbConfig {
+    /// Create a new IndexedDB configuration
+    #[wasm_bindgen(constructor)]
+    pub fn new(db_name: &str, store_name: &str) -> Self {
+        Self {
+            db_name: db_name.to_string(),
+            store_name: store_name.to_string(),
+            auto_save: true,
+            save_interval_ms: 5000,
+        }
+    }
+
+    /// Disable auto-save
+    #[wasm_bindgen(js_name = "withoutAutoSave")]
+    pub fn without_auto_save(mut self) -> Self {
+        self.auto_save = false;
+        self
+    }
+
+    /// Set save interval in milliseconds
+    #[wasm_bindgen(js_name = "withSaveInterval")]
+    pub fn with_save_interval(mut self, ms: u32) -> Self {
+        self.save_interval_ms = ms;
+        self
+    }
+
+    /// Get database name
+    #[wasm_bindgen(getter, js_name = "dbName")]
+    pub fn db_name(&self) -> String {
+        self.db_name.clone()
+    }
+
+    /// Get store name
+    #[wasm_bindgen(getter, js_name = "storeName")]
+    pub fn store_name(&self) -> String {
+        self.store_name.clone()
+    }
+
+    /// Check if auto-save is enabled
+    #[wasm_bindgen(getter, js_name = "autoSave")]
+    pub fn auto_save(&self) -> bool {
+        self.auto_save
+    }
+
+    /// Get save interval
+    #[wasm_bindgen(getter, js_name = "saveIntervalMs")]
+    pub fn save_interval_ms(&self) -> u32 {
+        self.save_interval_ms
+    }
+}
+
+/// Collection with IndexedDB persistence support
+#[wasm_bindgen]
+pub struct PersistentCollection {
+    collection: WasmCollection,
+    config: IndexedDbConfig,
+    dirty: bool,
+}
+
+#[wasm_bindgen]
+impl PersistentCollection {
+    /// Create a new persistent collection
+    #[wasm_bindgen(constructor)]
+    pub fn new(
+        name: &str,
+        dimensions: usize,
+        distance: Option<String>,
+        config: IndexedDbConfig,
+    ) -> Result<PersistentCollection, JsValue> {
+        let collection = WasmCollection::new(name, dimensions, distance)?;
+        Ok(Self {
+            collection,
+            config,
+            dirty: false,
+        })
+    }
+
+    /// Get the underlying collection
+    #[wasm_bindgen(getter)]
+    pub fn collection(&self) -> WasmCollection {
+        WasmCollection {
+            inner: self.collection.inner.clone(),
+        }
+    }
+
+    /// Insert a vector (marks collection as dirty)
+    pub fn insert(
+        &mut self,
+        id: &str,
+        vector: Vec<f32>,
+        metadata: Option<String>,
+    ) -> Result<(), JsValue> {
+        self.collection.insert(id, vector, metadata)?;
+        self.dirty = true;
+        Ok(())
+    }
+
+    /// Check if there are unsaved changes
+    #[wasm_bindgen(getter, js_name = "isDirty")]
+    pub fn is_dirty(&self) -> bool {
+        self.dirty
+    }
+
+    /// Get serialized data for IndexedDB storage
+    /// Returns base64 encoded collection data
+    #[wasm_bindgen(js_name = "getSerializedData")]
+    pub fn get_serialized_data(&self) -> Result<String, JsValue> {
+        self.collection.to_base64()
+    }
+
+    /// Mark as saved (call after successful IndexedDB write)
+    #[wasm_bindgen(js_name = "markSaved")]
+    pub fn mark_saved(&mut self) {
+        self.dirty = false;
+    }
+
+    /// Restore from serialized data
+    #[wasm_bindgen(js_name = "restoreFromData")]
+    pub fn restore_from_data(
+        data: &str,
+        config: IndexedDbConfig,
+    ) -> Result<PersistentCollection, JsValue> {
+        let collection = WasmCollection::from_base64(data)?;
+        Ok(Self {
+            collection,
+            config,
+            dirty: false,
+        })
+    }
+
+    /// Get IndexedDB configuration
+    #[wasm_bindgen(getter)]
+    pub fn config(&self) -> IndexedDbConfig {
+        IndexedDbConfig {
+            db_name: self.config.db_name.clone(),
+            store_name: self.config.store_name.clone(),
+            auto_save: self.config.auto_save,
+            save_interval_ms: self.config.save_interval_ms,
+        }
+    }
+
+    /// Search for k nearest neighbors
+    pub fn search(&self, query: Vec<f32>, k: usize) -> Result<Vec<SearchResult>, JsValue> {
+        self.collection.search(query, k)
+    }
+
+    /// Search with filter
+    #[wasm_bindgen(js_name = "searchWithFilter")]
+    pub fn search_with_filter(
+        &self,
+        query: Vec<f32>,
+        k: usize,
+        filter_json: &str,
+    ) -> Result<Vec<SearchResult>, JsValue> {
+        self.collection.search_with_filter(query, k, filter_json)
+    }
+
+    /// Get vector by ID
+    pub fn get(&self, id: &str) -> JsValue {
+        self.collection.get(id)
+    }
+
+    /// Delete vector (marks as dirty)
+    pub fn delete(&mut self, id: &str) -> Result<bool, JsValue> {
+        let result = self.collection.delete(id)?;
+        if result {
+            self.dirty = true;
+        }
+        Ok(result)
+    }
+
+    /// Clear all vectors (marks as dirty)
+    pub fn clear(&mut self) -> Result<(), JsValue> {
+        self.collection.clear()?;
+        self.dirty = true;
+        Ok(())
+    }
+
+    /// Get collection info
+    #[wasm_bindgen(js_name = "getInfo")]
+    pub fn get_info(&self) -> Result<js_sys::Object, JsValue> {
+        let info = self.collection.get_info()?;
+        let _ = js_sys::Reflect::set(&info, &"isDirty".into(), &self.dirty.into());
+        let _ = js_sys::Reflect::set(&info, &"dbName".into(), &self.config.db_name.clone().into());
+        let _ = js_sys::Reflect::set(&info, &"storeName".into(), &self.config.store_name.clone().into());
+        Ok(info)
+    }
+}
+
+/// Generate JavaScript helper code for IndexedDB operations
+/// This returns a string of JavaScript that can be eval'd to get helper functions
+#[wasm_bindgen(js_name = "getIndexedDbHelpers")]
+pub fn get_indexed_db_helpers() -> String {
+    r#"
+const NeedleIndexedDb = {
+    async openDatabase(dbName, storeName) {
+        return new Promise((resolve, reject) => {
+            const request = indexedDB.open(dbName, 1);
+            request.onerror = () => reject(request.error);
+            request.onsuccess = () => resolve(request.result);
+            request.onupgradeneeded = (event) => {
+                const db = event.target.result;
+                if (!db.objectStoreNames.contains(storeName)) {
+                    db.createObjectStore(storeName);
+                }
+            };
+        });
+    },
+
+    async save(dbName, storeName, key, data) {
+        const db = await this.openDatabase(dbName, storeName);
+        return new Promise((resolve, reject) => {
+            const tx = db.transaction(storeName, 'readwrite');
+            const store = tx.objectStore(storeName);
+            const request = store.put(data, key);
+            request.onerror = () => reject(request.error);
+            request.onsuccess = () => resolve();
+            tx.oncomplete = () => db.close();
+        });
+    },
+
+    async load(dbName, storeName, key) {
+        const db = await this.openDatabase(dbName, storeName);
+        return new Promise((resolve, reject) => {
+            const tx = db.transaction(storeName, 'readonly');
+            const store = tx.objectStore(storeName);
+            const request = store.get(key);
+            request.onerror = () => reject(request.error);
+            request.onsuccess = () => resolve(request.result);
+            tx.oncomplete = () => db.close();
+        });
+    },
+
+    async delete(dbName, storeName, key) {
+        const db = await this.openDatabase(dbName, storeName);
+        return new Promise((resolve, reject) => {
+            const tx = db.transaction(storeName, 'readwrite');
+            const store = tx.objectStore(storeName);
+            const request = store.delete(key);
+            request.onerror = () => reject(request.error);
+            request.onsuccess = () => resolve();
+            tx.oncomplete = () => db.close();
+        });
+    },
+
+    async listKeys(dbName, storeName) {
+        const db = await this.openDatabase(dbName, storeName);
+        return new Promise((resolve, reject) => {
+            const tx = db.transaction(storeName, 'readonly');
+            const store = tx.objectStore(storeName);
+            const request = store.getAllKeys();
+            request.onerror = () => reject(request.error);
+            request.onsuccess = () => resolve(request.result);
+            tx.oncomplete = () => db.close();
+        });
+    },
+
+    async saveCollection(collection) {
+        const config = collection.config;
+        const data = collection.getSerializedData();
+        const name = collection.collection.name;
+        await this.save(config.dbName, config.storeName, name, data);
+        collection.markSaved();
+        return true;
+    },
+
+    async loadCollection(dbName, storeName, collectionName, config) {
+        const data = await this.load(dbName, storeName, collectionName);
+        if (!data) return null;
+        return PersistentCollection.restoreFromData(data, config);
+    },
+
+    createAutoSaver(collection, intervalMs = 5000) {
+        let timer = null;
+        const save = async () => {
+            if (collection.isDirty) {
+                try {
+                    await this.saveCollection(collection);
+                    console.log('Auto-saved collection:', collection.collection.name);
+                } catch (e) {
+                    console.error('Auto-save failed:', e);
+                }
+            }
+        };
+        return {
+            start() {
+                if (!timer) {
+                    timer = setInterval(save, intervalMs);
+                }
+            },
+            stop() {
+                if (timer) {
+                    clearInterval(timer);
+                    timer = null;
+                }
+            },
+            saveNow: save
+        };
+    }
+};
+"#.to_string()
+}
+
+/// Offline-first sync status
+#[wasm_bindgen]
+pub struct SyncStatus {
+    is_online: bool,
+    pending_changes: usize,
+    last_sync_timestamp: f64,
+}
+
+#[wasm_bindgen]
+impl SyncStatus {
+    /// Create a new sync status
+    #[wasm_bindgen(constructor)]
+    pub fn new() -> Self {
+        Self {
+            is_online: true,
+            pending_changes: 0,
+            last_sync_timestamp: 0.0,
+        }
+    }
+
+    /// Check if online
+    #[wasm_bindgen(getter, js_name = "isOnline")]
+    pub fn is_online(&self) -> bool {
+        self.is_online
+    }
+
+    /// Get pending changes count
+    #[wasm_bindgen(getter, js_name = "pendingChanges")]
+    pub fn pending_changes(&self) -> usize {
+        self.pending_changes
+    }
+
+    /// Get last sync timestamp
+    #[wasm_bindgen(getter, js_name = "lastSyncTimestamp")]
+    pub fn last_sync_timestamp(&self) -> f64 {
+        self.last_sync_timestamp
+    }
+
+    /// Update online status
+    #[wasm_bindgen(js_name = "setOnline")]
+    pub fn set_online(&mut self, online: bool) {
+        self.is_online = online;
+    }
+
+    /// Add pending change
+    #[wasm_bindgen(js_name = "addPendingChange")]
+    pub fn add_pending_change(&mut self) {
+        self.pending_changes += 1;
+    }
+
+    /// Clear pending changes (after sync)
+    #[wasm_bindgen(js_name = "clearPendingChanges")]
+    pub fn clear_pending_changes(&mut self) {
+        self.pending_changes = 0;
+        self.last_sync_timestamp = js_sys::Date::now();
+    }
+
+    /// Convert to JavaScript object
+    #[wasm_bindgen(js_name = "toObject")]
+    pub fn to_object(&self) -> js_sys::Object {
+        let obj = js_sys::Object::new();
+        let _ = js_sys::Reflect::set(&obj, &"isOnline".into(), &self.is_online.into());
+        let _ = js_sys::Reflect::set(&obj, &"pendingChanges".into(), &(self.pending_changes as u32).into());
+        let _ = js_sys::Reflect::set(&obj, &"lastSyncTimestamp".into(), &self.last_sync_timestamp.into());
+        obj
+    }
+}
+
+impl Default for SyncStatus {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Generate JavaScript helper code for service worker support
+#[wasm_bindgen(js_name = "getServiceWorkerHelpers")]
+pub fn get_service_worker_helpers() -> String {
+    r#"
+const NeedleServiceWorker = {
+    // Register service worker with Needle caching support
+    async register(swPath = '/needle-sw.js') {
+        if ('serviceWorker' in navigator) {
+            try {
+                const registration = await navigator.serviceWorker.register(swPath);
+                console.log('Needle ServiceWorker registered:', registration);
+                return registration;
+            } catch (e) {
+                console.error('Needle ServiceWorker registration failed:', e);
+                throw e;
+            }
+        }
+        throw new Error('Service workers not supported');
+    },
+
+    // Generate service worker script content
+    generateScript(options = {}) {
+        const cacheName = options.cacheName || 'needle-cache-v1';
+        const wasmPath = options.wasmPath || '/needle.wasm';
+        
+        return `
+const CACHE_NAME = '${cacheName}';
+const WASM_PATH = '${wasmPath}';
+
+self.addEventListener('install', (event) => {
+    event.waitUntil(
+        caches.open(CACHE_NAME).then((cache) => {
+            return cache.add(WASM_PATH);
+        })
+    );
+});
+
+self.addEventListener('fetch', (event) => {
+    if (event.request.url.includes('.wasm')) {
+        event.respondWith(
+            caches.match(event.request).then((response) => {
+                return response || fetch(event.request).then((fetchResponse) => {
+                    return caches.open(CACHE_NAME).then((cache) => {
+                        cache.put(event.request, fetchResponse.clone());
+                        return fetchResponse;
+                    });
+                });
+            })
+        );
+    }
+});
+
+self.addEventListener('message', (event) => {
+    if (event.data.type === 'SYNC_COLLECTION') {
+        // Handle background sync
+        self.registration.sync.register('needle-sync');
+    }
+});
+
+self.addEventListener('sync', (event) => {
+    if (event.tag === 'needle-sync') {
+        event.waitUntil(syncCollections());
+    }
+});
+
+async function syncCollections() {
+    // Notify clients to sync
+    const clients = await self.clients.matchAll();
+    clients.forEach(client => {
+        client.postMessage({ type: 'SYNC_REQUESTED' });
+    });
+}
+`;
+    },
+
+    // Check if currently offline
+    isOffline() {
+        return !navigator.onLine;
+    },
+
+    // Listen for online/offline events
+    onConnectivityChange(callback) {
+        window.addEventListener('online', () => callback(true));
+        window.addEventListener('offline', () => callback(false));
+    }
+};
+"#.to_string()
+}
