@@ -3,7 +3,8 @@
 
 .PHONY: help quick check check-all build build-all build-release test test-unit test-integration \
         fmt fmt-check lint lint-fix watch serve demo doctor doc bench clean playground setup setup-tools dev test-single coverage \
-        new-module verify-docs check-quick test-feature count-debt
+        new-module verify-docs check-quick test-feature count-debt \
+        docker-up docker-down docker-build docker-logs
 
 help:
 	@echo "Available recipes:"
@@ -37,6 +38,10 @@ help:
 	@echo "  make verify-docs   — Check that all markdown links resolve"
 	@echo "  make playground    — Interactive guided walkthrough"
 	@echo "  make new-module    — Scaffold a new service module (DOMAIN=x NAME=y)"
+	@echo "  make docker-up     — Start Needle via Docker Compose"
+	@echo "  make docker-down   — Stop Docker Compose services"
+	@echo "  make docker-build  — Build Docker image from source"
+	@echo "  make docker-logs   — Tail Docker Compose logs"
 	@echo "  make clean         — Clean build artifacts"
 	@echo ""
 	@echo "Feature flag combinations:"
@@ -186,3 +191,16 @@ count-debt:
 	echo "Tech Debt Dashboard"; \
 	echo "==================="; \
 	echo "  unwrap(): $$unwrap | expect(): $$expect | let _ =: $$let_discard"
+
+# Docker convenience targets
+docker-up:
+	docker compose up -d
+
+docker-down:
+	docker compose down
+
+docker-build:
+	docker compose -f docker-compose.source.yml build
+
+docker-logs:
+	docker compose logs -f

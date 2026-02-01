@@ -175,3 +175,19 @@ count-debt:
     echo "Tech Debt Dashboard"
     echo "==================="
     echo "  unwrap(): $unwrap | expect(): $expect | let _ =: $let_discard"
+
+# Start Needle via Docker Compose
+docker-up:
+    docker compose up -d
+
+# Stop Docker Compose services
+docker-down:
+    docker compose down
+
+# Build Docker image from source
+docker-build:
+    docker compose -f docker-compose.source.yml build
+
+# Tail Docker Compose logs
+docker-logs:
+    docker compose logs -f
