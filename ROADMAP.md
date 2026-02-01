@@ -92,6 +92,10 @@ Needle is currently in **v0.1.x** (pre-1.0), focusing on API stabilization and c
 - [ ] Custom distance function plugins
 - [ ] Vector compression improvements
 
+### Edge Runtime
+- [ ] LZ4/similar compression for edge storage segments (`edge_runtime.rs`)
+- [ ] Decompression support for compressed segments
+
 ## Future: v1.0.0
 
 ### Stability Guarantees
