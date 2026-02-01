@@ -381,6 +381,82 @@ enum Commands {
         #[arg(short, long, default_value = "balanced")]
         profile: String,
     },
+
+    /// Execute a SQL-compatible query against the database
+    Sql {
+        /// Path to the database file
+        database: String,
+
+        /// SQL query to execute (e.g., "SELECT * FROM docs WHERE vector SIMILAR TO $query LIMIT 10")
+        #[arg(short, long)]
+        query: String,
+
+        /// Output format (json, table, csv)
+        #[arg(long, default_value = "json")]
+        format: String,
+
+        /// Query vector as comma-separated floats (e.g., "0.1,0.2,0.3")
+        #[arg(long)]
+        vector: Option<String>,
+    },
+
+    /// Show provenance information for a vector
+    Provenance {
+        /// Path to the database file
+        database: String,
+        /// Collection name
+        #[arg(short, long)]
+        collection: String,
+        /// Vector ID to get provenance for
+        #[arg(short, long)]
+        id: String,
+    },
+
+    /// Evaluate search quality against ground truth data
+    Evaluate {
+        /// Path to the database file
+        database: String,
+
+        /// Collection name
+        #[arg(short, long)]
+        collection: String,
+
+        /// Path to ground truth JSON file
+        #[arg(short, long)]
+        ground_truth: String,
+
+        /// Number of results to retrieve per query
+        #[arg(short, long, default_value = "10")]
+        k: usize,
+    },
+
+    /// Export a collection as a portable bundle
+    ExportBundle {
+        /// Path to the database file
+        database: String,
+
+        /// Collection name
+        #[arg(short, long)]
+        collection: String,
+
+        /// Output bundle file path
+        #[arg(short, long)]
+        output: String,
+    },
+
+    /// Import a collection from a portable bundle
+    ImportBundle {
+        /// Path to the database file
+        database: String,
+
+        /// Bundle file path to import
+        #[arg(short, long)]
+        bundle: String,
+
+        /// Override collection name (optional)
+        #[arg(short, long)]
+        name: Option<String>,
+    },
 }
 
 /// Developer subcommands
@@ -892,7 +968,77 @@ fn run(cli: Cli) -> Result<()> {
             estimate_command(&database, &collection, k, with_filter),
         Commands::RecommendIndex { vectors, dimensions, memory_mb, profile } =>
             recommend_index_command(vectors, dimensions, memory_mb, &profile),
+        Commands::Sql { database, query, format, vector } =>
+            sql_command(&database, &query, &format, vector.as_deref()),
+        Commands::Provenance { database, collection, id } =>
+            provenance_command(&database, &collection, &id),
+        Commands::Evaluate { database, collection, ground_truth, k } =>
+            evaluate_command(&database, &collection, &ground_truth, k),
+        Commands::ExportBundle { database, collection, output } =>
+            export_bundle_command(&database, &collection, &output),
+        Commands::ImportBundle { database, bundle, name } =>
+            import_bundle_command(&database, &bundle, name.as_deref()),
     }
+}
+
+fn sql_command(database: &str, query: &str, format: &str, vector: Option<&str>) -> Result<()> {
+    use needle::query_lang::{QueryContext, QueryExecutor, QueryParser};
+
+    let db = Database::open(database)?;
+    let parsed = QueryParser::parse(query)
+        .map_err(|e| NeedleError::InvalidInput(e.to_string()))?;
+
+    let mut context = QueryContext::new();
+    if let Some(vec_str) = vector {
+        let vec: Vec<f32> = vec_str
+            .split(',')
+            .map(|s| s.trim().parse::<f32>())
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(|e| NeedleError::InvalidInput(format!("Invalid vector: {e}")))?;
+        context = context.with_query_vector(vec);
+    }
+
+    let executor = QueryExecutor::new(std::sync::Arc::new(db));
+    let response = executor
+        .execute(&parsed, &context)
+        .map_err(|e| NeedleError::InvalidInput(e.to_string()))?;
+
+    match format {
+        "json" => println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "results": response.results.iter().map(|r| json!({
+                    "id": r.id,
+                    "distance": r.distance,
+                    "metadata": r.metadata,
+                })).collect::<Vec<_>>(),
+                "query_time_ms": response.stats.total_time_ms,
+                "row_count": response.results.len(),
+            }))
+            .unwrap_or_default()
+        ),
+        "csv" => {
+            println!("id,distance");
+            for result in &response.results {
+                println!("{},{}", result.id, result.distance);
+            }
+        }
+        _ => {
+            for result in &response.results {
+                println!(
+                    "ID: {} | Distance: {:.6} | Metadata: {}",
+                    result.id,
+                    result.distance,
+                    result
+                        .metadata
+                        .as_ref()
+                        .map_or("null".to_string(), |m| m.to_string())
+                );
+            }
+        }
+    }
+
+    Ok(())
 }
 
 fn info_command(path: &str) -> Result<()> {
@@ -2975,5 +3121,65 @@ fn estimate_command(path: &str, collection: &str, k: usize, with_filter: bool) -
         println!("    - {}", r);
     }
 
+    Ok(())
+}
+
+fn provenance_command(database: &str, collection: &str, id: &str) -> Result<()> {
+    let db = Database::open(database)?;
+    let coll = db.collection(collection)?;
+
+    match coll.get_provenance(id) {
+        Some(record) => {
+            println!("{}", serde_json::to_string_pretty(&record)
+                .map_err(|e| NeedleError::InvalidInput(e.to_string()))?);
+        }
+        None => {
+            println!("No provenance record found for vector '{}'", id);
+        }
+    }
+
+    Ok(())
+}
+
+fn evaluate_command(database: &str, collection: &str, ground_truth_path: &str, k: usize) -> Result<()> {
+    use needle::GroundTruthEntry;
+
+    let gt_data = std::fs::read_to_string(ground_truth_path)
+        .map_err(|e| NeedleError::InvalidInput(format!("Failed to read ground truth file: {e}")))?;
+    let ground_truth: Vec<GroundTruthEntry> = serde_json::from_str(&gt_data)
+        .map_err(|e| NeedleError::InvalidInput(format!("Failed to parse ground truth JSON: {e}")))?;
+
+    let db = Database::open(database)?;
+    let coll = db.collection(collection)?;
+    let report = coll.evaluate(&ground_truth, k)?;
+
+    println!("{}", serde_json::to_string_pretty(&report)
+        .map_err(|e| NeedleError::InvalidInput(e.to_string()))?);
+
+    Ok(())
+}
+
+fn export_bundle_command(database: &str, collection: &str, output: &str) -> Result<()> {
+    let db = Database::open(database)?;
+    let coll = db.collection(collection)?;
+    let manifest = coll.export_bundle(std::path::Path::new(output))?;
+
+    println!("Bundle exported successfully:");
+    println!("  Collection: {}", manifest.collection_name);
+    println!("  Vectors: {}", manifest.vector_count);
+    println!("  Dimensions: {}", manifest.dimensions);
+    println!("  Output: {}", output);
+    Ok(())
+}
+
+fn import_bundle_command(database: &str, bundle: &str, name: Option<&str>) -> Result<()> {
+    let mut db = Database::open(database)?;
+    let manifest = db.import_bundle(std::path::Path::new(bundle), name)?;
+    db.save()?;
+
+    println!("Bundle imported successfully:");
+    println!("  Collection: {}", manifest.collection_name);
+    println!("  Vectors: {}", manifest.vector_count);
+    println!("  Dimensions: {}", manifest.dimensions);
     Ok(())
 }
