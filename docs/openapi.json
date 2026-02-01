@@ -1,6 +1,186 @@
 {
   "components": {
     "schemas": {
+      "BatchInsertRequest": {
+        "properties": {
+          "vectors": {
+            "items": {
+              "$ref": "#/components/schemas/InsertVectorRequest"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "vectors"
+        ],
+        "type": "object"
+      },
+      "BatchInsertResponse": {
+        "properties": {
+          "errors": {
+            "items": {
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "id": {
+                  "type": "string"
+                }
+              },
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "inserted": {
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "BatchInsertTextRequest": {
+        "properties": {
+          "documents": {
+            "items": {
+              "$ref": "#/components/schemas/InsertTextRequest"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "documents"
+        ],
+        "type": "object"
+      },
+      "BatchSearchRequest": {
+        "properties": {
+          "queries": {
+            "items": {
+              "$ref": "#/components/schemas/SearchRequest"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "queries"
+        ],
+        "type": "object"
+      },
+      "BatchSearchResponse": {
+        "properties": {
+          "results": {
+            "items": {
+              "$ref": "#/components/schemas/SearchResponse"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "BenchmarkRequest": {
+        "properties": {
+          "dimensions": {
+            "type": "integer"
+          },
+          "k": {
+            "default": 10,
+            "type": "integer"
+          },
+          "num_queries": {
+            "default": 100,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "BenchmarkResponse": {
+        "properties": {
+          "mean_latency_ms": {
+            "type": "number"
+          },
+          "p99_latency_ms": {
+            "type": "number"
+          },
+          "qps": {
+            "description": "Queries per second",
+            "type": "number"
+          },
+          "recall": {
+            "type": "number"
+          }
+        },
+        "type": "object"
+      },
+      "CacheLookupRequest": {
+        "properties": {
+          "query": {
+            "description": "The query to look up in the cache",
+            "type": "string"
+          },
+          "threshold": {
+            "default": 0.95,
+            "description": "Similarity threshold for cache hits",
+            "type": "number"
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "type": "object"
+      },
+      "CacheLookupResponse": {
+        "properties": {
+          "hit": {
+            "type": "boolean"
+          },
+          "response": {
+            "nullable": true,
+            "type": "string"
+          },
+          "similarity": {
+            "nullable": true,
+            "type": "number"
+          }
+        },
+        "type": "object"
+      },
+      "CacheStoreRequest": {
+        "properties": {
+          "query": {
+            "type": "string"
+          },
+          "response": {
+            "type": "string"
+          },
+          "ttl_seconds": {
+            "description": "Optional TTL in seconds",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "query",
+          "response"
+        ],
+        "type": "object"
+      },
+      "ClusterStatusResponse": {
+        "properties": {
+          "nodes": {
+            "type": "integer"
+          },
+          "shards": {
+            "type": "integer"
+          },
+          "status": {
+            "enum": [
+              "healthy",
+              "degraded",
+              "unavailable"
+            ],
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
       "CollectionInfo": {
         "properties": {
           "dimensions": {
@@ -22,6 +202,35 @@
             "type": "integer"
           }
         },
+        "type": "object"
+      },
+      "CostEstimateResponse": {
+        "properties": {
+          "estimated_comparisons": {
+            "type": "integer"
+          },
+          "estimated_latency_ms": {
+            "type": "number"
+          },
+          "index_type": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "CreateAliasRequest": {
+        "properties": {
+          "alias": {
+            "type": "string"
+          },
+          "collection": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "alias",
+          "collection"
+        ],
         "type": "object"
       },
       "CreateCollectionRequest": {
@@ -58,6 +267,68 @@
         ],
         "type": "object"
       },
+      "CreateWebhookRequest": {
+        "properties": {
+          "collection": {
+            "description": "Optional: scope to a specific collection",
+            "type": "string"
+          },
+          "events": {
+            "items": {
+              "enum": [
+                "insert",
+                "delete",
+                "update",
+                "compact"
+              ],
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "url": {
+            "format": "uri",
+            "type": "string"
+          }
+        },
+        "required": [
+          "url",
+          "events"
+        ],
+        "type": "object"
+      },
+      "ExpireRequest": {
+        "properties": {
+          "max_age_seconds": {
+            "description": "Delete vectors older than this many seconds",
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "GraphSearchRequest": {
+        "properties": {
+          "depth": {
+            "default": 2,
+            "description": "Graph traversal depth",
+            "type": "integer"
+          },
+          "k": {
+            "default": 10,
+            "type": "integer"
+          },
+          "vector": {
+            "items": {
+              "format": "float",
+              "type": "number"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "vector"
+        ],
+        "type": "object"
+      },
       "HealthResponse": {
         "properties": {
           "status": {
@@ -65,6 +336,53 @@
             "type": "string"
           }
         },
+        "type": "object"
+      },
+      "IndexStatusResponse": {
+        "properties": {
+          "build_progress": {
+            "type": "number"
+          },
+          "index_type": {
+            "type": "string"
+          },
+          "indexed_vectors": {
+            "type": "integer"
+          },
+          "pending_vectors": {
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "IngestResponse": {
+        "properties": {
+          "errors": {
+            "type": "integer"
+          },
+          "inserted": {
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "InsertTextRequest": {
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "metadata": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "text"
+        ],
         "type": "object"
       },
       "InsertVectorRequest": {
@@ -88,6 +406,143 @@
           "id",
           "vector"
         ],
+        "type": "object"
+      },
+      "MatryoshkaSearchRequest": {
+        "properties": {
+          "coarse_dimensions": {
+            "description": "Dimensions for first-pass coarse search",
+            "type": "integer"
+          },
+          "k": {
+            "default": 10,
+            "type": "integer"
+          },
+          "vector": {
+            "items": {
+              "format": "float",
+              "type": "number"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "vector"
+        ],
+        "type": "object"
+      },
+      "McpRequest": {
+        "properties": {
+          "method": {
+            "description": "MCP tool method name",
+            "type": "string"
+          },
+          "params": {
+            "additionalProperties": true,
+            "type": "object"
+          }
+        },
+        "required": [
+          "method"
+        ],
+        "type": "object"
+      },
+      "McpResponse": {
+        "properties": {
+          "result": {
+            "additionalProperties": true,
+            "type": "object"
+          }
+        },
+        "type": "object"
+      },
+      "RadiusSearchRequest": {
+        "properties": {
+          "filter": {
+            "description": "MongoDB-style metadata filter",
+            "type": "object"
+          },
+          "limit": {
+            "default": 100,
+            "type": "integer"
+          },
+          "radius": {
+            "description": "Maximum distance threshold",
+            "type": "number"
+          },
+          "vector": {
+            "items": {
+              "format": "float",
+              "type": "number"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "vector",
+          "radius"
+        ],
+        "type": "object"
+      },
+      "RecallRequest": {
+        "properties": {
+          "k": {
+            "default": 5,
+            "type": "integer"
+          },
+          "query": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "type": "object"
+      },
+      "RecallResponse": {
+        "properties": {
+          "memories": {
+            "items": {
+              "properties": {
+                "content": {
+                  "type": "string"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "similarity": {
+                  "type": "number"
+                }
+              },
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "RememberRequest": {
+        "properties": {
+          "content": {
+            "description": "Memory content to store",
+            "type": "string"
+          },
+          "metadata": {
+            "additionalProperties": true,
+            "type": "object"
+          }
+        },
+        "required": [
+          "content"
+        ],
+        "type": "object"
+      },
+      "RememberResponse": {
+        "properties": {
+          "memory_id": {
+            "type": "string"
+          }
+        },
         "type": "object"
       },
       "SearchRequest": {
@@ -140,6 +595,138 @@
         },
         "type": "object"
       },
+      "SnapshotDiffRequest": {
+        "properties": {
+          "from": {
+            "description": "Source snapshot ID or timestamp",
+            "type": "string"
+          },
+          "to": {
+            "description": "Target snapshot ID or timestamp",
+            "type": "string"
+          }
+        },
+        "required": [
+          "from",
+          "to"
+        ],
+        "type": "object"
+      },
+      "SnapshotDiffResponse": {
+        "properties": {
+          "added": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "modified": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "removed": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "TextSearchRequest": {
+        "properties": {
+          "filter": {
+            "description": "MongoDB-style metadata filter",
+            "type": "object"
+          },
+          "k": {
+            "default": 10,
+            "type": "integer"
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "type": "object"
+      },
+      "TimeTravelSearchRequest": {
+        "properties": {
+          "k": {
+            "default": 10,
+            "type": "integer"
+          },
+          "timestamp": {
+            "description": "Point-in-time to search against",
+            "format": "date-time",
+            "type": "string"
+          },
+          "vector": {
+            "items": {
+              "format": "float",
+              "type": "number"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "vector",
+          "timestamp"
+        ],
+        "type": "object"
+      },
+      "TtlStatsResponse": {
+        "properties": {
+          "earliest_expiry": {
+            "format": "date-time",
+            "nullable": true,
+            "type": "string"
+          },
+          "expired": {
+            "type": "integer"
+          },
+          "total_with_ttl": {
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "UpdateAliasRequest": {
+        "properties": {
+          "collection": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "collection"
+        ],
+        "type": "object"
+      },
+      "VectorDiffRequest": {
+        "properties": {
+          "ids_a": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "ids_b": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "ids_a",
+          "ids_b"
+        ],
+        "type": "object"
+      },
       "VectorResponse": {
         "properties": {
           "id": {
@@ -154,6 +741,23 @@
               "type": "number"
             },
             "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "WebhookResponse": {
+        "properties": {
+          "events": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "id": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
           }
         },
         "type": "object"
@@ -185,6 +789,170 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/": {
+      "get": {
+        "operationId": "getRoot",
+        "responses": {
+          "200": {
+            "description": "Server info and version"
+          }
+        },
+        "summary": "Server info",
+        "tags": [
+          "System"
+        ]
+      }
+    },
+    "/aliases": {
+      "get": {
+        "operationId": "listAliases",
+        "responses": {
+          "200": {
+            "description": "List of aliases"
+          }
+        },
+        "summary": "List aliases",
+        "tags": [
+          "Aliases"
+        ]
+      },
+      "post": {
+        "description": "Create a named alias pointing to a collection",
+        "operationId": "createAlias",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateAliasRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Alias created"
+          },
+          "409": {
+            "description": "Alias already exists"
+          }
+        },
+        "summary": "Create an alias",
+        "tags": [
+          "Aliases"
+        ]
+      }
+    },
+    "/aliases/{alias}": {
+      "delete": {
+        "operationId": "deleteAlias",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "alias",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Alias deleted"
+          },
+          "404": {
+            "description": "Alias not found"
+          }
+        },
+        "summary": "Delete an alias",
+        "tags": [
+          "Aliases"
+        ]
+      },
+      "get": {
+        "operationId": "getAlias",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "alias",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Alias details"
+          },
+          "404": {
+            "description": "Alias not found"
+          }
+        },
+        "summary": "Get alias target",
+        "tags": [
+          "Aliases"
+        ]
+      },
+      "put": {
+        "description": "Change the target collection of an alias",
+        "operationId": "updateAlias",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "alias",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateAliasRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Alias updated"
+          },
+          "404": {
+            "description": "Alias not found"
+          }
+        },
+        "summary": "Update an alias",
+        "tags": [
+          "Aliases"
+        ]
+      }
+    },
+    "/cluster/status": {
+      "get": {
+        "description": "Get cluster topology, shard distribution, and node health",
+        "operationId": "clusterStatus",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClusterStatusResponse"
+                }
+              }
+            },
+            "description": "Cluster status"
+          }
+        },
+        "summary": "Cluster status",
+        "tags": [
+          "Cluster"
+        ]
+      }
+    },
     "/collections": {
       "get": {
         "operationId": "listCollections",
@@ -234,6 +1002,386 @@
         ]
       }
     },
+    "/collections/{collection}/benchmark": {
+      "post": {
+        "description": "Run a search benchmark and return latency statistics",
+        "operationId": "benchmark",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "collection",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BenchmarkRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BenchmarkResponse"
+                }
+              }
+            },
+            "description": "Benchmark results"
+          }
+        },
+        "summary": "In-process benchmark",
+        "tags": [
+          "Analytics"
+        ]
+      }
+    },
+    "/collections/{collection}/cache/lookup": {
+      "post": {
+        "description": "Look up a cached response by semantic similarity to the query",
+        "operationId": "cacheLookup",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "collection",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CacheLookupRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CacheLookupResponse"
+                }
+              }
+            },
+            "description": "Cache hit or miss"
+          }
+        },
+        "summary": "Semantic cache lookup",
+        "tags": [
+          "Semantic Cache"
+        ]
+      }
+    },
+    "/collections/{collection}/cache/store": {
+      "post": {
+        "description": "Store a query-response pair in the semantic cache",
+        "operationId": "cacheStore",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "collection",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CacheStoreRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Cached successfully"
+          }
+        },
+        "summary": "Store in semantic cache",
+        "tags": [
+          "Semantic Cache"
+        ]
+      }
+    },
+    "/collections/{collection}/changes": {
+      "get": {
+        "description": "Server-Sent Events stream of collection changes",
+        "operationId": "changeFeed",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "collection",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Event stream"
+          }
+        },
+        "summary": "SSE change feed",
+        "tags": [
+          "Analytics"
+        ]
+      }
+    },
+    "/collections/{collection}/diff": {
+      "post": {
+        "description": "Compare two sets of vector IDs and return differences",
+        "operationId": "vectorDiff",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "collection",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VectorDiffRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Diff results"
+          }
+        },
+        "summary": "Vector diff",
+        "tags": [
+          "Analytics"
+        ]
+      }
+    },
+    "/collections/{collection}/index/status": {
+      "get": {
+        "description": "Check HNSW index build status and WAL state",
+        "operationId": "indexStatus",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "collection",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IndexStatusResponse"
+                }
+              }
+            },
+            "description": "Index status"
+          }
+        },
+        "summary": "Index status",
+        "tags": [
+          "Analytics"
+        ]
+      }
+    },
+    "/collections/{collection}/ingest": {
+      "post": {
+        "description": "Stream vectors into a collection via NDJSON",
+        "operationId": "streamingIngest",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "collection",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/x-ndjson": {
+              "schema": {
+                "$ref": "#/components/schemas/InsertVectorRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IngestResponse"
+                }
+              }
+            },
+            "description": "Ingestion summary"
+          }
+        },
+        "summary": "Streaming ingest",
+        "tags": [
+          "Streaming"
+        ]
+      }
+    },
+    "/collections/{collection}/memory/recall": {
+      "post": {
+        "description": "Retrieve relevant memories by semantic similarity",
+        "operationId": "recall",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "collection",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecallRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecallResponse"
+                }
+              }
+            },
+            "description": "Recalled memories"
+          }
+        },
+        "summary": "Recall memories",
+        "tags": [
+          "Memory"
+        ]
+      }
+    },
+    "/collections/{collection}/memory/remember": {
+      "post": {
+        "description": "Store context for an LLM agent to recall later",
+        "operationId": "remember",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "collection",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RememberRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RememberResponse"
+                }
+              }
+            },
+            "description": "Memory stored"
+          }
+        },
+        "summary": "Store a memory",
+        "tags": [
+          "Memory"
+        ]
+      }
+    },
+    "/collections/{collection}/memory/{memory_id}/forget": {
+      "delete": {
+        "description": "Delete a specific memory by ID",
+        "operationId": "forget",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "collection",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "memory_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Memory forgotten"
+          },
+          "404": {
+            "description": "Memory not found"
+          }
+        },
+        "summary": "Forget a memory",
+        "tags": [
+          "Memory"
+        ]
+      }
+    },
     "/collections/{collection}/search": {
       "post": {
         "operationId": "searchVectors",
@@ -272,6 +1420,410 @@
         "summary": "Search for similar vectors",
         "tags": [
           "Search"
+        ]
+      }
+    },
+    "/collections/{collection}/search/batch": {
+      "post": {
+        "description": "Search for multiple query vectors in a single request",
+        "operationId": "batchSearch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "collection",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BatchSearchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BatchSearchResponse"
+                }
+              }
+            },
+            "description": "Batch search results"
+          }
+        },
+        "summary": "Batch search",
+        "tags": [
+          "Search"
+        ]
+      }
+    },
+    "/collections/{collection}/search/estimate": {
+      "post": {
+        "description": "Estimate the cost of a search query without executing it",
+        "operationId": "costEstimate",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "collection",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SearchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CostEstimateResponse"
+                }
+              }
+            },
+            "description": "Estimated cost"
+          }
+        },
+        "summary": "Query cost estimation",
+        "tags": [
+          "Analytics"
+        ]
+      }
+    },
+    "/collections/{collection}/search/graph": {
+      "post": {
+        "description": "Graph-augmented retrieval combining vector similarity with knowledge graph traversal",
+        "operationId": "graphSearch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "collection",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GraphSearchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Graph search results"
+          }
+        },
+        "summary": "GraphRAG search",
+        "tags": [
+          "Search"
+        ]
+      }
+    },
+    "/collections/{collection}/search/matryoshka": {
+      "post": {
+        "description": "Two-phase search using truncated embeddings for coarse filtering, then full embeddings for re-ranking",
+        "operationId": "matryoshkaSearch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "collection",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MatryoshkaSearchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchResponse"
+                }
+              }
+            },
+            "description": "Search results"
+          }
+        },
+        "summary": "Matryoshka two-phase search",
+        "tags": [
+          "Search"
+        ]
+      }
+    },
+    "/collections/{collection}/search/radius": {
+      "post": {
+        "description": "Find all vectors within a distance threshold",
+        "operationId": "radiusSearch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "collection",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RadiusSearchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchResponse"
+                }
+              }
+            },
+            "description": "Vectors within radius"
+          }
+        },
+        "summary": "Radius search",
+        "tags": [
+          "Search"
+        ]
+      }
+    },
+    "/collections/{collection}/search/time-travel": {
+      "post": {
+        "description": "Search against a historical snapshot of the collection",
+        "operationId": "timeTravelSearch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "collection",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TimeTravelSearchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchResponse"
+                }
+              }
+            },
+            "description": "Search results at specified point in time"
+          }
+        },
+        "summary": "Time-travel search",
+        "tags": [
+          "Time Travel"
+        ]
+      }
+    },
+    "/collections/{collection}/snapshots/diff": {
+      "post": {
+        "description": "Compare two snapshots and return added/removed/modified vectors",
+        "operationId": "snapshotDiff",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "collection",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SnapshotDiffRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SnapshotDiffResponse"
+                }
+              }
+            },
+            "description": "Diff between snapshots"
+          }
+        },
+        "summary": "Snapshot diff",
+        "tags": [
+          "Time Travel"
+        ]
+      }
+    },
+    "/collections/{collection}/texts": {
+      "post": {
+        "description": "Insert a text document; the server generates an embedding automatically",
+        "operationId": "insertText",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "collection",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InsertTextRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Text inserted"
+          },
+          "400": {
+            "description": "Invalid input"
+          }
+        },
+        "summary": "Insert text with auto-embedding",
+        "tags": [
+          "Text"
+        ]
+      }
+    },
+    "/collections/{collection}/texts/batch": {
+      "post": {
+        "operationId": "batchInsertTexts",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "collection",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BatchInsertTextRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Texts inserted"
+          },
+          "400": {
+            "description": "Invalid input"
+          }
+        },
+        "summary": "Batch insert texts with auto-embedding",
+        "tags": [
+          "Text"
+        ]
+      }
+    },
+    "/collections/{collection}/texts/search": {
+      "post": {
+        "description": "Provide a text query; the server embeds it and searches",
+        "operationId": "searchText",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "collection",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TextSearchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchResponse"
+                }
+              }
+            },
+            "description": "Search results"
+          }
+        },
+        "summary": "Search by text with auto-embedding",
+        "tags": [
+          "Text"
         ]
       }
     },
@@ -345,6 +1897,89 @@
           }
         },
         "summary": "Insert a vector",
+        "tags": [
+          "Vectors"
+        ]
+      }
+    },
+    "/collections/{collection}/vectors/batch": {
+      "post": {
+        "description": "Insert multiple vectors in a single request",
+        "operationId": "batchInsert",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "collection",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BatchInsertRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BatchInsertResponse"
+                }
+              }
+            },
+            "description": "Vectors inserted"
+          },
+          "400": {
+            "description": "Invalid input"
+          }
+        },
+        "summary": "Batch insert vectors",
+        "tags": [
+          "Vectors"
+        ]
+      }
+    },
+    "/collections/{collection}/vectors/upsert": {
+      "post": {
+        "description": "Insert or update a vector by ID",
+        "operationId": "upsertVector",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "collection",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InsertVectorRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Vector upserted"
+          },
+          "400": {
+            "description": "Invalid input"
+          }
+        },
+        "summary": "Upsert a vector",
         "tags": [
           "Vectors"
         ]
@@ -425,6 +2060,53 @@
         ]
       }
     },
+    "/collections/{collection}/vectors/{id}/metadata": {
+      "post": {
+        "description": "Merge or replace metadata on an existing vector",
+        "operationId": "updateMetadata",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "collection",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Metadata updated"
+          },
+          "404": {
+            "description": "Vector not found"
+          }
+        },
+        "summary": "Update vector metadata",
+        "tags": [
+          "Vectors"
+        ]
+      }
+    },
     "/collections/{name}": {
       "delete": {
         "operationId": "deleteCollection",
@@ -484,6 +2166,257 @@
         ]
       }
     },
+    "/collections/{name}/compact": {
+      "post": {
+        "description": "Remove deleted vectors and reclaim storage space",
+        "operationId": "compactCollection",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Compaction complete"
+          },
+          "404": {
+            "description": "Collection not found"
+          }
+        },
+        "summary": "Compact a collection",
+        "tags": [
+          "Collections"
+        ]
+      }
+    },
+    "/collections/{name}/expire": {
+      "post": {
+        "description": "Delete vectors that have exceeded their time-to-live",
+        "operationId": "expireVectors",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExpireRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Expired vectors count"
+          }
+        },
+        "summary": "Expire vectors by TTL",
+        "tags": [
+          "TTL"
+        ]
+      }
+    },
+    "/collections/{name}/export": {
+      "get": {
+        "description": "Export all vectors and metadata as JSON",
+        "operationId": "exportCollection",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Collection data as JSON array"
+          },
+          "404": {
+            "description": "Collection not found"
+          }
+        },
+        "summary": "Export collection data",
+        "tags": [
+          "Collections"
+        ]
+      }
+    },
+    "/collections/{name}/snapshots": {
+      "get": {
+        "description": "List all point-in-time snapshots for a collection",
+        "operationId": "listSnapshots",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of snapshots"
+          }
+        },
+        "summary": "List snapshots",
+        "tags": [
+          "Snapshots"
+        ]
+      },
+      "post": {
+        "description": "Create a point-in-time snapshot of the collection",
+        "operationId": "createSnapshot",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Snapshot created"
+          }
+        },
+        "summary": "Create a snapshot",
+        "tags": [
+          "Snapshots"
+        ]
+      }
+    },
+    "/collections/{name}/snapshots/{snapshot}/restore": {
+      "post": {
+        "description": "Restore a collection to a previous snapshot state",
+        "operationId": "restoreSnapshot",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "snapshot",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Snapshot restored"
+          },
+          "404": {
+            "description": "Snapshot not found"
+          }
+        },
+        "summary": "Restore from snapshot",
+        "tags": [
+          "Snapshots"
+        ]
+      }
+    },
+    "/collections/{name}/ttl-stats": {
+      "get": {
+        "description": "Get TTL distribution and expiration statistics",
+        "operationId": "ttlStats",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TtlStatsResponse"
+                }
+              }
+            },
+            "description": "TTL statistics"
+          }
+        },
+        "summary": "TTL statistics",
+        "tags": [
+          "TTL"
+        ]
+      }
+    },
+    "/dashboard": {
+      "get": {
+        "description": "Serve the web-based admin dashboard UI",
+        "operationId": "dashboard",
+        "responses": {
+          "200": {
+            "description": "HTML dashboard page"
+          }
+        },
+        "summary": "Web dashboard",
+        "tags": [
+          "UI"
+        ]
+      }
+    },
+    "/embeddings/router/status": {
+      "get": {
+        "description": "Get the status of configured embedding model providers",
+        "operationId": "embeddingRouterStatus",
+        "responses": {
+          "200": {
+            "description": "Embedding router status"
+          }
+        },
+        "summary": "Embedding router status",
+        "tags": [
+          "Observability"
+        ]
+      }
+    },
+    "/grpc/schema": {
+      "get": {
+        "operationId": "grpcSchema",
+        "responses": {
+          "200": {
+            "description": "Protobuf schema"
+          }
+        },
+        "summary": "gRPC schema definitions",
+        "tags": [
+          "System"
+        ]
+      }
+    },
     "/health": {
       "get": {
         "operationId": "healthCheck",
@@ -505,6 +2438,118 @@
         ]
       }
     },
+    "/info": {
+      "get": {
+        "operationId": "getInfo",
+        "responses": {
+          "200": {
+            "description": "Server info and version"
+          }
+        },
+        "summary": "Server info (alias)",
+        "tags": [
+          "System"
+        ]
+      }
+    },
+    "/mcp": {
+      "post": {
+        "description": "Invoke a Model Context Protocol tool over HTTP",
+        "operationId": "mcpInvoke",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/McpRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/McpResponse"
+                }
+              }
+            },
+            "description": "MCP tool result"
+          }
+        },
+        "summary": "MCP tool invocation",
+        "tags": [
+          "MCP"
+        ]
+      }
+    },
+    "/mcp/config": {
+      "get": {
+        "description": "Get the MCP server configuration and available tools",
+        "operationId": "mcpConfig",
+        "responses": {
+          "200": {
+            "description": "MCP configuration"
+          }
+        },
+        "summary": "MCP configuration",
+        "tags": [
+          "MCP"
+        ]
+      }
+    },
+    "/metrics": {
+      "get": {
+        "description": "Export Prometheus metrics (requires metrics feature)",
+        "operationId": "getMetrics",
+        "responses": {
+          "200": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Prometheus metrics in text exposition format"
+          }
+        },
+        "summary": "Prometheus metrics",
+        "tags": [
+          "Observability"
+        ]
+      }
+    },
+    "/openapi.json": {
+      "get": {
+        "operationId": "getOpenApiSpec",
+        "responses": {
+          "200": {
+            "description": "OpenAPI 3.1 JSON spec"
+          }
+        },
+        "summary": "OpenAPI specification",
+        "tags": [
+          "System"
+        ]
+      }
+    },
+    "/playground": {
+      "get": {
+        "description": "Serve the interactive vector search playground",
+        "operationId": "playground",
+        "responses": {
+          "200": {
+            "description": "HTML playground page"
+          }
+        },
+        "summary": "Interactive playground",
+        "tags": [
+          "UI"
+        ]
+      }
+    },
     "/save": {
       "post": {
         "operationId": "saveDatabase",
@@ -516,6 +2561,92 @@
         "summary": "Save database to disk",
         "tags": [
           "System"
+        ]
+      }
+    },
+    "/tracing/status": {
+      "get": {
+        "description": "Check OpenTelemetry tracing configuration and export status",
+        "operationId": "tracingStatus",
+        "responses": {
+          "200": {
+            "description": "Tracing configuration"
+          }
+        },
+        "summary": "Tracing status",
+        "tags": [
+          "Observability"
+        ]
+      }
+    },
+    "/webhooks": {
+      "get": {
+        "operationId": "listWebhooks",
+        "responses": {
+          "200": {
+            "description": "List of webhooks"
+          }
+        },
+        "summary": "List webhooks",
+        "tags": [
+          "Webhooks"
+        ]
+      },
+      "post": {
+        "description": "Register a webhook for collection events",
+        "operationId": "createWebhook",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateWebhookRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookResponse"
+                }
+              }
+            },
+            "description": "Webhook created"
+          }
+        },
+        "summary": "Create a webhook",
+        "tags": [
+          "Webhooks"
+        ]
+      }
+    },
+    "/webhooks/{id}": {
+      "delete": {
+        "operationId": "deleteWebhook",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Webhook deleted"
+          },
+          "404": {
+            "description": "Webhook not found"
+          }
+        },
+        "summary": "Delete a webhook",
+        "tags": [
+          "Webhooks"
         ]
       }
     }
@@ -532,6 +2663,80 @@
     {
       "description": "Local development",
       "url": "http://localhost:8080"
+    }
+  ],
+  "tags": [
+    {
+      "description": "Health, info, and database-level operations",
+      "name": "System"
+    },
+    {
+      "description": "Collection management",
+      "name": "Collections"
+    },
+    {
+      "description": "Vector CRUD operations",
+      "name": "Vectors"
+    },
+    {
+      "description": "Text insertion and search with auto-embedding",
+      "name": "Text"
+    },
+    {
+      "description": "Vector similarity search",
+      "name": "Search"
+    },
+    {
+      "description": "LLM response caching by semantic similarity",
+      "name": "Semantic Cache"
+    },
+    {
+      "description": "Streaming ingestion",
+      "name": "Streaming"
+    },
+    {
+      "description": "Temporal queries and snapshot diffing",
+      "name": "Time Travel"
+    },
+    {
+      "description": "Agentic memory protocol for LLM agents",
+      "name": "Memory"
+    },
+    {
+      "description": "Cost estimation, benchmarking, and index status",
+      "name": "Analytics"
+    },
+    {
+      "description": "Cluster topology and status",
+      "name": "Cluster"
+    },
+    {
+      "description": "Webhook management",
+      "name": "Webhooks"
+    },
+    {
+      "description": "Collection alias management",
+      "name": "Aliases"
+    },
+    {
+      "description": "Time-to-live and vector expiration",
+      "name": "TTL"
+    },
+    {
+      "description": "Point-in-time snapshot management",
+      "name": "Snapshots"
+    },
+    {
+      "description": "Model Context Protocol over HTTP",
+      "name": "MCP"
+    },
+    {
+      "description": "Dashboard and playground",
+      "name": "UI"
+    },
+    {
+      "description": "Tracing, metrics, and embedding router status",
+      "name": "Observability"
     }
   ]
 }
