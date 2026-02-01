@@ -9,6 +9,8 @@ pub mod agentic_memory;
 #[cfg(feature = "experimental")]
 pub mod analytics;
 #[cfg(feature = "experimental")]
+pub mod cdc;
+#[cfg(feature = "experimental")]
 pub mod cloud_control;
 #[cfg(feature = "experimental")]
 pub mod clustering;
