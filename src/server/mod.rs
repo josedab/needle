@@ -605,249 +605,730 @@ pub async fn serve_default() -> Result<(), Box<dyn std::error::Error>> {
 
 /// Generates an OpenAPI 3.1 specification for the Needle REST API.
 pub fn generate_openapi_spec() -> serde_json::Value {
+    let mut spec = serde_json::Map::new();
+    spec.insert("openapi".into(), serde_json::json!("3.1.0"));
+    spec.insert("info".into(), openapi_info());
+    spec.insert("servers".into(), serde_json::json!([{ "url": "http://localhost:8080", "description": "Local development" }]));
+    spec.insert("tags".into(), openapi_tags());
+    spec.insert("paths".into(), openapi_paths());
+    spec.insert("components".into(), openapi_components());
+    spec.insert("security".into(), serde_json::json!([{ "ApiKeyAuth": [] }, { "BearerAuth": [] }]));
+    serde_json::Value::Object(spec)
+}
+
+fn openapi_info() -> serde_json::Value {
     serde_json::json!({
-        "openapi": "3.1.0",
-        "info": {
-            "title": "Needle Vector Database API",
-            "description": "REST API for the Needle embedded vector database",
-            "version": "0.1.0",
-            "license": { "name": "MIT" },
-            "contact": { "name": "Needle Team" }
-        },
-        "servers": [
-            { "url": "http://localhost:8080", "description": "Local development" }
-        ],
-        "paths": {
-            "/health": {
-                "get": {
-                    "summary": "Health check",
-                    "operationId": "healthCheck",
-                    "tags": ["System"],
-                    "responses": {
-                        "200": {
-                            "description": "Server is healthy",
-                            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/HealthResponse" } } }
-                        }
-                    }
-                }
-            },
-            "/collections": {
-                "get": {
-                    "summary": "List all collections",
-                    "operationId": "listCollections",
-                    "tags": ["Collections"],
-                    "responses": {
-                        "200": {
-                            "description": "List of collections",
-                            "content": { "application/json": { "schema": { "type": "array", "items": { "$ref": "#/components/schemas/CollectionInfo" } } } }
-                        }
-                    }
-                },
-                "post": {
-                    "summary": "Create a new collection",
-                    "operationId": "createCollection",
-                    "tags": ["Collections"],
-                    "requestBody": {
-                        "required": true,
-                        "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CreateCollectionRequest" } } }
-                    },
-                    "responses": {
-                        "201": { "description": "Collection created" },
-                        "409": { "description": "Collection already exists" }
-                    }
-                }
-            },
-            "/collections/{name}": {
-                "get": {
-                    "summary": "Get collection info",
-                    "operationId": "getCollection",
-                    "tags": ["Collections"],
-                    "parameters": [{ "name": "name", "in": "path", "required": true, "schema": { "type": "string" } }],
-                    "responses": {
-                        "200": { "description": "Collection info", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CollectionInfo" } } } },
-                        "404": { "description": "Collection not found" }
-                    }
-                },
-                "delete": {
-                    "summary": "Delete a collection",
-                    "operationId": "deleteCollection",
-                    "tags": ["Collections"],
-                    "parameters": [{ "name": "name", "in": "path", "required": true, "schema": { "type": "string" } }],
-                    "responses": {
-                        "200": { "description": "Collection deleted" },
-                        "404": { "description": "Collection not found" }
-                    }
-                }
-            },
-            "/collections/{collection}/vectors": {
-                "get": {
-                    "summary": "List vectors in collection",
-                    "operationId": "listVectors",
-                    "tags": ["Vectors"],
-                    "parameters": [
-                        { "name": "collection", "in": "path", "required": true, "schema": { "type": "string" } },
-                        { "name": "limit", "in": "query", "schema": { "type": "integer", "default": 100 } },
-                        { "name": "offset", "in": "query", "schema": { "type": "integer", "default": 0 } }
-                    ],
-                    "responses": { "200": { "description": "List of vectors" } }
-                },
-                "post": {
-                    "summary": "Insert a vector",
-                    "operationId": "insertVector",
-                    "tags": ["Vectors"],
-                    "parameters": [{ "name": "collection", "in": "path", "required": true, "schema": { "type": "string" } }],
-                    "requestBody": {
-                        "required": true,
-                        "content": { "application/json": { "schema": { "$ref": "#/components/schemas/InsertVectorRequest" } } }
-                    },
-                    "responses": {
-                        "201": { "description": "Vector inserted" },
-                        "400": { "description": "Invalid input" }
-                    }
-                }
-            },
-            "/collections/{collection}/vectors/{id}": {
-                "get": {
-                    "summary": "Get a vector by ID",
-                    "operationId": "getVector",
-                    "tags": ["Vectors"],
-                    "parameters": [
-                        { "name": "collection", "in": "path", "required": true, "schema": { "type": "string" } },
-                        { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }
-                    ],
-                    "responses": {
-                        "200": { "description": "Vector data", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/VectorResponse" } } } },
-                        "404": { "description": "Vector not found" }
-                    }
-                },
-                "delete": {
-                    "summary": "Delete a vector",
-                    "operationId": "deleteVector",
-                    "tags": ["Vectors"],
-                    "parameters": [
-                        { "name": "collection", "in": "path", "required": true, "schema": { "type": "string" } },
-                        { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }
-                    ],
-                    "responses": { "200": { "description": "Vector deleted" }, "404": { "description": "Not found" } }
-                }
-            },
-            "/collections/{collection}/search": {
-                "post": {
-                    "summary": "Search for similar vectors",
-                    "operationId": "searchVectors",
-                    "tags": ["Search"],
-                    "parameters": [{ "name": "collection", "in": "path", "required": true, "schema": { "type": "string" } }],
-                    "requestBody": {
-                        "required": true,
-                        "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SearchRequest" } } }
-                    },
-                    "responses": {
-                        "200": {
-                            "description": "Search results",
-                            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SearchResponse" } } }
-                        }
-                    }
-                }
-            },
-            "/save": {
-                "post": {
-                    "summary": "Save database to disk",
-                    "operationId": "saveDatabase",
-                    "tags": ["System"],
-                    "responses": { "200": { "description": "Database saved" } }
-                }
-            }
-        },
-        "components": {
-            "schemas": {
-                "HealthResponse": {
-                    "type": "object",
-                    "properties": {
-                        "status": { "type": "string", "example": "healthy" }
-                    }
-                },
-                "CollectionInfo": {
-                    "type": "object",
-                    "properties": {
-                        "name": { "type": "string" },
-                        "dimensions": { "type": "integer" },
-                        "vector_count": { "type": "integer" },
-                        "distance_function": { "type": "string", "enum": ["cosine", "euclidean", "dot_product", "manhattan"] }
-                    }
-                },
-                "CreateCollectionRequest": {
-                    "type": "object",
-                    "required": ["name", "dimensions"],
-                    "properties": {
-                        "name": { "type": "string" },
-                        "dimensions": { "type": "integer", "minimum": 1 },
-                        "distance": { "type": "string", "enum": ["cosine", "euclidean", "dot_product", "manhattan"], "default": "cosine" },
-                        "m": { "type": "integer", "default": 16 },
-                        "ef_construction": { "type": "integer", "default": 200 }
-                    }
-                },
-                "InsertVectorRequest": {
-                    "type": "object",
-                    "required": ["id", "vector"],
-                    "properties": {
-                        "id": { "type": "string" },
-                        "vector": { "type": "array", "items": { "type": "number", "format": "float" } },
-                        "metadata": { "type": "object", "additionalProperties": true }
-                    }
-                },
-                "VectorResponse": {
-                    "type": "object",
-                    "properties": {
-                        "id": { "type": "string" },
-                        "vector": { "type": "array", "items": { "type": "number" } },
-                        "metadata": { "type": "object", "nullable": true }
-                    }
-                },
-                "SearchRequest": {
-                    "type": "object",
-                    "required": ["vector"],
-                    "properties": {
-                        "vector": { "type": "array", "items": { "type": "number", "format": "float" } },
-                        "k": { "type": "integer", "default": 10, "minimum": 1 },
-                        "filter": { "type": "object", "description": "MongoDB-style metadata filter" },
-                        "ef_search": { "type": "integer" }
-                    }
-                },
-                "SearchResponse": {
-                    "type": "object",
-                    "properties": {
-                        "results": {
-                            "type": "array",
-                            "items": {
-                                "type": "object",
-                                "properties": {
-                                    "id": { "type": "string" },
-                                    "distance": { "type": "number" },
-                                    "metadata": { "type": "object", "nullable": true }
-                                }
-                            }
-                        }
-                    }
-                }
-            },
-            "securitySchemes": {
-                "ApiKeyAuth": {
-                    "type": "apiKey",
-                    "in": "header",
-                    "name": "X-API-Key"
-                },
-                "BearerAuth": {
-                    "type": "http",
-                    "scheme": "bearer",
-                    "bearerFormat": "JWT"
-                }
-            }
-        },
-        "security": [
-            { "ApiKeyAuth": [] },
-            { "BearerAuth": [] }
-        ]
+        "title": "Needle Vector Database API",
+        "description": "REST API for the Needle embedded vector database",
+        "version": "0.1.0",
+        "license": { "name": "MIT" },
+        "contact": { "name": "Needle Team" }
     })
+}
+
+fn openapi_tags() -> serde_json::Value {
+    serde_json::json!([
+        { "name": "System", "description": "Health, info, and database-level operations" },
+        { "name": "Collections", "description": "Collection management" },
+        { "name": "Vectors", "description": "Vector CRUD operations" },
+        { "name": "Text", "description": "Text insertion and search with auto-embedding" },
+        { "name": "Search", "description": "Vector similarity search" },
+        { "name": "Semantic Cache", "description": "LLM response caching by semantic similarity" },
+        { "name": "Streaming", "description": "Streaming ingestion" },
+        { "name": "Time Travel", "description": "Temporal queries and snapshot diffing" },
+        { "name": "Memory", "description": "Agentic memory protocol for LLM agents" },
+        { "name": "Analytics", "description": "Cost estimation, benchmarking, and index status" },
+        { "name": "Cluster", "description": "Cluster topology and status" },
+        { "name": "Webhooks", "description": "Webhook management" },
+        { "name": "Aliases", "description": "Collection alias management" },
+        { "name": "TTL", "description": "Time-to-live and vector expiration" },
+        { "name": "Snapshots", "description": "Point-in-time snapshot management" },
+        { "name": "MCP", "description": "Model Context Protocol over HTTP" },
+        { "name": "UI", "description": "Dashboard and playground" },
+        { "name": "Observability", "description": "Tracing, metrics, and embedding router status" }
+    ])
+}
+
+fn openapi_paths() -> serde_json::Value {
+    let mut paths = serde_json::Map::new();
+    openapi_paths_system(&mut paths);
+    openapi_paths_collections(&mut paths);
+    openapi_paths_vectors(&mut paths);
+    openapi_paths_text(&mut paths);
+    openapi_paths_search(&mut paths);
+    openapi_paths_cache(&mut paths);
+    openapi_paths_streaming(&mut paths);
+    openapi_paths_time_travel(&mut paths);
+    openapi_paths_memory(&mut paths);
+    openapi_paths_analytics(&mut paths);
+    openapi_paths_cluster(&mut paths);
+    openapi_paths_webhooks(&mut paths);
+    openapi_paths_aliases(&mut paths);
+    openapi_paths_ttl(&mut paths);
+    openapi_paths_snapshots(&mut paths);
+    openapi_paths_mcp(&mut paths);
+    openapi_paths_ui(&mut paths);
+    openapi_paths_observability(&mut paths);
+    serde_json::Value::Object(paths)
+}
+
+fn col_param() -> serde_json::Value {
+    serde_json::json!({ "name": "collection", "in": "path", "required": true, "schema": { "type": "string" } })
+}
+
+fn name_param() -> serde_json::Value {
+    serde_json::json!({ "name": "name", "in": "path", "required": true, "schema": { "type": "string" } })
+}
+
+fn schema_ref(name: &str) -> serde_json::Value {
+    serde_json::json!({ "application/json": { "schema": { "$ref": format!("#/components/schemas/{name}") } } })
+}
+
+fn openapi_paths_system(paths: &mut serde_json::Map<String, serde_json::Value>) {
+    paths.insert("/health".into(), serde_json::json!({
+        "get": { "summary": "Health check", "operationId": "healthCheck", "tags": ["System"],
+            "responses": { "200": { "description": "Server is healthy", "content": schema_ref("HealthResponse") } } }
+    }));
+    paths.insert("/".into(), serde_json::json!({
+        "get": { "summary": "Server info", "operationId": "getRoot", "tags": ["System"],
+            "responses": { "200": { "description": "Server info and version" } } }
+    }));
+    paths.insert("/info".into(), serde_json::json!({
+        "get": { "summary": "Server info (alias)", "operationId": "getInfo", "tags": ["System"],
+            "responses": { "200": { "description": "Server info and version" } } }
+    }));
+    paths.insert("/save".into(), serde_json::json!({
+        "post": { "summary": "Save database to disk", "operationId": "saveDatabase", "tags": ["System"],
+            "responses": { "200": { "description": "Database saved" } } }
+    }));
+    paths.insert("/openapi.json".into(), serde_json::json!({
+        "get": { "summary": "OpenAPI specification", "operationId": "getOpenApiSpec", "tags": ["System"],
+            "responses": { "200": { "description": "OpenAPI 3.1 JSON spec" } } }
+    }));
+    paths.insert("/grpc/schema".into(), serde_json::json!({
+        "get": { "summary": "gRPC schema definitions", "operationId": "grpcSchema", "tags": ["System"],
+            "responses": { "200": { "description": "Protobuf schema" } } }
+    }));
+}
+
+fn openapi_paths_collections(paths: &mut serde_json::Map<String, serde_json::Value>) {
+    paths.insert("/collections".into(), serde_json::json!({
+        "get": { "summary": "List all collections", "operationId": "listCollections", "tags": ["Collections"],
+            "responses": { "200": { "description": "List of collections", "content": { "application/json": {
+                "schema": { "type": "array", "items": { "$ref": "#/components/schemas/CollectionInfo" } } } } } } },
+        "post": { "summary": "Create a new collection", "operationId": "createCollection", "tags": ["Collections"],
+            "requestBody": { "required": true, "content": schema_ref("CreateCollectionRequest") },
+            "responses": { "201": { "description": "Collection created" }, "409": { "description": "Collection already exists" } } }
+    }));
+    paths.insert("/collections/{name}".into(), serde_json::json!({
+        "get": { "summary": "Get collection info", "operationId": "getCollection", "tags": ["Collections"],
+            "parameters": [name_param()],
+            "responses": { "200": { "description": "Collection info", "content": schema_ref("CollectionInfo") }, "404": { "description": "Collection not found" } } },
+        "delete": { "summary": "Delete a collection", "operationId": "deleteCollection", "tags": ["Collections"],
+            "parameters": [name_param()],
+            "responses": { "200": { "description": "Collection deleted" }, "404": { "description": "Collection not found" } } }
+    }));
+    paths.insert("/collections/{name}/compact".into(), serde_json::json!({
+        "post": { "summary": "Compact a collection", "description": "Remove deleted vectors and reclaim storage space",
+            "operationId": "compactCollection", "tags": ["Collections"], "parameters": [name_param()],
+            "responses": { "200": { "description": "Compaction complete" }, "404": { "description": "Collection not found" } } }
+    }));
+    paths.insert("/collections/{name}/export".into(), serde_json::json!({
+        "get": { "summary": "Export collection data", "description": "Export all vectors and metadata as JSON",
+            "operationId": "exportCollection", "tags": ["Collections"], "parameters": [name_param()],
+            "responses": { "200": { "description": "Collection data as JSON array" }, "404": { "description": "Collection not found" } } }
+    }));
+}
+
+fn openapi_paths_vectors(paths: &mut serde_json::Map<String, serde_json::Value>) {
+    paths.insert("/collections/{collection}/vectors".into(), serde_json::json!({
+        "get": { "summary": "List vectors in collection", "operationId": "listVectors", "tags": ["Vectors"],
+            "parameters": [col_param(), { "name": "limit", "in": "query", "schema": { "type": "integer", "default": 100 } },
+                { "name": "offset", "in": "query", "schema": { "type": "integer", "default": 0 } }],
+            "responses": { "200": { "description": "List of vectors" } } },
+        "post": { "summary": "Insert a vector", "operationId": "insertVector", "tags": ["Vectors"],
+            "parameters": [col_param()],
+            "requestBody": { "required": true, "content": schema_ref("InsertVectorRequest") },
+            "responses": { "201": { "description": "Vector inserted" }, "400": { "description": "Invalid input" } } }
+    }));
+    paths.insert("/collections/{collection}/vectors/batch".into(), serde_json::json!({
+        "post": { "summary": "Batch insert vectors", "description": "Insert multiple vectors in a single request",
+            "operationId": "batchInsert", "tags": ["Vectors"], "parameters": [col_param()],
+            "requestBody": { "required": true, "content": schema_ref("BatchInsertRequest") },
+            "responses": { "200": { "description": "Vectors inserted", "content": schema_ref("BatchInsertResponse") }, "400": { "description": "Invalid input" } } }
+    }));
+    paths.insert("/collections/{collection}/vectors/upsert".into(), serde_json::json!({
+        "post": { "summary": "Upsert a vector", "description": "Insert or update a vector by ID",
+            "operationId": "upsertVector", "tags": ["Vectors"], "parameters": [col_param()],
+            "requestBody": { "required": true, "content": schema_ref("InsertVectorRequest") },
+            "responses": { "200": { "description": "Vector upserted" }, "400": { "description": "Invalid input" } } }
+    }));
+    paths.insert("/collections/{collection}/vectors/{id}".into(), serde_json::json!({
+        "get": { "summary": "Get a vector by ID", "operationId": "getVector", "tags": ["Vectors"],
+            "parameters": [col_param(), { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }],
+            "responses": { "200": { "description": "Vector data", "content": schema_ref("VectorResponse") }, "404": { "description": "Vector not found" } } },
+        "delete": { "summary": "Delete a vector", "operationId": "deleteVector", "tags": ["Vectors"],
+            "parameters": [col_param(), { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }],
+            "responses": { "200": { "description": "Vector deleted" }, "404": { "description": "Not found" } } }
+    }));
+    paths.insert("/collections/{collection}/vectors/{id}/metadata".into(), serde_json::json!({
+        "post": { "summary": "Update vector metadata", "description": "Merge or replace metadata on an existing vector",
+            "operationId": "updateMetadata", "tags": ["Vectors"],
+            "parameters": [col_param(), { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }],
+            "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "additionalProperties": true } } } },
+            "responses": { "200": { "description": "Metadata updated" }, "404": { "description": "Vector not found" } } }
+    }));
+}
+
+fn openapi_paths_text(paths: &mut serde_json::Map<String, serde_json::Value>) {
+    paths.insert("/collections/{collection}/texts".into(), serde_json::json!({
+        "post": { "summary": "Insert text with auto-embedding", "description": "Insert a text document; the server generates an embedding automatically",
+            "operationId": "insertText", "tags": ["Text"], "parameters": [col_param()],
+            "requestBody": { "required": true, "content": schema_ref("InsertTextRequest") },
+            "responses": { "201": { "description": "Text inserted" }, "400": { "description": "Invalid input" } } }
+    }));
+    paths.insert("/collections/{collection}/texts/batch".into(), serde_json::json!({
+        "post": { "summary": "Batch insert texts with auto-embedding", "operationId": "batchInsertTexts", "tags": ["Text"],
+            "parameters": [col_param()],
+            "requestBody": { "required": true, "content": schema_ref("BatchInsertTextRequest") },
+            "responses": { "200": { "description": "Texts inserted" }, "400": { "description": "Invalid input" } } }
+    }));
+    paths.insert("/collections/{collection}/texts/search".into(), serde_json::json!({
+        "post": { "summary": "Search by text with auto-embedding", "description": "Provide a text query; the server embeds it and searches",
+            "operationId": "searchText", "tags": ["Text"], "parameters": [col_param()],
+            "requestBody": { "required": true, "content": schema_ref("TextSearchRequest") },
+            "responses": { "200": { "description": "Search results", "content": schema_ref("SearchResponse") } } }
+    }));
+}
+
+fn openapi_paths_search(paths: &mut serde_json::Map<String, serde_json::Value>) {
+    paths.insert("/collections/{collection}/search".into(), serde_json::json!({
+        "post": { "summary": "Search for similar vectors", "operationId": "searchVectors", "tags": ["Search"],
+            "parameters": [col_param()],
+            "requestBody": { "required": true, "content": schema_ref("SearchRequest") },
+            "responses": { "200": { "description": "Search results", "content": schema_ref("SearchResponse") } } }
+    }));
+    paths.insert("/collections/{collection}/search/batch".into(), serde_json::json!({
+        "post": { "summary": "Batch search", "description": "Search for multiple query vectors in a single request",
+            "operationId": "batchSearch", "tags": ["Search"], "parameters": [col_param()],
+            "requestBody": { "required": true, "content": schema_ref("BatchSearchRequest") },
+            "responses": { "200": { "description": "Batch search results", "content": schema_ref("BatchSearchResponse") } } }
+    }));
+    paths.insert("/collections/{collection}/search/radius".into(), serde_json::json!({
+        "post": { "summary": "Radius search", "description": "Find all vectors within a distance threshold",
+            "operationId": "radiusSearch", "tags": ["Search"], "parameters": [col_param()],
+            "requestBody": { "required": true, "content": schema_ref("RadiusSearchRequest") },
+            "responses": { "200": { "description": "Vectors within radius", "content": schema_ref("SearchResponse") } } }
+    }));
+    paths.insert("/collections/{collection}/search/graph".into(), serde_json::json!({
+        "post": { "summary": "GraphRAG search", "description": "Graph-augmented retrieval combining vector similarity with knowledge graph traversal",
+            "operationId": "graphSearch", "tags": ["Search"], "parameters": [col_param()],
+            "requestBody": { "required": true, "content": schema_ref("GraphSearchRequest") },
+            "responses": { "200": { "description": "Graph search results" } } }
+    }));
+    paths.insert("/collections/{collection}/search/matryoshka".into(), serde_json::json!({
+        "post": { "summary": "Matryoshka two-phase search", "description": "Two-phase search using truncated embeddings for coarse filtering, then full embeddings for re-ranking",
+            "operationId": "matryoshkaSearch", "tags": ["Search"], "parameters": [col_param()],
+            "requestBody": { "required": true, "content": schema_ref("MatryoshkaSearchRequest") },
+            "responses": { "200": { "description": "Search results", "content": schema_ref("SearchResponse") } } }
+    }));
+}
+
+fn openapi_paths_cache(paths: &mut serde_json::Map<String, serde_json::Value>) {
+    paths.insert("/collections/{collection}/cache/lookup".into(), serde_json::json!({
+        "post": { "summary": "Semantic cache lookup", "description": "Look up a cached response by semantic similarity to the query",
+            "operationId": "cacheLookup", "tags": ["Semantic Cache"], "parameters": [col_param()],
+            "requestBody": { "required": true, "content": schema_ref("CacheLookupRequest") },
+            "responses": { "200": { "description": "Cache hit or miss", "content": schema_ref("CacheLookupResponse") } } }
+    }));
+    paths.insert("/collections/{collection}/cache/store".into(), serde_json::json!({
+        "post": { "summary": "Store in semantic cache", "description": "Store a query-response pair in the semantic cache",
+            "operationId": "cacheStore", "tags": ["Semantic Cache"], "parameters": [col_param()],
+            "requestBody": { "required": true, "content": schema_ref("CacheStoreRequest") },
+            "responses": { "200": { "description": "Cached successfully" } } }
+    }));
+}
+
+fn openapi_paths_streaming(paths: &mut serde_json::Map<String, serde_json::Value>) {
+    paths.insert("/collections/{collection}/ingest".into(), serde_json::json!({
+        "post": { "summary": "Streaming ingest", "description": "Stream vectors into a collection via NDJSON",
+            "operationId": "streamingIngest", "tags": ["Streaming"], "parameters": [col_param()],
+            "requestBody": { "required": true, "content": { "application/x-ndjson": { "schema": { "$ref": "#/components/schemas/InsertVectorRequest" } } } },
+            "responses": { "200": { "description": "Ingestion summary", "content": schema_ref("IngestResponse") } } }
+    }));
+}
+
+fn openapi_paths_time_travel(paths: &mut serde_json::Map<String, serde_json::Value>) {
+    paths.insert("/collections/{collection}/search/time-travel".into(), serde_json::json!({
+        "post": { "summary": "Time-travel search", "description": "Search against a historical snapshot of the collection",
+            "operationId": "timeTravelSearch", "tags": ["Time Travel"], "parameters": [col_param()],
+            "requestBody": { "required": true, "content": schema_ref("TimeTravelSearchRequest") },
+            "responses": { "200": { "description": "Search results at specified point in time", "content": schema_ref("SearchResponse") } } }
+    }));
+    paths.insert("/collections/{collection}/snapshots/diff".into(), serde_json::json!({
+        "post": { "summary": "Snapshot diff", "description": "Compare two snapshots and return added/removed/modified vectors",
+            "operationId": "snapshotDiff", "tags": ["Time Travel"], "parameters": [col_param()],
+            "requestBody": { "required": true, "content": schema_ref("SnapshotDiffRequest") },
+            "responses": { "200": { "description": "Diff between snapshots", "content": schema_ref("SnapshotDiffResponse") } } }
+    }));
+}
+
+fn openapi_paths_memory(paths: &mut serde_json::Map<String, serde_json::Value>) {
+    paths.insert("/collections/{collection}/memory/remember".into(), serde_json::json!({
+        "post": { "summary": "Store a memory", "description": "Store context for an LLM agent to recall later",
+            "operationId": "remember", "tags": ["Memory"], "parameters": [col_param()],
+            "requestBody": { "required": true, "content": schema_ref("RememberRequest") },
+            "responses": { "201": { "description": "Memory stored", "content": schema_ref("RememberResponse") } } }
+    }));
+    paths.insert("/collections/{collection}/memory/recall".into(), serde_json::json!({
+        "post": { "summary": "Recall memories", "description": "Retrieve relevant memories by semantic similarity",
+            "operationId": "recall", "tags": ["Memory"], "parameters": [col_param()],
+            "requestBody": { "required": true, "content": schema_ref("RecallRequest") },
+            "responses": { "200": { "description": "Recalled memories", "content": schema_ref("RecallResponse") } } }
+    }));
+    paths.insert("/collections/{collection}/memory/{memory_id}/forget".into(), serde_json::json!({
+        "delete": { "summary": "Forget a memory", "description": "Delete a specific memory by ID",
+            "operationId": "forget", "tags": ["Memory"],
+            "parameters": [col_param(), { "name": "memory_id", "in": "path", "required": true, "schema": { "type": "string" } }],
+            "responses": { "200": { "description": "Memory forgotten" }, "404": { "description": "Memory not found" } } }
+    }));
+}
+
+fn openapi_paths_analytics(paths: &mut serde_json::Map<String, serde_json::Value>) {
+    paths.insert("/collections/{collection}/search/estimate".into(), serde_json::json!({
+        "post": { "summary": "Query cost estimation", "description": "Estimate the cost of a search query without executing it",
+            "operationId": "costEstimate", "tags": ["Analytics"], "parameters": [col_param()],
+            "requestBody": { "required": true, "content": schema_ref("SearchRequest") },
+            "responses": { "200": { "description": "Estimated cost", "content": schema_ref("CostEstimateResponse") } } }
+    }));
+    paths.insert("/collections/{collection}/diff".into(), serde_json::json!({
+        "post": { "summary": "Vector diff", "description": "Compare two sets of vector IDs and return differences",
+            "operationId": "vectorDiff", "tags": ["Analytics"], "parameters": [col_param()],
+            "requestBody": { "required": true, "content": schema_ref("VectorDiffRequest") },
+            "responses": { "200": { "description": "Diff results" } } }
+    }));
+    paths.insert("/collections/{collection}/changes".into(), serde_json::json!({
+        "get": { "summary": "SSE change feed", "description": "Server-Sent Events stream of collection changes",
+            "operationId": "changeFeed", "tags": ["Analytics"], "parameters": [col_param()],
+            "responses": { "200": { "description": "Event stream", "content": { "text/event-stream": { "schema": { "type": "string" } } } } } }
+    }));
+    paths.insert("/collections/{collection}/benchmark".into(), serde_json::json!({
+        "post": { "summary": "In-process benchmark", "description": "Run a search benchmark and return latency statistics",
+            "operationId": "benchmark", "tags": ["Analytics"], "parameters": [col_param()],
+            "requestBody": { "required": true, "content": schema_ref("BenchmarkRequest") },
+            "responses": { "200": { "description": "Benchmark results", "content": schema_ref("BenchmarkResponse") } } }
+    }));
+    paths.insert("/collections/{collection}/index/status".into(), serde_json::json!({
+        "get": { "summary": "Index status", "description": "Check HNSW index build status and WAL state",
+            "operationId": "indexStatus", "tags": ["Analytics"], "parameters": [col_param()],
+            "responses": { "200": { "description": "Index status", "content": schema_ref("IndexStatusResponse") } } }
+    }));
+}
+
+fn openapi_paths_cluster(paths: &mut serde_json::Map<String, serde_json::Value>) {
+    paths.insert("/cluster/status".into(), serde_json::json!({
+        "get": { "summary": "Cluster status", "description": "Get cluster topology, shard distribution, and node health",
+            "operationId": "clusterStatus", "tags": ["Cluster"],
+            "responses": { "200": { "description": "Cluster status", "content": schema_ref("ClusterStatusResponse") } } }
+    }));
+}
+
+fn openapi_paths_webhooks(paths: &mut serde_json::Map<String, serde_json::Value>) {
+    paths.insert("/webhooks".into(), serde_json::json!({
+        "post": { "summary": "Create a webhook", "description": "Register a webhook for collection events",
+            "operationId": "createWebhook", "tags": ["Webhooks"],
+            "requestBody": { "required": true, "content": schema_ref("CreateWebhookRequest") },
+            "responses": { "201": { "description": "Webhook created", "content": schema_ref("WebhookResponse") } } },
+        "get": { "summary": "List webhooks", "operationId": "listWebhooks", "tags": ["Webhooks"],
+            "responses": { "200": { "description": "List of webhooks" } } }
+    }));
+    paths.insert("/webhooks/{id}".into(), serde_json::json!({
+        "delete": { "summary": "Delete a webhook", "operationId": "deleteWebhook", "tags": ["Webhooks"],
+            "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }],
+            "responses": { "200": { "description": "Webhook deleted" }, "404": { "description": "Webhook not found" } } }
+    }));
+}
+
+fn openapi_paths_aliases(paths: &mut serde_json::Map<String, serde_json::Value>) {
+    paths.insert("/aliases".into(), serde_json::json!({
+        "post": { "summary": "Create an alias", "description": "Create a named alias pointing to a collection",
+            "operationId": "createAlias", "tags": ["Aliases"],
+            "requestBody": { "required": true, "content": schema_ref("CreateAliasRequest") },
+            "responses": { "201": { "description": "Alias created" }, "409": { "description": "Alias already exists" } } },
+        "get": { "summary": "List aliases", "operationId": "listAliases", "tags": ["Aliases"],
+            "responses": { "200": { "description": "List of aliases" } } }
+    }));
+    paths.insert("/aliases/{alias}".into(), serde_json::json!({
+        "get": { "summary": "Get alias target", "operationId": "getAlias", "tags": ["Aliases"],
+            "parameters": [{ "name": "alias", "in": "path", "required": true, "schema": { "type": "string" } }],
+            "responses": { "200": { "description": "Alias details" }, "404": { "description": "Alias not found" } } },
+        "delete": { "summary": "Delete an alias", "operationId": "deleteAlias", "tags": ["Aliases"],
+            "parameters": [{ "name": "alias", "in": "path", "required": true, "schema": { "type": "string" } }],
+            "responses": { "200": { "description": "Alias deleted" }, "404": { "description": "Alias not found" } } },
+        "put": { "summary": "Update an alias", "description": "Change the target collection of an alias",
+            "operationId": "updateAlias", "tags": ["Aliases"],
+            "parameters": [{ "name": "alias", "in": "path", "required": true, "schema": { "type": "string" } }],
+            "requestBody": { "required": true, "content": schema_ref("UpdateAliasRequest") },
+            "responses": { "200": { "description": "Alias updated" }, "404": { "description": "Alias not found" } } }
+    }));
+}
+
+fn openapi_paths_ttl(paths: &mut serde_json::Map<String, serde_json::Value>) {
+    paths.insert("/collections/{name}/expire".into(), serde_json::json!({
+        "post": { "summary": "Expire vectors by TTL", "description": "Delete vectors that have exceeded their time-to-live",
+            "operationId": "expireVectors", "tags": ["TTL"], "parameters": [name_param()],
+            "requestBody": { "required": true, "content": schema_ref("ExpireRequest") },
+            "responses": { "200": { "description": "Expired vectors count" } } }
+    }));
+    paths.insert("/collections/{name}/ttl-stats".into(), serde_json::json!({
+        "get": { "summary": "TTL statistics", "description": "Get TTL distribution and expiration statistics",
+            "operationId": "ttlStats", "tags": ["TTL"], "parameters": [name_param()],
+            "responses": { "200": { "description": "TTL statistics", "content": schema_ref("TtlStatsResponse") } } }
+    }));
+}
+
+fn openapi_paths_snapshots(paths: &mut serde_json::Map<String, serde_json::Value>) {
+    paths.insert("/collections/{name}/snapshots".into(), serde_json::json!({
+        "get": { "summary": "List snapshots", "description": "List all point-in-time snapshots for a collection",
+            "operationId": "listSnapshots", "tags": ["Snapshots"], "parameters": [name_param()],
+            "responses": { "200": { "description": "List of snapshots" } } },
+        "post": { "summary": "Create a snapshot", "description": "Create a point-in-time snapshot of the collection",
+            "operationId": "createSnapshot", "tags": ["Snapshots"], "parameters": [name_param()],
+            "responses": { "201": { "description": "Snapshot created" } } }
+    }));
+    paths.insert("/collections/{name}/snapshots/{snapshot}/restore".into(), serde_json::json!({
+        "post": { "summary": "Restore from snapshot", "description": "Restore a collection to a previous snapshot state",
+            "operationId": "restoreSnapshot", "tags": ["Snapshots"],
+            "parameters": [name_param(), { "name": "snapshot", "in": "path", "required": true, "schema": { "type": "string" } }],
+            "responses": { "200": { "description": "Snapshot restored" }, "404": { "description": "Snapshot not found" } } }
+    }));
+}
+
+fn openapi_paths_mcp(paths: &mut serde_json::Map<String, serde_json::Value>) {
+    paths.insert("/mcp".into(), serde_json::json!({
+        "post": { "summary": "MCP tool invocation", "description": "Invoke a Model Context Protocol tool over HTTP",
+            "operationId": "mcpInvoke", "tags": ["MCP"],
+            "requestBody": { "required": true, "content": schema_ref("McpRequest") },
+            "responses": { "200": { "description": "MCP tool result", "content": schema_ref("McpResponse") } } }
+    }));
+    paths.insert("/mcp/config".into(), serde_json::json!({
+        "get": { "summary": "MCP configuration", "description": "Get the MCP server configuration and available tools",
+            "operationId": "mcpConfig", "tags": ["MCP"],
+            "responses": { "200": { "description": "MCP configuration" } } }
+    }));
+}
+
+fn openapi_paths_ui(paths: &mut serde_json::Map<String, serde_json::Value>) {
+    paths.insert("/dashboard".into(), serde_json::json!({
+        "get": { "summary": "Web dashboard", "description": "Serve the web-based admin dashboard UI",
+            "operationId": "dashboard", "tags": ["UI"],
+            "responses": { "200": { "description": "HTML dashboard page" } } }
+    }));
+    paths.insert("/playground".into(), serde_json::json!({
+        "get": { "summary": "Interactive playground", "description": "Serve the interactive vector search playground",
+            "operationId": "playground", "tags": ["UI"],
+            "responses": { "200": { "description": "HTML playground page" } } }
+    }));
+}
+
+fn openapi_paths_observability(paths: &mut serde_json::Map<String, serde_json::Value>) {
+    paths.insert("/tracing/status".into(), serde_json::json!({
+        "get": { "summary": "Tracing status", "description": "Check OpenTelemetry tracing configuration and export status",
+            "operationId": "tracingStatus", "tags": ["Observability"],
+            "responses": { "200": { "description": "Tracing configuration" } } }
+    }));
+    paths.insert("/embeddings/router/status".into(), serde_json::json!({
+        "get": { "summary": "Embedding router status", "description": "Get the status of configured embedding model providers",
+            "operationId": "embeddingRouterStatus", "tags": ["Observability"],
+            "responses": { "200": { "description": "Embedding router status" } } }
+    }));
+    paths.insert("/metrics".into(), serde_json::json!({
+        "get": { "summary": "Prometheus metrics", "description": "Export Prometheus metrics (requires metrics feature)",
+            "operationId": "getMetrics", "tags": ["Observability"],
+            "responses": { "200": { "description": "Prometheus metrics in text exposition format",
+                "content": { "text/plain": { "schema": { "type": "string" } } } } } }
+    }));
+}
+
+fn openapi_components() -> serde_json::Value {
+    let mut components = serde_json::Map::new();
+    let mut schemas = serde_json::Map::new();
+    openapi_schemas_core(&mut schemas);
+    openapi_schemas_search(&mut schemas);
+    openapi_schemas_text(&mut schemas);
+    openapi_schemas_cache(&mut schemas);
+    openapi_schemas_advanced(&mut schemas);
+    openapi_schemas_management(&mut schemas);
+    components.insert("schemas".into(), serde_json::Value::Object(schemas));
+    components.insert("securitySchemes".into(), serde_json::json!({
+        "ApiKeyAuth": { "type": "apiKey", "in": "header", "name": "X-API-Key" },
+        "BearerAuth": { "type": "http", "scheme": "bearer", "bearerFormat": "JWT" }
+    }));
+    serde_json::Value::Object(components)
+}
+
+fn openapi_schemas_core(s: &mut serde_json::Map<String, serde_json::Value>) {
+    s.insert("HealthResponse".into(), serde_json::json!({
+        "type": "object", "properties": { "status": { "type": "string", "example": "healthy" } }
+    }));
+    s.insert("CollectionInfo".into(), serde_json::json!({
+        "type": "object", "properties": {
+            "name": { "type": "string" }, "dimensions": { "type": "integer" },
+            "vector_count": { "type": "integer" },
+            "distance_function": { "type": "string", "enum": ["cosine", "euclidean", "dot_product", "manhattan"] }
+        }
+    }));
+    s.insert("CreateCollectionRequest".into(), serde_json::json!({
+        "type": "object", "required": ["name", "dimensions"], "properties": {
+            "name": { "type": "string" }, "dimensions": { "type": "integer", "minimum": 1 },
+            "distance": { "type": "string", "enum": ["cosine", "euclidean", "dot_product", "manhattan"], "default": "cosine" },
+            "m": { "type": "integer", "default": 16 }, "ef_construction": { "type": "integer", "default": 200 }
+        }
+    }));
+    s.insert("InsertVectorRequest".into(), serde_json::json!({
+        "type": "object", "required": ["id", "vector"], "properties": {
+            "id": { "type": "string" },
+            "vector": { "type": "array", "items": { "type": "number", "format": "float" } },
+            "metadata": { "type": "object", "additionalProperties": true }
+        }
+    }));
+    s.insert("BatchInsertRequest".into(), serde_json::json!({
+        "type": "object", "required": ["vectors"], "properties": {
+            "vectors": { "type": "array", "items": { "$ref": "#/components/schemas/InsertVectorRequest" } }
+        }
+    }));
+    s.insert("BatchInsertResponse".into(), serde_json::json!({
+        "type": "object", "properties": {
+            "inserted": { "type": "integer" },
+            "errors": { "type": "array", "items": { "type": "object", "properties": { "id": { "type": "string" }, "error": { "type": "string" } } } }
+        }
+    }));
+    s.insert("VectorResponse".into(), serde_json::json!({
+        "type": "object", "properties": {
+            "id": { "type": "string" },
+            "vector": { "type": "array", "items": { "type": "number" } },
+            "metadata": { "type": "object", "nullable": true }
+        }
+    }));
+}
+
+fn openapi_schemas_search(s: &mut serde_json::Map<String, serde_json::Value>) {
+    s.insert("SearchRequest".into(), serde_json::json!({
+        "type": "object", "required": ["vector"], "properties": {
+            "vector": { "type": "array", "items": { "type": "number", "format": "float" } },
+            "k": { "type": "integer", "default": 10, "minimum": 1 },
+            "filter": { "type": "object", "description": "MongoDB-style metadata filter" },
+            "ef_search": { "type": "integer" }
+        }
+    }));
+    s.insert("SearchResponse".into(), serde_json::json!({
+        "type": "object", "properties": {
+            "results": { "type": "array", "items": { "type": "object", "properties": {
+                "id": { "type": "string" }, "distance": { "type": "number" }, "metadata": { "type": "object", "nullable": true }
+            }}}
+        }
+    }));
+    s.insert("BatchSearchRequest".into(), serde_json::json!({
+        "type": "object", "required": ["queries"], "properties": {
+            "queries": { "type": "array", "items": { "$ref": "#/components/schemas/SearchRequest" } }
+        }
+    }));
+    s.insert("BatchSearchResponse".into(), serde_json::json!({
+        "type": "object", "properties": {
+            "results": { "type": "array", "items": { "$ref": "#/components/schemas/SearchResponse" } }
+        }
+    }));
+    s.insert("RadiusSearchRequest".into(), serde_json::json!({
+        "type": "object", "required": ["vector", "radius"], "properties": {
+            "vector": { "type": "array", "items": { "type": "number", "format": "float" } },
+            "radius": { "type": "number", "description": "Maximum distance threshold" },
+            "filter": { "type": "object", "description": "MongoDB-style metadata filter" },
+            "limit": { "type": "integer", "default": 100 }
+        }
+    }));
+    s.insert("GraphSearchRequest".into(), serde_json::json!({
+        "type": "object", "required": ["vector"], "properties": {
+            "vector": { "type": "array", "items": { "type": "number", "format": "float" } },
+            "k": { "type": "integer", "default": 10 },
+            "depth": { "type": "integer", "default": 2, "description": "Graph traversal depth" }
+        }
+    }));
+    s.insert("MatryoshkaSearchRequest".into(), serde_json::json!({
+        "type": "object", "required": ["vector"], "properties": {
+            "vector": { "type": "array", "items": { "type": "number", "format": "float" } },
+            "k": { "type": "integer", "default": 10 },
+            "coarse_dimensions": { "type": "integer", "description": "Dimensions for first-pass coarse search" }
+        }
+    }));
+}
+
+fn openapi_schemas_text(s: &mut serde_json::Map<String, serde_json::Value>) {
+    s.insert("InsertTextRequest".into(), serde_json::json!({
+        "type": "object", "required": ["id", "text"], "properties": {
+            "id": { "type": "string" }, "text": { "type": "string" },
+            "metadata": { "type": "object", "additionalProperties": true }
+        }
+    }));
+    s.insert("BatchInsertTextRequest".into(), serde_json::json!({
+        "type": "object", "required": ["documents"], "properties": {
+            "documents": { "type": "array", "items": { "$ref": "#/components/schemas/InsertTextRequest" } }
+        }
+    }));
+    s.insert("TextSearchRequest".into(), serde_json::json!({
+        "type": "object", "required": ["text"], "properties": {
+            "text": { "type": "string" }, "k": { "type": "integer", "default": 10 },
+            "filter": { "type": "object", "description": "MongoDB-style metadata filter" }
+        }
+    }));
+}
+
+fn openapi_schemas_cache(s: &mut serde_json::Map<String, serde_json::Value>) {
+    s.insert("CacheLookupRequest".into(), serde_json::json!({
+        "type": "object", "required": ["query"], "properties": {
+            "query": { "type": "string", "description": "The query to look up in the cache" },
+            "threshold": { "type": "number", "description": "Similarity threshold for cache hits", "default": 0.95 }
+        }
+    }));
+    s.insert("CacheLookupResponse".into(), serde_json::json!({
+        "type": "object", "properties": {
+            "hit": { "type": "boolean" }, "response": { "type": "string", "nullable": true },
+            "similarity": { "type": "number", "nullable": true }
+        }
+    }));
+    s.insert("CacheStoreRequest".into(), serde_json::json!({
+        "type": "object", "required": ["query", "response"], "properties": {
+            "query": { "type": "string" }, "response": { "type": "string" },
+            "ttl_seconds": { "type": "integer", "description": "Optional TTL in seconds" }
+        }
+    }));
+}
+
+fn openapi_schemas_advanced(s: &mut serde_json::Map<String, serde_json::Value>) {
+    s.insert("IngestResponse".into(), serde_json::json!({
+        "type": "object", "properties": { "inserted": { "type": "integer" }, "errors": { "type": "integer" } }
+    }));
+    s.insert("TimeTravelSearchRequest".into(), serde_json::json!({
+        "type": "object", "required": ["vector", "timestamp"], "properties": {
+            "vector": { "type": "array", "items": { "type": "number", "format": "float" } },
+            "timestamp": { "type": "string", "format": "date-time", "description": "Point-in-time to search against" },
+            "k": { "type": "integer", "default": 10 }
+        }
+    }));
+    s.insert("SnapshotDiffRequest".into(), serde_json::json!({
+        "type": "object", "required": ["from", "to"], "properties": {
+            "from": { "type": "string", "description": "Source snapshot ID or timestamp" },
+            "to": { "type": "string", "description": "Target snapshot ID or timestamp" }
+        }
+    }));
+    s.insert("SnapshotDiffResponse".into(), serde_json::json!({
+        "type": "object", "properties": {
+            "added": { "type": "array", "items": { "type": "string" } },
+            "removed": { "type": "array", "items": { "type": "string" } },
+            "modified": { "type": "array", "items": { "type": "string" } }
+        }
+    }));
+    s.insert("RememberRequest".into(), serde_json::json!({
+        "type": "object", "required": ["content"], "properties": {
+            "content": { "type": "string", "description": "Memory content to store" },
+            "metadata": { "type": "object", "additionalProperties": true }
+        }
+    }));
+    s.insert("RememberResponse".into(), serde_json::json!({
+        "type": "object", "properties": { "memory_id": { "type": "string" } }
+    }));
+    s.insert("RecallRequest".into(), serde_json::json!({
+        "type": "object", "required": ["query"], "properties": {
+            "query": { "type": "string" }, "k": { "type": "integer", "default": 5 }
+        }
+    }));
+    s.insert("RecallResponse".into(), serde_json::json!({
+        "type": "object", "properties": {
+            "memories": { "type": "array", "items": { "type": "object", "properties": {
+                "id": { "type": "string" }, "content": { "type": "string" }, "similarity": { "type": "number" }
+            }}}
+        }
+    }));
+    s.insert("CostEstimateResponse".into(), serde_json::json!({
+        "type": "object", "properties": {
+            "estimated_latency_ms": { "type": "number" }, "estimated_comparisons": { "type": "integer" },
+            "index_type": { "type": "string" }
+        }
+    }));
+    s.insert("VectorDiffRequest".into(), serde_json::json!({
+        "type": "object", "required": ["ids_a", "ids_b"], "properties": {
+            "ids_a": { "type": "array", "items": { "type": "string" } },
+            "ids_b": { "type": "array", "items": { "type": "string" } }
+        }
+    }));
+    s.insert("BenchmarkRequest".into(), serde_json::json!({
+        "type": "object", "properties": {
+            "num_queries": { "type": "integer", "default": 100 },
+            "k": { "type": "integer", "default": 10 }, "dimensions": { "type": "integer" }
+        }
+    }));
+    s.insert("BenchmarkResponse".into(), serde_json::json!({
+        "type": "object", "properties": {
+            "qps": { "type": "number", "description": "Queries per second" },
+            "mean_latency_ms": { "type": "number" }, "p99_latency_ms": { "type": "number" },
+            "recall": { "type": "number" }
+        }
+    }));
+    s.insert("IndexStatusResponse".into(), serde_json::json!({
+        "type": "object", "properties": {
+            "indexed_vectors": { "type": "integer" }, "pending_vectors": { "type": "integer" },
+            "index_type": { "type": "string" }, "build_progress": { "type": "number" }
+        }
+    }));
+    s.insert("ClusterStatusResponse".into(), serde_json::json!({
+        "type": "object", "properties": {
+            "nodes": { "type": "integer" }, "shards": { "type": "integer" },
+            "status": { "type": "string", "enum": ["healthy", "degraded", "unavailable"] }
+        }
+    }));
+}
+
+fn openapi_schemas_management(s: &mut serde_json::Map<String, serde_json::Value>) {
+    s.insert("CreateWebhookRequest".into(), serde_json::json!({
+        "type": "object", "required": ["url", "events"], "properties": {
+            "url": { "type": "string", "format": "uri" },
+            "events": { "type": "array", "items": { "type": "string", "enum": ["insert", "delete", "update", "compact"] } },
+            "collection": { "type": "string", "description": "Optional: scope to a specific collection" }
+        }
+    }));
+    s.insert("WebhookResponse".into(), serde_json::json!({
+        "type": "object", "properties": {
+            "id": { "type": "string" }, "url": { "type": "string" },
+            "events": { "type": "array", "items": { "type": "string" } }
+        }
+    }));
+    s.insert("CreateAliasRequest".into(), serde_json::json!({
+        "type": "object", "required": ["alias", "collection"], "properties": {
+            "alias": { "type": "string" }, "collection": { "type": "string" }
+        }
+    }));
+    s.insert("UpdateAliasRequest".into(), serde_json::json!({
+        "type": "object", "required": ["collection"], "properties": { "collection": { "type": "string" } }
+    }));
+    s.insert("ExpireRequest".into(), serde_json::json!({
+        "type": "object", "properties": {
+            "max_age_seconds": { "type": "integer", "description": "Delete vectors older than this many seconds" }
+        }
+    }));
+    s.insert("TtlStatsResponse".into(), serde_json::json!({
+        "type": "object", "properties": {
+            "total_with_ttl": { "type": "integer" }, "expired": { "type": "integer" },
+            "earliest_expiry": { "type": "string", "format": "date-time", "nullable": true }
+        }
+    }));
+    s.insert("McpRequest".into(), serde_json::json!({
+        "type": "object", "required": ["method"], "properties": {
+            "method": { "type": "string", "description": "MCP tool method name" },
+            "params": { "type": "object", "additionalProperties": true }
+        }
+    }));
+    s.insert("McpResponse".into(), serde_json::json!({
+        "type": "object", "properties": { "result": { "type": "object", "additionalProperties": true } }
+    }));
 }
 
 /// Return the OpenAPI spec as a formatted JSON string.
