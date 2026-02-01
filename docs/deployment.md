@@ -292,9 +292,10 @@ helm uninstall needle
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `NEEDLE_DATA_DIR` | Data directory | `/data` |
+| `NEEDLE_DATABASE` | Database filename within data directory | `needle.db` |
 | `RUST_LOG` | Log level (error, warn, info, debug, trace) | `info` |
 | `NEEDLE_ADDRESS` | Server bind address | `0.0.0.0:8080` |
-| `NEEDLE_METRICS_PORT` | Prometheus metrics port | `9090` |
+| `NEEDLE_METRICS_PORT` | Prometheus metrics port (used in Kubernetes deployments) | `9090` |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | OpenTelemetry OTLP collector endpoint | — |
 | `OTEL_SERVICE_NAME` | Service name for distributed traces | `needle` |
 | `OPENAI_API_KEY` | API key for OpenAI embeddings | — |
@@ -303,6 +304,9 @@ helm uninstall needle
 | `HUGGINGFACE_MODEL` | Hugging Face model name | `sentence-transformers/all-MiniLM-L6-v2` |
 | `EDGE_CONFIG` | Edge runtime configuration (experimental) | — |
 | `BLOB_READ_WRITE_TOKEN` | Blob storage read/write token (experimental) | — |
+| `NEEDLE_DB_PATH` | Database file path (used in cloud deploy configs: GCP Cloud Run, AWS App Runner, Azure Container Instances) | `/data/vectors.needle` |
+| `NEEDLE_HOST` | Server bind host (used in cloud deploy configs) | `0.0.0.0` |
+| `NEEDLE_PORT` | Server bind port (used in cloud deploy configs) | `8080` |
 
 ### Server Configuration
 
@@ -450,6 +454,88 @@ ingress:
 ---
 
 ## Troubleshooting
+
+### Server Won't Start
+
+**Port already in use:**
+```bash
+# Check what's using the port
+lsof -i :8080
+# Or change the bind address
+NEEDLE_ADDRESS=0.0.0.0:8081 needle serve
+```
+
+**Missing data directory:**
+```bash
+# Ensure the data directory exists and is writable
+mkdir -p /data
+# Or specify a different path
+needle serve --database /tmp/vectors.needle
+```
+
+### Database File Permission Errors
+
+```bash
+# Check file ownership and permissions
+ls -la /path/to/vectors.needle
+
+# Fix permissions (Docker: ensure the container user matches the file owner)
+chmod 644 /path/to/vectors.needle
+chown $(id -u):$(id -g) /path/to/vectors.needle
+
+# Docker volume mounts — use explicit user mapping
+docker run -u $(id -u):$(id -g) -v /host/data:/data ghcr.io/anthropics/needle
+```
+
+### OTEL Exporter Connection Failures
+
+```bash
+# Verify the OTLP endpoint is reachable
+curl -v http://localhost:4317
+
+# Check the environment variable is set correctly
+echo $OTEL_EXPORTER_OTLP_ENDPOINT
+
+# Disable tracing temporarily to isolate the issue
+unset OTEL_EXPORTER_OTLP_ENDPOINT
+needle serve
+```
+
+If the collector is running but connections fail, ensure the endpoint uses the correct
+protocol (`http` vs `grpc`) and port (`4317` for gRPC, `4318` for HTTP).
+
+### Embedding Provider API Key Errors
+
+```bash
+# Verify API key is set
+echo $OPENAI_API_KEY | head -c 8
+
+# Test connectivity (OpenAI example)
+curl -s https://api.openai.com/v1/models \
+  -H "Authorization: Bearer $OPENAI_API_KEY" | head -c 200
+
+# Common causes:
+# - Key not exported in the shell (use `export OPENAI_API_KEY=sk-...`)
+# - Key not passed into Docker container (add -e OPENAI_API_KEY to docker run)
+# - Rate limiting — check provider dashboard for quota status
+```
+
+### Docker Volume Mount Issues
+
+```bash
+# Container won't start — check logs
+docker logs needle
+
+# Verify permissions on data directory
+ls -la /path/to/data
+
+# Common fix: ensure the host directory exists before mounting
+mkdir -p /host/data
+docker run -v /host/data:/data ghcr.io/anthropics/needle
+
+# SELinux systems may require the :z flag
+docker run -v /host/data:/data:z ghcr.io/anthropics/needle
+```
 
 ### Common Issues
 
