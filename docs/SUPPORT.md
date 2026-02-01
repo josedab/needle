@@ -43,7 +43,7 @@ Add `needle = "0.1"` to your `Cargo.toml`. For Python, use `pip install needle-d
 
 ## 📋 Before Asking for Help
 
-1. Check the [documentation](docs/) for your topic
+1. Check the [documentation](.) for your topic
 2. Search [existing issues](https://github.com/anthropics/needle/issues) and [discussions](https://github.com/anthropics/needle/discussions)
 3. Try the latest version — your issue may already be fixed
 4. Prepare a minimal reproduction if reporting a bug
