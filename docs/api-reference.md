@@ -586,7 +586,11 @@ Health check endpoint.
 
 ```bash
 curl http://localhost:8080/health
-# {"status":"ok"}
+```
+
+**Response:**
+```json
+{"status": "ok"}
 ```
 
 #### `GET /` or `GET /info`
@@ -616,7 +620,11 @@ Persist all in-memory changes to disk.
 
 ```bash
 curl -X POST http://localhost:8080/save
-# {"saved":true}
+```
+
+**Response:**
+```json
+{"saved": true}
 ```
 
 #### `GET /openapi.json`
@@ -652,7 +660,11 @@ Create a new collection.
 curl -X POST http://localhost:8080/collections \
   -H "Content-Type: application/json" \
   -d '{"name": "docs", "dimension": 384}'
-# {"created":"docs"}
+```
+
+**Response:**
+```json
+{"created": "docs"}
 ```
 
 #### `GET /collections`
@@ -661,7 +673,11 @@ List all collections.
 
 ```bash
 curl http://localhost:8080/collections
-# {"collections":["docs","images"]}
+```
+
+**Response:**
+```json
+{"collections": ["docs", "images"]}
 ```
 
 #### `GET /collections/:name`
@@ -670,7 +686,11 @@ Get collection info and statistics.
 
 ```bash
 curl http://localhost:8080/collections/docs
-# {"name":"docs","dimensions":384,"count":1500,"distance":"cosine"}
+```
+
+**Response:**
+```json
+{"name": "docs", "dimensions": 384, "count": 1500, "distance": "cosine"}
 ```
 
 #### `DELETE /collections/:name`
@@ -697,7 +717,11 @@ Export all vectors and metadata as JSON.
 
 ```bash
 curl http://localhost:8080/collections/docs/export
-# {"vectors":[{"id":"doc1","values":[0.1,...],"metadata":{...}},...],"count":1500}
+```
+
+**Response:**
+```json
+{"vectors": [{"id": "doc1", "values": [0.1, ...], "metadata": {"title": "Hello"}}], "count": 1500}
 ```
 
 #### `POST /collections/:name/expire`
@@ -743,7 +767,11 @@ Insert one or more vectors.
 curl -X POST http://localhost:8080/collections/docs/vectors \
   -H "Content-Type: application/json" \
   -d '{"vectors": [{"id": "doc1", "values": [0.1, 0.2, 0.3], "metadata": {"title": "Hello"}}]}'
-# {"inserted":1}
+```
+
+**Response:**
+```json
+{"inserted": 1}
 ```
 
 #### `POST /collections/:collection/vectors/batch`
@@ -808,7 +836,11 @@ Get a specific vector and its metadata.
 
 ```bash
 curl http://localhost:8080/collections/docs/vectors/doc1
-# {"id":"doc1","values":[0.1,0.2,0.3],"metadata":{"title":"Hello"}}
+```
+
+**Response:**
+```json
+{"id": "doc1", "values": [0.1, 0.2, 0.3], "metadata": {"title": "Hello"}}
 ```
 
 #### `DELETE /collections/:collection/vectors/:id`
@@ -817,7 +849,11 @@ Delete a vector by ID.
 
 ```bash
 curl -X DELETE http://localhost:8080/collections/docs/vectors/doc1
-# {"deleted":"doc1"}
+```
+
+**Response:**
+```json
+{"deleted": "doc1"}
 ```
 
 #### `POST /collections/:collection/vectors/:id/metadata`
