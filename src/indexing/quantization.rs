@@ -856,4 +856,179 @@ mod tests {
         let dist = BinaryQuantizer::hamming_distance(&c1, &c2);
         assert!(dist > 0, "Binary codes should be different");
     }
+
+    // ── Edge case tests ──────────────────────────────────────────────────
+
+    #[test]
+    fn test_scalar_quantizer_empty_training() {
+        let sq = ScalarQuantizer::train(&[]);
+        assert_eq!(sq.dimensions(), 0);
+    }
+
+    #[test]
+    fn test_scalar_quantizer_single_vector() {
+        let vectors: Vec<Vec<f32>> = vec![vec![1.0, 2.0, 3.0]];
+        let refs: Vec<&[f32]> = vectors.iter().map(|v| v.as_slice()).collect();
+        let sq = ScalarQuantizer::train(&refs);
+
+        let quantized = sq.quantize(&[1.0, 2.0, 3.0]);
+        let dequantized = sq.dequantize(&quantized);
+        assert_eq!(dequantized.len(), 3);
+    }
+
+    #[test]
+    fn test_scalar_quantizer_identical_values() {
+        let vectors: Vec<Vec<f32>> = vec![
+            vec![5.0, 5.0, 5.0],
+            vec![5.0, 5.0, 5.0],
+        ];
+        let refs: Vec<&[f32]> = vectors.iter().map(|v| v.as_slice()).collect();
+        let sq = ScalarQuantizer::train(&refs);
+
+        // Range is 0, scale should be 1.0 (fallback)
+        let quantized = sq.quantize(&[5.0, 5.0, 5.0]);
+        assert_eq!(quantized.len(), 3);
+    }
+
+    #[test]
+    #[should_panic(expected = "non-finite")]
+    fn test_scalar_quantizer_nan_training_panics() {
+        let vectors: Vec<Vec<f32>> = vec![vec![f32::NAN, 1.0, 2.0]];
+        let refs: Vec<&[f32]> = vectors.iter().map(|v| v.as_slice()).collect();
+        ScalarQuantizer::train(&refs);
+    }
+
+    #[test]
+    #[should_panic(expected = "non-finite")]
+    fn test_scalar_quantizer_infinity_training_panics() {
+        let vectors: Vec<Vec<f32>> = vec![vec![f32::INFINITY, 1.0, 2.0]];
+        let refs: Vec<&[f32]> = vectors.iter().map(|v| v.as_slice()).collect();
+        ScalarQuantizer::train(&refs);
+    }
+
+    #[test]
+    fn test_scalar_quantizer_out_of_range_clamped() {
+        let vectors: Vec<Vec<f32>> = vec![
+            vec![0.0, 0.0],
+            vec![1.0, 1.0],
+        ];
+        let refs: Vec<&[f32]> = vectors.iter().map(|v| v.as_slice()).collect();
+        let sq = ScalarQuantizer::train(&refs);
+
+        // Values outside training range should be clamped
+        let quantized = sq.quantize(&[-100.0, 100.0]);
+        assert_eq!(quantized[0], 0);   // clamped to min
+        assert_eq!(quantized[1], 255); // clamped to max
+    }
+
+    #[test]
+    #[should_panic(expected = "output buffer too small")]
+    fn test_scalar_quantize_into_buffer_too_small() {
+        let vectors: Vec<Vec<f32>> = vec![vec![0.0, 1.0]];
+        let refs: Vec<&[f32]> = vectors.iter().map(|v| v.as_slice()).collect();
+        let sq = ScalarQuantizer::train(&refs);
+
+        let mut out = [0u8; 1]; // too small for 2 dims
+        sq.quantize_into(&[0.5, 0.5], &mut out);
+    }
+
+    #[test]
+    #[should_panic(expected = "output buffer too small")]
+    fn test_scalar_dequantize_into_buffer_too_small() {
+        let vectors: Vec<Vec<f32>> = vec![vec![0.0, 1.0]];
+        let refs: Vec<&[f32]> = vectors.iter().map(|v| v.as_slice()).collect();
+        let sq = ScalarQuantizer::train(&refs);
+
+        let mut out = [0.0f32; 1]; // too small
+        sq.dequantize_into(&[128, 128], &mut out);
+    }
+
+    #[test]
+    fn test_scalar_distance_squared() {
+        let vectors: Vec<Vec<f32>> = vec![
+            vec![0.0, 0.0],
+            vec![1.0, 1.0],
+        ];
+        let refs: Vec<&[f32]> = vectors.iter().map(|v| v.as_slice()).collect();
+        let sq = ScalarQuantizer::train(&refs);
+
+        let a = sq.quantize(&[0.0, 0.0]);
+        let b = sq.quantize(&[1.0, 1.0]);
+        let dist = sq.distance_squared(&a, &b);
+        assert!(dist > 0.0);
+
+        // Same vector should have zero distance
+        let self_dist = sq.distance_squared(&a, &a);
+        assert!((self_dist - 0.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn test_product_quantizer_empty_training() {
+        let pq = ProductQuantizer::train(&[], 4);
+        assert_eq!(pq.subvector_dim(), 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "output buffer too small")]
+    fn test_product_encode_into_buffer_too_small() {
+        let vectors: Vec<Vec<f32>> = (0..50)
+            .map(|i| vec![i as f32 * 0.01; 8])
+            .collect();
+        let refs: Vec<&[f32]> = vectors.iter().map(|v| v.as_slice()).collect();
+        let pq = ProductQuantizer::train(&refs, 2);
+
+        let mut out = [0u8; 1]; // too small for 2 subvectors
+        pq.encode_into(&[0.5; 8], &mut out);
+    }
+
+    #[test]
+    fn test_binary_quantizer_empty_training() {
+        let bq = BinaryQuantizer::train(&[]);
+        assert_eq!(bq.dimensions, 0);
+    }
+
+    #[test]
+    fn test_binary_quantizer_hamming_distance_same() {
+        let dist = BinaryQuantizer::hamming_distance(&[0xFF], &[0xFF]);
+        assert_eq!(dist, 0);
+    }
+
+    #[test]
+    fn test_binary_quantizer_hamming_distance_max() {
+        let dist = BinaryQuantizer::hamming_distance(&[0x00], &[0xFF]);
+        assert_eq!(dist, 8);
+    }
+
+    #[test]
+    fn test_binary_quantizer_hamming_distance_empty() {
+        let dist = BinaryQuantizer::hamming_distance(&[], &[]);
+        assert_eq!(dist, 0);
+    }
+
+    // ── QuantizedIndex persistence ───────────────────────────────────────
+
+    #[test]
+    fn test_quantized_index_serde_roundtrip_scalar() {
+        let vectors: Vec<Vec<f32>> = vec![vec![0.0, 1.0], vec![1.0, 0.0]];
+        let refs: Vec<&[f32]> = vectors.iter().map(|v| v.as_slice()).collect();
+        let sq = ScalarQuantizer::train(&refs);
+
+        let qi = QuantizedIndex::Scalar(sq);
+        let bytes = qi.to_bytes();
+        let restored = QuantizedIndex::from_bytes(&bytes).unwrap();
+        assert_eq!(restored.dimensions(), 2);
+        assert_eq!(restored.compression_label(), "4x (scalar u8)");
+    }
+
+    #[test]
+    fn test_quantized_index_from_bytes_corrupted() {
+        let result = QuantizedIndex::from_bytes(b"not valid json");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_quantized_index_from_bytes_empty() {
+        let result = QuantizedIndex::from_bytes(b"");
+        assert!(result.is_err());
+    }
 }
