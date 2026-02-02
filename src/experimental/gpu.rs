@@ -3679,4 +3679,125 @@ mod tests {
         mgr2.reset();
         assert_eq!(mgr2.gpu_reliability(), 1.0);
     }
+
+    // ── FFI failure & edge case tests ────────────────────────────────────
+
+    #[test]
+    fn test_batch_cosine_distance_empty() {
+        let gpu = GpuAccelerator::with_cpu_fallback(GpuConfig::default());
+        let results = gpu.batch_cosine_distance(&[1.0, 0.0], &[]).unwrap();
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_batch_euclidean_distance_empty() {
+        let gpu = GpuAccelerator::with_cpu_fallback(GpuConfig::default());
+        let results = gpu.batch_euclidean_distance(&[1.0, 0.0], &[]).unwrap();
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_batch_dot_product_empty() {
+        let gpu = GpuAccelerator::with_cpu_fallback(GpuConfig::default());
+        let results = gpu.batch_dot_product(&[1.0, 0.0], &[]).unwrap();
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_batch_euclidean_dimension_mismatch() {
+        let gpu = GpuAccelerator::with_cpu_fallback(GpuConfig::default());
+        let query = vec![1.0, 0.0, 0.0];
+        let vectors = vec![vec![1.0, 0.0]]; // wrong dimension
+
+        let result = gpu.batch_euclidean_distance(&query, &vectors);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_batch_top_k_empty_distances() {
+        let gpu = GpuAccelerator::with_cpu_fallback(GpuConfig::default());
+        let result = gpu.batch_top_k(&[], 5).unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_batch_top_k_k_larger_than_input() {
+        let gpu = GpuAccelerator::with_cpu_fallback(GpuConfig::default());
+        let distances = vec![0.5, 0.1, 0.3];
+        let result = gpu.batch_top_k(&distances, 10).unwrap();
+        assert_eq!(result.len(), 3); // capped at input length
+    }
+
+    #[test]
+    fn test_batch_normalize_empty() {
+        let gpu = GpuAccelerator::with_cpu_fallback(GpuConfig::default());
+        let mut vectors: Vec<Vec<f32>> = vec![];
+        gpu.batch_normalize(&mut vectors).unwrap();
+        assert!(vectors.is_empty());
+    }
+
+    #[test]
+    fn test_batch_normalize_zero_vector() {
+        let gpu = GpuAccelerator::with_cpu_fallback(GpuConfig::default());
+        let mut vectors = vec![vec![0.0, 0.0, 0.0]];
+        gpu.batch_normalize(&mut vectors).unwrap();
+        // Zero vector normalization should not produce NaN
+        for v in &vectors[0] {
+            assert!(v.is_finite());
+        }
+    }
+
+    #[test]
+    fn test_fused_search_all_distance_types() {
+        let gpu = GpuAccelerator::with_cpu_fallback(GpuConfig::default());
+        let query = vec![1.0, 0.0, 0.0];
+        let vectors = vec![vec![1.0, 0.0, 0.0], vec![0.0, 1.0, 0.0]];
+
+        for dist_type in [DistanceType::Cosine, DistanceType::Euclidean, DistanceType::DotProduct] {
+            let results = gpu.fused_search(&query, &vectors, 2, dist_type).unwrap();
+            assert_eq!(results.len(), 2);
+        }
+    }
+
+    #[test]
+    fn test_matmul_empty() {
+        let gpu = GpuAccelerator::with_cpu_fallback(GpuConfig::default());
+        let a: Vec<Vec<f32>> = vec![];
+        let b: Vec<Vec<f32>> = vec![];
+        let result = gpu.matmul(&a, &b);
+        assert!(result.is_ok() || result.is_err()); // no panic
+    }
+
+    #[test]
+    fn test_quantize_dequantize_single_element() {
+        let gpu = GpuAccelerator::with_cpu_fallback(GpuConfig::default());
+        let vectors = vec![vec![0.5]];
+        let (quantized, params) = gpu.quantize_to_int8(&vectors).unwrap();
+        let dequantized = gpu.dequantize_from_int8(&quantized, &params).unwrap();
+        assert_eq!(dequantized.len(), 1);
+        assert!((dequantized[0][0] - 0.5).abs() < 0.1);
+    }
+
+    #[test]
+    fn test_gpu_device_default_config() {
+        let config = GpuConfig::default();
+        assert_eq!(config.preferred_backend, GpuBackend::Auto);
+        assert!(!config.use_fp16);
+    }
+
+    #[test]
+    fn test_gpu_backend_display() {
+        // Verify all backend variants can be used
+        let backends = [
+            GpuBackend::Auto,
+            GpuBackend::Cuda,
+            GpuBackend::Metal,
+            GpuBackend::OpenCL,
+            GpuBackend::Vulkan,
+            GpuBackend::CpuSimd,
+        ];
+        for b in &backends {
+            let _ = format!("{:?}", b);
+        }
+    }
 }
