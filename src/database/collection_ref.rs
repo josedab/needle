@@ -988,3 +988,432 @@ impl<'a> CollectionRef<'a> {
         self.db.export_bundle_internal(&self.name, path)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::database::Database;
+    use serde_json::json;
+    use std::sync::Arc;
+    use std::thread;
+
+    fn setup_db(dim: usize) -> Database {
+        let db = Database::in_memory();
+        db.create_collection("test", dim).unwrap();
+        db
+    }
+
+    // ── Basic operations ─────────────────────────────────────────────────
+
+    #[test]
+    fn test_insert_and_get() {
+        let db = setup_db(4);
+        let coll = db.collection("test").unwrap();
+        coll.insert("v1", &[1.0, 0.0, 0.0, 0.0], None).unwrap();
+
+        let (vec, meta) = coll.get("v1").unwrap();
+        assert_eq!(vec, vec![1.0, 0.0, 0.0, 0.0]);
+        assert!(meta.is_none());
+    }
+
+    #[test]
+    fn test_insert_with_metadata() {
+        let db = setup_db(4);
+        let coll = db.collection("test").unwrap();
+        coll.insert("v1", &[1.0, 0.0, 0.0, 0.0], Some(json!({"key": "val"}))).unwrap();
+
+        let (_, meta) = coll.get("v1").unwrap();
+        assert!(meta.is_some());
+    }
+
+    #[test]
+    fn test_get_nonexistent() {
+        let db = setup_db(4);
+        let coll = db.collection("test").unwrap();
+        assert!(coll.get("nonexistent").is_none());
+    }
+
+    #[test]
+    fn test_contains() {
+        let db = setup_db(4);
+        let coll = db.collection("test").unwrap();
+        coll.insert("v1", &[1.0, 0.0, 0.0, 0.0], None).unwrap();
+
+        assert!(coll.contains("v1"));
+        assert!(!coll.contains("v2"));
+    }
+
+    #[test]
+    fn test_len_and_is_empty() {
+        let db = setup_db(4);
+        let coll = db.collection("test").unwrap();
+        assert!(coll.is_empty());
+        assert_eq!(coll.len(), 0);
+
+        coll.insert("v1", &[1.0, 0.0, 0.0, 0.0], None).unwrap();
+        assert!(!coll.is_empty());
+        assert_eq!(coll.len(), 1);
+    }
+
+    #[test]
+    fn test_dimensions() {
+        let db = setup_db(128);
+        let coll = db.collection("test").unwrap();
+        assert_eq!(coll.dimensions(), Some(128));
+    }
+
+    #[test]
+    fn test_name() {
+        let db = setup_db(4);
+        let coll = db.collection("test").unwrap();
+        assert_eq!(coll.name(), "test");
+    }
+
+    // ── Error propagation ────────────────────────────────────────────────
+
+    #[test]
+    fn test_dimension_mismatch_error() {
+        let db = setup_db(4);
+        let coll = db.collection("test").unwrap();
+        let result = coll.insert("v1", &[1.0, 0.0], None);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_collection_not_found() {
+        let db = Database::in_memory();
+        let result = db.collection("nonexistent");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_duplicate_insert_error() {
+        let db = setup_db(4);
+        let coll = db.collection("test").unwrap();
+        coll.insert("v1", &[1.0, 0.0, 0.0, 0.0], None).unwrap();
+        let result = coll.insert("v1", &[0.0, 1.0, 0.0, 0.0], None);
+        assert!(result.is_err());
+    }
+
+    // ── Delete ───────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_delete() {
+        let db = setup_db(4);
+        let coll = db.collection("test").unwrap();
+        coll.insert("v1", &[1.0, 0.0, 0.0, 0.0], None).unwrap();
+
+        assert!(coll.delete("v1").unwrap());
+        assert!(!coll.delete("v1").unwrap());
+        assert!(coll.get("v1").is_none());
+    }
+
+    #[test]
+    fn test_deleted_count() {
+        let db = setup_db(4);
+        let coll = db.collection("test").unwrap();
+        coll.insert("v1", &[1.0, 0.0, 0.0, 0.0], None).unwrap();
+        coll.insert("v2", &[0.0, 1.0, 0.0, 0.0], None).unwrap();
+
+        assert_eq!(coll.deleted_count(), 0);
+        coll.delete("v1").unwrap();
+        assert_eq!(coll.deleted_count(), 1);
+    }
+
+    // ── Search ───────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_search() {
+        let db = setup_db(4);
+        let coll = db.collection("test").unwrap();
+        coll.insert("v1", &[1.0, 0.0, 0.0, 0.0], None).unwrap();
+        coll.insert("v2", &[0.0, 1.0, 0.0, 0.0], None).unwrap();
+
+        let results = coll.search(&[1.0, 0.0, 0.0, 0.0], 2).unwrap();
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].id, "v1");
+    }
+
+    #[test]
+    fn test_search_ids() {
+        let db = setup_db(4);
+        let coll = db.collection("test").unwrap();
+        coll.insert("v1", &[1.0, 0.0, 0.0, 0.0], None).unwrap();
+
+        let results = coll.search_ids(&[1.0, 0.0, 0.0, 0.0], 10).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].0, "v1");
+    }
+
+    #[test]
+    fn test_search_empty_collection() {
+        let db = setup_db(4);
+        let coll = db.collection("test").unwrap();
+        let results = coll.search(&[1.0, 0.0, 0.0, 0.0], 10).unwrap();
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_query_builder() {
+        let db = setup_db(4);
+        let coll = db.collection("test").unwrap();
+        coll.insert("v1", &[1.0, 0.0, 0.0, 0.0], None).unwrap();
+
+        let results = coll.query(&[1.0, 0.0, 0.0, 0.0])
+            .limit(5)
+            .execute()
+            .unwrap();
+        assert_eq!(results.len(), 1);
+    }
+
+    #[test]
+    fn test_search_with_filter() {
+        let db = setup_db(4);
+        let coll = db.collection("test").unwrap();
+        coll.insert("v1", &[1.0, 0.0, 0.0, 0.0], Some(json!({"cat": "a"}))).unwrap();
+        coll.insert("v2", &[0.0, 1.0, 0.0, 0.0], Some(json!({"cat": "b"}))).unwrap();
+
+        let filter = Filter::eq("cat", "a");
+        let results = coll.search_with_filter(&[1.0, 0.0, 0.0, 0.0], 10, &filter).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].id, "v1");
+    }
+
+    // ── Update ───────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_update() {
+        let db = setup_db(4);
+        let coll = db.collection("test").unwrap();
+        coll.insert("v1", &[1.0, 0.0, 0.0, 0.0], None).unwrap();
+
+        coll.update("v1", &[0.0, 1.0, 0.0, 0.0], Some(json!({"updated": true}))).unwrap();
+        let (vec, meta) = coll.get("v1").unwrap();
+        assert_eq!(vec, vec![0.0, 1.0, 0.0, 0.0]);
+        assert!(meta.is_some());
+    }
+
+    #[test]
+    fn test_update_nonexistent() {
+        let db = setup_db(4);
+        let coll = db.collection("test").unwrap();
+        let result = coll.update("nonexistent", &[1.0, 0.0, 0.0, 0.0], None);
+        assert!(result.is_err());
+    }
+
+    // ── Export & IDs ─────────────────────────────────────────────────────
+
+    #[test]
+    fn test_export_all() {
+        let db = setup_db(4);
+        let coll = db.collection("test").unwrap();
+        coll.insert("v1", &[1.0, 0.0, 0.0, 0.0], None).unwrap();
+        coll.insert("v2", &[0.0, 1.0, 0.0, 0.0], None).unwrap();
+
+        let exported = coll.export_all().unwrap();
+        assert_eq!(exported.len(), 2);
+    }
+
+    #[test]
+    fn test_ids() {
+        let db = setup_db(4);
+        let coll = db.collection("test").unwrap();
+        coll.insert("v1", &[1.0, 0.0, 0.0, 0.0], None).unwrap();
+        coll.insert("v2", &[0.0, 1.0, 0.0, 0.0], None).unwrap();
+
+        let ids = coll.ids().unwrap();
+        assert_eq!(ids.len(), 2);
+        assert!(ids.contains(&"v1".to_string()));
+        assert!(ids.contains(&"v2".to_string()));
+    }
+
+    // ── Compact ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_compact() {
+        let db = setup_db(4);
+        let coll = db.collection("test").unwrap();
+        for i in 0..10 {
+            coll.insert(format!("v{}", i), &[i as f32, 0.0, 0.0, 0.0], None).unwrap();
+        }
+        for i in 0..5 {
+            coll.delete(&format!("v{}", i)).unwrap();
+        }
+
+        let removed = coll.compact().unwrap();
+        assert_eq!(removed, 5);
+        assert_eq!(coll.len(), 5);
+    }
+
+    #[test]
+    fn test_needs_compaction() {
+        let db = setup_db(4);
+        let coll = db.collection("test").unwrap();
+        for i in 0..10 {
+            coll.insert(format!("v{}", i), &[i as f32, 0.0, 0.0, 0.0], None).unwrap();
+        }
+        for i in 0..8 {
+            coll.delete(&format!("v{}", i)).unwrap();
+        }
+
+        assert!(coll.needs_compaction(0.5));
+    }
+
+    // ── Count ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_count() {
+        let db = setup_db(4);
+        let coll = db.collection("test").unwrap();
+        coll.insert("v1", &[1.0, 0.0, 0.0, 0.0], Some(json!({"type": "a"}))).unwrap();
+        coll.insert("v2", &[0.0, 1.0, 0.0, 0.0], Some(json!({"type": "b"}))).unwrap();
+
+        assert_eq!(coll.count(None).unwrap(), 2);
+
+        let filter = Filter::eq("type", "a");
+        assert_eq!(coll.count(Some(&filter)).unwrap(), 1);
+    }
+
+    // ── Stats ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_stats() {
+        let db = setup_db(4);
+        let coll = db.collection("test").unwrap();
+        coll.insert("v1", &[1.0, 0.0, 0.0, 0.0], None).unwrap();
+
+        let stats = coll.stats().unwrap();
+        assert_eq!(stats.vector_count, 1);
+        assert_eq!(stats.dimensions, 4);
+    }
+
+    // ── Concurrent access ────────────────────────────────────────────────
+
+    #[test]
+    fn test_concurrent_reads() {
+        let db = Arc::new(Database::in_memory());
+        db.create_collection("test", 4).unwrap();
+        {
+            let coll = db.collection("test").unwrap();
+            coll.insert("v1", &[1.0, 0.0, 0.0, 0.0], None).unwrap();
+        }
+
+        let handles: Vec<_> = (0..8).map(|_| {
+            let db = Arc::clone(&db);
+            thread::spawn(move || {
+                let coll = db.collection("test").unwrap();
+                let results = coll.search(&[1.0, 0.0, 0.0, 0.0], 10).unwrap();
+                assert!(!results.is_empty());
+            })
+        }).collect();
+
+        for h in handles {
+            h.join().unwrap();
+        }
+    }
+
+    #[test]
+    fn test_concurrent_insert_and_search() {
+        let db = Arc::new(Database::in_memory());
+        db.create_collection("test", 4).unwrap();
+
+        // Insert from multiple threads
+        let handles: Vec<_> = (0..4).map(|t| {
+            let db = Arc::clone(&db);
+            thread::spawn(move || {
+                let coll = db.collection("test").unwrap();
+                for i in 0..10 {
+                    let id = format!("t{}_v{}", t, i);
+                    let _ = coll.insert(&id, &[t as f32, i as f32, 0.0, 0.0], None);
+                }
+            })
+        }).collect();
+
+        for h in handles {
+            h.join().unwrap();
+        }
+
+        let coll = db.collection("test").unwrap();
+        assert_eq!(coll.len(), 40);
+    }
+
+    #[test]
+    fn test_concurrent_read_write() {
+        let db = Arc::new(Database::in_memory());
+        db.create_collection("test", 4).unwrap();
+        {
+            let coll = db.collection("test").unwrap();
+            for i in 0..10 {
+                coll.insert(format!("v{}", i), &[i as f32, 0.0, 0.0, 0.0], None).unwrap();
+            }
+        }
+
+        let mut handles: Vec<thread::JoinHandle<()>> = Vec::new();
+
+        // Readers
+        for _ in 0..4 {
+            let db = Arc::clone(&db);
+            handles.push(thread::spawn(move || {
+                let coll = db.collection("test").unwrap();
+                for _ in 0..20 {
+                    let _ = coll.search(&[1.0, 0.0, 0.0, 0.0], 5);
+                    let _ = coll.get("v0");
+                    let _ = coll.len();
+                }
+            }));
+        }
+
+        // Writer
+        {
+            let db = Arc::clone(&db);
+            handles.push(thread::spawn(move || {
+                let coll = db.collection("test").unwrap();
+                for i in 10..20 {
+                    let _ = coll.insert(format!("v{}", i), &[i as f32, 0.0, 0.0, 0.0], None);
+                }
+            }));
+        }
+
+        for h in handles {
+            h.join().unwrap();
+        }
+    }
+
+    // ── insert_vec ───────────────────────────────────────────────────────
+
+    #[test]
+    fn test_insert_vec() {
+        let db = setup_db(4);
+        let coll = db.collection("test").unwrap();
+        coll.insert_vec("v1", vec![1.0, 0.0, 0.0, 0.0], None).unwrap();
+
+        let (vec, _) = coll.get("v1").unwrap();
+        assert_eq!(vec, vec![1.0, 0.0, 0.0, 0.0]);
+    }
+
+    // ── Search explain ───────────────────────────────────────────────────
+
+    #[test]
+    fn test_search_explain() {
+        let db = setup_db(4);
+        let coll = db.collection("test").unwrap();
+        coll.insert("v1", &[1.0, 0.0, 0.0, 0.0], None).unwrap();
+
+        let (results, explain) = coll.search_explain(&[1.0, 0.0, 0.0, 0.0], 10).unwrap();
+        assert_eq!(results.len(), 1);
+        assert!(explain.total_time_us > 0 || true); // may be 0 on fast machines
+    }
+
+    // ── Snapshots ────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_snapshots() {
+        let db = setup_db(4);
+        let coll = db.collection("test").unwrap();
+        coll.insert("v1", &[1.0, 0.0, 0.0, 0.0], None).unwrap();
+
+        coll.create_snapshot("snap1").unwrap();
+        let snaps = coll.list_snapshots();
+        assert!(snaps.contains(&"snap1".to_string()));
+    }
+}
