@@ -705,4 +705,179 @@ mod tests {
         let result = index.search(&[1.0; 32], 5);
         assert!(matches!(result, Err(IvfError::NotTrained)));
     }
+
+    // ── Edge case tests ──────────────────────────────────────────────────
+
+    #[test]
+    fn test_ivf_k_greater_than_total_vectors() {
+        let config = IvfConfig::new(4).with_nprobe(4);
+        let mut index = IvfIndex::new(16, config);
+
+        let vectors = random_vectors(20, 16);
+        let refs: Vec<&[f32]> = vectors.iter().map(|v| v.as_slice()).collect();
+        index.train(&refs).unwrap();
+
+        for (i, v) in vectors.iter().enumerate() {
+            index.insert(i, v).unwrap();
+        }
+
+        // Request more results than vectors exist
+        let results = index.search(&vectors[0], 100).unwrap();
+        assert!(results.len() <= 20, "Should return at most the number of indexed vectors");
+        assert!(!results.is_empty());
+    }
+
+    #[test]
+    fn test_ivf_search_k_zero() {
+        let config = IvfConfig::new(4).with_nprobe(4);
+        let mut index = IvfIndex::new(16, config);
+
+        let vectors = random_vectors(50, 16);
+        let refs: Vec<&[f32]> = vectors.iter().map(|v| v.as_slice()).collect();
+        index.train(&refs).unwrap();
+
+        for (i, v) in vectors.iter().enumerate() {
+            index.insert(i, v).unwrap();
+        }
+
+        let results = index.search(&vectors[0], 0).unwrap();
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_ivf_empty_training_data() {
+        let config = IvfConfig::new(4);
+        let mut index = IvfIndex::new(32, config);
+
+        let result = index.train(&[]);
+        assert!(matches!(result, Err(IvfError::EmptyTrainingData)));
+    }
+
+    #[test]
+    fn test_ivf_insert_not_trained_error() {
+        let mut index = IvfIndex::new(32, IvfConfig::default());
+        let result = index.insert(0, &[1.0; 32]);
+        assert!(matches!(result, Err(IvfError::NotTrained)));
+    }
+
+    #[test]
+    fn test_ivf_search_dimension_mismatch() {
+        let config = IvfConfig::new(4);
+        let mut index = IvfIndex::new(32, config);
+
+        let vectors = random_vectors(50, 32);
+        let refs: Vec<&[f32]> = vectors.iter().map(|v| v.as_slice()).collect();
+        index.train(&refs).unwrap();
+
+        let result = index.search(&[1.0; 16], 5); // wrong dimension
+        assert!(matches!(result, Err(IvfError::DimensionMismatch { .. })));
+    }
+
+    #[test]
+    fn test_ivf_train_dimension_mismatch() {
+        let config = IvfConfig::new(4);
+        let mut index = IvfIndex::new(32, config);
+
+        let vectors = vec![vec![1.0; 16]]; // wrong dim
+        let refs: Vec<&[f32]> = vectors.iter().map(|v| v.as_slice()).collect();
+        let result = index.train(&refs);
+        assert!(matches!(result, Err(IvfError::DimensionMismatch { .. })));
+    }
+
+    #[test]
+    fn test_ivf_more_clusters_than_data() {
+        // n_clusters > n_vectors: should cap at n_vectors
+        let config = IvfConfig::new(100).with_nprobe(10);
+        let mut index = IvfIndex::new(8, config);
+
+        let vectors = random_vectors(10, 8); // only 10 vectors but 100 clusters requested
+        let refs: Vec<&[f32]> = vectors.iter().map(|v| v.as_slice()).collect();
+        index.train(&refs).unwrap();
+
+        assert!(index.is_trained());
+        // Clusters should be capped at num vectors
+        assert!(index.clusters.len() <= 10);
+    }
+
+    #[test]
+    fn test_ivf_clear() {
+        let config = IvfConfig::new(4).with_nprobe(4);
+        let mut index = IvfIndex::new(16, config);
+
+        let vectors = random_vectors(50, 16);
+        let refs: Vec<&[f32]> = vectors.iter().map(|v| v.as_slice()).collect();
+        index.train(&refs).unwrap();
+
+        for (i, v) in vectors.iter().enumerate() {
+            index.insert(i, v).unwrap();
+        }
+        assert_eq!(index.len(), 50);
+
+        index.clear();
+        assert_eq!(index.len(), 0);
+        assert!(index.is_empty());
+        assert!(index.is_trained()); // still trained, centroids preserved
+    }
+
+    #[test]
+    fn test_ivf_clear_cluster() {
+        let config = IvfConfig::new(4).with_nprobe(4);
+        let mut index = IvfIndex::new(16, config);
+
+        let vectors = random_vectors(50, 16);
+        let refs: Vec<&[f32]> = vectors.iter().map(|v| v.as_slice()).collect();
+        index.train(&refs).unwrap();
+
+        for (i, v) in vectors.iter().enumerate() {
+            index.insert(i, v).unwrap();
+        }
+
+        let removed = index.clear_cluster(0).unwrap();
+        assert!(removed <= 50);
+    }
+
+    #[test]
+    fn test_ivf_clear_invalid_cluster() {
+        let config = IvfConfig::new(4);
+        let mut index = IvfIndex::new(16, config);
+
+        let vectors = random_vectors(50, 16);
+        let refs: Vec<&[f32]> = vectors.iter().map(|v| v.as_slice()).collect();
+        index.train(&refs).unwrap();
+
+        let result = index.clear_cluster(999);
+        assert!(matches!(result, Err(IvfError::InvalidConfig(_))));
+    }
+
+    #[test]
+    fn test_ivf_single_vector() {
+        let config = IvfConfig::new(1).with_nprobe(1);
+        let mut index = IvfIndex::new(4, config);
+
+        let vectors = random_vectors(1, 4);
+        let refs: Vec<&[f32]> = vectors.iter().map(|v| v.as_slice()).collect();
+        index.train(&refs).unwrap();
+        index.insert(0, &vectors[0]).unwrap();
+
+        let results = index.search(&vectors[0], 1).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].0, 0);
+    }
+
+    #[test]
+    fn test_ivf_batch_insert() {
+        let config = IvfConfig::new(4).with_nprobe(4);
+        let mut index = IvfIndex::new(16, config);
+
+        let vectors = random_vectors(50, 16);
+        let refs: Vec<&[f32]> = vectors.iter().map(|v| v.as_slice()).collect();
+        index.train(&refs).unwrap();
+
+        let batch: Vec<(usize, &[f32])> = vectors.iter().enumerate()
+            .map(|(i, v)| (i, v.as_slice()))
+            .collect();
+        index.insert_batch(&batch).unwrap();
+
+        assert_eq!(index.len(), 50);
+    }
 }
