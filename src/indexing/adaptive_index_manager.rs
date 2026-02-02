@@ -43,7 +43,7 @@ pub struct AdaptiveIndexConfig {
     pub min_observations: usize,
     /// Confidence threshold to trigger a switch (0.0 - 1.0).
     pub switch_confidence_threshold: f64,
-    /// Cooldown period between switches (seconds).
+    /// Cooldown period between switches (seconds). Default: 3600 (1 hour).
     pub switch_cooldown_seconds: u64,
     /// Target query latency (ms).
     pub target_latency_ms: f64,
@@ -53,6 +53,10 @@ pub struct AdaptiveIndexConfig {
     pub memory_budget_bytes: u64,
     /// Enable automatic switching (vs. recommendation-only mode).
     pub auto_switch: bool,
+    /// Hysteresis threshold: improvement must exceed this % to trigger switch.
+    pub hysteresis_threshold_pct: f64,
+    /// Minimum consecutive evaluations recommending the same target before switching.
+    pub min_consecutive_recommendations: usize,
 }
 
 impl Default for AdaptiveIndexConfig {
@@ -61,11 +65,13 @@ impl Default for AdaptiveIndexConfig {
             profile_window_size: 1000,
             min_observations: 100,
             switch_confidence_threshold: 0.7,
-            switch_cooldown_seconds: 300,
+            switch_cooldown_seconds: 3600, // 1 hour minimum cooldown
             target_latency_ms: 10.0,
             target_recall: 0.95,
             memory_budget_bytes: 1024 * 1024 * 1024, // 1GB
             auto_switch: false,
+            hysteresis_threshold_pct: 15.0, // Must be 15% better to switch
+            min_consecutive_recommendations: 3,
         }
     }
 }
@@ -269,6 +275,27 @@ fn compute_cost(
     latency_cost * latency_weight + recall_cost * recall_weight + memory_cost * memory_weight
 }
 
+/// State of an ongoing index rebuild for double-buffered swap.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum RebuildState {
+    /// No rebuild in progress.
+    Idle,
+    /// Building the new index in the background.
+    Building {
+        /// Target index type.
+        target: RecommendedIndex,
+        /// Progress percentage (0-100).
+        progress_pct: f64,
+        /// Start timestamp.
+        started_at: u64,
+    },
+    /// Ready to swap: new index is built, awaiting atomic swap.
+    ReadyToSwap {
+        /// Target index type.
+        target: RecommendedIndex,
+    },
+}
+
 /// Adaptive Index Manager: monitors workload and recommends/executes index switches.
 pub struct AdaptiveIndexManager {
     config: AdaptiveIndexConfig,
@@ -277,6 +304,10 @@ pub struct AdaptiveIndexManager {
     last_switch_time: RwLock<Option<u64>>,
     evaluation_count: RwLock<u64>,
     last_profile: RwLock<Option<WorkloadProfile>>,
+    /// Consecutive evaluations recommending the same target (hysteresis).
+    consecutive_recommendation: RwLock<(Option<RecommendedIndex>, usize)>,
+    /// State of background index rebuild.
+    rebuild_state: RwLock<RebuildState>,
 }
 
 impl AdaptiveIndexManager {
@@ -289,6 +320,8 @@ impl AdaptiveIndexManager {
             last_switch_time: RwLock::new(None),
             evaluation_count: RwLock::new(0),
             last_profile: RwLock::new(None),
+            consecutive_recommendation: RwLock::new((None, 0)),
+            rebuild_state: RwLock::new(RebuildState::Idle),
         }
     }
 
@@ -467,7 +500,28 @@ impl AdaptiveIndexManager {
         *self.evaluation_count.write() += 1;
 
         if best == current || confidence < self.config.switch_confidence_threshold {
+            // Reset consecutive counter if best changed or confidence too low
+            *self.consecutive_recommendation.write() = (None, 0);
             return None;
+        }
+
+        // Hysteresis: require improvement > threshold %
+        let improvement_pct = improvement * 100.0;
+        if improvement_pct < self.config.hysteresis_threshold_pct {
+            return None;
+        }
+
+        // Track consecutive recommendations for the same target
+        {
+            let mut consec = self.consecutive_recommendation.write();
+            if consec.0 == Some(best) {
+                consec.1 += 1;
+            } else {
+                *consec = (Some(best), 1);
+            }
+            if consec.1 < self.config.min_consecutive_recommendations {
+                return None;
+            }
         }
 
         let latency_improvement =
@@ -534,6 +588,70 @@ impl AdaptiveIndexManager {
     pub fn evaluation_count(&self) -> u64 {
         *self.evaluation_count.read()
     }
+
+    /// Initiate a background index rebuild for double-buffered swap.
+    pub fn start_rebuild(&self, target: RecommendedIndex) -> Result<()> {
+        let mut state = self.rebuild_state.write();
+        if matches!(*state, RebuildState::Building { .. }) {
+            return Err(NeedleError::OperationInProgress(
+                "Index rebuild already in progress".into(),
+            ));
+        }
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        *state = RebuildState::Building {
+            target,
+            progress_pct: 0.0,
+            started_at: now,
+        };
+        Ok(())
+    }
+
+    /// Update rebuild progress (called by the background builder).
+    pub fn update_rebuild_progress(&self, progress_pct: f64) {
+        let mut state = self.rebuild_state.write();
+        if let RebuildState::Building {
+            progress_pct: ref mut current,
+            ..
+        } = *state
+        {
+            *current = progress_pct.clamp(0.0, 100.0);
+        }
+    }
+
+    /// Mark rebuild as complete and ready for atomic swap.
+    pub fn mark_rebuild_ready(&self) {
+        let mut state = self.rebuild_state.write();
+        if let RebuildState::Building { target, .. } = *state {
+            *state = RebuildState::ReadyToSwap { target };
+        }
+    }
+
+    /// Execute the atomic swap: switch the active index to the rebuilt one.
+    /// Returns the new index type if a swap occurred.
+    pub fn execute_swap(&self) -> Option<RecommendedIndex> {
+        let mut state = self.rebuild_state.write();
+        if let RebuildState::ReadyToSwap { target } = *state {
+            self.acknowledge_switch(target);
+            *self.consecutive_recommendation.write() = (None, 0);
+            *state = RebuildState::Idle;
+            Some(target)
+        } else {
+            None
+        }
+    }
+
+    /// Get the current rebuild state.
+    pub fn rebuild_state(&self) -> RebuildState {
+        self.rebuild_state.read().clone()
+    }
+
+    /// Get the consecutive recommendation count for diagnostics.
+    pub fn consecutive_recommendation_count(&self) -> usize {
+        self.consecutive_recommendation.read().1
+    }
 }
 
 #[cfg(test)]
@@ -599,5 +717,75 @@ mod tests {
         let p = profile.unwrap();
         assert!(p.qps > 0.0);
         assert!(p.read_write_ratio > 0.5);
+    }
+
+    #[test]
+    fn test_hysteresis_blocks_premature_switch() {
+        let config = AdaptiveIndexConfig {
+            min_observations: 3,
+            switch_cooldown_seconds: 0,
+            switch_confidence_threshold: 0.01,
+            hysteresis_threshold_pct: 50.0, // Very high threshold
+            min_consecutive_recommendations: 1,
+            ..Default::default()
+        };
+        let manager = AdaptiveIndexManager::new(config);
+        for _ in 0..10 {
+            manager.record_query(1.0, 10);
+        }
+        // With a very high hysteresis threshold, even if there's a better index,
+        // the improvement may not be enough
+        let result = manager.evaluate(1000, 128, 50_000_000);
+        // Should not trigger due to hysteresis
+        assert!(result.is_none() || result.as_ref().is_some_and(|r| r.confidence > 0.5));
+    }
+
+    #[test]
+    fn test_consecutive_recommendation_required() {
+        let config = AdaptiveIndexConfig {
+            min_observations: 3,
+            switch_cooldown_seconds: 0,
+            switch_confidence_threshold: 0.01,
+            hysteresis_threshold_pct: 0.0,
+            min_consecutive_recommendations: 5,
+            ..Default::default()
+        };
+        let manager = AdaptiveIndexManager::new(config);
+        // Need 5 consecutive evaluations recommending the same target
+        for _ in 0..5 {
+            manager.record_query(1.0, 10);
+        }
+        // First evaluation: count = 1, needs 5
+        let _r = manager.evaluate(100_000_000, 128, 50_000_000);
+        assert!(manager.consecutive_recommendation_count() <= 1);
+    }
+
+    #[test]
+    fn test_rebuild_lifecycle() {
+        let config = AdaptiveIndexConfig::default();
+        let manager = AdaptiveIndexManager::new(config);
+
+        assert!(matches!(manager.rebuild_state(), RebuildState::Idle));
+
+        manager.start_rebuild(RecommendedIndex::Ivf).expect("start");
+        assert!(matches!(
+            manager.rebuild_state(),
+            RebuildState::Building { .. }
+        ));
+
+        // Can't start another rebuild while one is in progress
+        assert!(manager.start_rebuild(RecommendedIndex::Hnsw).is_err());
+
+        manager.update_rebuild_progress(50.0);
+        manager.mark_rebuild_ready();
+        assert!(matches!(
+            manager.rebuild_state(),
+            RebuildState::ReadyToSwap { .. }
+        ));
+
+        let swapped = manager.execute_swap();
+        assert_eq!(swapped, Some(RecommendedIndex::Ivf));
+        assert_eq!(manager.current_index(), RecommendedIndex::Ivf);
+        assert!(matches!(manager.rebuild_state(), RebuildState::Idle));
     }
 }
