@@ -1060,4 +1060,155 @@ mod tests {
         let short_key = vec![0u8; 16];
         assert!(LocalKekProvider::new(&short_key, "kek").is_err());
     }
+
+    // ── Adversarial tests ────────────────────────────────────────────────
+
+    #[test]
+    fn test_tampered_ciphertext_detected() {
+        let mut encryptor = create_encryptor();
+        let vector = vec![1.0, 2.0, 3.0, 4.0];
+        let mut encrypted = encryptor.encrypt("v1", &vector, HashMap::new()).unwrap();
+
+        // Tamper with ciphertext
+        if !encrypted.ciphertext.is_empty() {
+            encrypted.ciphertext[0] ^= 0xFF;
+        }
+
+        let result = encryptor.decrypt(&encrypted);
+        assert!(result.is_err(), "Tampered ciphertext should fail decryption");
+    }
+
+    #[test]
+    fn test_tampered_auth_tag_detected() {
+        let mut encryptor = create_encryptor();
+        let vector = vec![1.0, 2.0, 3.0, 4.0];
+        let mut encrypted = encryptor.encrypt("v1", &vector, HashMap::new()).unwrap();
+
+        // Tamper with auth tag
+        if !encrypted.auth_tag.is_empty() {
+            encrypted.auth_tag[0] ^= 0xFF;
+        }
+
+        let result = encryptor.decrypt(&encrypted);
+        assert!(result.is_err(), "Tampered auth tag should fail decryption");
+    }
+
+    #[test]
+    fn test_tampered_nonce_detected() {
+        let mut encryptor = create_encryptor();
+        let vector = vec![1.0, 2.0, 3.0];
+        let mut encrypted = encryptor.encrypt("v1", &vector, HashMap::new()).unwrap();
+
+        // Tamper with nonce
+        encrypted.nonce[0] ^= 0xFF;
+
+        let result = encryptor.decrypt(&encrypted);
+        assert!(result.is_err(), "Tampered nonce should fail decryption");
+    }
+
+    #[test]
+    fn test_decrypt_with_wrong_key() {
+        let key1 = vec![1u8; 32];
+        let key2 = vec![2u8; 32];
+
+        let mut enc1 = VectorEncryptor::new(
+            EncryptionConfig::default(),
+            KeyManager::new(&key1).unwrap(),
+        );
+        let mut enc2 = VectorEncryptor::new(
+            EncryptionConfig::default(),
+            KeyManager::new(&key2).unwrap(),
+        );
+
+        let vector = vec![1.0, 2.0, 3.0];
+        let encrypted = enc1.encrypt("v1", &vector, HashMap::new()).unwrap();
+
+        // Try to decrypt with wrong key
+        let result = enc2.decrypt(&encrypted);
+        assert!(result.is_err(), "Wrong key should fail decryption");
+    }
+
+    #[test]
+    fn test_empty_vector_encrypt_decrypt() {
+        let mut encryptor = create_encryptor();
+        let vector: Vec<f32> = vec![];
+        let encrypted = encryptor.encrypt("empty", &vector, HashMap::new()).unwrap();
+
+        let decrypted = encryptor.decrypt(&encrypted).unwrap();
+        assert!(decrypted.is_empty());
+    }
+
+    #[test]
+    fn test_single_element_vector() {
+        let mut encryptor = create_encryptor();
+        let vector = vec![42.0];
+        let encrypted = encryptor.encrypt("single", &vector, HashMap::new()).unwrap();
+
+        let decrypted = encryptor.decrypt(&encrypted).unwrap();
+        assert_eq!(decrypted, vector);
+    }
+
+    #[test]
+    fn test_large_vector_encrypt_decrypt() {
+        let mut encryptor = create_encryptor();
+        let vector: Vec<f32> = (0..1024).map(|i| i as f32 * 0.001).collect();
+        let encrypted = encryptor.encrypt("large", &vector, HashMap::new()).unwrap();
+
+        let decrypted = encryptor.decrypt(&encrypted).unwrap();
+        assert_eq!(decrypted.len(), 1024);
+        for (a, b) in vector.iter().zip(decrypted.iter()) {
+            assert!((a - b).abs() < f32::EPSILON);
+        }
+    }
+
+    #[test]
+    fn test_encrypt_twice_produces_different_ciphertext() {
+        let mut encryptor = create_encryptor();
+        let vector = vec![1.0, 2.0, 3.0];
+
+        let e1 = encryptor.encrypt("v1", &vector, HashMap::new()).unwrap();
+        let e2 = encryptor.encrypt("v2", &vector, HashMap::new()).unwrap();
+
+        // Different nonces should produce different ciphertext
+        assert_ne!(e1.nonce, e2.nonce);
+        assert_ne!(e1.ciphertext, e2.ciphertext);
+    }
+
+    #[test]
+    fn test_key_rotation_preserves_old_decryption() {
+        let kek = vec![55u8; 32];
+        let provider = LocalKekProvider::new(&kek, "kek-1").unwrap();
+        let manager = KeyRotationManager::new(Box::new(provider));
+
+        let (id1, dek1) = manager.generate_dek().unwrap();
+        let _id2 = manager.rotate().unwrap();
+
+        // Old key should still be accessible
+        let unwrapped = manager.unwrap_dek(&id1).unwrap();
+        assert_eq!(unwrapped, dek1);
+    }
+
+    #[test]
+    fn test_unwrap_nonexistent_dek() {
+        let kek = vec![55u8; 32];
+        let provider = LocalKekProvider::new(&kek, "kek-1").unwrap();
+        let manager = KeyRotationManager::new(Box::new(provider));
+
+        let result = manager.unwrap_dek("nonexistent-key-id");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_search_not_searchable_mode() {
+        let key = vec![0u8; 32];
+        let manager = KeyManager::new(&key).unwrap();
+        let config = EncryptionConfig {
+            searchable: false,
+            ..Default::default()
+        };
+        let encryptor = VectorEncryptor::new(config, manager);
+
+        let result = encryptor.search_encrypted(&[1.0, 2.0], &[], 5);
+        assert!(result.is_err());
+    }
 }
