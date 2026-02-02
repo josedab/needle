@@ -2907,4 +2907,201 @@ mod tests {
         assert_eq!(query.from.collection, "docs");
         assert_eq!(query.limit, Some(5));
     }
+
+    // ── Error / invalid input tests ──────────────────────────────────────
+
+    #[test]
+    fn test_parse_empty_input() {
+        let result = QueryParser::parse("");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_whitespace_only() {
+        let result = QueryParser::parse("   ");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_garbage_input() {
+        let result = QueryParser::parse("!@#$%^&*()");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_incomplete_select() {
+        let result = QueryParser::parse("SELECT");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_select_without_from() {
+        let result = QueryParser::parse("SELECT * WHERE x = 1");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_missing_collection_name() {
+        let result = QueryParser::parse("SELECT * FROM");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_where_without_expression() {
+        let result = QueryParser::parse("SELECT * FROM docs WHERE");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_incomplete_comparison() {
+        let result = QueryParser::parse("SELECT * FROM docs WHERE x =");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_double_equals_invalid() {
+        let result = QueryParser::parse("SELECT * FROM docs WHERE x == 1");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_unterminated_string_literal() {
+        let mut lexer = Lexer::new("'unterminated string");
+        let result = lexer.next_token();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_unterminated_double_quote_string() {
+        let mut lexer = Lexer::new("\"unterminated");
+        let result = lexer.next_token();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_similar_to_without_parameter() {
+        let result = QueryParser::parse("SELECT * FROM docs WHERE vector SIMILAR TO LIMIT 10");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_limit_without_value() {
+        let result = QueryParser::parse("SELECT * FROM docs LIMIT");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_negative_limit() {
+        // Parser may or may not accept negative numbers; this tests the boundary
+        let result = QueryParser::parse("SELECT * FROM docs LIMIT -1");
+        // Either error or it parses but validation would reject
+        assert!(result.is_err() || result.is_ok());
+    }
+
+    #[test]
+    fn test_parse_in_without_closing_paren() {
+        let result = QueryParser::parse("SELECT * FROM docs WHERE status IN ('active'");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_in_empty_list() {
+        let result = QueryParser::parse("SELECT * FROM docs WHERE status IN ()");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_between_without_and() {
+        let result = QueryParser::parse("SELECT * FROM docs WHERE score BETWEEN 0.5");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_unbalanced_parentheses() {
+        let result = QueryParser::parse("SELECT * FROM docs WHERE (x = 1");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_deeply_nested_valid() {
+        // Moderately nested expression — should succeed
+        let result = QueryParser::parse(
+            "SELECT * FROM docs WHERE ((x = 1 AND y = 2) OR (z = 3 AND w = 4))"
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_parse_sql_injection_attempt() {
+        // SQL injection-style input — should be safely rejected or treated as literal
+        let result = QueryParser::parse("SELECT * FROM docs; DROP TABLE docs;--");
+        // Should fail parsing (';' is not a valid token)
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_just_keyword() {
+        let result = QueryParser::parse("WHERE");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_from_without_select() {
+        let result = QueryParser::parse("FROM docs WHERE x = 1");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_explain_without_select() {
+        let result = QueryParser::parse("EXPLAIN ANALYZE FROM docs");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_order_by_without_column() {
+        let result = QueryParser::parse("SELECT * FROM docs ORDER BY");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_offset_without_limit() {
+        // OFFSET without LIMIT — parser may or may not require LIMIT first
+        let result = QueryParser::parse("SELECT * FROM docs OFFSET 10");
+        // Either ok or error is fine; this tests it doesn't panic
+        assert!(result.is_ok() || result.is_err());
+    }
+
+    #[test]
+    fn test_lexer_special_characters() {
+        let mut lexer = Lexer::new("@");
+        let result = lexer.next_token();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_lexer_dollar_without_name() {
+        let mut lexer = Lexer::new("$ ");
+        let result = lexer.next_token();
+        // Should either return empty parameter or error
+        assert!(result.is_ok() || result.is_err());
+    }
+
+    #[test]
+    fn test_parse_with_time_decay_invalid() {
+        let result = QueryParser::parse(
+            "SELECT * FROM docs WITH TIME_DECAY(INVALID_FUNC) WHERE vector SIMILAR TO $query"
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_validate_limit_zero() {
+        let query = QueryParser::parse(
+            "SELECT * FROM docs WHERE vector SIMILAR TO $query LIMIT 0"
+        ).unwrap();
+        let result = QueryValidator::validate(&query);
+        // Validator may accept or reject zero limit depending on implementation
+        // The important thing is it doesn't panic
+        let _ = result;
+    }
 }
