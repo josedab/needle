@@ -399,3 +399,291 @@ impl CollectionConfig {
         self
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::distance::DistanceFunction;
+
+    // ── try_new tests ────────────────────────────────────────────────────
+
+    #[test]
+    fn test_try_new_valid() {
+        let config = CollectionConfig::try_new("test", 128).unwrap();
+        assert_eq!(config.name, "test");
+        assert_eq!(config.dimensions, 128);
+        assert_eq!(config.distance, DistanceFunction::Cosine);
+    }
+
+    #[test]
+    fn test_try_new_zero_dimensions_returns_error() {
+        let result = CollectionConfig::try_new("test", 0);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(err, NeedleError::InvalidConfig(_)));
+    }
+
+    #[test]
+    fn test_try_new_single_dimension() {
+        let config = CollectionConfig::try_new("test", 1).unwrap();
+        assert_eq!(config.dimensions, 1);
+    }
+
+    #[test]
+    fn test_try_new_large_dimension() {
+        let config = CollectionConfig::try_new("test", 65536).unwrap();
+        assert_eq!(config.dimensions, 65536);
+    }
+
+    #[test]
+    fn test_try_new_empty_name() {
+        let config = CollectionConfig::try_new("", 128).unwrap();
+        assert_eq!(config.name, "");
+    }
+
+    // ── new panics ───────────────────────────────────────────────────────
+
+    #[test]
+    #[should_panic(expected = "Vector dimensions must be greater than 0")]
+    fn test_new_zero_dimensions_panics() {
+        CollectionConfig::new("test", 0);
+    }
+
+    // ── Builder methods ──────────────────────────────────────────────────
+
+    #[test]
+    fn test_with_distance() {
+        let config = CollectionConfig::new("test", 128)
+            .with_distance(DistanceFunction::Euclidean);
+        assert_eq!(config.distance, DistanceFunction::Euclidean);
+    }
+
+    #[test]
+    fn test_with_m() {
+        let config = CollectionConfig::new("test", 128).with_m(32);
+        assert_eq!(config.hnsw.m, 32);
+    }
+
+    #[test]
+    fn test_with_ef_construction() {
+        let config = CollectionConfig::new("test", 128).with_ef_construction(400);
+        assert_eq!(config.hnsw.ef_construction, 400);
+    }
+
+    #[test]
+    fn test_with_slow_query_threshold() {
+        let config = CollectionConfig::new("test", 128)
+            .with_slow_query_threshold_us(100_000);
+        assert_eq!(config.slow_query_threshold_us, Some(100_000));
+    }
+
+    // ── TTL configuration ────────────────────────────────────────────────
+
+    #[test]
+    fn test_default_ttl_is_none() {
+        let config = CollectionConfig::new("test", 128);
+        assert!(config.default_ttl_seconds.is_none());
+    }
+
+    #[test]
+    fn test_with_ttl_seconds() {
+        let config = CollectionConfig::new("test", 128)
+            .with_default_ttl_seconds(3600);
+        assert_eq!(config.default_ttl_seconds, Some(3600));
+    }
+
+    #[test]
+    fn test_with_ttl_zero() {
+        let config = CollectionConfig::new("test", 128)
+            .with_default_ttl_seconds(0);
+        assert_eq!(config.default_ttl_seconds, Some(0));
+    }
+
+    #[test]
+    fn test_with_ttl_max() {
+        let config = CollectionConfig::new("test", 128)
+            .with_default_ttl_seconds(u64::MAX);
+        assert_eq!(config.default_ttl_seconds, Some(u64::MAX));
+    }
+
+    // ── Lazy expiration ──────────────────────────────────────────────────
+
+    #[test]
+    fn test_lazy_expiration_default_true() {
+        let config = CollectionConfig::new("test", 128);
+        assert!(config.lazy_expiration);
+    }
+
+    #[test]
+    fn test_with_lazy_expiration_disabled() {
+        let config = CollectionConfig::new("test", 128)
+            .with_lazy_expiration(false);
+        assert!(!config.lazy_expiration);
+    }
+
+    // ── Query cache ──────────────────────────────────────────────────────
+
+    #[test]
+    fn test_query_cache_default_disabled() {
+        let config = CollectionConfig::new("test", 128);
+        assert!(!config.query_cache.is_enabled());
+        assert_eq!(config.query_cache.capacity, 0);
+    }
+
+    #[test]
+    fn test_with_query_cache() {
+        let config = CollectionConfig::new("test", 128)
+            .with_query_cache(QueryCacheConfig::new(1000));
+        assert!(config.query_cache.is_enabled());
+        assert_eq!(config.query_cache.capacity, 1000);
+    }
+
+    #[test]
+    fn test_with_query_cache_capacity() {
+        let config = CollectionConfig::new("test", 128)
+            .with_query_cache_capacity(500);
+        assert!(config.query_cache.is_enabled());
+        assert_eq!(config.query_cache.capacity, 500);
+    }
+
+    #[test]
+    fn test_query_cache_disabled() {
+        let cache = QueryCacheConfig::disabled();
+        assert!(!cache.is_enabled());
+        assert_eq!(cache.capacity, 0);
+    }
+
+    // ── Semantic cache ───────────────────────────────────────────────────
+
+    #[test]
+    fn test_semantic_cache_default_none() {
+        let config = CollectionConfig::new("test", 128);
+        assert!(config.semantic_cache.is_none());
+    }
+
+    #[test]
+    fn test_with_semantic_cache() {
+        let config = CollectionConfig::new("test", 128)
+            .with_semantic_cache(SemanticQueryCacheConfig::new(100, 0.95));
+        let sc = config.semantic_cache.unwrap();
+        assert_eq!(sc.capacity, 100);
+        assert!((sc.similarity_threshold - 0.95).abs() < f32::EPSILON);
+        assert!(sc.ttl_seconds.is_none());
+    }
+
+    #[test]
+    fn test_semantic_cache_with_ttl() {
+        let sc = SemanticQueryCacheConfig::new(50, 0.9)
+            .with_ttl_seconds(600);
+        assert_eq!(sc.ttl_seconds, Some(600));
+    }
+
+    #[test]
+    fn test_semantic_cache_defaults() {
+        let sc = SemanticQueryCacheConfig::default();
+        assert_eq!(sc.capacity, 100);
+        assert!((sc.similarity_threshold - 0.95).abs() < f32::EPSILON);
+        assert!(sc.ttl_seconds.is_none());
+    }
+
+    // ── QueryCacheStats ──────────────────────────────────────────────────
+
+    #[test]
+    fn test_hit_ratio_no_requests() {
+        let stats = QueryCacheStats::default();
+        assert!((stats.hit_ratio() - 0.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_hit_ratio_all_hits() {
+        let stats = QueryCacheStats {
+            hits: 100,
+            misses: 0,
+            ..Default::default()
+        };
+        assert!((stats.hit_ratio() - 1.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_hit_ratio_half() {
+        let stats = QueryCacheStats {
+            hits: 50,
+            misses: 50,
+            ..Default::default()
+        };
+        assert!((stats.hit_ratio() - 0.5).abs() < f64::EPSILON);
+    }
+
+    // ── Serialization round-trip ─────────────────────────────────────────
+
+    #[test]
+    fn test_config_serde_roundtrip() {
+        let config = CollectionConfig::new("test", 128)
+            .with_distance(DistanceFunction::DotProduct)
+            .with_default_ttl_seconds(3600)
+            .with_lazy_expiration(false)
+            .with_query_cache_capacity(500)
+            .with_semantic_cache(SemanticQueryCacheConfig::new(100, 0.9));
+
+        let json = serde_json::to_string(&config).unwrap();
+        let restored: CollectionConfig = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(restored.name, "test");
+        assert_eq!(restored.dimensions, 128);
+        assert_eq!(restored.default_ttl_seconds, Some(3600));
+        assert!(!restored.lazy_expiration);
+        assert_eq!(restored.query_cache.capacity, 500);
+        assert!(restored.semantic_cache.is_some());
+    }
+
+    // ── CollectionStats Display ──────────────────────────────────────────
+
+    fn make_hnsw_stats() -> crate::hnsw::HnswStats {
+        crate::hnsw::HnswStats {
+            num_vectors: 0,
+            num_deleted: 0,
+            num_layers: 0,
+            total_edges: 0,
+            avg_connections_per_node: 0.0,
+            entry_point: None,
+            entry_level: 0,
+            m: 16,
+            ef_construction: 200,
+            ef_search: 50,
+        }
+    }
+
+    #[test]
+    fn test_collection_stats_display_bytes() {
+        let stats = CollectionStats {
+            name: "test".to_string(),
+            vector_count: 10,
+            dimensions: 4,
+            distance_function: DistanceFunction::Cosine,
+            vector_memory_bytes: 500,
+            metadata_memory_bytes: 100,
+            index_memory_bytes: 200,
+            total_memory_bytes: 800,
+            index_stats: make_hnsw_stats(),
+        };
+        let display = format!("{}", stats);
+        assert!(display.contains("800 B"));
+    }
+
+    #[test]
+    fn test_collection_stats_display_kb() {
+        let stats = CollectionStats {
+            name: "test".to_string(),
+            vector_count: 100,
+            dimensions: 4,
+            distance_function: DistanceFunction::Cosine,
+            vector_memory_bytes: 0,
+            metadata_memory_bytes: 0,
+            index_memory_bytes: 0,
+            total_memory_bytes: 2048,
+            index_stats: make_hnsw_stats(),
+        };
+        let display = format!("{}", stats);
+        assert!(display.contains("KB"));
+    }
+}
