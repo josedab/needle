@@ -93,6 +93,10 @@ pub enum PluginType {
     PreSearchHook,
     /// Hook executed after search results are computed.
     PostSearchHook,
+    /// Custom embedding transformer (modifies vectors before/after embedding).
+    EmbeddingTransformer,
+    /// Custom index type.
+    IndexBackend,
     /// Alternative storage backend.
     StorageBackend,
     /// Uncategorised / user-defined.
@@ -105,6 +109,8 @@ impl fmt::Display for PluginType {
             Self::Distance => write!(f, "Distance"),
             Self::PreSearchHook => write!(f, "PreSearchHook"),
             Self::PostSearchHook => write!(f, "PostSearchHook"),
+            Self::EmbeddingTransformer => write!(f, "EmbeddingTransformer"),
+            Self::IndexBackend => write!(f, "IndexBackend"),
             Self::StorageBackend => write!(f, "StorageBackend"),
             Self::Custom => write!(f, "Custom"),
         }
@@ -227,6 +233,100 @@ pub trait PreSearchHook: Plugin {
 pub trait PostSearchHook: Plugin {
     /// Receives search results and returns (possibly modified) results.
     fn after_search(&self, results: Vec<SearchHookResult>) -> HookResult<Vec<SearchHookResult>>;
+}
+
+/// Trait for plugins that transform embedding vectors.
+///
+/// Used for custom normalization, dimension reduction, augmentation,
+/// or domain-specific vector modifications.
+pub trait EmbeddingTransformerPlugin: Plugin {
+    /// Transform a vector before it is indexed (called during insert).
+    fn transform_for_index(&self, vector: &[f32]) -> HookResult<Vec<f32>>;
+
+    /// Transform a query vector before search.
+    fn transform_for_query(&self, vector: &[f32]) -> HookResult<Vec<f32>> {
+        // Default: same transformation as indexing
+        self.transform_for_index(vector)
+    }
+
+    /// Whether this transformer changes the vector dimensions.
+    fn changes_dimensions(&self) -> bool {
+        false
+    }
+
+    /// Output dimensions (if `changes_dimensions` returns true).
+    fn output_dimensions(&self, input_dimensions: usize) -> usize {
+        input_dimensions
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Plugin directory manager
+// ---------------------------------------------------------------------------
+
+/// Manages the local plugin directory (~/.needle/plugins/).
+pub struct PluginDirectory {
+    /// Root directory for plugins.
+    root: std::path::PathBuf,
+}
+
+impl PluginDirectory {
+    /// Create a plugin directory manager for the default path.
+    pub fn default_path() -> Self {
+        let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+        Self {
+            root: std::path::PathBuf::from(home).join(".needle").join("plugins"),
+        }
+    }
+
+    /// Create a plugin directory at a custom path.
+    pub fn new(root: std::path::PathBuf) -> Self {
+        Self { root }
+    }
+
+    /// Ensure the plugin directory exists.
+    pub fn ensure_exists(&self) -> HookResult<()> {
+        std::fs::create_dir_all(&self.root).map_err(|e| {
+            PluginError::LifecycleError(format!("Failed to create plugin dir: {e}"))
+        })
+    }
+
+    /// List installed plugin names (subdirectories).
+    pub fn list_installed(&self) -> Vec<String> {
+        if !self.root.exists() {
+            return Vec::new();
+        }
+        std::fs::read_dir(&self.root)
+            .map(|entries| {
+                entries
+                    .filter_map(|e| e.ok())
+                    .filter(|e| e.path().is_dir())
+                    .filter_map(|e| e.file_name().into_string().ok())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Get the path for a specific plugin.
+    pub fn plugin_path(&self, name: &str) -> std::path::PathBuf {
+        self.root.join(name)
+    }
+
+    /// Remove a plugin's directory.
+    pub fn remove(&self, name: &str) -> HookResult<()> {
+        let path = self.plugin_path(name);
+        if !path.exists() {
+            return Err(PluginError::NotFound(name.to_string()));
+        }
+        std::fs::remove_dir_all(&path).map_err(|e| {
+            PluginError::LifecycleError(format!("Failed to remove plugin '{name}': {e}"))
+        })
+    }
+
+    /// Get the root directory path.
+    pub fn root(&self) -> &std::path::Path {
+        &self.root
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -528,6 +628,257 @@ impl<'a> PluginRef<'a> {
             .get(&self.name)
             .expect("plugin was registered")
             .as_ref()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Plugin API Version & Hook Version Negotiation
+// ---------------------------------------------------------------------------
+
+/// Plugin API version for compatibility checks.
+/// Plugins declare which API version they support; the host can reject
+/// incompatible plugins.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct ApiVersion {
+    /// Major version (breaking changes).
+    pub major: u32,
+    /// Minor version (backward-compatible additions).
+    pub minor: u32,
+}
+
+impl ApiVersion {
+    /// The current plugin API version.
+    pub const CURRENT: Self = Self { major: 1, minor: 0 };
+
+    /// Create a new API version.
+    pub const fn new(major: u32, minor: u32) -> Self {
+        Self { major, minor }
+    }
+
+    /// Check if a plugin's API version is compatible with the host.
+    pub fn is_compatible_with(&self, host: &ApiVersion) -> bool {
+        // Same major version, plugin minor <= host minor
+        self.major == host.major && self.minor <= host.minor
+    }
+}
+
+impl fmt::Display for ApiVersion {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "v{}.{}", self.major, self.minor)
+    }
+}
+
+/// Extended plugin trait with API version support.
+pub trait VersionedPlugin: Plugin {
+    /// The API version this plugin was built against.
+    fn api_version(&self) -> ApiVersion {
+        ApiVersion::CURRENT
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Plugin Permissions
+// ---------------------------------------------------------------------------
+
+/// Permissions a plugin can request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum PluginPermission {
+    /// Read vectors from collections.
+    ReadVectors,
+    /// Write/modify vectors.
+    WriteVectors,
+    /// Access metadata.
+    ReadMetadata,
+    /// Modify metadata.
+    WriteMetadata,
+    /// Access filesystem.
+    FileSystemAccess,
+    /// Make network requests.
+    NetworkAccess,
+    /// Access system metrics.
+    MetricsAccess,
+}
+
+/// Extended manifest with permissions and API version.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExtendedManifest {
+    /// Base manifest.
+    #[serde(flatten)]
+    pub base: PluginManifest,
+    /// API version.
+    pub api_version: ApiVersion,
+    /// Required permissions.
+    pub permissions: Vec<PluginPermission>,
+    /// Homepage URL.
+    pub homepage: Option<String>,
+    /// License identifier (e.g., "MIT", "Apache-2.0").
+    pub license: Option<String>,
+    /// Minimum Needle version required.
+    pub min_needle_version: Option<String>,
+}
+
+impl ExtendedManifest {
+    /// Parse an extended manifest from a TOML string.
+    pub fn from_toml(toml_str: &str) -> HookResult<Self> {
+        // Simple TOML parser for plugin manifests.
+        // Parses key = "value" lines within [plugin] section.
+        let mut name = String::new();
+        let mut version = String::new();
+        let mut author = String::new();
+        let mut description = String::new();
+        let mut plugin_type = PluginType::Custom;
+        let mut api_major = 1u32;
+        let mut api_minor = 0u32;
+        let mut permissions = Vec::new();
+        let mut homepage = None;
+        let mut license = None;
+        let mut min_needle_version = None;
+        let dependencies = Vec::new();
+
+        for line in toml_str.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') || line.starts_with('[') {
+                continue;
+            }
+            if let Some((key, val)) = line.split_once('=') {
+                let key = key.trim();
+                let val = val.trim().trim_matches('"');
+                match key {
+                    "name" => name = val.to_string(),
+                    "version" => version = val.to_string(),
+                    "author" => author = val.to_string(),
+                    "description" => description = val.to_string(),
+                    "type" => {
+                        plugin_type = match val {
+                            "distance" => PluginType::Distance,
+                            "pre_search" => PluginType::PreSearchHook,
+                            "post_search" => PluginType::PostSearchHook,
+                            "embedding_transformer" => PluginType::EmbeddingTransformer,
+                            "index" => PluginType::IndexBackend,
+                            "storage" => PluginType::StorageBackend,
+                            _ => PluginType::Custom,
+                        };
+                    }
+                    "api_major" => api_major = val.parse().unwrap_or(1),
+                    "api_minor" => api_minor = val.parse().unwrap_or(0),
+                    "homepage" => homepage = Some(val.to_string()),
+                    "license" => license = Some(val.to_string()),
+                    "min_needle_version" => min_needle_version = Some(val.to_string()),
+                    _ => {}
+                }
+            }
+        }
+
+        if name.is_empty() {
+            return Err(PluginError::LifecycleError("Missing 'name' in manifest".into()));
+        }
+
+        Ok(Self {
+            base: PluginManifest {
+                name,
+                version,
+                author,
+                description,
+                plugin_type,
+                dependencies,
+            },
+            api_version: ApiVersion::new(api_major, api_minor),
+            permissions,
+            homepage,
+            license,
+            min_needle_version,
+        })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// WASM Plugin Sandbox (placeholder)
+// ---------------------------------------------------------------------------
+
+/// Configuration for the WASM plugin sandbox.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WasmSandboxConfig {
+    /// Maximum memory in bytes (default: 64MB).
+    pub max_memory_bytes: u64,
+    /// Maximum execution time in milliseconds (default: 5000).
+    pub max_execution_ms: u64,
+    /// Allowed permissions.
+    pub allowed_permissions: HashSet<PluginPermission>,
+    /// Enable fuel-based CPU limiting.
+    pub fuel_limit: Option<u64>,
+}
+
+impl Default for WasmSandboxConfig {
+    fn default() -> Self {
+        Self {
+            max_memory_bytes: 64 * 1024 * 1024, // 64 MB
+            max_execution_ms: 5000,
+            allowed_permissions: HashSet::new(),
+            fuel_limit: Some(1_000_000),
+        }
+    }
+}
+
+/// State of a WASM plugin instance.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum WasmPluginState {
+    /// Not yet instantiated.
+    Unloaded,
+    /// Loaded and ready.
+    Ready,
+    /// Currently executing.
+    Running,
+    /// Encountered an error.
+    Error,
+    /// Terminated (exceeded limits).
+    Terminated,
+}
+
+/// Placeholder for a WASM plugin sandbox.
+/// Full implementation requires the `wasmtime` crate.
+#[derive(Debug)]
+pub struct WasmSandbox {
+    config: WasmSandboxConfig,
+    state: WasmPluginState,
+    plugin_name: Option<String>,
+}
+
+impl WasmSandbox {
+    /// Create a new WASM sandbox.
+    pub fn new(config: WasmSandboxConfig) -> Self {
+        Self {
+            config,
+            state: WasmPluginState::Unloaded,
+            plugin_name: None,
+        }
+    }
+
+    /// Load a WASM module from bytes.
+    /// This is a placeholder — actual implementation requires wasmtime.
+    pub fn load(&mut self, name: &str, _wasm_bytes: &[u8]) -> HookResult<()> {
+        self.plugin_name = Some(name.to_string());
+        self.state = WasmPluginState::Ready;
+        Ok(())
+    }
+
+    /// Check if the sandbox is ready to execute.
+    pub fn is_ready(&self) -> bool {
+        self.state == WasmPluginState::Ready
+    }
+
+    /// Get the current state.
+    pub fn state(&self) -> WasmPluginState {
+        self.state
+    }
+
+    /// Get the loaded plugin name.
+    pub fn plugin_name(&self) -> Option<&str> {
+        self.plugin_name.as_deref()
+    }
+
+    /// Terminate the sandbox.
+    pub fn terminate(&mut self) {
+        self.state = WasmPluginState::Terminated;
     }
 }
 
@@ -1087,5 +1438,75 @@ mod tests {
         let old = manager.hot_reload(Box::new(DummyPlugin::new())).unwrap();
         assert_eq!(old.name(), "dummy");
         assert_eq!(manager.len(), 1);
+    }
+
+    #[test]
+    fn test_api_version_compatibility() {
+        let v1_0 = ApiVersion::new(1, 0);
+        let v1_1 = ApiVersion::new(1, 1);
+        let v2_0 = ApiVersion::new(2, 0);
+
+        assert!(v1_0.is_compatible_with(&v1_0));
+        assert!(v1_0.is_compatible_with(&v1_1)); // plugin 1.0 works with host 1.1
+        assert!(!v1_1.is_compatible_with(&v1_0)); // plugin 1.1 doesn't work with host 1.0
+        assert!(!v2_0.is_compatible_with(&v1_0)); // different major
+    }
+
+    #[test]
+    fn test_extended_manifest_from_toml() {
+        let toml = r#"
+[plugin]
+name = "my-distance"
+version = "0.1.0"
+author = "Test Author"
+description = "Custom weighted distance"
+type = "distance"
+api_major = "1"
+api_minor = "0"
+license = "MIT"
+homepage = "https://example.com"
+"#;
+        let manifest = ExtendedManifest::from_toml(toml).expect("parse");
+        assert_eq!(manifest.base.name, "my-distance");
+        assert_eq!(manifest.base.version, "0.1.0");
+        assert_eq!(manifest.base.plugin_type, PluginType::Distance);
+        assert_eq!(manifest.api_version, ApiVersion::new(1, 0));
+        assert_eq!(manifest.license, Some("MIT".into()));
+        assert_eq!(manifest.homepage, Some("https://example.com".into()));
+    }
+
+    #[test]
+    fn test_extended_manifest_missing_name() {
+        let toml = r#"
+version = "0.1.0"
+"#;
+        let result = ExtendedManifest::from_toml(toml);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_wasm_sandbox_lifecycle() {
+        let config = WasmSandboxConfig::default();
+        let mut sandbox = WasmSandbox::new(config);
+
+        assert_eq!(sandbox.state(), WasmPluginState::Unloaded);
+        assert!(!sandbox.is_ready());
+
+        sandbox.load("test-plugin", b"fake-wasm-bytes").expect("load");
+        assert_eq!(sandbox.state(), WasmPluginState::Ready);
+        assert!(sandbox.is_ready());
+        assert_eq!(sandbox.plugin_name(), Some("test-plugin"));
+
+        sandbox.terminate();
+        assert_eq!(sandbox.state(), WasmPluginState::Terminated);
+        assert!(!sandbox.is_ready());
+    }
+
+    #[test]
+    fn test_wasm_sandbox_config_defaults() {
+        let config = WasmSandboxConfig::default();
+        assert_eq!(config.max_memory_bytes, 64 * 1024 * 1024);
+        assert_eq!(config.max_execution_ms, 5000);
+        assert!(config.fuel_limit.is_some());
     }
 }
