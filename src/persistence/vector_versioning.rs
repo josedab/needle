@@ -467,6 +467,183 @@ impl VersionedStore {
     pub fn stats(&self) -> &VersioningStats {
         &self.stats
     }
+
+    /// Get all vectors visible at a given snapshot, returning (id, vector, metadata).
+    /// This provides snapshot isolation: you see exactly the state at that timestamp.
+    pub fn snapshot_read(&self, timestamp: u64) -> Vec<(String, Vec<f32>, Option<serde_json::Value>)> {
+        self.versions
+            .iter()
+            .filter_map(|(id, _)| {
+                self.get_as_of(id, timestamp).map(|entry| {
+                    (id.clone(), entry.vector.clone(), entry.metadata.clone())
+                })
+            })
+            .collect()
+    }
+
+    /// Create a versioned search builder for fluent as_of queries.
+    pub fn search_builder(&self) -> VersionedSearchBuilder<'_> {
+        VersionedSearchBuilder::new(self)
+    }
+
+    /// Get the diff between two timestamps: inserted, updated, and deleted vector IDs.
+    pub fn diff_between(&self, from_ts: u64, to_ts: u64) -> VersionDiff {
+        let mut diff = VersionDiff::default();
+        for (id, chain) in &self.versions {
+            let was_visible = self.get_as_of(id, from_ts);
+            let is_visible = self.get_as_of(id, to_ts);
+
+            match (was_visible, is_visible) {
+                (None, Some(_)) => diff.inserted.push(id.clone()),
+                (Some(_), None) => diff.deleted.push(id.clone()),
+                (Some(old), Some(new)) if old.version != new.version => {
+                    diff.updated.push(id.clone());
+                }
+                _ => {}
+            }
+        }
+        diff
+    }
+
+    /// Estimate storage overhead from versioning.
+    pub fn storage_overhead(&self) -> VersioningOverhead {
+        let mut total_vector_bytes: u64 = 0;
+        let mut latest_vector_bytes: u64 = 0;
+
+        for chain in self.versions.values() {
+            for entry in chain {
+                let bytes = (entry.vector.len() * 4) as u64;
+                total_vector_bytes += bytes;
+            }
+            if let Some(last) = chain.back() {
+                latest_vector_bytes += (last.vector.len() * 4) as u64;
+            }
+        }
+
+        VersioningOverhead {
+            total_bytes: total_vector_bytes,
+            latest_only_bytes: latest_vector_bytes,
+            overhead_ratio: if latest_vector_bytes > 0 {
+                total_vector_bytes as f64 / latest_vector_bytes as f64
+            } else {
+                1.0
+            },
+        }
+    }
+}
+
+/// Diff between two timestamps.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct VersionDiff {
+    /// Vector IDs inserted between the two timestamps.
+    pub inserted: Vec<String>,
+    /// Vector IDs updated between the two timestamps.
+    pub updated: Vec<String>,
+    /// Vector IDs deleted between the two timestamps.
+    pub deleted: Vec<String>,
+}
+
+/// Storage overhead from versioning.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VersioningOverhead {
+    /// Total bytes used by all versions.
+    pub total_bytes: u64,
+    /// Bytes that would be used if only latest versions were kept.
+    pub latest_only_bytes: u64,
+    /// Overhead ratio (total / latest_only). 1.0 = no overhead.
+    pub overhead_ratio: f64,
+}
+
+/// Fluent builder for versioned searches.
+pub struct VersionedSearchBuilder<'a> {
+    store: &'a VersionedStore,
+    query_type: VersionQuery,
+}
+
+impl<'a> VersionedSearchBuilder<'a> {
+    fn new(store: &'a VersionedStore) -> Self {
+        Self {
+            store,
+            query_type: VersionQuery::Latest,
+        }
+    }
+
+    /// Set the query to read as of a specific timestamp.
+    #[must_use]
+    pub fn as_of(mut self, timestamp: u64) -> Self {
+        self.query_type = VersionQuery::AsOf(timestamp);
+        self
+    }
+
+    /// Set the query to read a specific version.
+    #[must_use]
+    pub fn at_version(mut self, version: u64) -> Self {
+        self.query_type = VersionQuery::AtVersion(version);
+        self
+    }
+
+    /// Set the query to read the latest version.
+    #[must_use]
+    pub fn latest(mut self) -> Self {
+        self.query_type = VersionQuery::Latest;
+        self
+    }
+
+    /// Set the query to a time range.
+    #[must_use]
+    pub fn range(mut self, start: u64, end: u64) -> Self {
+        self.query_type = VersionQuery::Range { start, end };
+        self
+    }
+
+    /// Execute the query for a specific vector ID.
+    pub fn get(&self, id: &str) -> Option<Vec<&VersionEntry>> {
+        self.store.query(id, &self.query_type)
+    }
+
+    /// Get all visible vectors at the configured point in time.
+    /// Returns (id, vector, metadata) tuples.
+    pub fn get_all(&self) -> Vec<(String, Vec<f32>, Option<serde_json::Value>)> {
+        match &self.query_type {
+            VersionQuery::Latest => {
+                self.store
+                    .versions
+                    .iter()
+                    .filter_map(|(id, _)| {
+                        self.store.get_latest(id).map(|e| {
+                            (id.clone(), e.vector.clone(), e.metadata.clone())
+                        })
+                    })
+                    .collect()
+            }
+            VersionQuery::AsOf(ts) => self.store.snapshot_read(*ts),
+            VersionQuery::AtVersion(ver) => {
+                self.store
+                    .versions
+                    .iter()
+                    .filter_map(|(id, _)| {
+                        self.store.get_at_version(id, *ver).map(|e| {
+                            (id.clone(), e.vector.clone(), e.metadata.clone())
+                        })
+                    })
+                    .collect()
+            }
+            VersionQuery::Range { .. } => {
+                // For range, return latest within the range
+                self.store
+                    .versions
+                    .iter()
+                    .filter_map(|(id, _)| {
+                        self.store.query(id, &self.query_type).and_then(|entries| {
+                            entries.last().map(|e| {
+                                (id.clone(), e.vector.clone(), e.metadata.clone())
+                            })
+                        })
+                    })
+                    .collect()
+            }
+        }
+    }
 }
 
 /// Provenance record tracking the full lifecycle of a vector.
@@ -755,5 +932,67 @@ mod tests {
 
         let children = store.find_children("parent");
         assert_eq!(children.len(), 2);
+    }
+
+    #[test]
+    fn test_snapshot_read() {
+        let mut store = VersionedStore::new(VersioningConfig::default());
+        let _v1 = store.put("a", &[1.0], None).expect("ok");
+        let _v2 = store.put("b", &[2.0], None).expect("ok");
+
+        // Snapshot read at future time should see both
+        let all = store.snapshot_read(u64::MAX);
+        assert_eq!(all.len(), 2);
+    }
+
+    #[test]
+    fn test_search_builder_as_of() {
+        let mut store = VersionedStore::new(VersioningConfig::default());
+        store.put("doc1", &[1.0], None).expect("ok");
+        store.put("doc2", &[2.0], None).expect("ok");
+
+        let results = store.search_builder().as_of(u64::MAX).get_all();
+        assert_eq!(results.len(), 2);
+    }
+
+    #[test]
+    fn test_search_builder_latest() {
+        let mut store = VersionedStore::new(VersioningConfig::default());
+        store.put("doc1", &[1.0], None).expect("ok");
+        store.put("doc1", &[2.0], None).expect("ok");
+
+        let builder = store.search_builder().latest();
+        let results = builder.get("doc1");
+        assert!(results.is_some());
+        let entries = results.expect("entries");
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].vector, vec![2.0]);
+    }
+
+    #[test]
+    fn test_diff_between() {
+        let mut store = VersionedStore::new(VersioningConfig::default());
+
+        // All inserted after ts=0
+        store.put("a", &[1.0], None).expect("ok");
+        store.put("b", &[2.0], None).expect("ok");
+
+        let diff = store.diff_between(0, u64::MAX);
+        assert_eq!(diff.inserted.len(), 2);
+        assert!(diff.updated.is_empty());
+        assert!(diff.deleted.is_empty());
+    }
+
+    #[test]
+    fn test_storage_overhead() {
+        let mut store = VersionedStore::new(VersioningConfig::default());
+        store.put("doc1", &[1.0, 2.0, 3.0], None).expect("ok");
+        store.put("doc1", &[4.0, 5.0, 6.0], None).expect("ok");
+
+        let overhead = store.storage_overhead();
+        // 2 versions of 3 floats = 24 bytes total, 12 latest only
+        assert_eq!(overhead.total_bytes, 24);
+        assert_eq!(overhead.latest_only_bytes, 12);
+        assert!((overhead.overhead_ratio - 2.0).abs() < 0.01);
     }
 }
