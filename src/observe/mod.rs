@@ -1,6 +1,7 @@
 //! Observability: telemetry, drift detection, anomaly detection, profiling.
 
 pub mod anomaly;
+pub mod audit;
 pub mod dashboard;
 pub mod drift;
 pub mod lineage;
