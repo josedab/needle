@@ -94,6 +94,7 @@
 pub mod cdc;
 pub mod core;
 pub mod event_log;
+pub mod ingestion;
 pub mod pubsub;
 pub mod stream_manager;
 
@@ -109,6 +110,12 @@ pub use core::{
 };
 pub(crate) use core::{COMPACTION_THRESHOLD, DEFAULT_BUFFER_SIZE, DEFAULT_CHANNEL_CAPACITY};
 pub use event_log::{EventLog, EventLogSnapshot, ReplayOptions};
+pub use ingestion::{
+    BatchStats, ChannelSender, ChannelSource, CheckpointSink, IngestionConfig,
+    IngestionMetrics, IngestionPipeline, IngestionRecord, IngestionSource,
+    MemoryCheckpointSink, OffsetTracker, PipelineStats, RedisStreamSourceConfig,
+    SourceOffset, WebSocketPushHandle, WebSocketSource, WebSocketSourceConfig,
+};
 pub use pubsub::{PubSub, Subscriber};
 pub use stream_manager::{ChangeStream, StreamManager, StreamManagerConfig, StreamStats};
 

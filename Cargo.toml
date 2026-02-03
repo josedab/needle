@@ -307,6 +307,8 @@ cdc = ["cdc-kafka", "cdc-pulsar", "cdc-postgres", "cdc-mongodb"]
 # Embedded model runtime (candle-based, zero C/C++ deps)
 # Note: actual candle crates added when ready; currently uses mock backend
 embedded-models = []
+# Streaming ingestion
+streaming-kafka = ["cdc-kafka"]
 
 [lints]
 workspace = true
