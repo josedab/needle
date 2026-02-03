@@ -739,6 +739,148 @@ impl QualityEstimator {
     pub fn add_calibration(&mut self, dim: usize, quality: f32) {
         self.calibration.insert(dim, quality);
     }
+
+    /// Run a benchmark to calibrate quality vs dimension on sample data.
+    /// Performs search at each tier and measures recall against full-dim results.
+    pub fn calibrate_from_index(
+        &mut self,
+        index: &MatryoshkaIndex,
+        sample_queries: &[Vec<f32>],
+        k: usize,
+    ) {
+        if sample_queries.is_empty() || index.is_empty() {
+            return;
+        }
+
+        // Get ground truth at full dimensions
+        let full_results: Vec<Vec<String>> = sample_queries
+            .iter()
+            .filter_map(|q| {
+                index
+                    .search_at_dimension(q, k, index.config().full_dimensions)
+                    .ok()
+                    .map(|rs| rs.iter().map(|r| r.id.clone()).collect())
+            })
+            .collect();
+
+        if full_results.is_empty() {
+            return;
+        }
+
+        // Measure recall at each tier
+        for &dim in &index.config().dimension_tiers {
+            if dim >= index.config().full_dimensions {
+                self.calibration.insert(dim, 1.0);
+                continue;
+            }
+
+            let mut total_recall = 0.0f32;
+            let mut count = 0;
+
+            for (i, query) in sample_queries.iter().enumerate() {
+                if i >= full_results.len() {
+                    break;
+                }
+                if let Ok(tier_results) = index.search_at_dimension(query, k, dim) {
+                    let tier_ids: std::collections::HashSet<&str> =
+                        tier_results.iter().map(|r| r.id.as_str()).collect();
+                    let full_ids = &full_results[i];
+                    let hits = full_ids.iter().filter(|id| tier_ids.contains(id.as_str())).count();
+                    total_recall += hits as f32 / full_ids.len().max(1) as f32;
+                    count += 1;
+                }
+            }
+
+            if count > 0 {
+                self.calibration.insert(dim, total_recall / count as f32);
+            }
+        }
+    }
+}
+
+/// Known Matryoshka-compatible models with their supported tiers
+pub struct MatryoshkaModelDetector;
+
+impl MatryoshkaModelDetector {
+    /// Well-known models that support Matryoshka truncation
+    const KNOWN_MODELS: &'static [(&'static str, usize, &'static [usize])] = &[
+        ("all-MiniLM-L6-v2", 384, &[64, 128, 256, 384]),
+        ("all-MiniLM-L12-v2", 384, &[64, 128, 256, 384]),
+        ("bge-small-en", 384, &[64, 128, 256, 384]),
+        ("bge-base-en", 768, &[64, 128, 256, 384, 512, 768]),
+        ("bge-large-en", 1024, &[64, 128, 256, 384, 512, 768, 1024]),
+        ("nomic-embed-text-v1.5", 768, &[64, 128, 256, 384, 512, 768]),
+        ("text-embedding-3-small", 1536, &[256, 512, 1024, 1536]),
+        ("text-embedding-3-large", 3072, &[256, 512, 1024, 1536, 3072]),
+        ("jina-embeddings-v2-base-en", 768, &[64, 128, 256, 384, 512, 768]),
+        ("mxbai-embed-large-v1", 1024, &[64, 128, 256, 384, 512, 768, 1024]),
+    ];
+
+    /// Check if a model name is known to support Matryoshka embeddings
+    pub fn is_matryoshka_compatible(model_name: &str) -> bool {
+        let name_lower = model_name.to_lowercase();
+        Self::KNOWN_MODELS
+            .iter()
+            .any(|(name, _, _)| name_lower.contains(&name.to_lowercase()))
+    }
+
+    /// Get recommended tiers for a model
+    pub fn recommended_tiers(model_name: &str) -> Option<Vec<usize>> {
+        let name_lower = model_name.to_lowercase();
+        Self::KNOWN_MODELS
+            .iter()
+            .find(|(name, _, _)| name_lower.contains(&name.to_lowercase()))
+            .map(|(_, _, tiers)| tiers.to_vec())
+    }
+
+    /// Get full dimensions for a known model
+    pub fn model_dimensions(model_name: &str) -> Option<usize> {
+        let name_lower = model_name.to_lowercase();
+        Self::KNOWN_MODELS
+            .iter()
+            .find(|(name, _, _)| name_lower.contains(&name.to_lowercase()))
+            .map(|(_, dims, _)| *dims)
+    }
+
+    /// Auto-detect and create config for a model
+    pub fn auto_config(model_name: &str) -> Option<MatryoshkaConfig> {
+        let name_lower = model_name.to_lowercase();
+        Self::KNOWN_MODELS
+            .iter()
+            .find(|(name, _, _)| name_lower.contains(&name.to_lowercase()))
+            .map(|(_, full_dim, tiers)| {
+                MatryoshkaConfig::new(*full_dim)
+                    .with_tiers(tiers.to_vec())
+                    .with_search_strategy(SearchStrategy::CoarseToFine {
+                        coarse_dim: tiers[0],
+                        fine_dim: *full_dim,
+                        candidate_multiplier: 10,
+                    })
+            })
+    }
+
+    /// Suggest optimal truncation dimension for a target recall.
+    /// Returns (dimension, estimated_recall, storage_ratio).
+    pub fn suggest_truncation(
+        model_name: &str,
+        target_recall: f32,
+    ) -> Option<(usize, f32, f32)> {
+        let name_lower = model_name.to_lowercase();
+        Self::KNOWN_MODELS
+            .iter()
+            .find(|(name, _, _)| name_lower.contains(&name.to_lowercase()))
+            .and_then(|(_, full_dim, tiers)| {
+                let estimator = QualityEstimator::new(*full_dim);
+                tiers
+                    .iter()
+                    .find(|&&dim| estimator.estimate_quality(dim) >= target_recall)
+                    .map(|&dim| {
+                        let quality = estimator.estimate_quality(dim);
+                        let storage_ratio = dim as f32 / *full_dim as f32;
+                        (dim, quality, storage_ratio)
+                    })
+            })
+    }
 }
 
 #[cfg(test)]
