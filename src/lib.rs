@@ -142,8 +142,8 @@ pub use persistence::{
 #[allow(clippy::unwrap_used)] // tech debt: unwrap cleanup needed
 pub mod ml;
 pub use ml::{
-    auto_embed, dimreduce, embeddings_gateway, finetuning, local_inference, matryoshka,
-    model_registry, multimodal, rag,
+    auto_embed, dimreduce, embedded_runtime, embeddings_gateway, finetuning, llm_provider,
+    local_inference, matryoshka, model_registry, multimodal, rag,
 };
 #[cfg(feature = "experimental")]
 pub use ml::inference_engine;

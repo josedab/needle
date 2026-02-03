@@ -304,6 +304,9 @@ cdc-pulsar = ["async", "pulsar"]
 cdc-postgres = ["async", "tokio-postgres"]
 cdc-mongodb = ["async", "mongodb"]
 cdc = ["cdc-kafka", "cdc-pulsar", "cdc-postgres", "cdc-mongodb"]
+# Embedded model runtime (candle-based, zero C/C++ deps)
+# Note: actual candle crates added when ready; currently uses mock backend
+embedded-models = []
 
 [lints]
 workspace = true
