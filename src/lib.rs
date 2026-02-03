@@ -489,8 +489,8 @@ pub use tuning::{
 // Automatic embedding generation
 pub use auto_embed::{
     AutoEmbedCollectionBuilder, AutoEmbedConfig, AutoEmbedStats, AutoEmbedder, EmbeddingBackend,
-    EmbeddingModelManager, ModelEntry, ModelHub, ModelType, TextFirstCollection, TextInsertable,
-    TextSearchResult,
+    EmbeddingModelManager, ModelArtifact, ModelEntry, ModelHub, ModelStatus, ModelType,
+    TextFirstCollection, TextInsertable, TextSearchResult,
 };
 
 // ── Beta & Experimental API ──────────────────────────────────────────────────
