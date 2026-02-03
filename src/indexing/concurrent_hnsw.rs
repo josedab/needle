@@ -440,6 +440,69 @@ impl ConcurrentHnswGraph {
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
+
+    /// Get the tombstone ratio (deleted / total).
+    pub fn tombstone_ratio(&self) -> f64 {
+        let total = self.nodes.read().len();
+        if total == 0 {
+            return 0.0;
+        }
+        self.tombstone_count.load(Ordering::Relaxed) as f64 / total as f64
+    }
+
+    /// Insert and auto-compact if the tombstone threshold is exceeded.
+    pub fn insert_node_with_auto_compact(
+        &self,
+        layer: usize,
+        neighbors: Vec<(usize, Vec<usize>)>,
+    ) -> (usize, Option<CompactionResult>) {
+        let id = self.insert_node(layer, neighbors);
+        let compaction = if self.needs_compaction() {
+            Some(self.compact())
+        } else {
+            None
+        };
+        (id, compaction)
+    }
+
+    /// Delete and auto-compact if the tombstone threshold is exceeded.
+    pub fn lazy_delete_with_auto_compact(
+        &self,
+        node_id: usize,
+    ) -> Result<Option<CompactionResult>> {
+        self.lazy_delete(node_id)?;
+        if self.needs_compaction() {
+            Ok(Some(self.compact()))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Batch insert multiple nodes. Returns the assigned node IDs.
+    pub fn batch_insert(
+        &self,
+        entries: Vec<(usize, Vec<(usize, Vec<usize>)>)>,
+    ) -> Vec<usize> {
+        entries
+            .into_iter()
+            .map(|(layer, neighbors)| self.insert_node(layer, neighbors))
+            .collect()
+    }
+
+    /// Batch delete multiple nodes.
+    pub fn batch_delete(&self, node_ids: &[usize]) -> Result<usize> {
+        let mut deleted = 0;
+        for &id in node_ids {
+            self.lazy_delete(id)?;
+            deleted += 1;
+        }
+        Ok(deleted)
+    }
+
+    /// Get the total number of nodes including tombstones.
+    pub fn total_nodes(&self) -> usize {
+        self.nodes.read().len()
+    }
 }
 
 #[cfg(test)]
@@ -525,5 +588,64 @@ mod tests {
         assert_eq!(stats.total_nodes, 3);
         assert_eq!(stats.active_nodes, 3);
         assert_eq!(stats.tombstone_count, 0);
+    }
+
+    #[test]
+    fn test_tombstone_ratio() {
+        let graph = ConcurrentHnswGraph::new(ConcurrentHnswConfig::default());
+        graph.insert_node(0, vec![]);
+        graph.insert_node(0, vec![(0, vec![0])]);
+        graph.insert_node(0, vec![(0, vec![0, 1])]);
+        graph.insert_node(0, vec![(0, vec![0, 1, 2])]);
+
+        assert!((graph.tombstone_ratio() - 0.0).abs() < 0.001);
+
+        graph.lazy_delete(1).expect("delete");
+        assert!((graph.tombstone_ratio() - 0.25).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_auto_compact_on_delete() {
+        let config = ConcurrentHnswConfig {
+            compaction_threshold: 0.2,
+            ..Default::default()
+        };
+        let graph = ConcurrentHnswGraph::new(config);
+
+        for i in 0..5 {
+            let nbrs = if i == 0 { vec![] } else { vec![(0, vec![i - 1])] };
+            graph.insert_node(0, nbrs);
+        }
+
+        // Delete 2 of 5 = 40% > 20% threshold
+        graph.lazy_delete(1).expect("del");
+        let result = graph.lazy_delete_with_auto_compact(2).expect("del+compact");
+        // Should have triggered compaction
+        assert!(result.is_some());
+    }
+
+    #[test]
+    fn test_batch_insert() {
+        let graph = ConcurrentHnswGraph::new(ConcurrentHnswConfig::default());
+        let entries = vec![
+            (0, vec![]),
+            (0, vec![]),
+            (0, vec![]),
+        ];
+        let ids = graph.batch_insert(entries);
+        assert_eq!(ids.len(), 3);
+        assert_eq!(graph.len(), 3);
+    }
+
+    #[test]
+    fn test_batch_delete() {
+        let graph = ConcurrentHnswGraph::new(ConcurrentHnswConfig::default());
+        for _ in 0..5 {
+            graph.insert_node(0, vec![]);
+        }
+
+        let deleted = graph.batch_delete(&[0, 2, 4]).expect("batch delete");
+        assert_eq!(deleted, 3);
+        assert_eq!(graph.len(), 2);
     }
 }
