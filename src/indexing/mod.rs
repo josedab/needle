@@ -53,5 +53,6 @@ pub mod concurrent_hnsw;
 pub mod columnar;
 pub mod compression_pipeline;
 pub mod adaptive_index_manager;
+pub mod multimodal_search;
 #[cfg(feature = "diskann")]
 pub mod tiered_ann;
