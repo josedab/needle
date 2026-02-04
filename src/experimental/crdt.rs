@@ -831,6 +831,368 @@ impl PeerRegistry {
     }
 }
 
+// ============================================================================
+// Merkle Tree Anti-Entropy Protocol
+// ============================================================================
+
+/// A node in the Merkle tree used for efficient delta detection.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MerkleNode {
+    /// Hash of this node (derived from children or leaf data)
+    pub hash: u64,
+    /// Range of vector IDs covered by this node
+    pub range_start: String,
+    pub range_end: String,
+    /// Number of vectors in this subtree
+    pub count: usize,
+}
+
+/// Merkle tree for detecting differences between replicas.
+///
+/// Divides the key space into buckets and builds a binary tree of hashes.
+/// Two replicas can compare roots, then drill down into differing subtrees
+/// to efficiently identify the minimal set of changed keys.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MerkleTree {
+    /// Tree nodes organized as a flat array (index 0 = root)
+    nodes: Vec<MerkleNode>,
+    /// Number of leaf buckets (power of 2)
+    bucket_count: usize,
+    /// Depth of the tree
+    depth: usize,
+}
+
+impl MerkleTree {
+    /// Build a Merkle tree from a set of (id, hash) pairs.
+    pub fn build(entries: &mut [(String, u64)], bucket_count: usize) -> Self {
+        let bucket_count = bucket_count.next_power_of_two().max(2);
+        let depth = (bucket_count as f64).log2() as usize;
+        let total_nodes = 2 * bucket_count - 1;
+        let mut nodes = Vec::with_capacity(total_nodes);
+
+        // Sort entries by ID for consistent bucketing
+        entries.sort_by(|a, b| a.0.cmp(&b.0));
+
+        // Create leaf nodes
+        let entries_per_bucket = entries.len().max(1) / bucket_count;
+        for i in 0..bucket_count {
+            let start = i * entries_per_bucket;
+            let end = if i == bucket_count - 1 {
+                entries.len()
+            } else {
+                ((i + 1) * entries_per_bucket).min(entries.len())
+            };
+
+            let bucket_entries = if start < entries.len() {
+                &entries[start..end.min(entries.len())]
+            } else {
+                &[]
+            };
+
+            let hash = Self::hash_bucket(bucket_entries);
+            let range_start = bucket_entries
+                .first()
+                .map(|(id, _)| id.clone())
+                .unwrap_or_default();
+            let range_end = bucket_entries
+                .last()
+                .map(|(id, _)| id.clone())
+                .unwrap_or_default();
+
+            nodes.push(MerkleNode {
+                hash,
+                range_start,
+                range_end,
+                count: bucket_entries.len(),
+            });
+        }
+
+        // Build internal nodes bottom-up
+        let mut level_start = 0;
+        let mut level_size = bucket_count;
+        while level_size > 1 {
+            let next_level_size = level_size / 2;
+            for i in 0..next_level_size {
+                let left = &nodes[level_start + i * 2];
+                let right = &nodes[level_start + i * 2 + 1];
+                let hash = left.hash.wrapping_mul(31).wrapping_add(right.hash);
+                let range_start = left.range_start.clone();
+                let range_end = right.range_end.clone();
+                let count = left.count + right.count;
+                nodes.push(MerkleNode {
+                    hash,
+                    range_start,
+                    range_end,
+                    count,
+                });
+            }
+            level_start += level_size;
+            level_size = next_level_size;
+        }
+
+        Self {
+            nodes,
+            bucket_count,
+            depth,
+        }
+    }
+
+    /// Get the root hash of the tree
+    pub fn root_hash(&self) -> u64 {
+        self.nodes.last().map(|n| n.hash).unwrap_or(0)
+    }
+
+    /// Compare two Merkle trees and return bucket indices that differ
+    pub fn diff(&self, other: &MerkleTree) -> Vec<usize> {
+        if self.root_hash() == other.root_hash() {
+            return Vec::new(); // Trees are identical
+        }
+
+        let mut differing_buckets = Vec::new();
+        let min_buckets = self.bucket_count.min(other.bucket_count);
+
+        for i in 0..min_buckets {
+            if i < self.nodes.len() && i < other.nodes.len() {
+                if self.nodes[i].hash != other.nodes[i].hash {
+                    differing_buckets.push(i);
+                }
+            }
+        }
+
+        differing_buckets
+    }
+
+    /// Get the IDs that need to be synced based on differing buckets
+    pub fn keys_in_bucket(&self, bucket_idx: usize) -> (&str, &str) {
+        if bucket_idx < self.nodes.len() {
+            (
+                &self.nodes[bucket_idx].range_start,
+                &self.nodes[bucket_idx].range_end,
+            )
+        } else {
+            ("", "")
+        }
+    }
+
+    /// Get tree depth
+    pub fn depth(&self) -> usize {
+        self.depth
+    }
+
+    /// Get total entry count
+    pub fn total_count(&self) -> usize {
+        self.nodes.last().map(|n| n.count).unwrap_or(0)
+    }
+
+    fn hash_bucket(entries: &[(String, u64)]) -> u64 {
+        let mut hash = 0u64;
+        for (id, val) in entries {
+            let mut id_hash = 0u64;
+            for byte in id.bytes() {
+                id_hash = id_hash.wrapping_mul(31).wrapping_add(byte as u64);
+            }
+            hash = hash.wrapping_mul(17).wrapping_add(id_hash).wrapping_add(*val);
+        }
+        hash
+    }
+}
+
+impl VectorCRDT {
+    /// Build a Merkle tree of the current state for anti-entropy comparison.
+    pub fn build_merkle_tree(&self, bucket_count: usize) -> MerkleTree {
+        let mut entries: Vec<(String, u64)> = self
+            .vectors
+            .iter()
+            .filter(|(_, v)| !v.is_deleted())
+            .map(|(id, v)| {
+                // Hash the vector content + timestamp for change detection
+                let mut hash = v.timestamp.physical;
+                hash = hash
+                    .wrapping_mul(31)
+                    .wrapping_add(v.timestamp.logical as u64);
+                for &val in &v.vector {
+                    hash = hash.wrapping_mul(17).wrapping_add(val.to_bits() as u64);
+                }
+                (id.clone(), hash)
+            })
+            .collect();
+        MerkleTree::build(&mut entries, bucket_count)
+    }
+
+    /// Compute the delta needed to sync with a remote replica based on
+    /// Merkle tree comparison. Returns only operations affecting keys in
+    /// differing buckets (much more efficient than full delta).
+    pub fn merkle_delta(&self, remote_tree: &MerkleTree, bucket_count: usize) -> Delta {
+        let local_tree = self.build_merkle_tree(bucket_count);
+        let differing = local_tree.diff(remote_tree);
+
+        if differing.is_empty() {
+            return Delta::empty(self.replica_id);
+        }
+
+        // Collect key ranges from differing buckets
+        let mut key_ranges: Vec<(String, String)> = Vec::new();
+        for bucket_idx in &differing {
+            let (start, end) = local_tree.keys_in_bucket(*bucket_idx);
+            if !start.is_empty() || !end.is_empty() {
+                key_ranges.push((start.to_string(), end.to_string()));
+            }
+        }
+
+        // Filter operations to only those in differing ranges
+        let ops: Vec<TimestampedOp> = self
+            .operation_log
+            .values()
+            .filter(|op| {
+                if let Some(id) = op.op.affected_id() {
+                    key_ranges.iter().any(|(start, end)| {
+                        (start.is_empty() || id >= start.as_str())
+                            && (end.is_empty() || id <= end.as_str())
+                    })
+                } else {
+                    false
+                }
+            })
+            .cloned()
+            .collect();
+
+        Delta {
+            operations: ops,
+            origin: self.replica_id,
+            from_timestamp: None,
+            to_timestamp: Some(self.clock),
+        }
+    }
+}
+
+// ============================================================================
+// Delta Compression
+// ============================================================================
+
+/// Compressed delta using simple run-length encoding for vector data.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompressedDelta {
+    /// Compressed operation data
+    pub data: Vec<u8>,
+    /// Original operation count
+    pub operation_count: usize,
+    /// Original size in bytes (estimated)
+    pub original_bytes: usize,
+    /// Compressed size in bytes
+    pub compressed_bytes: usize,
+    /// Origin replica
+    pub origin: ReplicaId,
+}
+
+impl Delta {
+    /// Compress this delta for network transfer.
+    /// Uses a simple variable-length encoding to reduce bandwidth.
+    pub fn compress(&self) -> CompressedDelta {
+        let original_bytes = self.operations.iter().map(VectorCRDT::estimate_op_size).sum();
+        let serialized = self.serialize_compact();
+        let compressed = Self::simple_compress(&serialized);
+
+        CompressedDelta {
+            data: compressed.clone(),
+            operation_count: self.operations.len(),
+            original_bytes,
+            compressed_bytes: compressed.len(),
+            origin: self.origin,
+        }
+    }
+
+    /// Serialize operations to a compact binary format
+    fn serialize_compact(&self) -> Vec<u8> {
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&(self.operations.len() as u32).to_le_bytes());
+        buf.extend_from_slice(&self.origin.0.to_le_bytes());
+
+        for op in &self.operations {
+            buf.extend_from_slice(&op.timestamp.physical.to_le_bytes());
+            buf.extend_from_slice(&(op.timestamp.logical as u32).to_le_bytes());
+            buf.extend_from_slice(&op.origin.0.to_le_bytes());
+
+            match &op.op {
+                Operation::Add { id, vector, metadata } => {
+                    buf.push(0x01);
+                    buf.extend_from_slice(&(id.len() as u16).to_le_bytes());
+                    buf.extend_from_slice(id.as_bytes());
+                    buf.extend_from_slice(&(vector.len() as u32).to_le_bytes());
+                    for v in vector {
+                        buf.extend_from_slice(&v.to_le_bytes());
+                    }
+                    buf.extend_from_slice(&(metadata.len() as u16).to_le_bytes());
+                    for (k, v) in metadata {
+                        buf.extend_from_slice(&(k.len() as u16).to_le_bytes());
+                        buf.extend_from_slice(k.as_bytes());
+                        buf.extend_from_slice(&(v.len() as u16).to_le_bytes());
+                        buf.extend_from_slice(v.as_bytes());
+                    }
+                }
+                Operation::Update { id, vector } => {
+                    buf.push(0x02);
+                    buf.extend_from_slice(&(id.len() as u16).to_le_bytes());
+                    buf.extend_from_slice(id.as_bytes());
+                    buf.extend_from_slice(&(vector.len() as u32).to_le_bytes());
+                    for v in vector {
+                        buf.extend_from_slice(&v.to_le_bytes());
+                    }
+                }
+                Operation::Delete { id } => {
+                    buf.push(0x03);
+                    buf.extend_from_slice(&(id.len() as u16).to_le_bytes());
+                    buf.extend_from_slice(id.as_bytes());
+                }
+                Operation::UpdateMetadata { id, key, value } => {
+                    buf.push(0x04);
+                    buf.extend_from_slice(&(id.len() as u16).to_le_bytes());
+                    buf.extend_from_slice(id.as_bytes());
+                    buf.extend_from_slice(&(key.len() as u16).to_le_bytes());
+                    buf.extend_from_slice(key.as_bytes());
+                    let v_bytes = value.as_deref().unwrap_or("").as_bytes();
+                    buf.extend_from_slice(&(v_bytes.len() as u16).to_le_bytes());
+                    buf.extend_from_slice(v_bytes);
+                }
+            }
+        }
+        buf
+    }
+
+    /// Simple LZ-style compression: look for repeated byte patterns
+    fn simple_compress(data: &[u8]) -> Vec<u8> {
+        let mut result = Vec::with_capacity(data.len());
+        let mut i = 0;
+        while i < data.len() {
+            // Find run of identical bytes
+            let start = i;
+            while i + 1 < data.len() && data[i] == data[i + 1] && i - start < 254 {
+                i += 1;
+            }
+            let run_len = i - start + 1;
+            if run_len >= 4 {
+                // Encode as: 0xFF, count, byte
+                result.push(0xFF);
+                result.push(run_len as u8);
+                result.push(data[start]);
+            } else {
+                // Copy literal bytes
+                for j in start..=i {
+                    if data[j] == 0xFF {
+                        // Escape the marker byte
+                        result.push(0xFF);
+                        result.push(1);
+                        result.push(0xFF);
+                    } else {
+                        result.push(data[j]);
+                    }
+                }
+            }
+            i += 1;
+        }
+        result
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
