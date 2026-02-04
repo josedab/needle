@@ -23,7 +23,7 @@
 //! ```
 
 use crate::database::Database;
-use crate::error::Result;
+use crate::error::{NeedleError, Result};
 use crate::SearchResult;
 use lru::LruCache;
 use parking_lot::Mutex;
@@ -55,6 +55,8 @@ pub enum ChunkingStrategy {
     },
     /// Paragraph-based chunking
     Paragraph { max_paragraphs: usize },
+    /// Recursive splitting: try separators in order (\n\n, \n, sentence, word)
+    Recursive { chunk_size: usize, chunk_overlap: usize },
 }
 
 impl Default for ChunkingStrategy {
@@ -463,6 +465,15 @@ impl RagPipeline {
         }
     }
 
+    /// Ingest a pre-loaded document (from [`DocumentLoader`]).
+    pub fn ingest_loaded(
+        &mut self,
+        doc: &LoadedDocument,
+        embedder: &dyn Embedder,
+    ) -> Result<Document> {
+        self.ingest_document(&doc.id, &doc.text, doc.metadata.clone(), embedder)
+    }
+
     /// Ingest a document with automatic chunking
     pub fn ingest_document(
         &mut self,
@@ -693,6 +704,9 @@ impl RagPipeline {
             ChunkingStrategy::Hierarchical { levels } => self.chunk_hierarchical(text, levels),
             ChunkingStrategy::Paragraph { max_paragraphs } => {
                 self.chunk_paragraphs(text, *max_paragraphs)
+            }
+            ChunkingStrategy::Recursive { chunk_size, chunk_overlap } => {
+                RecursiveTextSplitter::new(*chunk_size, *chunk_overlap).split(text)
             }
         }
     }
@@ -1526,6 +1540,22 @@ impl RagPipelineBuilder {
         self
     }
 
+    /// Enable hybrid (dense + sparse) search.
+    #[must_use]
+    pub fn hybrid_search(mut self, alpha: f32) -> Self {
+        self.config.hybrid_search = true;
+        self.config.hybrid_alpha = alpha;
+        self
+    }
+
+    /// Enable deduplication with the given similarity threshold.
+    #[must_use]
+    pub fn deduplicate(mut self, threshold: f32) -> Self {
+        self.config.deduplicate = true;
+        self.config.dedup_threshold = threshold;
+        self
+    }
+
     /// Build the pipeline from a shared `Database`.
     pub fn build(self, db: Arc<Database>) -> Result<RagPipeline> {
         RagPipeline::new(db, self.config)
@@ -1540,6 +1570,215 @@ impl RagPipelineBuilder {
 impl Default for RagPipelineBuilder {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+// =============================================================================
+// Document Loaders
+// =============================================================================
+
+/// Supported document input formats.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DocumentFormat {
+    /// Plain UTF-8 text.
+    PlainText,
+    /// Markdown (headers extracted as metadata).
+    Markdown,
+    /// JSON with configurable text-field extraction.
+    Json,
+}
+
+/// A loaded document ready for pipeline ingestion.
+#[derive(Debug, Clone)]
+pub struct LoadedDocument {
+    /// Unique identifier.
+    pub id: String,
+    /// Extracted text content.
+    pub text: String,
+    /// Source format.
+    pub format: DocumentFormat,
+    /// Auto-extracted metadata (headings, fields, etc.).
+    pub metadata: Option<serde_json::Value>,
+}
+
+/// Extracts text from various document formats.
+pub struct DocumentLoader;
+
+impl DocumentLoader {
+    /// Load plain text.
+    pub fn load_plaintext(id: impl Into<String>, text: &str) -> LoadedDocument {
+        LoadedDocument {
+            id: id.into(),
+            text: text.to_string(),
+            format: DocumentFormat::PlainText,
+            metadata: None,
+        }
+    }
+
+    /// Load Markdown, extracting title and section headings as metadata.
+    pub fn load_markdown(id: impl Into<String>, md: &str) -> LoadedDocument {
+        let mut title: Option<String> = None;
+        let mut headings = Vec::new();
+        let mut body = Vec::new();
+
+        for line in md.lines() {
+            let t = line.trim();
+            if let Some(h1) = t.strip_prefix("# ") {
+                if title.is_none() {
+                    title = Some(h1.trim().to_string());
+                }
+                headings.push(h1.trim().to_string());
+                body.push(h1.trim().to_string());
+            } else if let Some(h) = t.strip_prefix("## ")
+                .or_else(|| t.strip_prefix("### "))
+                .or_else(|| t.strip_prefix("#### "))
+            {
+                headings.push(h.trim().to_string());
+                body.push(h.trim().to_string());
+            } else {
+                body.push(line.to_string());
+            }
+        }
+
+        let meta = serde_json::json!({
+            "format": "markdown",
+            "title": title,
+            "headings": headings,
+        });
+
+        LoadedDocument {
+            id: id.into(),
+            text: body.join("\n"),
+            format: DocumentFormat::Markdown,
+            metadata: Some(meta),
+        }
+    }
+
+    /// Load JSON, concatenating values from `text_fields` (or all strings if empty).
+    pub fn load_json(
+        id: impl Into<String>,
+        json_str: &str,
+        text_fields: &[&str],
+    ) -> Result<LoadedDocument> {
+        let value: serde_json::Value =
+            serde_json::from_str(json_str).map_err(NeedleError::Serialization)?;
+
+        let mut parts = Vec::new();
+        if let serde_json::Value::Object(map) = &value {
+            if text_fields.is_empty() {
+                for val in map.values() {
+                    if let serde_json::Value::String(s) = val {
+                        parts.push(s.clone());
+                    }
+                }
+            } else {
+                for field in text_fields {
+                    if let Some(serde_json::Value::String(s)) = map.get(*field) {
+                        parts.push(s.clone());
+                    }
+                }
+            }
+        }
+
+        Ok(LoadedDocument {
+            id: id.into(),
+            text: parts.join("\n\n"),
+            format: DocumentFormat::Json,
+            metadata: Some(value),
+        })
+    }
+}
+
+// =============================================================================
+// Recursive Text Splitter
+// =============================================================================
+
+/// Splits text by trying separators in order: paragraphs → lines → sentences → words.
+pub struct RecursiveTextSplitter {
+    chunk_size: usize,
+    chunk_overlap: usize,
+    separators: Vec<&'static str>,
+}
+
+impl RecursiveTextSplitter {
+    /// Create with defaults: paragraph → line → sentence → word.
+    pub fn new(chunk_size: usize, chunk_overlap: usize) -> Self {
+        Self {
+            chunk_size,
+            chunk_overlap,
+            separators: vec!["\n\n", "\n", ". ", "! ", "? ", "; ", ", ", " "],
+        }
+    }
+
+    /// Split `text` into `(chunk, start_byte, end_byte)` tuples.
+    pub fn split(&self, text: &str) -> Vec<(String, usize, usize)> {
+        let mut results = Vec::new();
+        self.split_inner(text, 0, 0, &mut results);
+        results
+    }
+
+    fn split_inner(
+        &self,
+        text: &str,
+        base: usize,
+        sep_idx: usize,
+        out: &mut Vec<(String, usize, usize)>,
+    ) {
+        if text.len() <= self.chunk_size || sep_idx >= self.separators.len() {
+            if !text.trim().is_empty() {
+                out.push((text.to_string(), base, base + text.len()));
+            }
+            return;
+        }
+
+        let sep = self.separators[sep_idx];
+        let parts: Vec<&str> = text.split(sep).collect();
+
+        if parts.len() <= 1 {
+            // Separator not found — try the next finer one
+            self.split_inner(text, base, sep_idx + 1, out);
+            return;
+        }
+
+        let mut chunk = String::new();
+        let mut chunk_start = base;
+        let mut pos = base;
+
+        for (i, part) in parts.iter().enumerate() {
+            let piece = if i < parts.len() - 1 {
+                format!("{part}{sep}")
+            } else {
+                part.to_string()
+            };
+
+            if chunk.len() + piece.len() > self.chunk_size && !chunk.is_empty() {
+                if chunk.len() > self.chunk_size {
+                    self.split_inner(&chunk, chunk_start, sep_idx + 1, out);
+                } else {
+                    out.push((chunk.clone(), chunk_start, chunk_start + chunk.len()));
+                }
+
+                // Overlap
+                let keep = if self.chunk_overlap > 0 && chunk.len() > self.chunk_overlap {
+                    chunk.len() - self.chunk_overlap
+                } else {
+                    chunk.len()
+                };
+                chunk = chunk[keep..].to_string();
+                chunk_start = pos - chunk.len();
+            }
+
+            chunk.push_str(&piece);
+            pos += piece.len();
+        }
+
+        if !chunk.trim().is_empty() {
+            if chunk.len() > self.chunk_size {
+                self.split_inner(&chunk, chunk_start, sep_idx + 1, out);
+            } else {
+                out.push((chunk.clone(), chunk_start, chunk_start + chunk.len()));
+            }
+        }
     }
 }
 
@@ -2160,5 +2399,73 @@ mod tests {
         let stats = pipeline.stats();
         assert_eq!(stats.total_queries, 2);
         assert!(stats.avg_query_latency_ms >= 0.0);
+    }
+
+    #[test]
+    fn test_document_loader_plaintext() {
+        let doc = DocumentLoader::load_plaintext("d1", "Hello world.");
+        assert_eq!(doc.format, DocumentFormat::PlainText);
+        assert!(doc.metadata.is_none());
+    }
+
+    #[test]
+    fn test_document_loader_markdown() {
+        let md = "# Title\n\nBody paragraph.\n\n## Section\n\nMore text.";
+        let doc = DocumentLoader::load_markdown("md1", md);
+        assert_eq!(doc.format, DocumentFormat::Markdown);
+        let meta = doc.metadata.as_ref().unwrap();
+        assert_eq!(meta["title"], "Title");
+        assert_eq!(meta["headings"].as_array().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn test_document_loader_json() {
+        let json = r#"{"title":"T","body":"B","n":42}"#;
+        let doc = DocumentLoader::load_json("j1", json, &["title", "body"]).unwrap();
+        assert!(doc.text.contains("T"));
+        assert!(doc.text.contains("B"));
+    }
+
+    #[test]
+    fn test_recursive_splitter() {
+        let splitter = RecursiveTextSplitter::new(40, 5);
+        let text = "First paragraph.\n\nSecond paragraph.\n\nThird paragraph that is a bit longer.";
+        let chunks = splitter.split(text);
+        assert!(!chunks.is_empty());
+        for (chunk, start, end) in &chunks {
+            assert!(!chunk.trim().is_empty());
+            assert!(start <= end);
+        }
+    }
+
+    #[test]
+    fn test_recursive_chunking_strategy() {
+        let db = Arc::new(Database::in_memory());
+        let pipeline = RagPipeline::new(db, RagConfig { dimensions: 64, ..Default::default() }).unwrap();
+        let chunks = pipeline.chunk_text("a. b. c. d. e.", &ChunkingStrategy::Recursive { chunk_size: 8, chunk_overlap: 2 });
+        assert!(!chunks.is_empty());
+    }
+
+    #[test]
+    fn test_ingest_loaded() {
+        let db = Arc::new(Database::in_memory());
+        let mut pipeline = RagPipeline::new(db, RagConfig { dimensions: 64, ..Default::default() }).unwrap();
+        let embedder = MockEmbedder::new(64);
+        let doc = DocumentLoader::load_plaintext("ld1", "Some text for loading.");
+        let result = pipeline.ingest_loaded(&doc, &embedder).unwrap();
+        assert_eq!(result.id, "ld1");
+    }
+
+    #[test]
+    fn test_builder_extensions() {
+        let db = Arc::new(Database::in_memory());
+        let p = RagPipelineBuilder::new()
+            .dimensions(64)
+            .hybrid_search(0.8)
+            .deduplicate(0.9)
+            .with_cache(100, 60)
+            .build(db)
+            .unwrap();
+        assert!(p.cache_stats().is_some());
     }
 }
