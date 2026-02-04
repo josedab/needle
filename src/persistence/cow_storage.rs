@@ -567,7 +567,9 @@ impl<'a> WriteTxn<'a> {
         self.engine.pending.write().push(delta);
 
         if self.engine.should_auto_flush() {
-            let _ = self.engine.flush(); // best-effort
+            if let Err(e) = self.engine.flush() {
+                tracing::warn!("auto-flush failed: {e}");
+            }
         }
 
         self.committed = true;
@@ -588,7 +590,10 @@ impl Drop for WriteTxn<'_> {
 fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
+        .unwrap_or_else(|e| {
+            tracing::warn!("system clock before UNIX epoch: {e}");
+            std::time::Duration::default()
+        })
         .as_millis() as u64
 }
 
