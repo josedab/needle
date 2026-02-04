@@ -589,6 +589,172 @@ impl GraphRAG {
     ) -> Result<Vec<GraphRAGResult>> {
         self.search(query_embedding, k, None)
     }
+
+    /// Insert a document with automatic entity/relationship extraction.
+    ///
+    /// Extracts entities and relationships using rule-based NLP, optionally
+    /// generates embeddings for each entity, and adds them to the graph.
+    pub fn insert_document(
+        &mut self,
+        text: &str,
+        doc_embedding: Option<&[f32]>,
+    ) -> Result<(usize, usize)> {
+        let entities = self.extract_entities_from_text(text);
+        let relationships = self.extract_relationships_from_entities(&entities);
+
+        let entity_count = entities.len();
+        let rel_count = relationships.len();
+
+        for mut entity in entities {
+            entity.embedding = doc_embedding.map(|e| e.to_vec());
+            self.add_entity(entity)?;
+        }
+
+        for rel in relationships {
+            self.add_relationship(rel)?;
+        }
+
+        Ok((entity_count, rel_count))
+    }
+
+    /// Weighted graph traversal using edge weights for scoring.
+    ///
+    /// Unlike `multi_hop_search` which scores purely by hop distance,
+    /// this method accumulates edge weights along paths, producing scores
+    /// that reflect relationship strength.
+    pub fn weighted_traversal(
+        &self,
+        start_entity_id: &str,
+        max_hops: usize,
+        k: usize,
+    ) -> Vec<GraphRAGResult> {
+        if !self.entities.contains_key(start_entity_id) {
+            return Vec::new();
+        }
+
+        let mut results: Vec<GraphRAGResult> = Vec::new();
+        let mut visited: HashMap<String, f32> = HashMap::new();
+        // (node_id, path, depth, accumulated_weight)
+        let mut queue: VecDeque<(String, Vec<String>, usize, f32)> = VecDeque::new();
+        queue.push_back((
+            start_entity_id.to_string(),
+            vec![start_entity_id.to_string()],
+            0,
+            1.0,
+        ));
+        visited.insert(start_entity_id.to_string(), 1.0);
+
+        while let Some((current, path, depth, acc_weight)) = queue.pop_front() {
+            if depth > 0 {
+                if let Some(entity) = self.entities.get(&current) {
+                    // Score = accumulated weight decayed by depth
+                    let graph_score = acc_weight / (1.0 + depth as f32);
+                    results.push(GraphRAGResult {
+                        entity: entity.clone(),
+                        vector_score: 0.0,
+                        graph_score,
+                        combined_score: graph_score,
+                        path: path.clone(),
+                        hop_count: depth,
+                    });
+                }
+            }
+            if depth >= max_hops {
+                continue;
+            }
+            if let Some(neighbors) = self.adjacency.get(&current) {
+                for (nid, edge_weight) in neighbors {
+                    let new_weight = acc_weight * edge_weight;
+                    let prev_weight = visited.get(nid).copied().unwrap_or(0.0);
+                    if new_weight > prev_weight {
+                        visited.insert(nid.clone(), new_weight);
+                        let mut new_path = path.clone();
+                        new_path.push(nid.clone());
+                        queue.push_back((nid.clone(), new_path, depth + 1, new_weight));
+                    }
+                }
+            }
+        }
+
+        results.sort_by(|a, b| OrderedFloat(b.combined_score).cmp(&OrderedFloat(a.combined_score)));
+        results.truncate(k);
+        results
+    }
+
+    /// Compute PageRank-inspired importance scores for all entities.
+    /// Returns entity IDs sorted by importance (descending).
+    pub fn compute_importance(&self, iterations: usize, damping: f32) -> Vec<(String, f32)> {
+        let n = self.entities.len();
+        if n == 0 {
+            return Vec::new();
+        }
+
+        let ids: Vec<&String> = self.entities.keys().collect();
+        let mut scores: HashMap<&String, f32> =
+            ids.iter().map(|id| (*id, 1.0 / n as f32)).collect();
+
+        for _ in 0..iterations {
+            let mut new_scores: HashMap<&String, f32> =
+                ids.iter().map(|id| (*id, (1.0 - damping) / n as f32)).collect();
+
+            for id in &ids {
+                if let Some(neighbors) = self.adjacency.get(*id) {
+                    let out_degree = neighbors.len().max(1);
+                    let share = scores[id] / out_degree as f32;
+                    for (nid, _) in neighbors {
+                        if let Some(score) = new_scores.get_mut(&nid) {
+                            *score += damping * share;
+                        }
+                    }
+                }
+            }
+            scores = new_scores;
+        }
+
+        let mut result: Vec<(String, f32)> = scores
+            .into_iter()
+            .map(|(id, score)| (id.clone(), score))
+            .collect();
+        result.sort_by(|a, b| OrderedFloat(b.1).cmp(&OrderedFloat(a.1)));
+        result
+    }
+
+    /// Generate a summary string for a community.
+    /// Returns the community members and their relationships.
+    pub fn community_summary(&self, community_id: u32) -> Option<String> {
+        let community = self.communities.iter().find(|c| c.id == community_id)?;
+        let member_names: Vec<&str> = community
+            .member_ids
+            .iter()
+            .filter_map(|id| self.entities.get(id).map(|e| e.name.as_str()))
+            .collect();
+
+        let internal_rels: Vec<String> = self
+            .relationships
+            .iter()
+            .filter(|r| {
+                community.member_ids.contains(&r.source_id)
+                    && community.member_ids.contains(&r.target_id)
+            })
+            .map(|r| {
+                let src = self.entities.get(&r.source_id).map(|e| e.name.as_str()).unwrap_or(&r.source_id);
+                let tgt = self.entities.get(&r.target_id).map(|e| e.name.as_str()).unwrap_or(&r.target_id);
+                format!("{} --[{:?}]--> {}", src, r.relation_type, tgt)
+            })
+            .collect();
+
+        Some(format!(
+            "Community {} ({} members): [{}]\nRelationships:\n{}",
+            community_id,
+            member_names.len(),
+            member_names.join(", "),
+            if internal_rels.is_empty() {
+                "  (none)".to_string()
+            } else {
+                internal_rels.iter().map(|r| format!("  {r}")).collect::<Vec<_>>().join("\n")
+            }
+        ))
+    }
 }
 
 // ---------------------------------------------------------------------------
