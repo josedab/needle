@@ -1265,6 +1265,117 @@ impl Default for QuerySuggester {
     }
 }
 
+// ============================================================================
+// ParsedQuery → SearchParams conversion
+// ============================================================================
+
+/// Search parameters derived from a natural language query
+#[derive(Debug, Clone)]
+pub struct NLSearchParams {
+    /// Text to embed for vector search
+    pub search_text: String,
+    /// Number of results (default 10, or extracted from "top N")
+    pub k: usize,
+    /// Metadata filter
+    pub filter: Option<Filter>,
+    /// Time range filter field name (e.g., "created_at")
+    pub time_field: Option<String>,
+    /// Time range start (unix timestamp)
+    pub time_start: Option<u64>,
+    /// Time range end (unix timestamp)
+    pub time_end: Option<u64>,
+    /// Parse confidence
+    pub confidence: f32,
+}
+
+impl ParsedQuery {
+    /// Convert to search parameters with a default k value
+    pub fn to_search_params(&self, default_k: usize) -> NLSearchParams {
+        let k = self.extract_quantity().unwrap_or(default_k);
+
+        let (time_start, time_end) = self
+            .temporal
+            .as_ref()
+            .map(|t| (t.start, t.end))
+            .unwrap_or((None, None));
+
+        NLSearchParams {
+            search_text: self.search_text.clone(),
+            k,
+            filter: self.filter.clone(),
+            time_field: if self.temporal.is_some() {
+                Some("created_at".to_string())
+            } else {
+                None
+            },
+            time_start,
+            time_end,
+            confidence: self.confidence,
+        }
+    }
+
+    /// Extract a quantity from the query text (e.g., "top 5", "first 10")
+    fn extract_quantity(&self) -> Option<usize> {
+        let text = self.search_text.to_lowercase();
+        let words: Vec<&str> = text.split_whitespace().collect();
+
+        for (i, word) in words.iter().enumerate() {
+            if *word == "top" || *word == "first" || *word == "best" {
+                if i + 1 < words.len() {
+                    if let Ok(n) = words[i + 1].parse::<usize>() {
+                        return Some(n);
+                    }
+                }
+            }
+            // "5 most similar" pattern
+            if let Ok(n) = word.parse::<usize>() {
+                if i + 1 < words.len()
+                    && (words[i + 1] == "most" || words[i + 1] == "nearest" || words[i + 1] == "closest")
+                {
+                    return Some(n);
+                }
+            }
+        }
+        None
+    }
+}
+
+/// Parse a natural language query and return search parameters in one call.
+/// Convenience function combining NLFilterParser + ParsedQuery.to_search_params().
+pub fn parse_nl_query(query: &str, default_k: usize) -> NLSearchParams {
+    let parser = NLFilterParser::new();
+    let parsed = parser.parse(query);
+    parsed.to_search_params(default_k)
+}
+
+// ============================================================================
+// CLI & REST integration helpers
+// ============================================================================
+
+/// Format a ParsedQuery for CLI display
+pub fn format_parsed_query(parsed: &ParsedQuery) -> String {
+    let mut parts = Vec::new();
+
+    parts.push(format!("Search: \"{}\"", parsed.search_text));
+
+    if let Some(ref filter) = parsed.filter {
+        parts.push(format!("Filter: {:?}", filter));
+    }
+
+    if let Some(ref temporal) = parsed.temporal {
+        parts.push(format!("Time range: {}", temporal.expression));
+    }
+
+    if !parsed.intents.is_empty() {
+        let intent_strs: Vec<String> = parsed.intents.iter().map(|i| format!("{i:?}")).collect();
+        parts.push(format!("Intents: [{}]", intent_strs.join(", ")));
+    }
+
+    parts.push(format!("Confidence: {:.0}%", parsed.confidence * 100.0));
+
+    parts.join("\n")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
