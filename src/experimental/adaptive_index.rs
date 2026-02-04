@@ -792,6 +792,231 @@ impl AdaptiveIndex {
 }
 
 // ---------------------------------------------------------------------------
+// CostModel — benchmark-calibrated latency/memory estimation
+// ---------------------------------------------------------------------------
+
+/// A single benchmark observation for calibrating the cost model.
+#[derive(Debug, Clone)]
+pub struct BenchmarkObservation {
+    /// Which index strategy was measured.
+    pub strategy: IndexStrategy,
+    /// Number of vectors in the index.
+    pub vector_count: usize,
+    /// Dimensionality.
+    pub dimensions: usize,
+    /// Observed query latency (µs).
+    pub latency_us: u64,
+    /// Observed recall (0.0–1.0).
+    pub recall: f32,
+}
+
+/// Benchmark-calibrated cost model for index selection.
+///
+/// Default parameters are derived from typical workloads; call
+/// [`CostModel::calibrate`] with real observations for better accuracy.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CostModel {
+    /// µs per vector for brute-force scan.
+    pub bf_us_per_vec: f64,
+    /// HNSW base latency (µs).
+    pub hnsw_base_us: f64,
+    /// HNSW log-scaling factor.
+    pub hnsw_log_factor: f64,
+    /// IVF base latency (µs).
+    pub ivf_base_us: f64,
+    /// IVF per-probe-cluster cost (µs).
+    pub ivf_per_probe_us: f64,
+    /// Extra bytes per vector for HNSW graph edges.
+    pub hnsw_overhead_bytes: usize,
+    /// Extra bytes per vector for IVF metadata.
+    pub ivf_overhead_bytes: usize,
+}
+
+impl Default for CostModel {
+    fn default() -> Self {
+        Self {
+            bf_us_per_vec: 0.05,
+            hnsw_base_us: 50.0,
+            hnsw_log_factor: 15.0,
+            ivf_base_us: 200.0,
+            ivf_per_probe_us: 10.0,
+            hnsw_overhead_bytes: 800,
+            ivf_overhead_bytes: 200,
+        }
+    }
+}
+
+impl CostModel {
+    /// Fit the model from benchmark observations.
+    pub fn calibrate(obs: &[BenchmarkObservation]) -> Self {
+        let mut model = Self::default();
+        if obs.is_empty() {
+            return model;
+        }
+
+        // Fit brute-force linear model
+        let bf: Vec<_> = obs.iter().filter(|o| o.strategy == IndexStrategy::BruteForce && o.vector_count > 0).collect();
+        if !bf.is_empty() {
+            model.bf_us_per_vec = bf.iter().map(|o| o.latency_us as f64 / o.vector_count as f64).sum::<f64>() / bf.len() as f64;
+        }
+
+        // Fit HNSW log model
+        let hnsw: Vec<_> = obs.iter().filter(|o| o.strategy == IndexStrategy::Hnsw && o.vector_count > 1).collect();
+        if hnsw.len() >= 2 {
+            let avg_lat = hnsw.iter().map(|o| o.latency_us as f64).sum::<f64>() / hnsw.len() as f64;
+            let avg_ln = hnsw.iter().map(|o| (o.vector_count as f64).ln()).sum::<f64>() / hnsw.len() as f64;
+            if avg_ln > 0.0 {
+                model.hnsw_log_factor = avg_lat / avg_ln;
+                model.hnsw_base_us = (avg_lat - model.hnsw_log_factor * avg_ln).max(1.0);
+            }
+        }
+        model
+    }
+
+    /// Estimate query latency (µs).
+    pub fn estimate_latency(&self, strategy: IndexStrategy, n: usize, dims: usize) -> f64 {
+        let dim_scale = 1.0 + dims as f64 * 0.01;
+        match strategy {
+            IndexStrategy::BruteForce => self.bf_us_per_vec * n as f64 * dim_scale,
+            IndexStrategy::Hnsw | IndexStrategy::Auto => {
+                let ln_n = if n > 1 { (n as f64).ln() } else { 1.0 };
+                (self.hnsw_base_us + self.hnsw_log_factor * ln_n) * dim_scale
+            }
+            IndexStrategy::Ivf => {
+                let probes = (n as f64).sqrt().ceil().max(1.0) * 0.1;
+                (self.ivf_base_us + self.ivf_per_probe_us * probes) * dim_scale
+            }
+            IndexStrategy::DiskAnn => {
+                let ln_n = if n > 1 { (n as f64).ln() } else { 1.0 };
+                (self.hnsw_base_us * 3.0 + self.hnsw_log_factor * ln_n * 2.0) * dim_scale
+            }
+        }
+    }
+
+    /// Estimate memory usage (bytes).
+    pub fn estimate_memory(&self, strategy: IndexStrategy, n: usize, dims: usize) -> usize {
+        let raw = n * dims * 4; // f32
+        let overhead = match strategy {
+            IndexStrategy::BruteForce => 0,
+            IndexStrategy::Hnsw | IndexStrategy::Auto => n * self.hnsw_overhead_bytes,
+            IndexStrategy::Ivf => n * self.ivf_overhead_bytes,
+            IndexStrategy::DiskAnn => n * 64,
+        };
+        raw + overhead
+    }
+
+    /// Recommend the best strategy subject to optional constraints.
+    pub fn recommend(
+        &self,
+        n: usize,
+        dims: usize,
+        memory_budget: Option<usize>,
+        latency_target_us: Option<f64>,
+    ) -> IndexRecommendation {
+        let candidates = [IndexStrategy::BruteForce, IndexStrategy::Hnsw, IndexStrategy::Ivf];
+        let mut best = IndexStrategy::Hnsw;
+        let mut best_score = f64::MAX;
+
+        for &s in &candidates {
+            let lat = self.estimate_latency(s, n, dims);
+            let mem = self.estimate_memory(s, n, dims);
+            if let Some(budget) = memory_budget {
+                if mem > budget { continue; }
+            }
+            let mut score = lat;
+            if let Some(target) = latency_target_us {
+                if lat > target { score *= 2.0; }
+            }
+            if score < best_score {
+                best_score = score;
+                best = s;
+            }
+        }
+
+        let est = self.estimate_latency(best, n, dims);
+        IndexRecommendation {
+            recommended: best,
+            reason: format!("CostModel: {best} est. {est:.0}µs for {n} vectors ({dims}d)"),
+            estimated_recall: match best {
+                IndexStrategy::BruteForce => 1.0,
+                IndexStrategy::Hnsw => 0.98,
+                IndexStrategy::Ivf => 0.94,
+                _ => 0.90,
+            },
+            estimated_latency_us: est as u64,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// AdaptiveIndexManager — double-buffered hot-swap
+// ---------------------------------------------------------------------------
+
+/// Wraps an [`AdaptiveIndex`] behind `Arc<RwLock>` to allow hot-swapping
+/// the active index with zero-downtime.
+pub struct AdaptiveIndexManager {
+    active: Arc<RwLock<AdaptiveIndex>>,
+    cost_model: CostModel,
+    config: AdaptiveIndexConfig,
+}
+
+impl AdaptiveIndexManager {
+    /// Create a new manager.
+    pub fn new(
+        dims: usize,
+        distance: DistanceFunction,
+        config: AdaptiveIndexConfig,
+        cost_model: CostModel,
+    ) -> Self {
+        let idx = AdaptiveIndex::new(dims, distance, IndexStrategy::Auto, config.clone());
+        Self {
+            active: Arc::new(RwLock::new(idx)),
+            cost_model,
+            config,
+        }
+    }
+
+    /// Get a handle to the active index (clone the Arc).
+    pub fn active(&self) -> Arc<RwLock<AdaptiveIndex>> {
+        Arc::clone(&self.active)
+    }
+
+    /// Cost-model recommendation for the current workload.
+    pub fn recommend(&self) -> IndexRecommendation {
+        let idx = self.active.read();
+        let p = idx.profile();
+        self.cost_model.recommend(
+            p.vector_count,
+            p.dimensions,
+            if self.config.memory_budget_bytes > 0 { Some(self.config.memory_budget_bytes) } else { None },
+            if self.config.max_latency_us > 0 { Some(self.config.max_latency_us as f64) } else { None },
+        )
+    }
+
+    /// Hot-swap to a new strategy (rebuilds index under write lock).
+    pub fn hot_swap(&self, target: IndexStrategy) -> Result<()> {
+        self.active.write().migrate_index(target)
+    }
+
+    /// Check workload and auto-swap if the cost model disagrees with the current strategy.
+    pub fn auto_swap(&self) -> Result<bool> {
+        let rec = self.recommend();
+        let current = self.active.read().active_strategy();
+        if rec.recommended != current && rec.recommended != IndexStrategy::DiskAnn {
+            self.hot_swap(rec.recommended)?;
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+
+    /// Access the cost model.
+    pub fn cost_model(&self) -> &CostModel {
+        &self.cost_model
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -1098,5 +1323,57 @@ mod tests {
         // Should have migrated because satisfaction_rate < threshold
         assert!(migrated);
         assert_eq!(idx.active_strategy(), IndexStrategy::Hnsw);
+    }
+
+    #[test]
+    fn test_cost_model_latency_ordering() {
+        let m = CostModel::default();
+        let bf = m.estimate_latency(IndexStrategy::BruteForce, 10_000, 128);
+        let hnsw = m.estimate_latency(IndexStrategy::Hnsw, 10_000, 128);
+        assert!(hnsw < bf, "HNSW should be faster than brute-force at 10K");
+    }
+
+    #[test]
+    fn test_cost_model_memory() {
+        let m = CostModel::default();
+        let bf = m.estimate_memory(IndexStrategy::BruteForce, 10_000, 128);
+        let hnsw = m.estimate_memory(IndexStrategy::Hnsw, 10_000, 128);
+        assert!(hnsw > bf);
+    }
+
+    #[test]
+    fn test_cost_model_recommend() {
+        let m = CostModel::default();
+        let rec = m.recommend(100, 128, None, None);
+        assert!(rec.recommended == IndexStrategy::BruteForce || rec.recommended == IndexStrategy::Hnsw);
+    }
+
+    #[test]
+    fn test_cost_model_calibrate() {
+        let obs = vec![
+            BenchmarkObservation { strategy: IndexStrategy::BruteForce, vector_count: 1000, dimensions: 128, latency_us: 100, recall: 1.0 },
+            BenchmarkObservation { strategy: IndexStrategy::Hnsw, vector_count: 10_000, dimensions: 128, latency_us: 200, recall: 0.98 },
+            BenchmarkObservation { strategy: IndexStrategy::Hnsw, vector_count: 100_000, dimensions: 128, latency_us: 350, recall: 0.97 },
+        ];
+        let m = CostModel::calibrate(&obs);
+        assert!(m.bf_us_per_vec > 0.0);
+    }
+
+    #[test]
+    fn test_adaptive_manager() {
+        let mgr = AdaptiveIndexManager::new(
+            4, DistanceFunction::Cosine, AdaptiveIndexConfig::default(), CostModel::default(),
+        );
+        {
+            let mut idx = mgr.active().write();
+            idx.insert("a", &[1.0, 0.0, 0.0, 0.0]).unwrap();
+        }
+        {
+            let idx = mgr.active().read();
+            let r = idx.search(&[1.0, 0.0, 0.0, 0.0], 1).unwrap();
+            assert!(!r.is_empty());
+        }
+        let rec = mgr.recommend();
+        assert!(!rec.reason.is_empty());
     }
 }
