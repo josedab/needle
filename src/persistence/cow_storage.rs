@@ -1,7 +1,3 @@
-// Allow dead_code: public API module — types are exported for library consumers
-#![allow(dead_code)]
-#![allow(clippy::redundant_closure)]
-
 //! Copy-on-Write (COW) B-tree backed persistence for incremental HNSW updates.
 //!
 //! Instead of serialising the entire database state and performing a full-file
@@ -40,7 +36,6 @@ use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 // ─── Constants ───────────────────────────────────────────────────────────────
