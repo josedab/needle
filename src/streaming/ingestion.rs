@@ -540,6 +540,208 @@ impl Default for RedisStreamSourceConfig {
     }
 }
 
+/// Push-handle based Redis Streams source.
+///
+/// Use `RedisStreamSource::new()` to get a `(source, handle)` pair. The handle
+/// is passed to your Redis consumer thread; the source is attached to the pipeline.
+pub struct RedisStreamSource {
+    name: String,
+    #[allow(dead_code)]
+    config: RedisStreamSourceConfig,
+    buffer: Arc<Mutex<VecDeque<IngestionRecord>>>,
+    closed: Arc<AtomicBool>,
+}
+
+/// Handle for pushing records from a Redis consumer.
+pub struct RedisStreamPushHandle {
+    buffer: Arc<Mutex<VecDeque<IngestionRecord>>>,
+    closed: Arc<AtomicBool>,
+}
+
+impl RedisStreamSource {
+    /// Create a new source + push handle pair.
+    pub fn new(config: RedisStreamSourceConfig) -> (Self, RedisStreamPushHandle) {
+        let buffer = Arc::new(Mutex::new(VecDeque::with_capacity(config.buffer_capacity)));
+        let closed = Arc::new(AtomicBool::new(false));
+        let source = Self {
+            name: format!("redis:{}", config.stream_key),
+            config,
+            buffer: Arc::clone(&buffer),
+            closed: Arc::clone(&closed),
+        };
+        let handle = RedisStreamPushHandle { buffer, closed };
+        (source, handle)
+    }
+}
+
+impl RedisStreamPushHandle {
+    /// Push a record.
+    pub fn push(&self, record: IngestionRecord) -> Result<()> {
+        if self.closed.load(Ordering::Acquire) {
+            return Err(NeedleError::InvalidOperation("Redis source closed".into()));
+        }
+        self.buffer.lock().push_back(record);
+        Ok(())
+    }
+}
+
+impl IngestionSource for RedisStreamSource {
+    fn name(&self) -> &str { &self.name }
+    fn poll_batch(&self, max: usize) -> Result<Vec<IngestionRecord>> {
+        let mut buf = self.buffer.lock();
+        let count = max.min(buf.len()); Ok(buf.drain(..count).collect())
+    }
+    fn acknowledge(&self, _offset: &SourceOffset) -> Result<()> { Ok(()) }
+    fn is_healthy(&self) -> bool { !self.closed.load(Ordering::Acquire) }
+    fn close(&self) -> Result<()> { self.closed.store(true, Ordering::Release); Ok(()) }
+}
+
+// ============================================================================
+// Kafka Source (push-handle based)
+// ============================================================================
+
+/// Kafka source configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct KafkaSourceConfig {
+    /// Topic to consume from.
+    pub topic: String,
+    /// Consumer group id.
+    pub group_id: String,
+    /// Bootstrap servers (comma-separated).
+    pub bootstrap_servers: String,
+    /// Buffer capacity.
+    pub buffer_capacity: usize,
+}
+
+impl Default for KafkaSourceConfig {
+    fn default() -> Self {
+        Self {
+            topic: "needle-vectors".into(),
+            group_id: "needle-ingest".into(),
+            bootstrap_servers: "localhost:9092".into(),
+            buffer_capacity: 8192,
+        }
+    }
+}
+
+/// Push-handle based Kafka source.
+pub struct KafkaSource {
+    name: String,
+    #[allow(dead_code)]
+    config: KafkaSourceConfig,
+    buffer: Arc<Mutex<VecDeque<IngestionRecord>>>,
+    closed: Arc<AtomicBool>,
+}
+
+/// Handle for pushing records from a Kafka consumer thread.
+pub struct KafkaPushHandle {
+    buffer: Arc<Mutex<VecDeque<IngestionRecord>>>,
+    closed: Arc<AtomicBool>,
+}
+
+impl KafkaSource {
+    /// Create a source + push handle pair.
+    pub fn new(config: KafkaSourceConfig) -> (Self, KafkaPushHandle) {
+        let buffer = Arc::new(Mutex::new(VecDeque::with_capacity(config.buffer_capacity)));
+        let closed = Arc::new(AtomicBool::new(false));
+        let source = Self {
+            name: format!("kafka:{}", config.topic),
+            config,
+            buffer: Arc::clone(&buffer),
+            closed: Arc::clone(&closed),
+        };
+        let handle = KafkaPushHandle { buffer, closed };
+        (source, handle)
+    }
+}
+
+impl KafkaPushHandle {
+    /// Push a record from the Kafka consumer.
+    pub fn push(&self, record: IngestionRecord) -> Result<()> {
+        if self.closed.load(Ordering::Acquire) {
+            return Err(NeedleError::InvalidOperation("Kafka source closed".into()));
+        }
+        self.buffer.lock().push_back(record);
+        Ok(())
+    }
+}
+
+impl IngestionSource for KafkaSource {
+    fn name(&self) -> &str { &self.name }
+    fn poll_batch(&self, max: usize) -> Result<Vec<IngestionRecord>> {
+        let mut buf = self.buffer.lock();
+        let count = max.min(buf.len()); Ok(buf.drain(..count).collect())
+    }
+    fn acknowledge(&self, _offset: &SourceOffset) -> Result<()> { Ok(()) }
+    fn is_healthy(&self) -> bool { !self.closed.load(Ordering::Acquire) }
+    fn close(&self) -> Result<()> { self.closed.store(true, Ordering::Release); Ok(()) }
+}
+
+// ============================================================================
+// SSE (Server-Sent Events) Source
+// ============================================================================
+
+/// SSE source configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SseSourceConfig {
+    /// Buffer capacity.
+    pub buffer_capacity: usize,
+    /// Optional event-type filter.
+    pub event_type_filter: Option<String>,
+}
+
+impl Default for SseSourceConfig {
+    fn default() -> Self {
+        Self { buffer_capacity: 4096, event_type_filter: None }
+    }
+}
+
+/// Push-handle based SSE source.
+pub struct SseSource {
+    name: String,
+    buffer: Arc<Mutex<VecDeque<IngestionRecord>>>,
+    closed: Arc<AtomicBool>,
+}
+
+/// Handle for pushing SSE events.
+pub struct SsePushHandle {
+    buffer: Arc<Mutex<VecDeque<IngestionRecord>>>,
+    closed: Arc<AtomicBool>,
+}
+
+impl SseSource {
+    /// Create a source + push handle pair.
+    pub fn new(config: SseSourceConfig) -> (Self, SsePushHandle) {
+        let buffer = Arc::new(Mutex::new(VecDeque::with_capacity(config.buffer_capacity)));
+        let closed = Arc::new(AtomicBool::new(false));
+        let source = Self { name: "sse".into(), buffer: Arc::clone(&buffer), closed: Arc::clone(&closed) };
+        let handle = SsePushHandle { buffer, closed };
+        (source, handle)
+    }
+}
+
+impl SsePushHandle {
+    /// Push a record from an SSE event.
+    pub fn push(&self, record: IngestionRecord) -> Result<()> {
+        if self.closed.load(Ordering::Acquire) {
+            return Err(NeedleError::InvalidOperation("SSE source closed".into()));
+        }
+        self.buffer.lock().push_back(record);
+        Ok(())
+    }
+}
+
+impl IngestionSource for SseSource {
+    fn name(&self) -> &str { &self.name }
+    fn poll_batch(&self, max: usize) -> Result<Vec<IngestionRecord>> {
+        let mut buf = self.buffer.lock();
+        let count = max.min(buf.len()); Ok(buf.drain(..count).collect())
+    }
+    fn acknowledge(&self, _offset: &SourceOffset) -> Result<()> { Ok(()) }
+    fn is_healthy(&self) -> bool { !self.closed.load(Ordering::Acquire) }
+    fn close(&self) -> Result<()> { self.closed.store(true, Ordering::Release); Ok(()) }
+}
+
 // ============================================================================
 // Ingestion Pipeline
 // ============================================================================
@@ -1126,6 +1328,38 @@ mod tests {
         assert_eq!(batch.len(), 2);
         assert!(source.is_healthy());
 
+        source.close().expect("close");
+        assert!(handle.push(make_record("v3", "test", 64)).is_err());
+    }
+
+    #[test]
+    fn test_kafka_source() {
+        let (source, handle) = KafkaSource::new(KafkaSourceConfig::default());
+        handle.push(make_record("v1", "test", 64)).expect("push");
+        let batch = source.poll_batch(10).expect("poll");
+        assert_eq!(batch.len(), 1);
+        source.close().expect("close");
+        assert!(handle.push(make_record("v2", "test", 64)).is_err());
+    }
+
+    #[test]
+    fn test_redis_stream_source() {
+        let (source, handle) = RedisStreamSource::new(RedisStreamSourceConfig::default());
+        handle.push(make_record("v1", "test", 64)).expect("push");
+        let batch = source.poll_batch(10).expect("poll");
+        assert_eq!(batch.len(), 1);
+        assert!(source.is_healthy());
+        source.close().expect("close");
+        assert!(!source.is_healthy());
+    }
+
+    #[test]
+    fn test_sse_source() {
+        let (source, handle) = SseSource::new(SseSourceConfig::default());
+        handle.push(make_record("v1", "test", 64)).expect("push");
+        handle.push(make_record("v2", "test", 64)).expect("push");
+        let batch = source.poll_batch(10).expect("poll");
+        assert_eq!(batch.len(), 2);
         source.close().expect("close");
         assert!(handle.push(make_record("v3", "test", 64)).is_err());
     }
