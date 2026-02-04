@@ -209,6 +209,12 @@ struct DashboardStats {
     queries_per_second: f64,
     #[allow(dead_code)]
     uptime_seconds: u64,
+    /// Cache hit rate (0.0-1.0) if semantic cache is active
+    cache_hit_rate: f64,
+    /// Average query latency in microseconds
+    avg_query_latency_us: f64,
+    /// Insert throughput (vectors per second)
+    insert_throughput: f64,
 }
 
 /// Render the UI - standalone function to avoid borrow conflicts
