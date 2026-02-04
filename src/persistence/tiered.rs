@@ -784,6 +784,364 @@ impl Default for TierPolicyBuilder {
     }
 }
 
+// ============================================================================
+// Cloud Storage Backend Trait
+// ============================================================================
+
+/// Trait for cloud object storage backends (S3, GCS, Azure Blob)
+pub trait CloudStorageBackend: Send + Sync {
+    /// Name of this backend (e.g., "s3", "gcs", "azure")
+    fn name(&self) -> &str;
+
+    /// Upload data to the cloud storage
+    fn upload(&self, key: &str, data: &[u8]) -> std::result::Result<(), String>;
+
+    /// Download data from cloud storage
+    fn download(&self, key: &str) -> std::result::Result<Vec<u8>, String>;
+
+    /// Delete data from cloud storage
+    fn delete(&self, key: &str) -> std::result::Result<(), String>;
+
+    /// Check if a key exists
+    fn exists(&self, key: &str) -> std::result::Result<bool, String>;
+
+    /// List keys with a given prefix
+    fn list_keys(&self, prefix: &str) -> std::result::Result<Vec<String>, String>;
+
+    /// Get estimated cost per GB per month
+    fn cost_per_gb_month(&self) -> f64;
+}
+
+/// S3-compatible cloud storage backend configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct S3Config {
+    /// S3 bucket name
+    pub bucket: String,
+    /// AWS region (e.g., "us-east-1")
+    pub region: String,
+    /// Key prefix for Needle data
+    pub prefix: String,
+    /// Enable server-side encryption (AES-256)
+    pub encryption: bool,
+    /// Storage class (e.g., "STANDARD", "GLACIER", "DEEP_ARCHIVE")
+    pub storage_class: String,
+    /// Endpoint override for S3-compatible services (MinIO, etc.)
+    pub endpoint_override: Option<String>,
+}
+
+impl Default for S3Config {
+    fn default() -> Self {
+        Self {
+            bucket: "needle-vectors".to_string(),
+            region: "us-east-1".to_string(),
+            prefix: "needle/".to_string(),
+            encryption: true,
+            storage_class: "STANDARD".to_string(),
+            endpoint_override: None,
+        }
+    }
+}
+
+/// S3 cloud storage backend (stub - requires aws-sdk-s3 dependency)
+pub struct S3Backend {
+    config: S3Config,
+}
+
+impl S3Backend {
+    pub fn new(config: S3Config) -> Self {
+        Self { config }
+    }
+
+    pub fn config(&self) -> &S3Config {
+        &self.config
+    }
+
+    fn full_key(&self, key: &str) -> String {
+        format!("{}{}", self.config.prefix, key)
+    }
+}
+
+impl CloudStorageBackend for S3Backend {
+    fn name(&self) -> &str {
+        "s3"
+    }
+
+    fn upload(&self, key: &str, _data: &[u8]) -> std::result::Result<(), String> {
+        let _full_key = self.full_key(key);
+        // In production: use aws-sdk-s3 PutObject
+        // aws_sdk_s3::Client::put_object()
+        //   .bucket(&self.config.bucket)
+        //   .key(&full_key)
+        //   .body(ByteStream::from(data.to_vec()))
+        //   .server_side_encryption(if self.config.encryption { "AES256" } else { "" })
+        //   .storage_class(&self.config.storage_class)
+        //   .send().await
+        Err("S3 upload requires aws-sdk-s3 dependency. Enable 'cloud-storage' feature.".to_string())
+    }
+
+    fn download(&self, key: &str) -> std::result::Result<Vec<u8>, String> {
+        let _full_key = self.full_key(key);
+        Err("S3 download requires aws-sdk-s3 dependency. Enable 'cloud-storage' feature.".to_string())
+    }
+
+    fn delete(&self, key: &str) -> std::result::Result<(), String> {
+        let _full_key = self.full_key(key);
+        Err("S3 delete requires aws-sdk-s3 dependency. Enable 'cloud-storage' feature.".to_string())
+    }
+
+    fn exists(&self, key: &str) -> std::result::Result<bool, String> {
+        let _full_key = self.full_key(key);
+        Err("S3 exists requires aws-sdk-s3 dependency. Enable 'cloud-storage' feature.".to_string())
+    }
+
+    fn list_keys(&self, prefix: &str) -> std::result::Result<Vec<String>, String> {
+        let _full_prefix = self.full_key(prefix);
+        Err("S3 list requires aws-sdk-s3 dependency. Enable 'cloud-storage' feature.".to_string())
+    }
+
+    fn cost_per_gb_month(&self) -> f64 {
+        match self.config.storage_class.as_str() {
+            "GLACIER" => 0.004,
+            "DEEP_ARCHIVE" => 0.00099,
+            "STANDARD_IA" => 0.0125,
+            _ => 0.023, // S3 Standard
+        }
+    }
+}
+
+/// GCS cloud storage backend configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GcsConfig {
+    /// GCS bucket name
+    pub bucket: String,
+    /// Key prefix
+    pub prefix: String,
+    /// Storage class ("STANDARD", "NEARLINE", "COLDLINE", "ARCHIVE")
+    pub storage_class: String,
+    /// Enable encryption
+    pub encryption: bool,
+}
+
+impl Default for GcsConfig {
+    fn default() -> Self {
+        Self {
+            bucket: "needle-vectors".to_string(),
+            prefix: "needle/".to_string(),
+            storage_class: "STANDARD".to_string(),
+            encryption: true,
+        }
+    }
+}
+
+/// GCS cloud storage backend (stub - requires google-cloud-storage dependency)
+pub struct GcsBackend {
+    config: GcsConfig,
+}
+
+impl GcsBackend {
+    pub fn new(config: GcsConfig) -> Self {
+        Self { config }
+    }
+
+    pub fn config(&self) -> &GcsConfig {
+        &self.config
+    }
+}
+
+impl CloudStorageBackend for GcsBackend {
+    fn name(&self) -> &str {
+        "gcs"
+    }
+
+    fn upload(&self, _key: &str, _data: &[u8]) -> std::result::Result<(), String> {
+        Err("GCS upload requires google-cloud-storage dependency. Enable 'cloud-storage' feature.".to_string())
+    }
+
+    fn download(&self, _key: &str) -> std::result::Result<Vec<u8>, String> {
+        Err("GCS download requires google-cloud-storage dependency. Enable 'cloud-storage' feature.".to_string())
+    }
+
+    fn delete(&self, _key: &str) -> std::result::Result<(), String> {
+        Err("GCS delete requires google-cloud-storage dependency. Enable 'cloud-storage' feature.".to_string())
+    }
+
+    fn exists(&self, _key: &str) -> std::result::Result<bool, String> {
+        Err("GCS exists requires google-cloud-storage dependency. Enable 'cloud-storage' feature.".to_string())
+    }
+
+    fn list_keys(&self, _prefix: &str) -> std::result::Result<Vec<String>, String> {
+        Err("GCS list requires google-cloud-storage dependency. Enable 'cloud-storage' feature.".to_string())
+    }
+
+    fn cost_per_gb_month(&self) -> f64 {
+        match self.config.storage_class.as_str() {
+            "NEARLINE" => 0.01,
+            "COLDLINE" => 0.004,
+            "ARCHIVE" => 0.0012,
+            _ => 0.020, // GCS Standard
+        }
+    }
+}
+
+/// Azure Blob Storage configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AzureBlobConfig {
+    /// Storage account name
+    pub account: String,
+    /// Container name
+    pub container: String,
+    /// Blob prefix
+    pub prefix: String,
+    /// Access tier ("Hot", "Cool", "Archive")
+    pub access_tier: String,
+}
+
+impl Default for AzureBlobConfig {
+    fn default() -> Self {
+        Self {
+            account: "needlestorage".to_string(),
+            container: "vectors".to_string(),
+            prefix: "needle/".to_string(),
+            access_tier: "Hot".to_string(),
+        }
+    }
+}
+
+/// Azure Blob Storage backend (stub)
+pub struct AzureBlobBackend {
+    config: AzureBlobConfig,
+}
+
+impl AzureBlobBackend {
+    pub fn new(config: AzureBlobConfig) -> Self {
+        Self { config }
+    }
+
+    pub fn config(&self) -> &AzureBlobConfig {
+        &self.config
+    }
+}
+
+impl CloudStorageBackend for AzureBlobBackend {
+    fn name(&self) -> &str {
+        "azure"
+    }
+
+    fn upload(&self, _key: &str, _data: &[u8]) -> std::result::Result<(), String> {
+        Err("Azure upload requires azure-storage-blobs dependency. Enable 'cloud-storage' feature.".to_string())
+    }
+
+    fn download(&self, _key: &str) -> std::result::Result<Vec<u8>, String> {
+        Err("Azure download requires azure-storage-blobs dependency. Enable 'cloud-storage' feature.".to_string())
+    }
+
+    fn delete(&self, _key: &str) -> std::result::Result<(), String> {
+        Err("Azure delete requires azure-storage-blobs dependency. Enable 'cloud-storage' feature.".to_string())
+    }
+
+    fn exists(&self, _key: &str) -> std::result::Result<bool, String> {
+        Err("Azure exists requires azure-storage-blobs dependency. Enable 'cloud-storage' feature.".to_string())
+    }
+
+    fn list_keys(&self, _prefix: &str) -> std::result::Result<Vec<String>, String> {
+        Err("Azure list requires azure-storage-blobs dependency. Enable 'cloud-storage' feature.".to_string())
+    }
+
+    fn cost_per_gb_month(&self) -> f64 {
+        match self.config.access_tier.as_str() {
+            "Cool" => 0.01,
+            "Archive" => 0.00099,
+            _ => 0.018, // Hot
+        }
+    }
+}
+
+// ============================================================================
+// Simple LZ4-style Compression for Warm/Cold Tiers
+// ============================================================================
+
+/// Compress vector data for warm/cold storage.
+/// Uses simple delta encoding + variable-length encoding for f32 vectors.
+pub fn compress_vectors(vectors: &[f32]) -> Vec<u8> {
+    if vectors.is_empty() {
+        return Vec::new();
+    }
+
+    let mut result = Vec::with_capacity(vectors.len() * 3);
+    // Header: vector count
+    result.extend_from_slice(&(vectors.len() as u32).to_le_bytes());
+
+    // Delta encoding: store first value, then differences
+    let first_bits = vectors[0].to_bits();
+    result.extend_from_slice(&first_bits.to_le_bytes());
+
+    let mut prev = first_bits;
+    for &v in &vectors[1..] {
+        let bits = v.to_bits();
+        let delta = bits.wrapping_sub(prev);
+        // Variable-length encode the delta
+        encode_varint(delta, &mut result);
+        prev = bits;
+    }
+
+    result
+}
+
+/// Decompress vector data from warm/cold storage.
+pub fn decompress_vectors(data: &[u8]) -> std::result::Result<Vec<f32>, String> {
+    if data.len() < 8 {
+        return Err("Compressed data too short".to_string());
+    }
+
+    let count = u32::from_le_bytes(
+        data[0..4].try_into().map_err(|_| "Invalid header")?,
+    ) as usize;
+    let first_bits = u32::from_le_bytes(
+        data[4..8].try_into().map_err(|_| "Invalid first value")?,
+    );
+
+    let mut result = Vec::with_capacity(count);
+    result.push(f32::from_bits(first_bits));
+
+    let mut prev = first_bits;
+    let mut pos = 8;
+
+    for _ in 1..count {
+        let (delta, bytes_read) = decode_varint(&data[pos..])
+            .ok_or_else(|| "Truncated compressed data".to_string())?;
+        pos += bytes_read;
+        let bits = prev.wrapping_add(delta);
+        result.push(f32::from_bits(bits));
+        prev = bits;
+    }
+
+    Ok(result)
+}
+
+fn encode_varint(mut value: u32, buf: &mut Vec<u8>) {
+    while value >= 0x80 {
+        buf.push((value as u8) | 0x80);
+        value >>= 7;
+    }
+    buf.push(value as u8);
+}
+
+fn decode_varint(data: &[u8]) -> Option<(u32, usize)> {
+    let mut result = 0u32;
+    let mut shift = 0;
+    for (i, &byte) in data.iter().enumerate() {
+        result |= ((byte & 0x7F) as u32) << shift;
+        if byte & 0x80 == 0 {
+            return Some((result, i + 1));
+        }
+        shift += 7;
+        if shift >= 32 {
+            return None;
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
