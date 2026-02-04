@@ -618,6 +618,122 @@ where
     }
 }
 
+// ============================================================================
+// Search Pipeline Integration
+// ============================================================================
+
+/// Cache-aware search result wrapper with EXPLAIN support
+#[derive(Debug, Clone)]
+pub struct CachedSearchResult {
+    /// Original search results
+    pub results: Vec<crate::SearchResult>,
+    /// Whether results came from cache
+    pub cache_hit: bool,
+    /// Similarity to cached query (if cache hit)
+    pub cache_similarity: Option<f32>,
+    /// Latency in microseconds
+    pub latency_us: u64,
+    /// Cache key used (for debugging)
+    pub cache_key: Option<String>,
+}
+
+impl CachedSearchResult {
+    /// Generate EXPLAIN output for this cached result
+    pub fn explain(&self) -> String {
+        let mut lines = Vec::new();
+        lines.push(format!(
+            "Cache: {}",
+            if self.cache_hit { "HIT" } else { "MISS" }
+        ));
+        if let Some(sim) = self.cache_similarity {
+            lines.push(format!("  similarity: {:.4}", sim));
+        }
+        if let Some(ref key) = self.cache_key {
+            lines.push(format!("  key: {}", key));
+        }
+        lines.push(format!("  latency: {}µs", self.latency_us));
+        lines.push(format!("  results: {}", self.results.len()));
+        lines.join("\n")
+    }
+}
+
+impl SemanticCache {
+    /// Invalidate cache entries that are affected by a vector insert/update/delete.
+    /// Removes entries whose cached results reference the given vector ID.
+    pub fn invalidate_for_vector(&mut self, vector_id: &str) {
+        let affected_l1: Vec<String> = self
+            .l1_entries
+            .iter()
+            .filter(|(_, entry)| entry.response.contains(vector_id))
+            .map(|(k, _)| k.clone())
+            .collect();
+
+        for key in &affected_l1 {
+            self.l1_entries.remove(key);
+            self.evictions += 1;
+        }
+
+        let affected_l2: Vec<String> = self
+            .l2_entries
+            .iter()
+            .filter(|(_, entry)| entry.response.contains(vector_id))
+            .map(|(k, _)| k.clone())
+            .collect();
+
+        for key in &affected_l2 {
+            self.l2_entries.remove(key);
+            self.evictions += 1;
+        }
+    }
+
+    /// Invalidate all cache entries (e.g., after bulk insert/delete).
+    pub fn invalidate_all(&mut self) {
+        let count = self.l1_entries.len() + self.l2_entries.len();
+        self.l1_entries.clear();
+        self.l2_entries.clear();
+        self.evictions += count as u64;
+    }
+
+    /// Format cache statistics for CLI display
+    pub fn format_stats(&self) -> String {
+        let stats = self.stats();
+        format!(
+            "Semantic Cache Statistics:\n\
+             \x20 L1 entries: {} / {}\n\
+             \x20 L2 entries: {} / {}\n\
+             \x20 Hit ratio:  {:.1}% ({} hits, {} misses)\n\
+             \x20 Avg lookup: {:.1}µs\n\
+             \x20 Evictions:  {}\n\
+             \x20 Promotions: {}",
+            stats.l1_size,
+            self.config.l1_max_entries,
+            stats.l2_size,
+            self.config.l2_max_entries,
+            stats.hit_ratio * 100.0,
+            stats.hits,
+            stats.misses,
+            stats.avg_lookup_us,
+            stats.evictions,
+            stats.promotions,
+        )
+    }
+
+    /// Get the similarity threshold
+    pub fn similarity_threshold(&self) -> f32 {
+        self.config.similarity_threshold
+    }
+
+    /// Update the similarity threshold
+    pub fn set_similarity_threshold(&mut self, threshold: f32) {
+        self.config.similarity_threshold = threshold.clamp(0.0, 1.0);
+    }
+
+    /// Get the total number of entries across all tiers
+    pub fn total_entries(&self) -> usize {
+        self.l1_entries.len() + self.l2_entries.len()
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
