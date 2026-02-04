@@ -1518,11 +1518,97 @@ impl WasmDatabase {
             .map_err(|e| JsValue::from_str(&e.to_string()))?;
         Ok(results.into_iter().map(SearchResult::from).collect())
     }
-}
 
-impl Default for WasmDatabase {
-    fn default() -> Self {
-        Self::new()
+    /// Delete a vector from a named collection
+    pub fn delete(
+        &mut self,
+        collection: &str,
+        id: &str,
+    ) -> Result<bool, JsValue> {
+        let coll = self
+            .collections
+            .get_mut(collection)
+            .ok_or_else(|| JsValue::from_str(&format!("Collection '{}' not found", collection)))?;
+        coll.delete(id)
+            .map_err(|e| JsValue::from_str(&e.to_string()))
+    }
+
+    /// Get a vector by ID from a named collection
+    pub fn get(
+        &self,
+        collection: &str,
+        id: &str,
+    ) -> Result<JsValue, JsValue> {
+        let coll = self
+            .collections
+            .get(collection)
+            .ok_or_else(|| JsValue::from_str(&format!("Collection '{}' not found", collection)))?;
+        match coll.get(id) {
+            Some((vector, metadata)) => {
+                let obj = js_sys::Object::new();
+                let vec_arr = js_sys::Float32Array::from(vector.as_slice());
+                js_set(&obj, &"vector".into(), &vec_arr);
+                if let Some(meta) = metadata {
+                    if let Ok(parsed) = js_sys::JSON::parse(&meta.to_string()) {
+                        js_set(&obj, &"metadata".into(), &parsed);
+                    }
+                }
+                Ok(obj.into())
+            }
+            None => Ok(JsValue::NULL),
+        }
+    }
+
+    /// Search with a metadata filter within a named collection
+    #[wasm_bindgen(js_name = "searchWithFilter")]
+    pub fn search_with_filter(
+        &self,
+        collection: &str,
+        query: Vec<f32>,
+        k: usize,
+        filter_json: &str,
+    ) -> Result<Vec<SearchResult>, JsValue> {
+        let coll = self
+            .collections
+            .get(collection)
+            .ok_or_else(|| JsValue::from_str(&format!("Collection '{}' not found", collection)))?;
+        let filter_value: Value = serde_json::from_str(filter_json)
+            .map_err(|e| JsValue::from_str(&format!("Invalid filter JSON: {e}")))?;
+        let filter = Filter::parse(&filter_value)
+            .map_err(|e| JsValue::from_str(&format!("Invalid filter: {e}")))?;
+        let results = coll
+            .search_with_filter(&query, k, &filter)
+            .map_err(|e| JsValue::from_str(&e.to_string()))?;
+        Ok(results.into_iter().map(SearchResult::from).collect())
+    }
+
+    /// Get memory statistics for the entire database
+    #[wasm_bindgen(js_name = "getMemoryStats")]
+    pub fn get_memory_stats(&self) -> js_sys::Object {
+        let obj = js_sys::Object::new();
+        let mut total_vectors = 0usize;
+        let mut total_bytes = 0usize;
+        for (name, coll) in &self.collections {
+            let count = coll.len();
+            let dims = coll.dimensions();
+            total_vectors += count;
+            total_bytes += count * dims * 4 + count * 64 * 4;
+            let coll_obj = js_sys::Object::new();
+            js_set(&coll_obj, &"vectors".into(), &(count as u32).into());
+            js_set(&coll_obj, &"dimensions".into(), &(dims as u32).into());
+            js_set(&coll_obj, &"estimatedBytes".into(), &((count * dims * 4) as u32).into());
+            js_set(&obj, &JsValue::from_str(name), &coll_obj);
+        }
+        js_set(&obj, &"totalVectors".into(), &(total_vectors as u32).into());
+        js_set(&obj, &"totalEstimatedBytes".into(), &(total_bytes as u32).into());
+        js_set(&obj, &"collectionCount".into(), &(self.collections.len() as u32).into());
+        obj
+    }
+
+    /// Get the number of collections
+    #[wasm_bindgen(getter, js_name = "collectionCount")]
+    pub fn collection_count(&self) -> usize {
+        self.collections.len()
     }
 }
 
@@ -1968,4 +2054,143 @@ impl WasmSearchOptions {
     pub fn k(&self) -> usize {
         self.k
     }
+}
+
+// ============================================================================
+// React Hooks Generator
+// ============================================================================
+
+/// Generate TypeScript/React hooks source for `@needle-db/wasm` package
+#[wasm_bindgen(js_name = "getReactHooks")]
+pub fn get_react_hooks() -> String {
+    r#"
+import { useState, useEffect, useCallback, useRef } from 'react';
+
+/** Result from a Needle search */
+export interface NeedleSearchResult {
+  id: string;
+  distance: number;
+  metadata?: Record<string, unknown>;
+}
+
+/** Options for the useNeedleSearch hook */
+export interface UseNeedleSearchOptions {
+  collection: string;
+  k?: number;
+  debounceMs?: number;
+  filter?: Record<string, unknown>;
+}
+
+/**
+ * React hook for performing vector searches against a Needle WASM collection.
+ *
+ * @example
+ * ```tsx
+ * const { search, results, loading } = useNeedleSearch(db, {
+ *   collection: 'docs',
+ *   k: 10,
+ * });
+ * // Trigger a search with a query vector
+ * search(queryVector);
+ * ```
+ */
+export function useNeedleSearch(db: any, options: UseNeedleSearchOptions) {
+  const { collection, k = 10, debounceMs = 0, filter } = options;
+  const [results, setResults] = useState<NeedleSearchResult[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<Error | null>(null);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const search = useCallback(
+    (query: Float32Array | number[]) => {
+      if (timerRef.current) clearTimeout(timerRef.current);
+
+      const doSearch = () => {
+        setLoading(true);
+        setError(null);
+        try {
+          const queryArray = query instanceof Float32Array ? query : new Float32Array(query);
+          let searchResults;
+          if (filter) {
+            searchResults = db.searchWithFilter(collection, queryArray, k, JSON.stringify(filter));
+          } else {
+            searchResults = db.search(collection, queryArray, k);
+          }
+          const mapped = searchResults.map((r: any) => ({
+            id: r.id,
+            distance: r.distance,
+            metadata: r.metadata,
+          }));
+          setResults(mapped);
+        } catch (e) {
+          setError(e instanceof Error ? e : new Error(String(e)));
+          setResults([]);
+        } finally {
+          setLoading(false);
+        }
+      };
+
+      if (debounceMs > 0) {
+        timerRef.current = setTimeout(doSearch, debounceMs);
+      } else {
+        doSearch();
+      }
+    },
+    [db, collection, k, debounceMs, filter],
+  );
+
+  useEffect(() => {
+    return () => {
+      if (timerRef.current) clearTimeout(timerRef.current);
+    };
+  }, []);
+
+  return { search, results, loading, error };
+}
+
+/**
+ * React hook for managing a persistent Needle database with IndexedDB.
+ *
+ * @example
+ * ```tsx
+ * const { db, ready, save } = useNeedleDb('my-app');
+ * ```
+ */
+export function useNeedleDb(dbName: string) {
+  const [db, setDb] = useState<any>(null);
+  const [ready, setReady] = useState(false);
+
+  useEffect(() => {
+    async function init() {
+      const { WasmDatabase } = await import('@needle-db/wasm');
+      const database = new WasmDatabase();
+      setDb(database);
+      setReady(true);
+    }
+    init().catch(console.error);
+  }, [dbName]);
+
+  const save = useCallback(async () => {
+    if (!db) return;
+    const bytes = db.toBytes();
+    // Use IndexedDB to persist
+    const request = indexedDB.open(dbName, 1);
+    request.onupgradeneeded = (e: any) => {
+      const idb = e.target.result;
+      if (!idb.objectStoreNames.contains('needle')) {
+        idb.createObjectStore('needle');
+      }
+    };
+    request.onsuccess = () => {
+      const idb = request.result;
+      const tx = idb.transaction('needle', 'readwrite');
+      tx.objectStore('needle').put(bytes, 'database');
+      tx.oncomplete = () => idb.close();
+    };
+  }, [db, dbName]);
+
+  return { db, ready, save };
+}
+"#
+    .to_string()
 }
