@@ -2084,6 +2084,121 @@ pub fn generate_admin_dashboard_html() -> String {
 }
 
 // ============================================================================
+// Alerting Configuration
+// ============================================================================
+
+/// Alerting configuration for observability
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AlertConfig {
+    /// Enable alerting
+    pub enabled: bool,
+    /// Latency threshold in milliseconds (alert if p99 exceeds this)
+    pub latency_threshold_ms: f64,
+    /// Minimum recall threshold (alert if below this)
+    pub min_recall: f32,
+    /// Maximum error rate (fraction, alert if above this)
+    pub max_error_rate: f32,
+    /// Webhook URL for notifications
+    pub webhook_url: Option<String>,
+    /// Check interval in seconds
+    pub check_interval_secs: u64,
+}
+
+impl Default for AlertConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            latency_threshold_ms: 100.0,
+            min_recall: 0.85,
+            max_error_rate: 0.05,
+            webhook_url: None,
+            check_interval_secs: 60,
+        }
+    }
+}
+
+/// An alert that has been triggered
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Alert {
+    /// Alert severity
+    pub severity: AlertSeverity,
+    /// Alert message
+    pub message: String,
+    /// Timestamp (unix seconds)
+    pub timestamp: u64,
+    /// Whether this alert has been acknowledged
+    pub acknowledged: bool,
+}
+
+/// Alert severity level
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AlertSeverity {
+    Info,
+    Warning,
+    Critical,
+}
+
+/// Checks metrics against alert thresholds and returns any triggered alerts
+pub fn check_alerts(
+    config: &AlertConfig,
+    p99_latency_ms: f64,
+    error_rate: f32,
+    _recall: Option<f32>,
+) -> Vec<Alert> {
+    if !config.enabled {
+        return Vec::new();
+    }
+
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+
+    let mut alerts = Vec::new();
+
+    if p99_latency_ms > config.latency_threshold_ms {
+        alerts.push(Alert {
+            severity: AlertSeverity::Warning,
+            message: format!(
+                "P99 latency ({:.1}ms) exceeds threshold ({:.1}ms)",
+                p99_latency_ms, config.latency_threshold_ms
+            ),
+            timestamp: now,
+            acknowledged: false,
+        });
+    }
+
+    if error_rate > config.max_error_rate {
+        alerts.push(Alert {
+            severity: AlertSeverity::Critical,
+            message: format!(
+                "Error rate ({:.1}%) exceeds threshold ({:.1}%)",
+                error_rate * 100.0,
+                config.max_error_rate * 100.0
+            ),
+            timestamp: now,
+            acknowledged: false,
+        });
+    }
+
+    if let Some(recall) = _recall {
+        if recall < config.min_recall {
+            alerts.push(Alert {
+                severity: AlertSeverity::Warning,
+                message: format!(
+                    "Recall ({:.2}) below threshold ({:.2})",
+                    recall, config.min_recall
+                ),
+                timestamp: now,
+                acknowledged: false,
+            });
+        }
+    }
+
+    alerts
+}
+
+// ============================================================================
 // Tests
 // ============================================================================
 
