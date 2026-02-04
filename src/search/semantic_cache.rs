@@ -734,6 +734,214 @@ impl SemanticCache {
     }
 }
 
+// ============================================================================
+// QueryVectorCache — dedicated HNSW-backed search-result cache
+// ============================================================================
+
+/// Configuration for the query vector cache.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QueryVectorCacheConfig {
+    /// Maximum cached queries (default 10 000).
+    pub max_entries: usize,
+    /// Distance threshold for cache hits (default 0.05).
+    pub distance_threshold: f32,
+    /// TTL in seconds (0 = no expiry).
+    pub ttl_seconds: u64,
+    /// Embedding dimensionality.
+    pub dimensions: usize,
+}
+
+impl Default for QueryVectorCacheConfig {
+    fn default() -> Self {
+        Self {
+            max_entries: 10_000,
+            distance_threshold: 0.05,
+            ttl_seconds: 300,
+            dimensions: 384,
+        }
+    }
+}
+
+impl QueryVectorCacheConfig {
+    /// New config with given dimensions.
+    pub fn new(dimensions: usize) -> Self {
+        Self { dimensions, ..Default::default() }
+    }
+
+    /// Set max entries.
+    #[must_use]
+    pub fn with_max_entries(mut self, max: usize) -> Self { self.max_entries = max; self }
+
+    /// Set distance threshold.
+    #[must_use]
+    pub fn with_distance_threshold(mut self, t: f32) -> Self { self.distance_threshold = t; self }
+
+    /// Set TTL.
+    #[must_use]
+    pub fn with_ttl(mut self, seconds: u64) -> Self { self.ttl_seconds = seconds; self }
+}
+
+/// Prometheus-style counters for the query cache.
+#[derive(Debug, Clone, Default)]
+pub struct QueryVectorCacheStats {
+    /// Total hits.
+    pub hits: u64,
+    /// Total misses.
+    pub misses: u64,
+    /// Entries invalidated by mutations.
+    pub mutation_invalidations: u64,
+    /// Entries evicted (LRU / TTL).
+    pub evictions: u64,
+    /// Current size.
+    pub entry_count: usize,
+    /// Data-mutation generation counter.
+    pub generation: u64,
+}
+
+impl QueryVectorCacheStats {
+    /// Hit ratio (0.0–1.0).
+    pub fn hit_ratio(&self) -> f64 {
+        let total = self.hits + self.misses;
+        if total == 0 { 0.0 } else { self.hits as f64 / total as f64 }
+    }
+}
+
+/// Internal cache entry.
+#[derive(Clone)]
+struct QvCacheEntry {
+    results: Vec<(String, f32)>,
+    created: Instant,
+    generation: u64,
+}
+
+/// Query vector cache: a small HNSW index (max 10 K) of recent query embeddings.
+///
+/// Returns cached results when a new query is within [`distance_threshold`] of a
+/// previously seen query.  Auto-invalidates on mutations via a generation counter.
+pub struct QueryVectorCache {
+    config: QueryVectorCacheConfig,
+    index: HnswIndex,
+    vectors: Vec<Vec<f32>>,
+    entries: HashMap<usize, QvCacheEntry>,
+    insertion_order: std::collections::VecDeque<usize>,
+    generation: u64,
+    hits: u64,
+    misses: u64,
+    mutation_invalidations: u64,
+    evictions: u64,
+}
+
+impl QueryVectorCache {
+    /// Create a new cache.
+    pub fn new(config: QueryVectorCacheConfig) -> Self {
+        let hnsw_cfg = HnswConfig::builder().m(12).ef_construction(64).ef_search(32);
+        Self {
+            index: HnswIndex::new(hnsw_cfg, DistanceFunction::Cosine),
+            config,
+            vectors: Vec::new(),
+            entries: HashMap::new(),
+            insertion_order: std::collections::VecDeque::new(),
+            generation: 0,
+            hits: 0,
+            misses: 0,
+            mutation_invalidations: 0,
+            evictions: 0,
+        }
+    }
+
+    /// Look up cached results.
+    pub fn lookup(&mut self, query: &[f32]) -> Option<Vec<(String, f32)>> {
+        if self.index.is_empty() {
+            self.misses += 1;
+            return None;
+        }
+
+        let results = self.index.search(query, 1, &self.vectors).ok()?;
+        if let Some(&(vid, dist)) = results.first() {
+            if dist <= self.config.distance_threshold {
+                if let Some(entry) = self.entries.get(&vid) {
+                    // Generation check
+                    if entry.generation < self.generation {
+                        self.mutation_invalidations += 1;
+                        self.entries.remove(&vid);
+                        self.misses += 1;
+                        return None;
+                    }
+                    // TTL check
+                    if self.config.ttl_seconds > 0
+                        && entry.created.elapsed() > Duration::from_secs(self.config.ttl_seconds)
+                    {
+                        self.evictions += 1;
+                        self.entries.remove(&vid);
+                        self.misses += 1;
+                        return None;
+                    }
+                    self.hits += 1;
+                    return Some(entry.results.clone());
+                }
+            }
+        }
+        self.misses += 1;
+        None
+    }
+
+    /// Store results for a query.
+    pub fn store(&mut self, query: &[f32], results: Vec<(String, f32)>) {
+        // LRU eviction
+        while self.entries.len() >= self.config.max_entries {
+            if let Some(oldest) = self.insertion_order.pop_front() {
+                self.entries.remove(&oldest);
+                self.evictions += 1;
+            } else {
+                break;
+            }
+        }
+
+        let vid = self.vectors.len();
+        self.vectors.push(query.to_vec());
+        if self.index.insert(vid, query, &self.vectors).is_err() {
+            self.vectors.pop();
+            return;
+        }
+        self.entries.insert(vid, QvCacheEntry {
+            results,
+            created: Instant::now(),
+            generation: self.generation,
+        });
+        self.insertion_order.push_back(vid);
+    }
+
+    /// Bump generation — existing entries lazily invalidated on next lookup.
+    pub fn notify_mutation(&mut self) { self.generation += 1; }
+
+    /// Force-clear all entries.
+    pub fn invalidate_all(&mut self) {
+        let n = self.entries.len();
+        self.entries.clear();
+        self.insertion_order.clear();
+        self.mutation_invalidations += n as u64;
+        self.generation += 1;
+    }
+
+    /// Statistics snapshot.
+    pub fn stats(&self) -> QueryVectorCacheStats {
+        QueryVectorCacheStats {
+            hits: self.hits,
+            misses: self.misses,
+            mutation_invalidations: self.mutation_invalidations,
+            evictions: self.evictions,
+            entry_count: self.entries.len(),
+            generation: self.generation,
+        }
+    }
+
+    /// Whether the cache is empty.
+    pub fn is_empty(&self) -> bool { self.entries.is_empty() }
+
+    /// Number of entries.
+    pub fn len(&self) -> usize { self.entries.len() }
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -1061,5 +1269,62 @@ mod tests {
         let wrong_dim = vec![0.0f32; 64]; // config expects 32
         let result = cache.store("bad", "resp", wrong_dim, None);
         assert!(result.is_err());
+    }
+
+    // ── QueryVectorCache tests ──────────────────────────────────────────
+
+    #[test]
+    fn test_qv_cache_hit() {
+        let mut cache = QueryVectorCache::new(QueryVectorCacheConfig::new(32).with_max_entries(100));
+        let q = mock_embedding("query1", 32);
+        cache.store(&q, vec![("d1".into(), 0.1), ("d2".into(), 0.2)]);
+        let hit = cache.lookup(&q);
+        assert!(hit.is_some());
+        assert_eq!(hit.unwrap().len(), 2);
+        assert_eq!(cache.stats().hits, 1);
+    }
+
+    #[test]
+    fn test_qv_cache_miss() {
+        let mut cache = QueryVectorCache::new(QueryVectorCacheConfig::new(32).with_distance_threshold(0.01));
+        let q1 = mock_embedding("query1", 32);
+        cache.store(&q1, vec![("d1".into(), 0.1)]);
+        let q2 = mock_embedding("totally different", 32);
+        assert!(cache.lookup(&q2).is_none());
+        assert_eq!(cache.stats().misses, 1);
+    }
+
+    #[test]
+    fn test_qv_cache_mutation_invalidation() {
+        let mut cache = QueryVectorCache::new(QueryVectorCacheConfig::new(32));
+        let q = mock_embedding("q", 32);
+        cache.store(&q, vec![("d1".into(), 0.1)]);
+        cache.notify_mutation();
+        assert!(cache.lookup(&q).is_none());
+        assert_eq!(cache.stats().mutation_invalidations, 1);
+    }
+
+    #[test]
+    fn test_qv_cache_lru_eviction() {
+        let mut cache = QueryVectorCache::new(QueryVectorCacheConfig::new(32).with_max_entries(2));
+        for i in 0..3 {
+            let q = mock_embedding(&format!("q{i}"), 32);
+            cache.store(&q, vec![(format!("d{i}"), 0.1)]);
+        }
+        assert!(cache.len() <= 2);
+        assert!(cache.stats().evictions >= 1);
+    }
+
+    #[test]
+    fn test_qv_cache_invalidate_all() {
+        let mut cache = QueryVectorCache::new(QueryVectorCacheConfig::new(32));
+        for i in 0..5 {
+            let q = mock_embedding(&format!("q{i}"), 32);
+            cache.store(&q, vec![(format!("d{i}"), 0.1)]);
+        }
+        assert_eq!(cache.len(), 5);
+        cache.invalidate_all();
+        assert!(cache.is_empty());
+        assert_eq!(cache.stats().mutation_invalidations, 5);
     }
 }
