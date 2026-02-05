@@ -151,6 +151,16 @@ jobs:
             echo "If the discard is intentional, add '// allow-discard' on the same line."
           fi
 
+      - name: Audit blanket allow(dead_code) attributes
+        run: |
+          # Count files with #![allow(dead_code)] inner attributes (blanket suppression)
+          DEAD_CODE_FILES=$(grep -rl '#!\[allow(dead_code)\]' src/ --include='*.rs' || true)
+          DEAD_CODE_COUNT=$(echo "$DEAD_CODE_FILES" | grep -c '.' || true)
+          if [ "$DEAD_CODE_COUNT" -gt 0 ]; then
+            echo "::warning::Found $DEAD_CODE_COUNT files with blanket #![allow(dead_code)]. Consider removing unused code or narrowing the allow to specific items."
+            echo "$DEAD_CODE_FILES"
+          fi
+
   docs:
     needs: quick-check
     name: Documentation
