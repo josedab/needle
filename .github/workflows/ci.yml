@@ -30,7 +30,7 @@ jobs:
       - name: Check formatting
         run: cargo fmt -- --check
       - name: Clippy
-        run: cargo clippy --features full -- -D warnings
+        run: cargo clippy --all-targets --features full -- -D warnings
       - name: Unit tests
         run: cargo test --lib
 
