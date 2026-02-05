@@ -58,7 +58,10 @@ help:
 quick: fmt-check lint test-unit
 
 # Start developing: first-time setup + continuous check on save
-dev: setup watch
+dev:
+	@command -v cargo-watch > /dev/null 2>&1 || { echo "Error: cargo-watch not found. Run 'make setup-tools' first, or 'cargo install cargo-watch'."; exit 1; }
+	$(MAKE) setup
+	$(MAKE) watch
 
 # Full pre-commit check
 check: fmt-check lint test
@@ -106,12 +109,13 @@ watch:
 	cargo watch -x 'check --features full'
 
 NEEDLE_PORT ?= 8080
+RUST_LOG ?= info
 
 serve:
 	@echo "Starting Needle server on 127.0.0.1:$(NEEDLE_PORT)"
 	@echo "Tip: change port with NEEDLE_PORT=9090 make serve"
 	@echo "Tip: RUST_LOG=debug make serve (for verbose logging)"
-	cargo run --features server -- serve -a 127.0.0.1:$(NEEDLE_PORT)
+	RUST_LOG=$(RUST_LOG) cargo run --features server -- serve -a 127.0.0.1:$(NEEDLE_PORT)
 
 demo:
 	./scripts/quickstart.sh
