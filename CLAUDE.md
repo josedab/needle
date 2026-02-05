@@ -52,7 +52,11 @@ cargo run --features server -- serve -a 127.0.0.1:8080 -d mydb.needle
 ```
 src/
 ├── lib.rs              # Library entry, re-exports public API
-├── main.rs             # CLI application
+├── main.rs             # CLI entry point
+├── cli/                # CLI command definitions and handlers
+│   ├── mod.rs          # CLI struct, arg parsing, command dispatch
+│   ├── commands.rs     # Commands enum and subcommand enums
+│   └── handlers.rs     # Handler functions for all CLI commands
 ├── collection/         # Collection: vectors + metadata + index
 │   ├── mod.rs          # Core collection logic, search pipeline
 │   ├── config.rs       # CollectionConfig, CollectionStats
@@ -77,7 +81,12 @@ src/
 ├── tuning.rs           # Auto-tuning HNSW parameters
 ├── error.rs            # Error types
 ├── hybrid.rs           # BM25 + RRF hybrid search (feature: hybrid)
-├── server.rs           # HTTP REST API (feature: server)
+├── server/             # HTTP REST API (feature: server)
+│   ├── mod.rs          # Router setup, server entry point
+│   ├── handlers.rs     # Request handlers
+│   ├── types.rs        # Request/response types
+│   ├── middleware.rs    # Middleware (auth, logging)
+│   └── auth.rs         # Authentication
 ├── metrics.rs          # Prometheus metrics (feature: metrics)
 ├── embeddings.rs       # ONNX embedding inference (feature: embeddings)
 ├── python.rs           # Python bindings (feature: python)
@@ -273,14 +282,14 @@ pub enum NeedleError {
 3. Add SIMD version if `simd` feature is enabled
 
 ### Add a new CLI command
-1. Add variant to `Commands` enum in `src/main.rs`
-2. Add match arm in `main()`
-3. Implement `fn command_name(...) -> Result<()>`
+1. Add variant to `Commands` enum in `src/cli/commands.rs`
+2. Add match arm in `run()` in `src/cli/mod.rs`
+3. Implement handler `fn command_name(...) -> Result<()>` in `src/cli/handlers.rs`
 
 ### Add a new REST endpoint
-1. Add handler function in `src/server.rs`
-2. Register route in `create_router()`
-3. Define request/response types as needed
+1. Add handler function in `src/server/handlers.rs`
+2. Register route in `create_router()` in `src/server/mod.rs`
+3. Define request/response types in `src/server/types.rs`
 
 ## Dependencies
 

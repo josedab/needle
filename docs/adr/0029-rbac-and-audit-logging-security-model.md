@@ -104,7 +104,7 @@ pub trait AuditLogger: Send + Sync {
 - `src/security.rs:42-61` — Permission enum with all operations
 - `src/security.rs:64-82` — Resource enum with wildcard matching
 - `src/security.rs:98-130` — Role definition with permission grants
-- `src/server.rs` — Integration with HTTP authentication middleware
+- `src/server/middleware.rs` — Integration with HTTP authentication middleware
 
 ## Consequences
 

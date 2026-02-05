@@ -330,7 +330,7 @@ impl Database {
 ### HTTP API Integration
 
 ```rust
-// src/server.rs
+// src/server/handlers.rs
 // Namespace extracted from path or header
 async fn insert_handler(
     Path((namespace, collection)): Path<(String, String)>,
@@ -375,4 +375,4 @@ async fn insert_handler(
 - Namespace implementation: `src/namespace.rs`
 - Quota configuration: `src/namespace.rs:30-60`
 - Rate limiting: `src/namespace.rs:150-200`
-- HTTP integration: `src/server.rs` (namespaced routes)
+- HTTP integration: `src/server/` (namespaced routes)

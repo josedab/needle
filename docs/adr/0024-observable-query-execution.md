@@ -291,4 +291,4 @@ struct SearchResponse {
 
 - SearchExplain struct: `src/collection.rs:127-150`
 - HNSW stats: `src/hnsw.rs:300-400`
-- HTTP endpoint: `src/server.rs` (search handler with explain parameter)
+- HTTP endpoint: `src/server/handlers.rs` (search handler with explain parameter)

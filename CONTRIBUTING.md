@@ -76,6 +76,9 @@ cargo build --features full
 
 ### Building
 
+> **VS Code users**: The project includes `.vscode/settings.json` that enables inline Clippy linting
+> and checks all targets (tests, examples, benches). Accept the workspace settings prompt when VS Code asks.
+
 > **Tip**: The Python and WASM bindings live in `crates/needle-python/` (cdylib).
 > The root library uses `crate-type = ["rlib"]` so regular `cargo build` and
 > `cargo test` are fast. Build Python bindings with `maturin develop`.
@@ -476,7 +479,7 @@ Understanding the codebase structure will help you contribute effectively.
 | `indexing/hnsw.rs` | HNSW index implementation |
 | `metadata.rs` | Metadata storage and filtering |
 | `distance.rs` | Distance functions (Cosine, Euclidean, Dot, Manhattan) |
-| `server.rs` | HTTP REST API (feature: server) |
+| `server/` | HTTP REST API (feature: server) |
 | `error.rs` | Error types with structured codes |
 | `services/` | Higher-level service modules (adaptive indexing, ingestion pipelines, plugin runtime) |
 
@@ -510,15 +513,15 @@ pub enum NeedleError {
 
 #### New CLI Command
 
-1. Add variant to `Commands` enum in `src/main.rs`
-2. Add match arm in `main()`
-3. Implement handler function
+1. Add variant to `Commands` enum in `src/cli/commands.rs`
+2. Add match arm in `run()` in `src/cli/mod.rs`
+3. Implement handler function in `src/cli/handlers.rs`
 
 #### New REST Endpoint
 
-1. Add handler in `src/server.rs`
-2. Register route in `create_router()`
-3. Add request/response types
+1. Add handler in `src/server/handlers.rs`
+2. Register route in `create_router()` in `src/server/mod.rs`
+3. Add request/response types in `src/server/types.rs`
 
 ### Thread Safety
 

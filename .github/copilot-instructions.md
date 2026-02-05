@@ -5,7 +5,7 @@ Needle is an embedded vector database written in Rust ("SQLite for vectors"). It
 
 ## Architecture
 - **Core**: `src/collection/`, `src/database/`, `src/indexing/`, `src/distance.rs`, `src/error.rs`, `src/storage.rs`, `src/metadata.rs`
-- **API layers**: `src/server.rs` (HTTP REST), `src/main.rs` (CLI), `src/python.rs`, `src/wasm.rs`
+- **API layers**: `src/server/` (HTTP REST), `src/cli/` (CLI), `src/python.rs`, `src/wasm.rs`
 - **Enterprise**: `src/enterprise/` (raft, encryption, RBAC, namespaces)
 - **Experimental**: `src/experimental/` (APIs may change without notice)
 
@@ -19,8 +19,8 @@ Needle is an embedded vector database written in Rust ("SQLite for vectors"). It
 
 ## Adding Features
 - **New Collection method**: Add to `Collection` in `src/collection/mod.rs`, add internal method to `Database`, expose via `CollectionRef`
-- **New CLI command**: Add variant to `Commands` enum in `src/main.rs`, add match arm
-- **New REST endpoint**: Add handler in `src/server.rs`, register in `create_router()`
+- **New CLI command**: Add variant to `Commands` enum in `src/cli/commands.rs`, add match arm in `src/cli/mod.rs`
+- **New REST endpoint**: Add handler in `src/server/handlers.rs`, register in `create_router()` in `src/server/mod.rs`
 - **New error type**: Add variant to `NeedleError` in `src/error.rs` with `ErrorCode`
 
 ## Build & Test
