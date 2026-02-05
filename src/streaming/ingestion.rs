@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 
 //! Streaming Vector Ingestion Pipeline
 //!
@@ -516,6 +515,113 @@ impl IngestionSource for WebSocketSource {
     }
 }
 
+// ============================================================================
+// Generic Push-Handle Source (shared by Redis, Kafka, SSE)
+// ============================================================================
+
+/// Trait for configs that provide a buffer capacity and source name.
+pub trait PushSourceConfig: Send + Sync {
+    /// Buffer capacity for the internal record queue.
+    fn buffer_capacity(&self) -> usize;
+    /// Display name for the source (used in logging/metrics).
+    fn source_name(&self) -> String;
+    /// Label used in the "source closed" error message.
+    fn closed_label(&self) -> &'static str;
+}
+
+/// Generic push-handle based ingestion source.
+///
+/// Use `PushHandleSource::new()` to get a `(source, handle)` pair.
+/// The handle is passed to your consumer thread; the source is attached to the pipeline.
+pub struct PushHandleSource<C: PushSourceConfig> {
+    name: String,
+    #[allow(dead_code)]
+    config: C,
+    buffer: Arc<Mutex<VecDeque<IngestionRecord>>>,
+    closed: Arc<AtomicBool>,
+}
+
+/// Handle for pushing records into a `PushHandleSource` from a consumer thread.
+pub struct PushHandle<C: PushSourceConfig> {
+    #[allow(dead_code)]
+    _marker: std::marker::PhantomData<C>,
+    buffer: Arc<Mutex<VecDeque<IngestionRecord>>>,
+    closed: Arc<AtomicBool>,
+    closed_label: &'static str,
+}
+
+impl<C: PushSourceConfig> PushHandleSource<C> {
+    /// Create a new source + push handle pair.
+    ///
+    /// # Panics
+    /// Panics if `config.buffer_capacity()` is 0.
+    pub fn new(config: C) -> (Self, PushHandle<C>) {
+        assert!(
+            config.buffer_capacity() > 0,
+            "buffer_capacity must be > 0"
+        );
+        let buffer = Arc::new(Mutex::new(VecDeque::with_capacity(config.buffer_capacity())));
+        let closed = Arc::new(AtomicBool::new(false));
+        let name = config.source_name();
+        let closed_label = config.closed_label();
+        let source = Self {
+            name,
+            config,
+            buffer: Arc::clone(&buffer),
+            closed: Arc::clone(&closed),
+        };
+        let handle = PushHandle {
+            _marker: std::marker::PhantomData,
+            buffer,
+            closed,
+            closed_label,
+        };
+        (source, handle)
+    }
+}
+
+impl<C: PushSourceConfig> PushHandle<C> {
+    /// Push a record into the source buffer.
+    pub fn push(&self, record: IngestionRecord) -> Result<()> {
+        if self.closed.load(Ordering::Acquire) {
+            return Err(NeedleError::InvalidOperation(
+                format!("{} source closed", self.closed_label),
+            ));
+        }
+        self.buffer.lock().push_back(record);
+        Ok(())
+    }
+}
+
+impl<C: PushSourceConfig> IngestionSource for PushHandleSource<C> {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn poll_batch(&self, max: usize) -> Result<Vec<IngestionRecord>> {
+        let mut buf = self.buffer.lock();
+        let count = max.min(buf.len());
+        Ok(buf.drain(..count).collect())
+    }
+
+    fn acknowledge(&self, _offset: &SourceOffset) -> Result<()> {
+        Ok(())
+    }
+
+    fn is_healthy(&self) -> bool {
+        !self.closed.load(Ordering::Acquire)
+    }
+
+    fn close(&self) -> Result<()> {
+        self.closed.store(true, Ordering::Release);
+        Ok(())
+    }
+}
+
+// ============================================================================
+// Redis Streams Source
+// ============================================================================
+
 /// Redis Streams ingestion source configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RedisStreamSourceConfig {
@@ -540,64 +646,19 @@ impl Default for RedisStreamSourceConfig {
     }
 }
 
+impl PushSourceConfig for RedisStreamSourceConfig {
+    fn buffer_capacity(&self) -> usize { self.buffer_capacity }
+    fn source_name(&self) -> String { format!("redis:{}", self.stream_key) }
+    fn closed_label(&self) -> &'static str { "Redis" }
+}
+
 /// Push-handle based Redis Streams source.
-///
-/// Use `RedisStreamSource::new()` to get a `(source, handle)` pair. The handle
-/// is passed to your Redis consumer thread; the source is attached to the pipeline.
-pub struct RedisStreamSource {
-    name: String,
-    #[allow(dead_code)]
-    config: RedisStreamSourceConfig,
-    buffer: Arc<Mutex<VecDeque<IngestionRecord>>>,
-    closed: Arc<AtomicBool>,
-}
-
+pub type RedisStreamSource = PushHandleSource<RedisStreamSourceConfig>;
 /// Handle for pushing records from a Redis consumer.
-pub struct RedisStreamPushHandle {
-    buffer: Arc<Mutex<VecDeque<IngestionRecord>>>,
-    closed: Arc<AtomicBool>,
-}
-
-impl RedisStreamSource {
-    /// Create a new source + push handle pair.
-    pub fn new(config: RedisStreamSourceConfig) -> (Self, RedisStreamPushHandle) {
-        let buffer = Arc::new(Mutex::new(VecDeque::with_capacity(config.buffer_capacity)));
-        let closed = Arc::new(AtomicBool::new(false));
-        let source = Self {
-            name: format!("redis:{}", config.stream_key),
-            config,
-            buffer: Arc::clone(&buffer),
-            closed: Arc::clone(&closed),
-        };
-        let handle = RedisStreamPushHandle { buffer, closed };
-        (source, handle)
-    }
-}
-
-impl RedisStreamPushHandle {
-    /// Push a record.
-    pub fn push(&self, record: IngestionRecord) -> Result<()> {
-        if self.closed.load(Ordering::Acquire) {
-            return Err(NeedleError::InvalidOperation("Redis source closed".into()));
-        }
-        self.buffer.lock().push_back(record);
-        Ok(())
-    }
-}
-
-impl IngestionSource for RedisStreamSource {
-    fn name(&self) -> &str { &self.name }
-    fn poll_batch(&self, max: usize) -> Result<Vec<IngestionRecord>> {
-        let mut buf = self.buffer.lock();
-        let count = max.min(buf.len()); Ok(buf.drain(..count).collect())
-    }
-    fn acknowledge(&self, _offset: &SourceOffset) -> Result<()> { Ok(()) }
-    fn is_healthy(&self) -> bool { !self.closed.load(Ordering::Acquire) }
-    fn close(&self) -> Result<()> { self.closed.store(true, Ordering::Release); Ok(()) }
-}
+pub type RedisStreamPushHandle = PushHandle<RedisStreamSourceConfig>;
 
 // ============================================================================
-// Kafka Source (push-handle based)
+// Kafka Source
 // ============================================================================
 
 /// Kafka source configuration.
@@ -624,58 +685,16 @@ impl Default for KafkaSourceConfig {
     }
 }
 
+impl PushSourceConfig for KafkaSourceConfig {
+    fn buffer_capacity(&self) -> usize { self.buffer_capacity }
+    fn source_name(&self) -> String { format!("kafka:{}", self.topic) }
+    fn closed_label(&self) -> &'static str { "Kafka" }
+}
+
 /// Push-handle based Kafka source.
-pub struct KafkaSource {
-    name: String,
-    #[allow(dead_code)]
-    config: KafkaSourceConfig,
-    buffer: Arc<Mutex<VecDeque<IngestionRecord>>>,
-    closed: Arc<AtomicBool>,
-}
-
+pub type KafkaSource = PushHandleSource<KafkaSourceConfig>;
 /// Handle for pushing records from a Kafka consumer thread.
-pub struct KafkaPushHandle {
-    buffer: Arc<Mutex<VecDeque<IngestionRecord>>>,
-    closed: Arc<AtomicBool>,
-}
-
-impl KafkaSource {
-    /// Create a source + push handle pair.
-    pub fn new(config: KafkaSourceConfig) -> (Self, KafkaPushHandle) {
-        let buffer = Arc::new(Mutex::new(VecDeque::with_capacity(config.buffer_capacity)));
-        let closed = Arc::new(AtomicBool::new(false));
-        let source = Self {
-            name: format!("kafka:{}", config.topic),
-            config,
-            buffer: Arc::clone(&buffer),
-            closed: Arc::clone(&closed),
-        };
-        let handle = KafkaPushHandle { buffer, closed };
-        (source, handle)
-    }
-}
-
-impl KafkaPushHandle {
-    /// Push a record from the Kafka consumer.
-    pub fn push(&self, record: IngestionRecord) -> Result<()> {
-        if self.closed.load(Ordering::Acquire) {
-            return Err(NeedleError::InvalidOperation("Kafka source closed".into()));
-        }
-        self.buffer.lock().push_back(record);
-        Ok(())
-    }
-}
-
-impl IngestionSource for KafkaSource {
-    fn name(&self) -> &str { &self.name }
-    fn poll_batch(&self, max: usize) -> Result<Vec<IngestionRecord>> {
-        let mut buf = self.buffer.lock();
-        let count = max.min(buf.len()); Ok(buf.drain(..count).collect())
-    }
-    fn acknowledge(&self, _offset: &SourceOffset) -> Result<()> { Ok(()) }
-    fn is_healthy(&self) -> bool { !self.closed.load(Ordering::Acquire) }
-    fn close(&self) -> Result<()> { self.closed.store(true, Ordering::Release); Ok(()) }
-}
+pub type KafkaPushHandle = PushHandle<KafkaSourceConfig>;
 
 // ============================================================================
 // SSE (Server-Sent Events) Source
@@ -696,51 +715,16 @@ impl Default for SseSourceConfig {
     }
 }
 
+impl PushSourceConfig for SseSourceConfig {
+    fn buffer_capacity(&self) -> usize { self.buffer_capacity }
+    fn source_name(&self) -> String { "sse".into() }
+    fn closed_label(&self) -> &'static str { "SSE" }
+}
+
 /// Push-handle based SSE source.
-pub struct SseSource {
-    name: String,
-    buffer: Arc<Mutex<VecDeque<IngestionRecord>>>,
-    closed: Arc<AtomicBool>,
-}
-
+pub type SseSource = PushHandleSource<SseSourceConfig>;
 /// Handle for pushing SSE events.
-pub struct SsePushHandle {
-    buffer: Arc<Mutex<VecDeque<IngestionRecord>>>,
-    closed: Arc<AtomicBool>,
-}
-
-impl SseSource {
-    /// Create a source + push handle pair.
-    pub fn new(config: SseSourceConfig) -> (Self, SsePushHandle) {
-        let buffer = Arc::new(Mutex::new(VecDeque::with_capacity(config.buffer_capacity)));
-        let closed = Arc::new(AtomicBool::new(false));
-        let source = Self { name: "sse".into(), buffer: Arc::clone(&buffer), closed: Arc::clone(&closed) };
-        let handle = SsePushHandle { buffer, closed };
-        (source, handle)
-    }
-}
-
-impl SsePushHandle {
-    /// Push a record from an SSE event.
-    pub fn push(&self, record: IngestionRecord) -> Result<()> {
-        if self.closed.load(Ordering::Acquire) {
-            return Err(NeedleError::InvalidOperation("SSE source closed".into()));
-        }
-        self.buffer.lock().push_back(record);
-        Ok(())
-    }
-}
-
-impl IngestionSource for SseSource {
-    fn name(&self) -> &str { &self.name }
-    fn poll_batch(&self, max: usize) -> Result<Vec<IngestionRecord>> {
-        let mut buf = self.buffer.lock();
-        let count = max.min(buf.len()); Ok(buf.drain(..count).collect())
-    }
-    fn acknowledge(&self, _offset: &SourceOffset) -> Result<()> { Ok(()) }
-    fn is_healthy(&self) -> bool { !self.closed.load(Ordering::Acquire) }
-    fn close(&self) -> Result<()> { self.closed.store(true, Ordering::Release); Ok(()) }
-}
+pub type SsePushHandle = PushHandle<SseSourceConfig>;
 
 // ============================================================================
 // Ingestion Pipeline
