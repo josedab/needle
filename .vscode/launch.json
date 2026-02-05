@@ -5,6 +5,7 @@
       "type": "lldb",
       "request": "launch",
       "name": "CLI: info",
+      "preLaunchTask": "Create test.needle",
       "cargo": {
         "args": ["build", "--bin=needle", "--package=needle"],
         "filter": {
@@ -19,6 +20,7 @@
       "type": "lldb",
       "request": "launch",
       "name": "HTTP Server: serve",
+      "preLaunchTask": "Create test.needle",
       "cargo": {
         "args": ["build", "--bin=needle", "--package=needle", "--features=server"],
         "filter": {
@@ -33,6 +35,7 @@
       "type": "lldb",
       "request": "launch",
       "name": "MCP Server: mcp",
+      "preLaunchTask": "Create test.needle",
       "cargo": {
         "args": ["build", "--bin=needle", "--package=needle"],
         "filter": {

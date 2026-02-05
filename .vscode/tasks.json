@@ -2,6 +2,14 @@
   "version": "2.0.0",
   "tasks": [
     {
+      "label": "Create test.needle",
+      "type": "shell",
+      "command": "test -f test.needle || cargo run -- create test.needle",
+      "group": "none",
+      "problemMatcher": ["$rustc"],
+      "presentation": { "reveal": "silent", "panel": "shared" }
+    },
+    {
       "label": "Quick Check (fmt + lint + unit tests)",
       "type": "shell",
       "command": "make quick",
