@@ -71,6 +71,8 @@ check: fmt-check lint test
 check-all: fmt-check lint test
 	RUSTDOCFLAGS='-D warnings' cargo doc --no-deps --features full
 	cargo build --examples --features full
+	cargo run --example quickstart
+	cargo run --example basic_usage
 	cargo bench --no-run
 
 build:

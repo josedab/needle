@@ -206,6 +206,11 @@ jobs:
       - name: Compile-check all examples
         run: cargo build --examples --features full
 
+      - name: Run in-memory examples
+        run: |
+          cargo run --example quickstart
+          cargo run --example basic_usage
+
   coverage:
     needs: quick-check
     name: Code Coverage
