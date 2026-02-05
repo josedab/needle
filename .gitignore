@@ -29,6 +29,9 @@ Thumbs.db
 # Test files
 *.tmp
 
+# Secrets
+.env
+
 # Python
 __pycache__/
 *.py[cod]
