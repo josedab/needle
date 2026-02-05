@@ -21,7 +21,7 @@
 /src/metadata.rs @anthropics/needle-search
 
 # HTTP Server and API
-/src/server.rs @anthropics/needle-api
+/src/server/ @anthropics/needle-api
 /src/metrics.rs @anthropics/needle-api
 /src/web_ui.rs @anthropics/needle-api
 

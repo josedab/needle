@@ -8,6 +8,10 @@
 # Generated files (exclude from language stats)
 Cargo.lock linguist-generated
 
+# Experimental scaffolding (exclude from language stats)
+src/services/** linguist-generated
+src/experimental/** linguist-generated
+
 # Binary database files
 *.needle binary
 *.needle.bak binary
