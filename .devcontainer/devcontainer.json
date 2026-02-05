@@ -7,12 +7,15 @@
   "customizations": {
     "vscode": {
       "settings": {
-        "rust-analyzer.cargo.features": ["full"]
+        "rust-analyzer.cargo.features": ["full"],
+        "rust-analyzer.check.command": "clippy",
+        "rust-analyzer.linkedProjects": ["Cargo.toml"]
       },
       "extensions": [
         "rust-lang.rust-analyzer",
         "tamasfe.even-better-toml",
-        "serayuzgur.crates"
+        "serayuzgur.crates",
+        "vadimcn.vscode-lldb"
       ]
     }
   },
