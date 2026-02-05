@@ -9,6 +9,7 @@
       "settings": {
         "rust-analyzer.cargo.features": ["full"],
         "rust-analyzer.check.command": "clippy",
+        "rust-analyzer.check.extraArgs": ["--all-targets", "--features", "full"],
         "rust-analyzer.linkedProjects": ["Cargo.toml"]
       },
       "extensions": [
