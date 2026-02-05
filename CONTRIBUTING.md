@@ -366,7 +366,13 @@ cargo clippy --features full -- -D warnings
 
 ### Before Submitting
 
-Run the quick check (format + lint + unit tests):
+Run the local CI gate (format + lint with all-targets + unit tests):
+
+```bash
+make check-local    # Recommended pre-push check (~3 min, mirrors CI fast gate)
+```
+
+For fast iteration during development:
 
 ```bash
 make quick         # Fast iteration (~2 min)

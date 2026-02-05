@@ -3,7 +3,7 @@
 
 .PHONY: help quick check check-all build build-all build-release test test-unit test-integration \
         fmt fmt-check lint lint-fix watch serve demo doctor doc bench clean playground setup setup-tools dev test-single coverage \
-        new-module verify-docs check-quick test-feature count-debt \
+        new-module verify-docs check-quick check-local test-feature count-debt \
         docker-up docker-down docker-build docker-logs
 
 help:
@@ -14,6 +14,7 @@ help:
 	@echo "  make quick         — Fast feedback: format check + lint + unit tests"
 	@echo "  make check         — Full pre-commit: format check + lint + all tests"
 	@echo "  make check-quick   — Quick CI gate: fmt-check + lint + unit tests (~3 min)"
+	@echo "  make check-local   — Alias for check-quick (recommended pre-push check)"
 	@echo "  make check-all     — Full CI equivalent: fmt, lint, test, doc-check, examples"
 	@echo "  make build         — Debug build (default features)"
 	@echo "  make build-all     — Debug build (all features)"
@@ -34,7 +35,7 @@ help:
 	@echo "  make bench         — Run benchmarks"
 	@echo "  make coverage      — Generate HTML coverage report (requires cargo-llvm-cov)"
 	@echo "  make outdated      — Check for outdated dependencies (requires cargo-outdated)"
-	@echo "  make count-debt    — Show tech debt dashboard (unwrap, expect, let _ = counts)"
+	@echo "  make count-debt    — Show tech debt & module size dashboard"
 	@echo "  make verify-docs   — Check that all markdown links resolve"
 	@echo "  make playground    — Interactive guided walkthrough"
 	@echo "  make new-module    — Scaffold a new service module (DOMAIN=x NAME=y)"
@@ -178,6 +179,9 @@ new-module:
 # Quick CI gate: fmt-check + lint (all-targets) + unit tests (~3 min)
 check-quick: fmt-check lint test-unit
 
+# Alias for check-quick — recommended pre-push command (mirrors CI fast gate)
+check-local: check-quick
+
 # Run tests with specific feature flags: make test-feature FEATURES=server,metrics
 test-feature:
 	@test -n "$(FEATURES)" || { echo "Usage: make test-feature FEATURES=server,metrics"; exit 1; }
@@ -188,9 +192,32 @@ count-debt:
 	@unwrap=$$(grep -r 'unwrap()' src/ --include='*.rs' | wc -l | tr -d ' '); \
 	expect=$$(grep -r 'expect(' src/ --include='*.rs' | wc -l | tr -d ' '); \
 	let_discard=$$(grep -r 'let _ =' src/ --include='*.rs' | wc -l | tr -d ' '); \
+	total_files=$$(find src/ -name '*.rs' | wc -l | tr -d ' '); \
+	total_lines=$$(find src/ -name '*.rs' -exec cat {} + | wc -l | tr -d ' '); \
+	dead_code=$$(grep -rl '#!\[allow(dead_code)\]' src/ --include='*.rs' | wc -l | tr -d ' '); \
 	echo "Tech Debt Dashboard"; \
 	echo "==================="; \
-	echo "  unwrap(): $$unwrap | expect(): $$expect | let _ =: $$let_discard"
+	echo ""; \
+	echo "Codebase Size"; \
+	echo "  Total .rs files : $$total_files"; \
+	echo "  Total lines     : $$total_lines"; \
+	echo ""; \
+	echo "Debt Markers"; \
+	echo "  unwrap(): $$unwrap | expect(): $$expect | let _ =: $$let_discard"; \
+	echo "  #![allow(dead_code)] files: $$dead_code"; \
+	echo ""; \
+	echo "Top 5 Largest Files"; \
+	find src/ -name '*.rs' -exec wc -l {} + | sort -rn | head -n 6 | tail -n 5 | awk '{printf "  %6d  %s\n", $$1, $$2}'; \
+	echo ""; \
+	echo "Per-Directory Breakdown (files / lines)"; \
+	for dir in $$(find src/ -mindepth 1 -maxdepth 1 -type d | sort); do \
+		d_files=$$(find "$$dir" -name '*.rs' | wc -l | tr -d ' '); \
+		d_lines=$$(find "$$dir" -name '*.rs' -exec cat {} + 2>/dev/null | wc -l | tr -d ' '); \
+		printf "  %-30s %4s files  %6s lines\n" "$$dir" "$$d_files" "$$d_lines"; \
+	done; \
+	root_files=$$(find src/ -maxdepth 1 -name '*.rs' | wc -l | tr -d ' '); \
+	root_lines=$$(find src/ -maxdepth 1 -name '*.rs' -exec cat {} + 2>/dev/null | wc -l | tr -d ' '); \
+	printf "  %-30s %4s files  %6s lines\n" "src/ (root)" "$$root_files" "$$root_lines"
 
 # Docker convenience targets
 docker-up:
