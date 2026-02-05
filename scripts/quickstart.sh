@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Default to info-level logging so failures always produce useful output.
+# Override with: RUST_LOG=debug ./scripts/quickstart.sh
+RUST_LOG="${RUST_LOG:-info}"
+export RUST_LOG
+
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PORT="${NEEDLE_PORT:-8080}"
 ADDR="127.0.0.1:${PORT}"
@@ -44,7 +49,7 @@ if ! curl -fsS "${BASE_URL}/health" >/dev/null; then
   if lsof -nP -iTCP:"${PORT}" -sTCP:LISTEN >/dev/null 2>&1; then
     echo "Port ${PORT} is already in use. Try: NEEDLE_PORT=9090 ./scripts/quickstart.sh" >&2
   fi
-  echo "For more detail: RUST_LOG=debug ./scripts/quickstart.sh" >&2
+  echo "For more detail: RUST_LOG=debug ./scripts/quickstart.sh (currently RUST_LOG=$RUST_LOG)" >&2
   exit 1
 fi
 
