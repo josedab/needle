@@ -2,7 +2,7 @@
 # Usage: make <recipe>
 
 .PHONY: help quick check check-all build build-all build-release test test-unit test-integration \
-        fmt fmt-check lint lint-fix watch serve demo doctor doc bench clean playground setup setup-tools dev test-single coverage \
+        fmt fmt-check lint lint-fix watch test-watch serve demo doctor doc bench clean playground setup setup-tools dev test-single coverage \
         new-module verify-docs check-quick check-local test-feature count-debt \
         docker-up docker-down docker-build docker-logs
 
@@ -28,6 +28,7 @@ help:
 	@echo "  make lint          — Run clippy linter"
 	@echo "  make lint-fix      — Auto-fix clippy suggestions"
 	@echo "  make watch         — Continuous check on file changes (requires cargo-watch)"
+	@echo "  make test-watch    — Continuous test on save — TDD workflow (requires cargo-watch)"
 	@echo "  make serve         — Run HTTP server locally (NEEDLE_PORT=9090 make serve)"
 	@echo "  make demo          — Run quickstart demo"
 	@echo "  make doctor        — Check local environment"

@@ -53,6 +53,15 @@ watch:
     fi
     cargo watch -x 'check --features full'
 
+# Continuous test on save — TDD workflow (requires: cargo install cargo-watch)
+test-watch:
+    #!/usr/bin/env bash
+    if ! command -v cargo-watch &> /dev/null; then
+        echo "Error: cargo-watch not found. Install with: cargo install cargo-watch"
+        exit 1
+    fi
+    cargo watch -x 'test --lib'
+
 # Full pre-commit check: format, lint, test
 check: fmt-check lint test
 
