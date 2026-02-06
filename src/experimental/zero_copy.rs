@@ -153,9 +153,11 @@ impl ZeroCopyBuffer {
     pub fn as_f32_slice(&self) -> &[f32] {
         assert_eq!(self.dtype, DataType::Float32);
         let count = self.len / 4;
-        // SAFETY: The assert above guarantees dtype is Float32, so ptr is f32-aligned.
-        // self.len tracks the byte length set at construction, and count = len/4 gives
-        // the correct number of f32 elements within the allocation.
+        // SAFETY: The assert above guarantees dtype is Float32, so ptr is f32-aligned
+        // (alignment was set to dtype.byte_size() at construction). self.len tracks the byte
+        // length set at construction, and count = len/4 gives the correct number of f32 elements.
+        // NOTE: Callers of from_raw_parts must guarantee proper alignment and allocation size;
+        // NonNull only checks for null, not alignment or bounds.
         unsafe { std::slice::from_raw_parts(self.ptr.as_ptr() as *const f32, count) }
     }
 
