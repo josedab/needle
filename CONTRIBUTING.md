@@ -26,6 +26,13 @@ This project adheres to the [Contributor Covenant Code of Conduct](CODE_OF_CONDU
 
 ## Getting Started
 
+### Where to Start
+
+Not sure what to work on? Check out:
+
+- **[Good First Issues](.github/GOOD_FIRST_ISSUES.md)** — curated list of beginner-friendly tasks
+- **[GitHub Issues labeled `good first issue`](https://github.com/anthropics/needle/labels/good%20first%20issue)** — community-reported issues suitable for new contributors
+
 ### 15-Minute Dev Quickstart
 
 ```bash
