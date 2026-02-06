@@ -417,6 +417,8 @@ impl StorageEngine {
         // Memory-map if large enough
         let mmap = if file_size > MMAP_THRESHOLD {
             debug!(file_size = file_size, "Using memory-mapped I/O");
+            // SAFETY: The file is opened with read permissions and is not modified while mapped.
+            // The mmap is invalidated (replaced) whenever the file is resaved via refresh_mmap().
             Some(unsafe { Mmap::map(&file)? })
         } else {
             debug!(file_size = file_size, "Using standard file I/O");
@@ -609,6 +611,8 @@ impl StorageEngine {
     pub fn refresh_mmap(&mut self) -> Result<()> {
         let file_size = self.file.metadata()?.len();
         if file_size > MMAP_THRESHOLD {
+            // SAFETY: The file is owned by self and has just been written/flushed. The previous
+            // mmap (if any) is dropped before creating the new one. No concurrent writes occur.
             self.mmap = Some(unsafe { Mmap::map(&self.file)? });
         }
         Ok(())
