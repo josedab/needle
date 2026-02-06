@@ -110,9 +110,9 @@ clean:
 # Run the HTTP server locally (NEEDLE_PORT=9090 just serve)
 serve:
     @echo "Starting Needle server on 127.0.0.1:{{ env_var_or_default("NEEDLE_PORT", "8080") }}"
-    @echo "Tip: change port with NEEDLE_PORT=9090 just serve"
+    @echo "Tip: change port with NEEDLE_PORT={{ env_var_or_default("NEEDLE_PORT", "9090") }} just serve"
     @echo "Tip: RUST_LOG=debug just serve (for verbose logging)"
-    cargo run --features server -- serve -a 127.0.0.1:{{ env_var_or_default("NEEDLE_PORT", "8080") }}
+    RUST_LOG={{ env_var_or_default("RUST_LOG", "info") }} cargo run --features server -- serve -a 127.0.0.1:{{ env_var_or_default("NEEDLE_PORT", "8080") }}
 
 # Run the quickstart demo (builds, seeds, searches)
 demo:
