@@ -158,12 +158,16 @@ pub fn euclidean_distance_squared(a: &[f32], b: &[f32]) -> Result<f32> {
     #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
     {
         if is_x86_feature_detected!("avx2") {
+            // SAFETY: AVX2 feature detection is checked above. a and b have equal lengths
+            // (checked by check_dimensions). The SIMD function reads a.len() f32s from each slice.
             return Ok(unsafe { simd_x86::euclidean_squared_avx2(a, b) });
         }
     }
 
     #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
     {
+        // SAFETY: NEON is enabled at compile time via target_feature. a and b have equal lengths
+        // (checked by check_dimensions). The SIMD function reads a.len() f32s from each slice.
         Ok(unsafe { simd_arm::euclidean_squared_neon(a, b) })
     }
 
@@ -224,12 +228,14 @@ fn dot_product_inner(a: &[f32], b: &[f32]) -> f32 {
     #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
     {
         if is_x86_feature_detected!("avx2") {
+            // SAFETY: AVX2 feature detection is checked above. Caller guarantees equal-length slices.
             return unsafe { simd_x86::dot_product_avx2(a, b) };
         }
     }
 
     #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
     {
+        // SAFETY: NEON is enabled at compile time via target_feature. Caller guarantees equal-length slices.
         unsafe { simd_arm::dot_product_neon(a, b) }
     }
 
@@ -249,12 +255,16 @@ pub fn manhattan_distance(a: &[f32], b: &[f32]) -> Result<f32> {
     #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
     {
         if is_x86_feature_detected!("avx2") {
+            // SAFETY: AVX2 feature detection is checked above. a and b have equal lengths
+            // (checked by check_dimensions). The SIMD function reads a.len() f32s from each slice.
             return Ok(unsafe { simd_x86::manhattan_avx2(a, b) });
         }
     }
 
     #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
     {
+        // SAFETY: NEON is enabled at compile time via target_feature. a and b have equal lengths
+        // (checked by check_dimensions). The SIMD function reads a.len() f32s from each slice.
         Ok(unsafe { simd_arm::manhattan_neon(a, b) })
     }
 
@@ -291,6 +301,8 @@ fn normalize_scale(vector: &mut [f32], scale: f32) {
     #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
     {
         if is_x86_feature_detected!("avx2") {
+            // SAFETY: AVX2 feature detection is checked above. vector is a valid mutable slice;
+            // the SIMD function writes in-place to vector.len() f32 elements.
             unsafe { simd_x86::scale_avx2(vector, scale) };
             return;
         }
@@ -298,6 +310,8 @@ fn normalize_scale(vector: &mut [f32], scale: f32) {
 
     #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
     {
+        // SAFETY: NEON is enabled at compile time via target_feature. vector is a valid mutable
+        // slice; the SIMD function writes in-place to vector.len() f32 elements.
         unsafe { simd_arm::scale_neon(vector, scale) };
     }
 
