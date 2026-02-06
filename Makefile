@@ -111,6 +111,11 @@ watch:
 	@command -v cargo-watch > /dev/null 2>&1 || { echo "Error: cargo-watch not found. Install with: cargo install cargo-watch"; exit 1; }
 	cargo watch -x 'check --features full'
 
+# Continuous test on save — TDD workflow (requires: cargo install cargo-watch)
+test-watch:
+	@command -v cargo-watch > /dev/null 2>&1 || { echo "Error: cargo-watch not found. Install with: cargo install cargo-watch"; exit 1; }
+	cargo watch -x 'test --lib'
+
 NEEDLE_PORT ?= 8080
 RUST_LOG ?= info
 
