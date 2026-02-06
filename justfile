@@ -183,9 +183,32 @@ count-debt:
     unwrap=$(grep -r 'unwrap()' src/ --include='*.rs' | wc -l | tr -d ' ')
     expect=$(grep -r 'expect(' src/ --include='*.rs' | wc -l | tr -d ' ')
     let_discard=$(grep -r 'let _ =' src/ --include='*.rs' | wc -l | tr -d ' ')
+    total_files=$(find src/ -name '*.rs' | wc -l | tr -d ' ')
+    total_lines=$(find src/ -name '*.rs' -exec cat {} + | wc -l | tr -d ' ')
+    dead_code=$(grep -rl '#!\[allow(dead_code)\]' src/ --include='*.rs' | wc -l | tr -d ' ')
     echo "Tech Debt Dashboard"
     echo "==================="
+    echo ""
+    echo "Codebase Size"
+    echo "  Total .rs files : $total_files"
+    echo "  Total lines     : $total_lines"
+    echo ""
+    echo "Debt Markers"
     echo "  unwrap(): $unwrap | expect(): $expect | let _ =: $let_discard"
+    echo "  #![allow(dead_code)] files: $dead_code"
+    echo ""
+    echo "Top 5 Largest Files"
+    find src/ -name '*.rs' -exec wc -l {} + | sort -rn | head -n 6 | tail -n 5 | awk '{printf "  %6d  %s\n", $1, $2}'
+    echo ""
+    echo "Per-Directory Breakdown (files / lines)"
+    for dir in $(find src/ -mindepth 1 -maxdepth 1 -type d | sort); do
+        d_files=$(find "$dir" -name '*.rs' | wc -l | tr -d ' ')
+        d_lines=$(find "$dir" -name '*.rs' -exec cat {} + 2>/dev/null | wc -l | tr -d ' ')
+        printf "  %-30s %4s files  %6s lines\n" "$dir" "$d_files" "$d_lines"
+    done
+    root_files=$(find src/ -maxdepth 1 -name '*.rs' | wc -l | tr -d ' ')
+    root_lines=$(find src/ -maxdepth 1 -name '*.rs' -exec cat {} + 2>/dev/null | wc -l | tr -d ' ')
+    printf "  %-30s %4s files  %6s lines\n" "src/ (root)" "$root_files" "$root_lines"
 
 # Start Needle via Docker Compose
 docker-up:
