@@ -205,9 +205,26 @@ impl AuthConfig {
     }
 
     /// Set the JWT secret for token validation.
+    ///
+    /// The secret must be at least 32 bytes to prevent brute-force attacks on HS256.
+    /// Shorter secrets will cause [`validate`](Self::validate) to return an error.
     pub fn with_jwt_secret(mut self, secret: impl Into<String>) -> Self {
         self.jwt_secret = Some(secret.into());
         self
+    }
+
+    /// Validate the authentication configuration.
+    ///
+    /// Returns an error if the JWT secret is configured but shorter than 32 bytes.
+    pub fn validate(&self) -> std::result::Result<(), AuthError> {
+        if let Some(secret) = &self.jwt_secret {
+            if secret.len() < 32 {
+                return Err(AuthError::InvalidToken(
+                    "JWT secret must be at least 32 bytes to prevent brute-force attacks".into(),
+                ));
+            }
+        }
+        Ok(())
     }
 
     /// Add a public endpoint that doesn't require authentication.
