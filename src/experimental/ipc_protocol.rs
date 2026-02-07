@@ -81,15 +81,20 @@ impl SharedMemoryLayout {
         index_size_bytes: u64,
         metadata_size_bytes: u64,
         wal_size_bytes: u64,
-    ) -> Self {
-        let data_size = (vector_count * dimensions * 4) as u64; // f32 = 4 bytes
+    ) -> Result<Self> {
+        let data_size = vector_count
+            .checked_mul(dimensions)
+            .and_then(|v| v.checked_mul(4)) // f32 = 4 bytes
+            .ok_or_else(|| NeedleError::InvalidInput(
+                "IPC data size overflow: vector_count * dimensions * 4 exceeds usize".into(),
+            ))? as u64;
         let data_offset = IPC_HEADER_SIZE as u64;
         let index_offset = data_offset + data_size;
         let metadata_offset = index_offset + index_size_bytes;
         let wal_offset = metadata_offset + metadata_size_bytes;
         let total_size = wal_offset + wal_size_bytes;
 
-        Self {
+        Ok(Self {
             total_size,
             data_offset,
             data_size,
@@ -99,7 +104,7 @@ impl SharedMemoryLayout {
             metadata_size: metadata_size_bytes,
             wal_offset,
             wal_size: wal_size_bytes,
-        }
+        })
     }
 }
 
@@ -670,7 +675,7 @@ mod tests {
             1024 * 1024, // 1MB index
             512 * 1024,  // 512KB metadata
             1024 * 1024, // 1MB WAL
-        );
+        ).unwrap();
 
         assert_eq!(layout.data_offset, IPC_HEADER_SIZE as u64);
         assert_eq!(layout.data_size, 10_000 * 384 * 4); // f32 per dim
@@ -727,7 +732,7 @@ mod tests {
     #[test]
     fn test_coordinator() {
         let config = IpcConfig::default();
-        let layout = SharedMemoryLayout::new(1000, 128, 100_000, 50_000, 100_000);
+        let layout = SharedMemoryLayout::new(1000, 128, 100_000, 50_000, 100_000).unwrap();
         let coordinator = IpcCoordinator::new(config, layout);
 
         let _reader = coordinator.create_reader();
@@ -740,7 +745,7 @@ mod tests {
     fn test_shared_memory_file() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("test.shm");
-        let layout = SharedMemoryLayout::new(100, 4, 1024, 512, 1024);
+        let layout = SharedMemoryLayout::new(100, 4, 1024, 512, 1024).unwrap();
 
         let mut shm = SharedMemoryFile::open_or_create(&path, layout).unwrap();
 
@@ -786,7 +791,7 @@ mod tests {
     fn test_shared_memory_reopen() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("test_reopen.shm");
-        let layout = SharedMemoryLayout::new(100, 4, 1024, 512, 1024);
+        let layout = SharedMemoryLayout::new(100, 4, 1024, 512, 1024).unwrap();
 
         // Create and write
         {
