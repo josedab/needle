@@ -19,6 +19,9 @@ use tower_http::cors::{AllowOrigin, CorsLayer};
 use tracing::warn;
 use serde_json::json;
 
+static SECURITY_HEADER_XCTO: (header::HeaderName, &str) = (header::X_CONTENT_TYPE_OPTIONS, "nosniff");
+static SECURITY_HEADER_XFO: (header::HeaderName, &str) = (header::X_FRAME_OPTIONS, "DENY");
+
 #[cfg(feature = "metrics")]
 use crate::metrics::{http_metrics, metrics};
 
@@ -283,3 +286,22 @@ pub(super) async fn get_metrics() -> impl IntoResponse {
 }
 
 
+/// Middleware that adds security headers to every response.
+pub(super) async fn security_headers_middleware(
+    request: Request<Body>,
+    next: Next,
+) -> Response {
+    let mut response = next.run(request).await;
+    let headers = response.headers_mut();
+    headers.insert(SECURITY_HEADER_XCTO.0.clone(), SECURITY_HEADER_XCTO.1.parse().unwrap());
+    headers.insert(SECURITY_HEADER_XFO.0.clone(), SECURITY_HEADER_XFO.1.parse().unwrap());
+    headers.insert(
+        header::STRICT_TRANSPORT_SECURITY,
+        "max-age=63072000; includeSubDomains".parse().unwrap(),
+    );
+    headers.insert(
+        header::HeaderName::from_static("x-xss-protection"),
+        "1; mode=block".parse().unwrap(),
+    );
+    response
+}
