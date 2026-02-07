@@ -657,7 +657,8 @@ impl GpuAccelerator {
         }
 
         let dim = vectors[0].len();
-        let total_elements = vectors.len() * dim;
+        let total_elements = vectors.len().checked_mul(dim)
+            .ok_or("GPU buffer size overflow")?;
         let buffer = self.allocate_buffer(total_elements, DataType::Float32)?;
 
         // In real implementation, would copy data to GPU memory
@@ -721,8 +722,8 @@ impl GpuAccelerator {
         self.update_metrics(
             KernelType::CosineSimilarity,
             start.elapsed(),
-            (vectors.len() * dim * 4) as u64,
-            Some(calculate_gflops(vectors.len() * dim * 3, start.elapsed())),
+            checked_gpu_bytes(&[vectors.len(), dim, 4]).unwrap_or(u64::MAX),
+            Some(calculate_gflops(vectors.len().saturating_mul(dim).saturating_mul(3), start.elapsed())),
         );
 
         Ok(results)
@@ -769,8 +770,8 @@ impl GpuAccelerator {
         self.update_metrics(
             KernelType::EuclideanDistance,
             start.elapsed(),
-            (vectors.len() * dim * 4) as u64,
-            Some(calculate_gflops(vectors.len() * dim * 3, start.elapsed())),
+            checked_gpu_bytes(&[vectors.len(), dim, 4]).unwrap_or(u64::MAX),
+            Some(calculate_gflops(vectors.len().saturating_mul(dim).saturating_mul(3), start.elapsed())),
         );
 
         Ok(results)
@@ -809,8 +810,8 @@ impl GpuAccelerator {
         self.update_metrics(
             KernelType::DotProduct,
             start.elapsed(),
-            (vectors.len() * dim * 4) as u64,
-            Some(calculate_gflops(vectors.len() * dim * 2, start.elapsed())),
+            checked_gpu_bytes(&[vectors.len(), dim, 4]).unwrap_or(u64::MAX),
+            Some(calculate_gflops(vectors.len().saturating_mul(dim).saturating_mul(2), start.elapsed())),
         );
 
         Ok(results)
@@ -834,7 +835,7 @@ impl GpuAccelerator {
         self.update_metrics(
             KernelType::Normalize,
             start.elapsed(),
-            (total_elements * 4) as u64,
+            checked_gpu_bytes(&[total_elements, 4]).unwrap_or(u64::MAX),
             None,
         );
 
@@ -892,8 +893,8 @@ impl GpuAccelerator {
         self.update_metrics(
             KernelType::MatMul,
             start.elapsed(),
-            ((m * k + k * n + m * n) * 4) as u64,
-            Some(calculate_gflops(2 * m * n * k, start.elapsed())),
+            checked_gpu_bytes(&[m.saturating_mul(k).saturating_add(k.saturating_mul(n)).saturating_add(m.saturating_mul(n)), 4]).unwrap_or(u64::MAX),
+            Some(calculate_gflops(2usize.saturating_mul(m).saturating_mul(n).saturating_mul(k), start.elapsed())),
         );
 
         Ok(result)
@@ -953,7 +954,7 @@ impl GpuAccelerator {
         self.update_metrics(
             KernelType::Quantize,
             start.elapsed(),
-            (total_elements * 4) as u64,
+            checked_gpu_bytes(&[total_elements, 4]).unwrap_or(u64::MAX),
             None,
         );
 
@@ -1018,7 +1019,7 @@ impl GpuAccelerator {
         self.update_metrics(
             KernelType::PcaProject,
             start.elapsed(),
-            ((input_elements + output_elements) * 4) as u64,
+            checked_gpu_bytes(&[input_elements.saturating_add(output_elements), 4]).unwrap_or(u64::MAX),
             None,
         );
 
@@ -1062,12 +1063,12 @@ impl GpuAccelerator {
         };
 
         let dim = vectors.first().map(|v| v.len()).unwrap_or(0);
-        let total_ops = vectors.len() * centroids.len() * dim;
+        let total_ops = vectors.len().saturating_mul(centroids.len()).saturating_mul(dim);
         self.update_metrics(
             KernelType::KMeansAssign,
             start.elapsed(),
-            (total_ops * 4) as u64,
-            Some(calculate_gflops(total_ops * 3, start.elapsed())),
+            checked_gpu_bytes(&[total_ops, 4]).unwrap_or(u64::MAX),
+            Some(calculate_gflops(total_ops.saturating_mul(3), start.elapsed())),
         );
 
         Ok(assignments)
@@ -1150,8 +1151,8 @@ impl GpuAccelerator {
         self.update_metrics(
             KernelType::CosineSimilarity, // Approximate
             start.elapsed(),
-            (vectors.len() * dim * 4 * 2) as u64, // Read vectors + write distances
-            Some(calculate_gflops(vectors.len() * dim * 3, start.elapsed())),
+            checked_gpu_bytes(&[vectors.len(), dim, 4, 2]).unwrap_or(u64::MAX),
+            Some(calculate_gflops(vectors.len().saturating_mul(dim).saturating_mul(3), start.elapsed())),
         );
 
         Ok(results)
@@ -1182,11 +1183,11 @@ impl GpuAccelerator {
             })
             .collect();
 
-        let total_ops = queries.len() * vectors.len() * dim * 3;
+        let total_ops = queries.len().saturating_mul(vectors.len()).saturating_mul(dim).saturating_mul(3);
         self.update_metrics(
             KernelType::CosineSimilarity,
             start.elapsed(),
-            (total_ops * 4) as u64,
+            checked_gpu_bytes(&[total_ops, 4]).unwrap_or(u64::MAX),
             Some(calculate_gflops(total_ops, start.elapsed())),
         );
 
@@ -1263,11 +1264,11 @@ impl GpuAccelerator {
         all_results.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
         all_results.truncate(k);
 
-        let total_ops = n_vectors * query.len() * 3;
+        let total_ops = n_vectors.saturating_mul(query.len()).saturating_mul(3);
         self.update_metrics(
             KernelType::CosineSimilarity,
             start.elapsed(),
-            (total_ops * 4) as u64,
+            checked_gpu_bytes(&[total_ops, 4]).unwrap_or(u64::MAX),
             Some(calculate_gflops(total_ops, start.elapsed())),
         );
 
@@ -1311,11 +1312,11 @@ impl GpuAccelerator {
                 .collect()
         };
 
-        let total_ops = n_queries * n_vectors * dim * 3;
+        let total_ops = n_queries.saturating_mul(n_vectors).saturating_mul(dim).saturating_mul(3);
         self.update_metrics(
             KernelType::CosineSimilarity,
             start.elapsed(),
-            (total_ops * 4) as u64,
+            checked_gpu_bytes(&[total_ops, 4]).unwrap_or(u64::MAX),
             Some(calculate_gflops(total_ops, start.elapsed())),
         );
 
@@ -1440,11 +1441,11 @@ impl GpuAccelerator {
             .collect();
 
         let dim = query.len();
-        let total_ops = filtered_vectors.len() * dim * 3;
+        let total_ops = filtered_vectors.len().saturating_mul(dim).saturating_mul(3);
         self.update_metrics(
             KernelType::CosineSimilarity,
             start.elapsed(),
-            (total_ops * 4) as u64,
+            checked_gpu_bytes(&[total_ops, 4]).unwrap_or(u64::MAX),
             Some(calculate_gflops(total_ops, start.elapsed())),
         );
 
@@ -2372,6 +2373,15 @@ fn normalize_vector_simd(v: &mut [f32]) {
             *x /= norm;
         }
     }
+}
+
+/// Safely compute a product of usize values and convert to u64, returning an error on overflow.
+fn checked_gpu_bytes(factors: &[usize]) -> Result<u64, String> {
+    let mut result: usize = 1;
+    for &f in factors {
+        result = result.checked_mul(f).ok_or("GPU buffer size overflow")?;
+    }
+    Ok(result as u64)
 }
 
 fn calculate_gflops(flops: usize, duration: Duration) -> f64 {
