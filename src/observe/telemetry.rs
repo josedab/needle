@@ -404,21 +404,11 @@ pub struct TraceContext {
 impl TraceContext {
     /// Generate new trace context.
     pub fn new() -> Self {
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
+        use rand::Rng;
 
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos();
-
-        let mut hasher = DefaultHasher::new();
-        now.hash(&mut hasher);
-        let trace_id = format!("{:032x}", hasher.finish() as u128);
-
-        let mut hasher = DefaultHasher::new();
-        (now + 1).hash(&mut hasher);
-        let span_id = format!("{:016x}", hasher.finish());
+        let mut rng = rand::thread_rng();
+        let trace_id = format!("{:032x}", rng.gen::<u128>());
+        let span_id = format!("{:016x}", rng.gen::<u64>());
 
         Self {
             trace_id,

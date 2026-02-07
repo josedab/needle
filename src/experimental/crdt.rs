@@ -43,17 +43,8 @@ pub struct ReplicaId(pub u64);
 impl ReplicaId {
     /// Generate a new replica ID.
     pub fn new() -> Self {
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
-
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("system clock should be after Unix epoch")
-            .as_nanos();
-
-        let mut hasher = DefaultHasher::new();
-        now.hash(&mut hasher);
-        ReplicaId(hasher.finish())
+        use rand::Rng;
+        ReplicaId(rand::thread_rng().gen())
     }
 
     /// Create from specific value.

@@ -1605,13 +1605,9 @@ fn cosine_distance(a: &[f32], b: &[f32]) -> f32 {
 
 /// Generate a unique session ID.
 fn generate_session_id() -> String {
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-
-    let now = current_timestamp_millis();
-    let mut hasher = DefaultHasher::new();
-    now.hash(&mut hasher);
-    format!("session_{:016x}", hasher.finish())
+    use rand::Rng;
+    let value: u64 = rand::thread_rng().gen();
+    format!("session_{:016x}", value)
 }
 
 // ============================================================================

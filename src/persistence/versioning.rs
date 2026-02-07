@@ -41,17 +41,9 @@ pub type CommitHash = String;
 
 /// Generate a commit hash.
 fn generate_hash() -> CommitHash {
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-
-    let mut hasher = DefaultHasher::new();
-    now.hash(&mut hasher);
-    format!("{:016x}", hasher.finish())
+    use rand::Rng;
+    let value: u64 = rand::thread_rng().gen();
+    format!("{:016x}", value)
 }
 
 /// A versioned vector entry.
