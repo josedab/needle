@@ -43,6 +43,9 @@ use std::io::{BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+/// Maximum allowed file size for deserialization (1 GB).
+const MAX_RAFT_FILE_SIZE: u64 = 1024 * 1024 * 1024;
+
 /// Node identifier.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct NodeId(pub u64);
@@ -282,23 +285,14 @@ impl RaftNode {
 
     /// Generate random election timeout.
     fn random_election_timeout(config: &RaftConfig) -> Duration {
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
+        use rand::Rng;
 
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos();
+        let mut rng = rand::thread_rng();
+        let min = config.election_timeout_min.as_millis() as u64;
+        let max = config.election_timeout_max.as_millis() as u64;
+        let timeout_ms = rng.gen_range(min..=max);
 
-        let mut hasher = DefaultHasher::new();
-        now.hash(&mut hasher);
-        let rand = hasher.finish() as f64 / u64::MAX as f64;
-
-        let min = config.election_timeout_min.as_millis() as f64;
-        let max = config.election_timeout_max.as_millis() as f64;
-        let timeout_ms = min + rand * (max - min);
-
-        Duration::from_millis(timeout_ms as u64)
+        Duration::from_millis(timeout_ms)
     }
 
     /// Initialize cluster with peers.
@@ -1091,7 +1085,7 @@ impl FileStorage {
         }
 
         let file = File::open(path).map_err(|e| NeedleError::Io(e))?;
-        let mut reader = BufReader::new(file);
+        let mut reader = BufReader::new(file.take(MAX_RAFT_FILE_SIZE));
         let mut entries = Vec::new();
 
         loop {
@@ -1103,6 +1097,11 @@ impl FileStorage {
             }
 
             let len = u32::from_le_bytes(len_buf) as usize;
+            if len > MAX_RAFT_FILE_SIZE as usize {
+                return Err(NeedleError::InvalidInput(
+                    format!("Log entry size {} exceeds maximum allowed size", len),
+                ));
+            }
             let mut data = vec![0u8; len];
             reader
                 .read_exact(&mut data)
@@ -1140,7 +1139,7 @@ impl RaftStorage for FileStorage {
         }
 
         let file = File::open(&self.state_path).map_err(|e| NeedleError::Io(e))?;
-        let reader = BufReader::new(file);
+        let reader = BufReader::new(file.take(MAX_RAFT_FILE_SIZE));
         let state: PersistentState =
             serde_json::from_reader(reader).map_err(|e| NeedleError::Serialization(e))?;
         Ok(Some(state))
@@ -1301,7 +1300,7 @@ impl RaftStorage for FileStorage {
 
         if let Some(latest) = snapshots.last() {
             let file = File::open(latest).map_err(|e| NeedleError::Io(e))?;
-            let reader = BufReader::new(file);
+            let reader = BufReader::new(file.take(MAX_RAFT_FILE_SIZE));
             let snapshot: Snapshot =
                 serde_json::from_reader(reader).map_err(|e| NeedleError::Serialization(e))?;
             return Ok(Some(snapshot));
