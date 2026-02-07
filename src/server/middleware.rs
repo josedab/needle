@@ -180,13 +180,23 @@ pub(super) async fn auth_middleware(
     // Auth is required - try to authenticate
     match try_authenticate(&request, auth_config) {
         Some(context) => {
-            // Auto-enforce collection-level RBAC when auth is required
             if let Some(collection) = extract_collection_from_path(&path) {
+                // Collection-level RBAC
                 let permission = infer_permission_from_request(&request);
                 let resource = crate::security::Resource::Collection(collection);
                 if !context.user.has_permission(permission, &resource) {
                     let error = ApiError::new(
                         format!("Insufficient permissions on collection"),
+                        "FORBIDDEN".to_string(),
+                    );
+                    return (StatusCode::FORBIDDEN, Json(error)).into_response();
+                }
+            } else if requires_admin(&path, request.method()) {
+                // Admin-only endpoints (non-collection mutating operations)
+                let resource = crate::security::Resource::System;
+                if !context.user.has_permission(crate::security::Permission::Admin, &resource) {
+                    let error = ApiError::new(
+                        "Admin permission required".to_string(),
                         "FORBIDDEN".to_string(),
                     );
                     return (StatusCode::FORBIDDEN, Json(error)).into_response();
@@ -221,6 +231,18 @@ pub(super) fn extract_collection_from_path(path: &str) -> Option<String> {
     }
 }
 
+
+/// Check if a non-collection endpoint requires admin permission.
+/// Gates mutating operations on /save, /webhooks, and /aliases.
+fn requires_admin(path: &str, method: &Method) -> bool {
+    let is_mutating = matches!(*method, Method::POST | Method::PUT | Method::DELETE);
+    if !is_mutating {
+        return false;
+    }
+    path == "/save"
+        || path.starts_with("/webhooks")
+        || path.starts_with("/aliases")
+}
 
 pub(super) fn infer_permission_from_request(request: &Request<Body>) -> crate::security::Permission {
     match *request.method() {
