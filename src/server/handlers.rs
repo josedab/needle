@@ -425,8 +425,8 @@ pub(super) async fn update_metadata(
         .collection(&collection)
         .map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
 
-    // Get existing vector
-    let (vector, _) = coll.get(&id).ok_or_else(|| {
+    // Get existing vector and save original metadata for rollback
+    let (vector, original_metadata) = coll.get(&id).ok_or_else(|| {
         (
             StatusCode::NOT_FOUND,
             Json(ApiError::new(
@@ -436,11 +436,15 @@ pub(super) async fn update_metadata(
         )
     })?;
 
-    // Delete and re-insert with new metadata
+    // Delete and re-insert with new metadata; rollback on insert failure
     coll.delete(&id)
         .map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
-    coll.insert(&id, &vector, req.metadata)
-        .map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
+    if let Err(e) = coll.insert(&id, &vector, req.metadata) {
+        // Rollback: re-insert with original data
+        warn!(id = %id, error = %e, "Metadata update insert failed, rolling back");
+        let _ = coll.insert(&id, &vector, original_metadata);
+        return Err(Into::<(StatusCode, Json<ApiError>)>::into(e));
+    }
 
     Ok(Json(json!({"updated": id})))
 }
