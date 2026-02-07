@@ -41,14 +41,26 @@ use std::time::Instant;
 static METRICS: OnceLock<NeedleMetrics> = OnceLock::new();
 static HTTP_METRICS: OnceLock<HttpMetrics> = OnceLock::new();
 
-/// Get or initialize the global metrics instance
+/// Get or initialize the global metrics instance.
+/// Falls back to a no-op metrics instance if Prometheus registration fails.
 pub fn metrics() -> &'static NeedleMetrics {
-    METRICS.get_or_init(NeedleMetrics::new)
+    METRICS.get_or_init(|| {
+        NeedleMetrics::try_new().unwrap_or_else(|e| {
+            tracing::warn!("Failed to initialize metrics, using no-op fallback: {e}");
+            NeedleMetrics::noop()
+        })
+    })
 }
 
-/// Get or initialize the HTTP metrics instance
+/// Get or initialize the HTTP metrics instance.
+/// Falls back to a no-op metrics instance if Prometheus registration fails.
 pub fn http_metrics() -> &'static HttpMetrics {
-    HTTP_METRICS.get_or_init(HttpMetrics::new)
+    HTTP_METRICS.get_or_init(|| {
+        HttpMetrics::try_new().unwrap_or_else(|e| {
+            tracing::warn!("Failed to initialize HTTP metrics, using no-op fallback: {e}");
+            HttpMetrics::noop()
+        })
+    })
 }
 
 /// HTTP server metrics for request tracking
@@ -62,33 +74,48 @@ pub struct HttpMetrics {
 }
 
 impl HttpMetrics {
-    fn new() -> Self {
+    fn try_new() -> std::result::Result<Self, prometheus::Error> {
         let requests_total = register_counter_vec!(
             "needle_http_requests_total",
             "Total number of HTTP requests",
             &["method", "path", "status"]
-        )
-        .expect("Failed to create HTTP requests counter");
+        )?;
 
         let request_duration_seconds = register_histogram_vec!(
             "needle_http_request_duration_seconds",
             "HTTP request duration in seconds",
             &["method", "path"],
             vec![0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0]
-        )
-        .expect("Failed to create HTTP duration histogram");
+        )?;
 
         let requests_in_flight = register_gauge_vec!(
             "needle_http_requests_in_flight",
             "Number of HTTP requests currently being processed",
             &["method"]
-        )
-        .expect("Failed to create requests in flight gauge");
+        )?;
 
-        Self {
+        Ok(Self {
             requests_total,
             request_duration_seconds,
             requests_in_flight,
+        })
+    }
+
+    /// Create a no-op fallback instance using unregistered metrics.
+    fn noop() -> Self {
+        Self {
+            requests_total: CounterVec::new(
+                prometheus::opts!("needle_http_requests_total_noop", "noop"),
+                &["method", "path", "status"],
+            ).unwrap(),
+            request_duration_seconds: HistogramVec::new(
+                prometheus::histogram_opts!("needle_http_request_duration_noop", "noop"),
+                &["method", "path"],
+            ).unwrap(),
+            requests_in_flight: GaugeVec::new(
+                prometheus::opts!("needle_http_requests_in_flight_noop", "noop"),
+                &["method"],
+            ).unwrap(),
         }
     }
 
@@ -201,89 +228,78 @@ pub struct NeedleMetrics {
 }
 
 impl NeedleMetrics {
-    fn new() -> Self {
+    fn try_new() -> std::result::Result<Self, prometheus::Error> {
         let operations_total = register_counter_vec!(
             "needle_operations_total",
             "Total number of operations",
             &["collection", "operation"]
-        )
-        .expect("Failed to create operations counter");
+        )?;
 
         let errors_total = register_counter_vec!(
             "needle_errors_total",
             "Total number of errors",
             &["collection", "operation", "error_type"]
-        )
-        .expect("Failed to create errors counter");
+        )?;
 
         let operation_duration_seconds = register_histogram_vec!(
             "needle_operation_duration_seconds",
             "Operation duration in seconds",
             &["collection", "operation"],
             vec![0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0]
-        )
-        .expect("Failed to create duration histogram");
+        )?;
 
         let search_result_count = register_histogram_vec!(
             "needle_search_result_count",
             "Number of results returned by search",
             &["collection"],
             vec![1.0, 5.0, 10.0, 20.0, 50.0, 100.0, 500.0, 1000.0]
-        )
-        .expect("Failed to create result count histogram");
+        )?;
 
         let hnsw_visited_nodes = register_histogram_vec!(
             "needle_hnsw_visited_nodes",
             "Number of nodes visited during HNSW search",
             &["collection"],
             vec![1.0, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0, 5000.0]
-        )
-        .expect("Failed to create HNSW visited nodes histogram");
+        )?;
 
         let hnsw_layers_traversed = register_histogram_vec!(
             "needle_hnsw_layers_traversed",
             "Number of HNSW layers traversed during search",
             &["collection"],
             vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 10.0, 15.0, 20.0]
-        )
-        .expect("Failed to create HNSW layers traversed histogram");
+        )?;
 
         let collection_vectors = register_gauge_vec!(
             "needle_collection_vectors",
             "Number of vectors in collection",
             &["collection"]
-        )
-        .expect("Failed to create vectors gauge");
+        )?;
 
         let collection_deleted_vectors = register_gauge_vec!(
             "needle_collection_deleted_vectors",
             "Number of soft-deleted vectors pending compaction",
             &["collection"]
-        )
-        .expect("Failed to create deleted vectors gauge");
+        )?;
 
         let collection_dimensions = register_gauge_vec!(
             "needle_collection_dimensions",
             "Vector dimensions for collection",
             &["collection"]
-        )
-        .expect("Failed to create dimensions gauge");
+        )?;
 
         let index_levels = register_gauge_vec!(
             "needle_index_levels",
             "Number of HNSW index levels",
             &["collection"]
-        )
-        .expect("Failed to create index levels gauge");
+        )?;
 
         let memory_bytes = register_gauge_vec!(
             "needle_memory_bytes",
             "Estimated memory usage in bytes",
             &["collection", "component"]
-        )
-        .expect("Failed to create memory gauge");
+        )?;
 
-        Self {
+        Ok(Self {
             operations_total,
             errors_total,
             operation_duration_seconds,
@@ -295,6 +311,45 @@ impl NeedleMetrics {
             collection_dimensions,
             index_levels,
             memory_bytes,
+        })
+    }
+
+    /// Create a no-op fallback instance using unregistered metrics.
+    fn noop() -> Self {
+        Self {
+            operations_total: CounterVec::new(
+                prometheus::opts!("needle_ops_noop", "noop"), &["collection", "operation"],
+            ).unwrap(),
+            errors_total: CounterVec::new(
+                prometheus::opts!("needle_errors_noop", "noop"), &["collection", "operation", "error_type"],
+            ).unwrap(),
+            operation_duration_seconds: HistogramVec::new(
+                prometheus::histogram_opts!("needle_duration_noop", "noop"), &["collection", "operation"],
+            ).unwrap(),
+            search_result_count: HistogramVec::new(
+                prometheus::histogram_opts!("needle_search_count_noop", "noop"), &["collection"],
+            ).unwrap(),
+            hnsw_visited_nodes: HistogramVec::new(
+                prometheus::histogram_opts!("needle_hnsw_visited_noop", "noop"), &["collection"],
+            ).unwrap(),
+            hnsw_layers_traversed: HistogramVec::new(
+                prometheus::histogram_opts!("needle_hnsw_layers_noop", "noop"), &["collection"],
+            ).unwrap(),
+            collection_vectors: GaugeVec::new(
+                prometheus::opts!("needle_vectors_noop", "noop"), &["collection"],
+            ).unwrap(),
+            collection_deleted_vectors: GaugeVec::new(
+                prometheus::opts!("needle_deleted_noop", "noop"), &["collection"],
+            ).unwrap(),
+            collection_dimensions: GaugeVec::new(
+                prometheus::opts!("needle_dims_noop", "noop"), &["collection"],
+            ).unwrap(),
+            index_levels: GaugeVec::new(
+                prometheus::opts!("needle_levels_noop", "noop"), &["collection"],
+            ).unwrap(),
+            memory_bytes: GaugeVec::new(
+                prometheus::opts!("needle_memory_noop", "noop"), &["collection", "component"],
+            ).unwrap(),
         }
     }
 
