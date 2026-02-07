@@ -3909,6 +3909,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "smallvec",
+ "subtle",
  "tempfile",
  "thiserror 2.0.17",
  "tokenizers",

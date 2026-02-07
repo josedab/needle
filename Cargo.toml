@@ -210,6 +210,7 @@ sha2 = "0.10"
 # Authentication - JWT support (optional, used with server)
 hmac = { version = "0.12", optional = true }
 base64 = { version = "0.22", optional = true }
+subtle = { version = "2.6", optional = true }
 
 # Cryptography - AEAD encryption (optional, used by enterprise/encryption)
 chacha20poly1305 = { version = "0.10", optional = true }
@@ -269,7 +270,7 @@ simd = []
 # Async API without HTTP server - enables embedded async usage
 async = ["tokio", "futures"]
 # HTTP server (depends on async)
-server = ["async", "axum", "tower", "tower-http", "governor", "tracing-subscriber", "hmac", "base64"]
+server = ["async", "axum", "tower", "tower-http", "governor", "tracing-subscriber", "hmac", "base64", "subtle"]
 web-ui = ["async", "axum"]
 metrics = ["prometheus"]
 hybrid = ["rust-stemmers"]

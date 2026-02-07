@@ -9,6 +9,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::Sha256;
 use std::collections::HashMap;
+use subtle::ConstantTimeEq;
+
+/// Default clock skew leeway for JWT expiration checks (in seconds).
+const JWT_CLOCK_LEEWAY_SECS: u64 = 60;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApiKey {
@@ -138,13 +142,13 @@ impl JwtClaims {
         self
     }
 
-    /// Check if the token is expired.
+    /// Check if the token is expired (with clock skew leeway).
     pub fn is_expired(&self) -> bool {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
-        self.exp < now
+        self.exp + JWT_CLOCK_LEEWAY_SECS < now
     }
 
     /// Convert claims to a User for RBAC checks.
@@ -237,7 +241,10 @@ impl AuthConfig {
     pub fn is_public_endpoint(&self, path: &str) -> bool {
         self.public_endpoints.iter().any(|e| {
             // Exact match or path starts with endpoint followed by / or ?
-            path == e || (e != "/" && path.starts_with(e))
+            path == e
+                || (e != "/"
+                    && (path.starts_with(&format!("{}/", e))
+                        || path.starts_with(&format!("{}?", e))))
         })
     }
 
@@ -245,7 +252,7 @@ impl AuthConfig {
     pub fn validate_api_key(&self, key: &str) -> Option<User> {
         self.api_keys
             .iter()
-            .find(|k| k.key == key && k.is_valid())
+            .find(|k| k.key.as_bytes().ct_eq(key.as_bytes()).into() && k.is_valid())
             .map(|k| k.to_user())
     }
 
@@ -262,6 +269,27 @@ impl AuthConfig {
         let header = parts[0];
         let payload = parts[1];
         let signature = parts[2];
+
+        // Decode and validate header algorithm
+        let header_bytes = URL_SAFE_NO_PAD
+            .decode(header)
+            .map_err(|_| AuthError::InvalidToken("Invalid header encoding".into()))?;
+        let header_json: Value = serde_json::from_slice(&header_bytes)
+            .map_err(|_| AuthError::InvalidToken("Invalid header JSON".into()))?;
+        match header_json.get("alg").and_then(|v| v.as_str()) {
+            Some("HS256") => {}
+            Some(alg) => {
+                return Err(AuthError::InvalidToken(format!(
+                    "Unsupported algorithm: {}. Only HS256 is supported",
+                    alg
+                )));
+            }
+            None => {
+                return Err(AuthError::InvalidToken(
+                    "Missing algorithm in header".into(),
+                ));
+            }
+        }
 
         // Verify signature (HS256)
         type HmacSha256 = Hmac<Sha256>;
