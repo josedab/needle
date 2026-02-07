@@ -23,7 +23,8 @@ use tokio::sync::RwLock;
 use tracing::{error, info, warn};
 
 
-/// Maximum allowed dimensions for a collection (prevents OOM).
+/// Maximum number of vectors allowed in a single export response.
+const MAX_EXPORT_VECTORS: usize = 100_000;
 const MAX_DIMENSIONS: usize = 65_536;
 /// Maximum allowed k for search operations.
 const MAX_SEARCH_K: usize = 10_000;
@@ -834,6 +835,20 @@ pub(super) async fn export_collection(
     let coll = db
         .collection(&collection)
         .map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
+
+    let count = coll.len();
+    if count > MAX_EXPORT_VECTORS {
+        return Err((
+            StatusCode::PAYLOAD_TOO_LARGE,
+            Json(ApiError::new(
+                format!(
+                    "Collection has {} vectors, exceeding export limit of {}. Use list_vectors + get_vector for large exports.",
+                    count, MAX_EXPORT_VECTORS
+                ),
+                "EXPORT_TOO_LARGE".to_string(),
+            )),
+        ));
+    }
 
     let vectors = coll
         .export_all()
