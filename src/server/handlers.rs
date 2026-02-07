@@ -317,7 +317,10 @@ pub(super) async fn batch_insert(
     for item in req.vectors {
         match coll.insert_with_ttl(&item.id, &item.vector, item.metadata, item.ttl_seconds) {
             Ok(_) => inserted += 1,
-            Err(e) => errors.push(json!({"id": item.id, "error": e.to_string()})),
+            Err(e) => {
+                warn!(id = %item.id, error = %e, "Batch insert failed for vector");
+                errors.push(json!({"id": item.id, "error": "Insert failed"}));
+            }
         }
     }
 
@@ -1206,7 +1209,10 @@ pub(super) async fn batch_insert_text_handler(
 
         match coll.insert(&item.id, &vector, Some(metadata)) {
             Ok(()) => { inserted += 1; embed_method = method; },
-            Err(e) => errors.push(json!({ "id": item.id, "error": e.to_string() })),
+            Err(e) => {
+                warn!(id = %item.id, error = %e, "Batch embed insert failed for vector");
+                errors.push(json!({ "id": item.id, "error": "Insert failed" }));
+            }
         }
     }
 
@@ -1593,7 +1599,10 @@ pub(super) async fn streaming_insert_handler(
     for v in &body.vectors {
         match coll.insert(&v.id, &v.vector, v.metadata.clone()) {
             Ok(()) => inserted += 1,
-            Err(e) => errors.push(json!({ "id": v.id, "error": e.to_string() })),
+            Err(e) => {
+                warn!(id = %v.id, error = %e, "Batch insert failed for vector");
+                errors.push(json!({ "id": v.id, "error": "Insert failed" }));
+            }
         }
     }
 
