@@ -455,12 +455,18 @@ impl HalfPrecision for Bf16Vector {
     }
 }
 
-/// Calculate memory savings from using half-precision
-pub fn memory_savings(dimensions: usize, num_vectors: usize) -> (usize, usize, f32) {
-    let f32_size = dimensions * num_vectors * std::mem::size_of::<f32>();
-    let f16_size = dimensions * num_vectors * std::mem::size_of::<F16>();
+/// Calculate memory savings from using half-precision.
+///
+/// Returns `None` if the computation would overflow.
+pub fn memory_savings(dimensions: usize, num_vectors: usize) -> Option<(usize, usize, f32)> {
+    let f32_size = dimensions
+        .checked_mul(num_vectors)?
+        .checked_mul(std::mem::size_of::<f32>())?;
+    let f16_size = dimensions
+        .checked_mul(num_vectors)?
+        .checked_mul(std::mem::size_of::<F16>())?;
     let savings = ((f32_size - f16_size) as f32 / f32_size as f32) * 100.0;
-    (f32_size, f16_size, savings)
+    Some((f32_size, f16_size, savings))
 }
 
 #[cfg(test)]
@@ -569,7 +575,7 @@ mod tests {
 
     #[test]
     fn test_memory_savings() {
-        let (f32_size, f16_size, savings) = memory_savings(384, 1_000_000);
+        let (f32_size, f16_size, savings) = memory_savings(384, 1_000_000).unwrap();
 
         assert_eq!(f32_size, 384 * 1_000_000 * 4);
         assert_eq!(f16_size, 384 * 1_000_000 * 2);
