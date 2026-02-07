@@ -23,6 +23,73 @@ use tokio::sync::RwLock;
 use tracing::{error, info, warn};
 
 
+/// Maximum allowed dimensions for a collection (prevents OOM).
+const MAX_DIMENSIONS: usize = 65_536;
+/// Maximum allowed k for search operations.
+const MAX_SEARCH_K: usize = 10_000;
+/// Maximum metadata size per vector in bytes (64KB).
+const MAX_METADATA_BYTES: usize = 64 * 1024;
+/// Maximum metadata JSON nesting depth.
+const MAX_METADATA_DEPTH: usize = 10;
+
+/// Validate that a collection name is safe: alphanumeric, underscore, hyphen, 1-256 chars.
+fn validate_collection_name(name: &str) -> std::result::Result<(), (StatusCode, Json<ApiError>)> {
+    if name.is_empty() || name.len() > 256 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ApiError::new(
+                "Collection name must be between 1 and 256 characters",
+                "INVALID_COLLECTION_NAME",
+            )),
+        ));
+    }
+    if !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ApiError::new(
+                "Collection name must contain only alphanumeric characters, underscores, or hyphens",
+                "INVALID_COLLECTION_NAME",
+            )),
+        ));
+    }
+    Ok(())
+}
+
+/// Validate metadata JSON size and nesting depth.
+fn validate_metadata(metadata: &Option<Value>) -> std::result::Result<(), (StatusCode, Json<ApiError>)> {
+    if let Some(value) = metadata {
+        let serialized = serde_json::to_string(value).unwrap_or_default();
+        if serialized.len() > MAX_METADATA_BYTES {
+            return Err((
+                StatusCode::PAYLOAD_TOO_LARGE,
+                Json(ApiError::new(
+                    format!("Metadata exceeds maximum size of {}KB", MAX_METADATA_BYTES / 1024),
+                    "METADATA_TOO_LARGE",
+                )),
+            ));
+        }
+        if json_depth(value) > MAX_METADATA_DEPTH {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(ApiError::new(
+                    format!("Metadata nesting depth exceeds maximum of {MAX_METADATA_DEPTH}"),
+                    "METADATA_TOO_DEEP",
+                )),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Compute the maximum nesting depth of a JSON value.
+fn json_depth(value: &Value) -> usize {
+    match value {
+        Value::Array(arr) => 1 + arr.iter().map(json_depth).max().unwrap_or(0),
+        Value::Object(map) => 1 + map.values().map(json_depth).max().unwrap_or(0),
+        _ => 0,
+    }
+}
+
 /// Check if the authenticated user (if any) has permission to perform
 /// an operation on a specific collection. Returns Ok(()) if allowed,
 /// or an appropriate HTTP error response if denied.
@@ -111,6 +178,18 @@ pub(super) async fn create_collection(
     State(state): State<Arc<AppState>>,
     Json(req): Json<CreateCollectionRequest>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<ApiError>)> {
+    validate_collection_name(&req.name)?;
+
+    if req.dimensions == 0 || req.dimensions > MAX_DIMENSIONS {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ApiError::new(
+                format!("Dimensions must be between 1 and {MAX_DIMENSIONS}"),
+                "INVALID_DIMENSIONS",
+            )),
+        ));
+    }
+
     let db = state.db.write().await;
 
     let mut config = crate::CollectionConfig::new(&req.name, req.dimensions);
@@ -186,6 +265,8 @@ pub(super) async fn insert_vector(
     Path(collection): Path<String>,
     Json(req): Json<InsertRequest>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<ApiError>)> {
+    validate_metadata(&req.metadata)?;
+
     let db = state.db.write().await;
     let coll = db
         .collection(&collection)
@@ -218,6 +299,10 @@ pub(super) async fn batch_insert(
         ));
     }
 
+    for item in &req.vectors {
+        validate_metadata(&item.metadata)?;
+    }
+
     let db = state.db.write().await;
     let coll = db
         .collection(&collection)
@@ -245,6 +330,8 @@ pub(super) async fn upsert_vector(
     Path(collection): Path<String>,
     Json(req): Json<UpsertRequest>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<ApiError>)> {
+    validate_metadata(&req.metadata)?;
+
     let db = state.db.write().await;
     let coll = db
         .collection(&collection)
@@ -359,6 +446,16 @@ pub(super) async fn search(
     Json(req): Json<SearchRequest>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<ApiError>)> {
     use crate::DistanceFunction;
+
+    if req.k == 0 || req.k > MAX_SEARCH_K {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ApiError::new(
+                format!("k must be between 1 and {MAX_SEARCH_K}"),
+                "INVALID_K",
+            )),
+        ));
+    }
 
     let db = state.db.read().await;
     let coll = db
