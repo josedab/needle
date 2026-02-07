@@ -94,12 +94,13 @@ impl GCSBackend {
         config: GCSConfig,
         credentials_path: &str,
     ) -> Result<Self> {
-        // Set the environment variable for the credentials file
-        std::env::set_var("GOOGLE_APPLICATION_CREDENTIALS", credentials_path);
-
-        let gcs_config = GcsClientConfig::default().with_auth().await.map_err(|e| {
-            NeedleError::Io(std::io::Error::other(format!("GCS auth error: {}", e)))
-        })?;
+        // Use direct credential configuration instead of modifying global env
+        let gcs_config = GcsClientConfig::default()
+            .with_credentials_file(credentials_path)
+            .await
+            .map_err(|e| {
+                NeedleError::Io(std::io::Error::other(format!("GCS auth error: {}", e)))
+            })?;
 
         let client = GcsClient::new(gcs_config);
 
