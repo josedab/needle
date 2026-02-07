@@ -90,10 +90,13 @@ pub(super) fn extract_client_ip(request: &Request<Body>, trusted_proxies: &[IpAd
         // Check X-Forwarded-For header first (for proxied requests)
         if let Some(forwarded_for) = request.headers().get("x-forwarded-for") {
             if let Ok(value) = forwarded_for.to_str() {
-                // X-Forwarded-For can contain multiple IPs, take the first one
-                if let Some(first_ip) = value.split(',').next() {
-                    if let Ok(ip) = first_ip.trim().parse::<IpAddr>() {
-                        return ip;
+                // Walk right-to-left to find the first IP not in the trusted proxy list
+                let ips: Vec<&str> = value.split(',').collect();
+                for raw_ip in ips.iter().rev() {
+                    if let Ok(ip) = raw_ip.trim().parse::<IpAddr>() {
+                        if !trusted_proxies.contains(&ip) {
+                            return ip;
+                        }
                     }
                 }
             }
