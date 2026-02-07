@@ -32,9 +32,35 @@ impl LocalBackend {
         })
     }
 
-    /// Get the full path for a key.
-    fn key_to_path(&self, key: &str) -> PathBuf {
-        self.base_path.join(key)
+    /// Get the full path for a key, with path traversal protection.
+    fn key_to_path(&self, key: &str) -> Result<PathBuf> {
+        // Reject keys with path traversal components or unsafe characters
+        if key.contains('\0')
+            || key.starts_with('/')
+            || key.starts_with('\\')
+            || key.split('/').any(|seg| seg == ".." || seg == ".")
+            || key.split('\\').any(|seg| seg == ".." || seg == ".")
+        {
+            return Err(NeedleError::InvalidInput(format!(
+                "Invalid storage key: '{}'",
+                key
+            )));
+        }
+
+        let path = self.base_path.join(key);
+
+        // Verify the resolved path stays within base_path using lexical check.
+        // canonicalize() isn't used since intermediate dirs may not yet exist.
+        let canonical_base = self.base_path.canonicalize().map_err(NeedleError::Io)?;
+        let normalized = canonical_base.join(key);
+        if !normalized.starts_with(&canonical_base) {
+            return Err(NeedleError::InvalidInput(format!(
+                "Storage key escapes base directory: '{}'",
+                key
+            )));
+        }
+
+        Ok(path)
     }
 
     /// Ensure parent directory exists.
@@ -70,7 +96,7 @@ impl StorageBackend for LocalBackend {
         key: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<Vec<u8>>> + Send + 'a>> {
         Box::pin(async move {
-            let path = self.key_to_path(key);
+            let path = self.key_to_path(key)?;
             let _conn = self.pool.acquire()?;
 
             self.retry_policy
@@ -93,7 +119,7 @@ impl StorageBackend for LocalBackend {
         data: &'a [u8],
     ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
         Box::pin(async move {
-            let path = self.key_to_path(key);
+            let path = self.key_to_path(key)?;
             let _conn = self.pool.acquire()?;
 
             self.ensure_parent_dir(&path)?;
@@ -106,7 +132,7 @@ impl StorageBackend for LocalBackend {
 
     fn delete<'a>(&'a self, key: &'a str) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
         Box::pin(async move {
-            let path = self.key_to_path(key);
+            let path = self.key_to_path(key)?;
             let _conn = self.pool.acquire()?;
 
             match std::fs::remove_file(&path) {
@@ -122,7 +148,7 @@ impl StorageBackend for LocalBackend {
         prefix: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<Vec<String>>> + Send + 'a>> {
         Box::pin(async move {
-            let base = self.key_to_path(prefix);
+            let base = self.key_to_path(prefix)?;
             let _conn = self.pool.acquire()?;
 
             let mut keys = Vec::new();
@@ -149,7 +175,7 @@ impl StorageBackend for LocalBackend {
         key: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<bool>> + Send + 'a>> {
         Box::pin(async move {
-            let path = self.key_to_path(key);
+            let path = self.key_to_path(key)?;
             let _conn = self.pool.acquire()?;
             Ok(path.exists())
         })
