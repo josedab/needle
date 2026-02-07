@@ -498,6 +498,7 @@ pub fn create_router_with_config(state: Arc<AppState>, config: &ServerConfig) ->
     let router = router.layer(axum::middleware::from_fn(metrics_middleware));
 
     router
+        .layer(axum::middleware::from_fn(security_headers_middleware))
         .layer(TraceLayer::new_for_http())
         .layer(timeout_layer)
         .layer(RequestBodyLimitLayer::new(config.max_body_size))
@@ -505,7 +506,9 @@ pub fn create_router_with_config(state: Arc<AppState>, config: &ServerConfig) ->
 }
 
 /// Build the router (legacy, uses permissive CORS for backwards compatibility)
+#[deprecated(since = "0.5.0", note = "Use `create_router_with_config` with restrictive CORS defaults instead")]
 pub fn create_router(state: Arc<AppState>) -> Router {
+    warn!("create_router() uses permissive CORS (AllowOrigin::any()). Migrate to create_router_with_config() with restrictive CORS for production use.");
     let config = ServerConfig {
         cors_config: CorsConfig::permissive(),
         ..Default::default()
@@ -515,6 +518,11 @@ pub fn create_router(state: Arc<AppState>) -> Router {
 
 
 pub async fn serve(config: ServerConfig) -> Result<(), Box<dyn std::error::Error>> {
+    // Validate auth configuration at startup
+    if let Err(e) = config.auth.validate() {
+        return Err(format!("Invalid auth configuration: {e}").into());
+    }
+
     // Initialize tracing subscriber with environment filter
     tracing_subscriber::fmt()
         .with_env_filter(
