@@ -308,7 +308,7 @@ impl AccessController {
 impl AccessControl for AccessController {
     fn can_access(&self, user: &User, permission: Permission, resource: &Resource) -> bool {
         if !self.enforce {
-            self.default_allow
+            user.active && self.default_allow
         } else {
             user.has_permission(permission, resource)
         }
@@ -318,12 +318,15 @@ impl AccessControl for AccessController {
         if self.can_access(user, permission, resource) {
             Ok(())
         } else {
-            Err(NeedleError::InvalidInput(format!(
-                "Access denied: user '{}' lacks {} permission on {:?}",
-                user.id,
-                permission.name(),
-                resource
-            )))
+            tracing::warn!(
+                user_id = %user.id,
+                permission = %permission.name(),
+                resource = ?resource,
+                "Access denied"
+            );
+            Err(NeedleError::InvalidInput(
+                "Access denied: insufficient permissions".to_string(),
+            ))
         }
     }
 
@@ -331,7 +334,9 @@ impl AccessControl for AccessController {
         // Note: No timing measurement to prevent timing attack information leakage.
         // Attackers could use timing differences to probe permission structures.
         if !self.enforce {
-            if self.default_allow {
+            if !user.active {
+                PolicyDecision::deny("User is inactive")
+            } else if self.default_allow {
                 PolicyDecision::allow("Enforcement disabled", "none")
             } else {
                 PolicyDecision::deny("Enforcement disabled, default deny")
