@@ -2242,6 +2242,14 @@ pub(super) async fn create_webhook_handler(
 ) -> impl IntoResponse {
     use crate::services::webhook_delivery::{WebhookSubscription, EventFilter};
 
+    // Validate webhook URL to prevent SSRF
+    if let Err(e) = body.validate_url() {
+        return (StatusCode::BAD_REQUEST, Json(json!({
+            "error": e,
+            "code": "INVALID_WEBHOOK_URL",
+        })));
+    }
+
     let filter = EventFilter {
         event_types: body.event_types.iter().filter_map(|t| match t.as_str() {
             "insert" => Some(crate::services::webhook_delivery::WebhookEventType::Insert),

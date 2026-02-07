@@ -559,4 +559,61 @@ pub struct CreateWebhookRequest {
     pub event_types: Vec<String>,
 }
 
+impl CreateWebhookRequest {
+    /// Validate the webhook URL to prevent SSRF attacks.
+    /// Only HTTPS URLs are allowed, and private/loopback/link-local IPs are rejected.
+    pub fn validate_url(&self) -> Result<(), String> {
+        let url = self.url.trim();
+
+        // Scheme check
+        if !url.starts_with("https://") {
+            return Err("Only HTTPS URLs are allowed for webhooks".to_string());
+        }
+
+        // Extract host portion: strip scheme, take up to first '/' or ':'
+        let after_scheme = &url["https://".len()..];
+        let host_port = after_scheme.split('/').next().unwrap_or("");
+        // Strip port if present
+        let host = if host_port.starts_with('[') {
+            // IPv6: [::1]:8080
+            host_port.split(']').next().unwrap_or("").trim_start_matches('[')
+        } else {
+            host_port.split(':').next().unwrap_or("")
+        };
+
+        if host.is_empty() {
+            return Err("URL must contain a valid host".to_string());
+        }
+
+        // Reject known loopback hostnames
+        if host == "localhost" || host == "127.0.0.1" || host == "::1" {
+            return Err("Loopback addresses are not allowed".to_string());
+        }
+
+        // Parse as IP and reject private ranges
+        if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+            if is_private_ip(&ip) {
+                return Err("Private/internal IP addresses are not allowed".to_string());
+            }
+        }
+
+        Ok(())
+    }
+}
+
+/// Check if an IP address is in a private, loopback, or link-local range.
+fn is_private_ip(ip: &std::net::IpAddr) -> bool {
+    match ip {
+        std::net::IpAddr::V4(v4) => {
+            v4.is_loopback()           // 127.0.0.0/8
+            || v4.is_private()         // 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16
+            || v4.is_link_local()      // 169.254.0.0/16
+            || v4.is_unspecified()     // 0.0.0.0
+        }
+        std::net::IpAddr::V6(v6) => {
+            v6.is_loopback()           // ::1
+            || v6.is_unspecified()     // ::
+        }
+    }
+}
 
