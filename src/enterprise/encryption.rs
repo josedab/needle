@@ -643,8 +643,10 @@ impl KekProvider for LocalKekProvider {
     fn wrap(&self, plaintext: &[u8], _kek_id: &str) -> std::result::Result<Vec<u8>, String> {
         use chacha20poly1305::aead::generic_array::GenericArray;
         use chacha20poly1305::{aead::Aead, ChaCha20Poly1305, KeyInit};
+        use rand::RngCore;
         let cipher = ChaCha20Poly1305::new(GenericArray::from_slice(&self.kek[..32]));
-        let nonce_bytes = [0u8; 12]; // DEK wrapping uses fixed nonce (single-use per wrap)
+        let mut nonce_bytes = [0u8; 12];
+        rand::thread_rng().fill_bytes(&mut nonce_bytes);
         let nonce = GenericArray::from_slice(&nonce_bytes);
         let ciphertext = cipher
             .encrypt(nonce, plaintext)
