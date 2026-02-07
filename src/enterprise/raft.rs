@@ -452,6 +452,11 @@ impl RaftNode {
 
     /// Handle incoming message.
     pub fn handle_message(&mut self, from: NodeId, message: RaftMessage) {
+        // Reject messages from nodes not in the cluster (if cluster is configured)
+        if !self.cluster.is_empty() && !self.cluster.contains(&from) {
+            return;
+        }
+
         match message {
             RaftMessage::RequestVote(req) => self.handle_request_vote(from, req),
             RaftMessage::RequestVoteResponse(resp) => self.handle_vote_response(from, resp),
