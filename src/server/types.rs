@@ -5,6 +5,7 @@ use crate::error::NeedleError;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
+use tracing::error;
 
 /// API error response
 #[derive(Debug, Serialize)]
@@ -47,10 +48,18 @@ impl From<NeedleError> for (StatusCode, Json<ApiError>) {
 
         let help = err.help();
 
+        // Sanitize internal errors: log full details server-side, return generic message to clients
+        let error_message = if status == StatusCode::INTERNAL_SERVER_ERROR {
+            error!(error = %err, "Internal server error");
+            "An internal error occurred".to_string()
+        } else {
+            err.to_string()
+        };
+
         (
             status,
             Json(ApiError {
-                error: err.to_string(),
+                error: error_message,
                 code: code.to_string(),
                 help,
             }),

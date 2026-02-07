@@ -122,13 +122,16 @@ pub(super) fn check_collection_access(
     if user.has_permission(permission, &resource) {
         Ok(())
     } else {
+        warn!(
+            user_id = %user.id,
+            permission = ?permission,
+            collection = %collection,
+            "Permission denied on collection"
+        );
         Err((
             StatusCode::FORBIDDEN,
             Json(ApiError::new(
-                format!(
-                    "User '{}' lacks {:?} permission on collection '{}'",
-                    user.id, permission, collection
-                ),
+                "Access denied: insufficient permissions",
                 "PERMISSION_DENIED",
             )),
         ))
