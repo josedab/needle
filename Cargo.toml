@@ -130,7 +130,7 @@ lru = "0.12"
 
 # Logging/tracing
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"], optional = true }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # CLI
 clap = { version = "4", features = ["derive"] }
@@ -273,7 +273,7 @@ simd = []
 # Async API without HTTP server - enables embedded async usage
 async = ["tokio", "futures"]
 # HTTP server (depends on async)
-server = ["async", "axum", "tower", "tower-http", "governor", "tracing-subscriber", "hmac", "base64", "subtle"]
+server = ["async", "axum", "tower", "tower-http", "governor", "hmac", "base64", "subtle"]
 web-ui = ["async", "axum"]
 metrics = ["prometheus"]
 hybrid = ["rust-stemmers"]

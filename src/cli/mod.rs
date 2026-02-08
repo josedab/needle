@@ -13,7 +13,7 @@ use handlers::*;
 #[command(name = "needle")]
 #[command(author, version, about = "Embedded Vector Database - SQLite for Vectors", long_about = None)]
 pub struct Cli {
-    /// Enable debug logging (sets RUST_LOG=debug)
+    /// Enable debug logging
     #[arg(short, long, global = true)]
     pub verbose: bool,
 

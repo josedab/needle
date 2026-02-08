@@ -20,7 +20,13 @@ fn main() {
     let parsed = cli::Cli::parse();
 
     if parsed.verbose {
-        std::env::set_var("RUST_LOG", "debug");
+        tracing_subscriber::fmt()
+            .with_env_filter(
+                tracing_subscriber::EnvFilter::builder()
+                    .with_default_directive(tracing::level_filters::LevelFilter::DEBUG.into())
+                    .from_env_lossy(),
+            )
+            .init();
     }
 
     if let Err(err) = cli::run(parsed) {

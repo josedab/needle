@@ -523,13 +523,13 @@ pub async fn serve(config: ServerConfig) -> Result<(), Box<dyn std::error::Error
         return Err(format!("Invalid auth configuration: {e}").into());
     }
 
-    // Initialize tracing subscriber with environment filter
-    tracing_subscriber::fmt()
+    // Initialize tracing subscriber with environment filter (may already be initialized by CLI)
+    let _ = tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::from_default_env()
                 .add_directive(tracing::Level::INFO.into()),
         )
-        .init();
+        .try_init();
 
     info!(
         addr = %config.addr,
