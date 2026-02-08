@@ -179,7 +179,7 @@ pub fn euclidean_distance_squared(a: &[f32], b: &[f32]) -> Result<f32> {
 }
 
 /// Scalar fallback for squared Euclidean distance
-#[inline]
+#[inline(always)]
 #[cfg_attr(
     all(target_arch = "aarch64", target_feature = "neon"),
     allow(dead_code)
@@ -214,7 +214,7 @@ pub fn dot_product(a: &[f32], b: &[f32]) -> Result<f32> {
 }
 
 /// Scalar fallback for dot product
-#[inline]
+#[inline(always)]
 #[cfg_attr(
     all(target_arch = "aarch64", target_feature = "neon"),
     allow(dead_code)
@@ -224,7 +224,7 @@ fn dot_product_scalar(a: &[f32], b: &[f32]) -> f32 {
 }
 
 /// Internal dot product without dimension check (caller must guarantee equal lengths).
-#[inline]
+#[inline(always)]
 fn dot_product_inner(a: &[f32], b: &[f32]) -> f32 {
     #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
     {
@@ -276,7 +276,7 @@ pub fn manhattan_distance(a: &[f32], b: &[f32]) -> Result<f32> {
 }
 
 /// Scalar fallback for Manhattan distance
-#[inline]
+#[inline(always)]
 #[cfg_attr(
     all(target_arch = "aarch64", target_feature = "neon"),
     allow(dead_code)
