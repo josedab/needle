@@ -141,12 +141,16 @@ pub(super) fn check_collection_access(
 
 // ============ Handlers ============
 
-/// Health check endpoint
+/// Health check endpoint.
+///
+/// `GET /health` — returns `{"status": "healthy"}` with the server version.
 pub(super) async fn health() -> impl IntoResponse {
     Json(json!({"status": "healthy", "version": env!("CARGO_PKG_VERSION")}))
 }
 
-/// Get database info
+/// Get database-level information.
+///
+/// `GET /info` — returns total collection and vector counts.
 pub(super) async fn get_info(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let db = state.db.read().await;
     let collections = db.list_collections();
@@ -157,7 +161,10 @@ pub(super) async fn get_info(State(state): State<Arc<AppState>>) -> impl IntoRes
     }))
 }
 
-/// List all collections
+/// List all collections in the database.
+///
+/// `GET /collections` — returns an array of collection summaries with name,
+/// dimensions, and vector count.
 pub(super) async fn list_collections(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let db = state.db.read().await;
     let collections: Vec<CollectionInfo> = db
@@ -180,7 +187,10 @@ pub(super) async fn list_collections(State(state): State<Arc<AppState>>) -> impl
     Json(json!({"collections": collections}))
 }
 
-/// Create a new collection
+/// Create a new vector collection.
+///
+/// `POST /collections` — accepts name, dimensions, and optional HNSW parameters.
+/// Returns `201 Created` on success.
 pub(super) async fn create_collection(
     State(state): State<Arc<AppState>>,
     Json(req): Json<CreateCollectionRequest>,
@@ -224,7 +234,10 @@ pub(super) async fn create_collection(
     Ok((StatusCode::CREATED, Json(json!({"created": req.name}))))
 }
 
-/// Get collection info
+/// Get detailed information about a collection.
+///
+/// `GET /collections/:name` — returns dimensions, vector count, deleted count,
+/// and compaction status.
 pub(super) async fn get_collection(
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
@@ -243,7 +256,9 @@ pub(super) async fn get_collection(
     })))
 }
 
-/// Delete a collection
+/// Delete a collection and all its vectors.
+///
+/// `DELETE /collections/:name` — returns 404 if the collection does not exist.
 pub(super) async fn delete_collection(
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
@@ -266,7 +281,10 @@ pub(super) async fn delete_collection(
     }
 }
 
-/// Insert a vector
+/// Insert a single vector into a collection.
+///
+/// `POST /collections/:name/vectors` — accepts id, vector, optional metadata
+/// and optional TTL. Returns `201 Created`.
 pub(super) async fn insert_vector(
     State(state): State<Arc<AppState>>,
     Path(collection): Path<String>,
@@ -334,7 +352,10 @@ pub(super) async fn batch_insert(
     })))
 }
 
-/// Upsert a vector
+/// Insert or update a vector (upsert).
+///
+/// `PUT /collections/:name/vectors` — if the ID already exists, deletes and
+/// re-inserts. Returns `{"updated": true}` if it replaced an existing vector.
 pub(super) async fn upsert_vector(
     State(state): State<Arc<AppState>>,
     Path(collection): Path<String>,
@@ -365,7 +386,10 @@ pub(super) async fn upsert_vector(
     })))
 }
 
-/// Get a vector by ID
+/// Retrieve a vector and its metadata by ID.
+///
+/// `GET /collections/:name/vectors/:id` — returns the vector, metadata, and ID.
+/// Returns 404 if not found.
 pub(super) async fn get_vector(
     State(state): State<Arc<AppState>>,
     Path((collection, id)): Path<(String, String)>,
@@ -391,7 +415,9 @@ pub(super) async fn get_vector(
     }
 }
 
-/// Delete a vector
+/// Delete a vector by ID.
+///
+/// `DELETE /collections/:name/vectors/:id` — returns 404 if not found.
 pub(super) async fn delete_vector(
     State(state): State<Arc<AppState>>,
     Path((collection, id)): Path<(String, String)>,
@@ -418,7 +444,10 @@ pub(super) async fn delete_vector(
     }
 }
 
-/// Update vector metadata
+/// Update the metadata of an existing vector (delete + re-insert).
+///
+/// `PATCH /collections/:name/vectors/:id/metadata` — replaces metadata while
+/// preserving the vector. Rolls back on failure.
 pub(super) async fn update_metadata(
     State(state): State<Arc<AppState>>,
     Path((collection, id)): Path<(String, String)>,
@@ -455,7 +484,11 @@ pub(super) async fn update_metadata(
     Ok(Json(json!({"updated": id})))
 }
 
-/// Search for similar vectors
+/// Search for similar vectors using approximate nearest neighbor search.
+///
+/// `POST /collections/:name/search` — accepts a query vector, k, optional
+/// filter, and optional explain flag. Returns ranked results with distances
+/// and similarity scores.
 pub(super) async fn search(
     State(state): State<Arc<AppState>>,
     Path(collection): Path<String>,
@@ -657,7 +690,10 @@ pub(super) async fn search(
     }))
 }
 
-/// Batch search
+/// Batch search: run multiple queries in a single request.
+///
+/// `POST /collections/:name/search/batch` — accepts an array of query vectors
+/// with shared k and optional filter. Returns per-query result arrays.
 pub(super) async fn batch_search(
     State(state): State<Arc<AppState>>,
     Path(collection): Path<String>,
@@ -727,8 +763,11 @@ pub(super) async fn batch_search(
     Ok(Json(json!({"results": all_results})))
 }
 
-/// Radius-based search (range search)
-/// Returns all vectors within max_distance from the query vector
+/// Radius-based (range) search.
+///
+/// `POST /collections/:name/search/radius` — returns all vectors within
+/// `max_distance` of the query vector, up to `limit` results.
+/// Supports optional metadata filter and `include_vectors` flag.
 pub(super) async fn radius_search(
     State(state): State<Arc<AppState>>,
     Path(collection): Path<String>,
@@ -793,7 +832,9 @@ pub(super) async fn radius_search(
     })))
 }
 
-/// Compact a collection
+/// Compact a collection by removing deleted vectors and reclaiming space.
+///
+/// `POST /collections/:name/compact` — returns the number of removed entries.
 pub(super) async fn compact_collection(
     State(state): State<Arc<AppState>>,
     Path(collection): Path<String>,
@@ -813,7 +854,10 @@ pub(super) async fn compact_collection(
     })))
 }
 
-/// List vector IDs in a collection
+/// List vector IDs in a collection with pagination.
+///
+/// `GET /collections/:name/vectors` — accepts `offset` and `limit` query
+/// parameters. Returns paginated IDs and total count.
 pub(super) async fn list_vectors(
     State(state): State<Arc<AppState>>,
     Path(collection): Path<String>,
@@ -841,7 +885,10 @@ pub(super) async fn list_vectors(
     })))
 }
 
-/// Export collection
+/// Export all vectors from a collection as JSON.
+///
+/// `GET /collections/:name/export` — returns up to `MAX_EXPORT_VECTORS`
+/// entries with their IDs, vectors, and metadata.
 pub(super) async fn export_collection(
     State(state): State<Arc<AppState>>,
     Path(collection): Path<String>,
@@ -888,7 +935,9 @@ pub(super) async fn export_collection(
     })))
 }
 
-/// Save database to disk
+/// Persist the database to disk.
+///
+/// `POST /save` — flushes all in-memory changes to the database file.
 pub(super) async fn save_database(
     State(state): State<Arc<AppState>>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<ApiError>)> {
@@ -900,7 +949,10 @@ pub(super) async fn save_database(
 
 // ============ Alias Handlers ============
 
-/// Create a new alias for a collection
+/// Create a new alias pointing to a collection.
+///
+/// `POST /aliases` — maps an alias name to a collection name.
+/// Returns `201 Created`.
 pub(super) async fn create_alias_handler(
     State(state): State<Arc<AppState>>,
     Json(req): Json<CreateAliasRequest>,
@@ -919,7 +971,9 @@ pub(super) async fn create_alias_handler(
     ))
 }
 
-/// List all aliases
+/// List all collection aliases.
+///
+/// `GET /aliases` — returns an array of alias-to-collection mappings.
 pub(super) async fn list_aliases_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let db = state.db.read().await;
     let aliases: Vec<AliasInfo> = db
@@ -931,7 +985,9 @@ pub(super) async fn list_aliases_handler(State(state): State<Arc<AppState>>) -> 
     Json(json!({"aliases": aliases}))
 }
 
-/// Get (resolve) an alias to its canonical collection name
+/// Resolve an alias to its canonical collection name.
+///
+/// `GET /aliases/:alias` — returns 404 if the alias does not exist.
 pub(super) async fn get_alias_handler(
     State(state): State<Arc<AppState>>,
     Path(alias): Path<String>,
@@ -950,7 +1006,9 @@ pub(super) async fn get_alias_handler(
     }
 }
 
-/// Delete an alias
+/// Delete an alias.
+///
+/// `DELETE /aliases/:alias` — returns 404 if the alias does not exist.
 pub(super) async fn delete_alias_handler(
     State(state): State<Arc<AppState>>,
     Path(alias): Path<String>,
@@ -973,7 +1031,9 @@ pub(super) async fn delete_alias_handler(
     }
 }
 
-/// Update an alias to point to a different collection
+/// Update an alias to point to a different collection.
+///
+/// `PUT /aliases/:alias` — changes the target collection for an existing alias.
 pub(super) async fn update_alias_handler(
     State(state): State<Arc<AppState>>,
     Path(alias): Path<String>,
@@ -992,7 +1052,10 @@ pub(super) async fn update_alias_handler(
 
 // ============ TTL Handlers ============
 
-/// Sweep and delete expired vectors from a collection
+/// Sweep and delete expired vectors from a collection.
+///
+/// `POST /collections/:name/expire` — removes vectors whose TTL has elapsed
+/// and returns the count of expired entries.
 pub(super) async fn expire_vectors_handler(
     State(state): State<Arc<AppState>>,
     Path(collection): Path<String>,
@@ -1012,7 +1075,10 @@ pub(super) async fn expire_vectors_handler(
     })))
 }
 
-/// Get TTL statistics for a collection
+/// Get TTL statistics for a collection.
+///
+/// `GET /collections/:name/ttl` — returns counts of vectors with TTL, expired
+/// vectors, earliest/latest expirations, and whether a sweep is recommended.
 pub(super) async fn ttl_stats_handler(
     State(state): State<Arc<AppState>>,
     Path(collection): Path<String>,
@@ -1035,11 +1101,18 @@ pub(super) async fn ttl_stats_handler(
 }
 
 
+/// Serve the OpenAPI specification as JSON.
+///
+/// `GET /openapi.json` — returns the auto-generated OpenAPI 3.0 spec for the Needle REST API.
 pub(super) async fn serve_openapi_spec() -> impl IntoResponse {
     Json(generate_openapi_spec())
 }
 
 
+/// Serve the HTML admin dashboard.
+///
+/// `GET /dashboard` — renders a single-page dashboard showing collection counts,
+/// total vectors, and per-collection statistics.
 pub(super) async fn serve_dashboard(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let db = state.db.read().await;
     let collections = db.list_collections();
@@ -1105,6 +1178,9 @@ pub(super) async fn serve_dashboard(State(state): State<Arc<AppState>>) -> impl 
 }
 
 
+/// List snapshots for a collection.
+///
+/// `GET /collections/:name/snapshots` — returns an array of snapshot names.
 pub(super) async fn list_snapshots_handler(
     State(state): State<Arc<AppState>>,
     Path(collection): Path<String>,
@@ -1114,6 +1190,10 @@ pub(super) async fn list_snapshots_handler(
     Json(json!({ "snapshots": snapshots }))
 }
 
+/// Create a named snapshot of a collection.
+///
+/// `POST /collections/:name/snapshots` — creates a point-in-time snapshot.
+/// Returns `201 Created` on success.
 pub(super) async fn create_snapshot_handler(
     State(state): State<Arc<AppState>>,
     Path(collection): Path<String>,
@@ -1126,6 +1206,10 @@ pub(super) async fn create_snapshot_handler(
     }
 }
 
+/// Restore a collection from a named snapshot.
+///
+/// `POST /collections/:name/snapshots/:snapshot/restore` — replaces the
+/// collection contents with the snapshot state.
 pub(super) async fn restore_snapshot_handler(
     State(state): State<Arc<AppState>>,
     Path((collection, snapshot)): Path<(String, String)>,
@@ -1137,6 +1221,11 @@ pub(super) async fn restore_snapshot_handler(
     }
 }
 
+/// Insert a vector by providing raw text instead of a pre-computed embedding.
+///
+/// `POST /collections/:name/texts` — embeds the text via the configured
+/// embedding provider (or deterministic hash fallback) and inserts the
+/// resulting vector with enriched metadata.
 pub(super) async fn insert_text_handler(
     State(state): State<Arc<AppState>>,
     Path(collection): Path<String>,
@@ -1204,6 +1293,10 @@ pub(super) async fn embed_text(state: &AppState, text: &str, dims: usize) -> (Ve
     (text_to_deterministic_vector(text, dims), "deterministic_hash".to_string())
 }
 
+/// Batch insert vectors from text, embedding each via the configured provider.
+///
+/// `POST /collections/:name/texts/batch` — accepts an array of text documents,
+/// embeds them, and inserts the resulting vectors. Returns per-item results.
 pub(super) async fn batch_insert_text_handler(
     State(state): State<Arc<AppState>>,
     Path(collection): Path<String>,
@@ -1258,6 +1351,10 @@ pub(super) async fn batch_insert_text_handler(
     })))
 }
 
+/// Search a collection using a text query instead of a raw vector.
+///
+/// `POST /collections/:name/texts/search` — embeds the query text and performs
+/// ANN search, returning results with relevance scores.
 pub(super) async fn search_text_handler(
     State(state): State<Arc<AppState>>,
     Path(collection): Path<String>,
@@ -1363,6 +1460,10 @@ pub(super) fn text_to_deterministic_vector(text: &str, dimensions: usize) -> Vec
 }
 
 
+/// Serve the interactive API playground.
+///
+/// `GET /playground` — renders an HTML page with forms for searching and
+/// inserting vectors, providing an interactive explorer for the REST API.
 pub(super) async fn serve_playground(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let db = state.db.read().await;
     let collections = db.list_collections();
@@ -1514,6 +1615,10 @@ pub(super) async fn mcp_config_handler() -> impl IntoResponse {
     )
 }
 
+/// Matryoshka (adaptive-dimension) search.
+///
+/// `POST /collections/:name/matryoshka-search` — performs a coarse search at
+/// reduced dimensions, then re-ranks candidates at full resolution.
 pub(super) async fn matryoshka_search_handler(
     State(state): State<Arc<AppState>>,
     Path(collection): Path<String>,
@@ -1554,6 +1659,10 @@ pub(super) async fn matryoshka_search_handler(
 }
 
 
+/// Semantic cache lookup.
+///
+/// `POST /collections/:name/cache/lookup` — checks whether a semantically
+/// similar query has been cached. Requires the `experimental` feature.
 #[cfg(feature = "experimental")]
 pub(super) async fn cache_lookup_handler(
     State(state): State<Arc<AppState>>,
@@ -1592,6 +1701,7 @@ pub(super) async fn cache_lookup_handler(
     })))
 }
 
+/// Semantic cache lookup stub (experimental feature not enabled).
 #[cfg(not(feature = "experimental"))]
 pub(super) async fn cache_lookup_handler(
     Path(_collection): Path<String>,
@@ -1600,6 +1710,10 @@ pub(super) async fn cache_lookup_handler(
     (StatusCode::NOT_IMPLEMENTED, Json(json!({ "error": "Requires 'experimental' feature" })))
 }
 
+/// Store a response in the semantic cache.
+///
+/// `POST /collections/:name/cache/store` — caches a query-response pair
+/// so future similar queries can be served from cache.
 pub(super) async fn cache_store_handler(
     State(_state): State<Arc<AppState>>,
     Path(collection): Path<String>,
@@ -1614,6 +1728,11 @@ pub(super) async fn cache_store_handler(
     })))
 }
 
+/// Streaming batch insert with backpressure signalling.
+///
+/// `POST /collections/:name/vectors/stream` — inserts vectors in streaming
+/// fashion, returning per-batch acknowledgements with latency and
+/// backpressure indicators.
 pub(super) async fn streaming_insert_handler(
     State(state): State<Arc<AppState>>,
     Path(collection): Path<String>,
@@ -1655,6 +1774,11 @@ pub(super) async fn streaming_insert_handler(
     })))
 }
 
+/// Time-travel search against a named snapshot.
+///
+/// `POST /collections/:name/time-travel` — searches the collection as it
+/// existed at the given snapshot point. Currently searches current state
+/// and annotates with snapshot metadata.
 pub(super) async fn time_travel_search_handler(
     State(state): State<Arc<AppState>>,
     Path(collection): Path<String>,
@@ -1701,6 +1825,10 @@ pub(super) async fn time_travel_search_handler(
 }
 
 
+/// Diff two snapshots within a collection.
+///
+/// `POST /collections/:name/snapshots/diff` — compares two snapshots and
+/// returns added, removed, and modified vector summaries.
 pub(super) async fn snapshot_diff_handler(
     State(state): State<Arc<AppState>>,
     Path(collection): Path<String>,
@@ -1725,6 +1853,10 @@ pub(super) async fn snapshot_diff_handler(
     })))
 }
 
+/// Estimate the cost of a search query before executing it.
+///
+/// `POST /collections/:name/cost` — uses the query planner to estimate
+/// latency, memory, and distance computations for the given query.
 pub(super) async fn cost_estimate_handler(
     State(state): State<Arc<AppState>>,
     Path(collection): Path<String>,
@@ -1781,6 +1913,10 @@ pub(super) async fn cost_estimate_handler(
     })))
 }
 
+/// Compute the diff between two collections.
+///
+/// `POST /collections/:name/diff` — compares vector IDs and values between
+/// two collections, returning added, removed, and modified vectors.
 pub(super) async fn vector_diff_handler(
     State(state): State<Arc<AppState>>,
     Path(collection): Path<String>,
@@ -1836,6 +1972,11 @@ pub(super) async fn vector_diff_handler(
     })))
 }
 
+/// Change feed endpoint for a collection.
+///
+/// `GET /collections/:name/changes` — returns feed configuration and current
+/// state. For real-time streaming, connect to the `/stream` sub-path with
+/// `Accept: text/event-stream`.
 pub(super) async fn change_feed_handler(
     State(state): State<Arc<AppState>>,
     Path(collection): Path<String>,
@@ -1899,6 +2040,10 @@ pub(super) async fn grpc_schema_handler() -> impl IntoResponse {
     })))
 }
 
+/// Run a micro-benchmark against a collection.
+///
+/// `POST /collections/:name/benchmark` — executes `num_queries` random
+/// searches and returns latency percentiles (p50, p99) and throughput (QPS).
 pub(super) async fn benchmark_handler(
     State(state): State<Arc<AppState>>,
     Path(collection): Path<String>,
@@ -2066,6 +2211,10 @@ pub(super) async fn tracing_status_handler() -> impl IntoResponse {
     })))
 }
 
+/// Store a memory for AI agent long-term recall.
+///
+/// `POST /collections/:name/remember` — inserts a vector with enriched
+/// metadata (content, tier, importance, timestamp) for memory retrieval.
 pub(super) async fn remember_handler(
     State(state): State<Arc<AppState>>,
     Path(collection): Path<String>,
@@ -2101,6 +2250,10 @@ pub(super) async fn remember_handler(
     }
 }
 
+/// Recall memories by vector similarity with optional tier/importance filtering.
+///
+/// `POST /collections/:name/recall` — performs filtered ANN search across
+/// stored memories, returning content, tier, importance, and relevance scores.
 pub(super) async fn recall_handler(
     State(state): State<Arc<AppState>>,
     Path(collection): Path<String>,
@@ -2167,6 +2320,9 @@ pub(super) async fn recall_handler(
     }
 }
 
+/// Delete a specific memory by ID.
+///
+/// `DELETE /collections/:name/memories/:id` — removes the memory vector.
 pub(super) async fn forget_handler(
     State(state): State<Arc<AppState>>,
     Path((collection, memory_id)): Path<(String, String)>,
@@ -2184,6 +2340,11 @@ pub(super) async fn forget_handler(
     }
 }
 
+/// Graph-augmented vector search (GraphRAG).
+///
+/// `POST /collections/:name/graph-search` — builds a knowledge graph from
+/// collection vectors, then performs a combined vector + graph traversal
+/// search up to `max_hops` deep.
 pub(super) async fn graph_search_handler(
     State(state): State<Arc<AppState>>,
     Path(collection): Path<String>,
@@ -2259,6 +2420,10 @@ pub(super) async fn graph_search_handler(
     })))
 }
 
+/// Register a webhook subscription for collection events.
+///
+/// `POST /webhooks` — creates a webhook that fires on insert, update, delete,
+/// or compact events. Requires the `experimental` feature.
 #[cfg(feature = "experimental")]
 pub(super) async fn create_webhook_handler(
     Json(body): Json<CreateWebhookRequest>,
@@ -2298,6 +2463,7 @@ pub(super) async fn create_webhook_handler(
     })))
 }
 
+/// Register a webhook subscription stub (experimental feature not enabled).
 #[cfg(not(feature = "experimental"))]
 pub(super) async fn create_webhook_handler(
     Json(body): Json<CreateWebhookRequest>,
@@ -2308,6 +2474,9 @@ pub(super) async fn create_webhook_handler(
     })))
 }
 
+/// List all registered webhook subscriptions.
+///
+/// `GET /webhooks` — returns the current set of webhook subscriptions.
 pub(super) async fn list_webhooks_handler() -> impl IntoResponse {
     (StatusCode::OK, Json(json!({
         "webhooks": [],
@@ -2315,6 +2484,9 @@ pub(super) async fn list_webhooks_handler() -> impl IntoResponse {
     })))
 }
 
+/// Delete a webhook subscription by ID.
+///
+/// `DELETE /webhooks/:id` — removes the subscription.
 pub(super) async fn delete_webhook_handler(
     Path(id): Path<String>,
 ) -> impl IntoResponse {
@@ -2326,6 +2498,10 @@ pub(super) async fn delete_webhook_handler(
 
 // ── Feature: Embedding Model Router Status ──────────────────────────────────
 
+/// Return the embedding model router status and configuration.
+///
+/// `GET /embedding-router/status` — shows routing strategy, available providers,
+/// and per-collection embedding model pins. Requires `experimental`.
 #[cfg(feature = "experimental")]
 pub(super) async fn embedding_router_status_handler() -> impl IntoResponse {
     use crate::services::embedding_router::RoutingStrategy;
@@ -2346,6 +2522,7 @@ pub(super) async fn embedding_router_status_handler() -> impl IntoResponse {
     })))
 }
 
+/// Embedding router status stub (experimental feature not enabled).
 #[cfg(not(feature = "experimental"))]
 pub(super) async fn embedding_router_status_handler() -> impl IntoResponse {
     (StatusCode::NOT_IMPLEMENTED, Json(json!({ "error": "Requires 'experimental' feature" })))
