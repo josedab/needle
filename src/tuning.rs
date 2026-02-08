@@ -167,6 +167,7 @@ impl TuningConstraints {
 }
 
 /// Result of auto-tuning
+#[must_use]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TuningResult {
     /// Recommended HNSW config
