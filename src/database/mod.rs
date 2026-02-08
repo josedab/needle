@@ -583,17 +583,27 @@ impl Database {
     /// # Ok::<(), needle::NeedleError>(())
     /// ```
     pub fn delete_collection(&self, name: &str) -> Result<bool> {
+        // Check aliases under read lock (O(n) iteration without blocking writers)
+        {
+            let state = self.state.read();
+            let has_aliases = state
+                .aliases
+                .iter()
+                .any(|(_, target)| *target == name);
+            if has_aliases {
+                return Err(NeedleError::CollectionHasAliases(name.to_string()));
+            }
+        }
+
+        // Re-acquire write lock for the actual deletion
         let mut state = self.state.write();
 
-        // Check if any aliases point to this collection
-        let aliases_pointing: Vec<String> = state
+        // Re-check aliases under write lock to avoid TOCTOU race
+        let has_aliases = state
             .aliases
             .iter()
-            .filter(|(_, target)| *target == name)
-            .map(|(alias, _)| alias.clone())
-            .collect();
-
-        if !aliases_pointing.is_empty() {
+            .any(|(_, target)| *target == name);
+        if has_aliases {
             return Err(NeedleError::CollectionHasAliases(name.to_string()));
         }
 
