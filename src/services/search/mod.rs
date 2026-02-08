@@ -1,13 +1,16 @@
 //! Search services.
+#![allow(clippy::unwrap_used)] // tech debt: 63 unwrap() calls remaining
 
 #[cfg(feature = "experimental")]
 pub mod adaptive_index_selector;
 #[cfg(feature = "experimental")]
 pub mod encrypted_search;
+/// Re-exported from [`crate::search::needleql_executor`] for backward compatibility.
 #[cfg(feature = "experimental")]
-pub mod needleql_executor;
+pub use crate::search::needleql_executor;
+/// Re-exported from [`crate::search::needleql_lsp`] for backward compatibility.
 #[cfg(feature = "experimental")]
-pub mod needleql_lsp;
+pub use crate::search::needleql_lsp;
 #[cfg(feature = "experimental")]
 pub mod nl_filter_parser;
 #[cfg(feature = "experimental")]

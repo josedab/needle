@@ -5,6 +5,12 @@ pub mod collaborative_search;
 pub mod cross_collection;
 pub mod federated;
 pub mod nl_filter;
+/// NeedleQL query executor service for CLI, REST, and SDK consumption.
+#[cfg(feature = "experimental")]
+pub mod needleql_executor;
+/// NeedleQL Language Server Protocol (LSP) for IDE integration.
+#[cfg(feature = "experimental")]
+pub mod needleql_lsp;
 pub mod query_builder;
 pub mod query_explain;
 pub mod query_lang;
