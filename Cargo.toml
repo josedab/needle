@@ -47,6 +47,9 @@ uninlined_format_args = "allow"
 # Deny unwrap() — use expect() with context or proper error handling instead.
 # Modules still being cleaned up have #[allow(clippy::unwrap_used)] as visible tech debt.
 unwrap_used = "deny"
+# Deny leftover stubs in production code.
+todo = "deny"
+unimplemented = "deny"
 
 [package]
 name = "needle"
