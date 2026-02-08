@@ -72,6 +72,11 @@ pub struct DatabaseConfig {
     pub create_if_missing: bool,
     /// Read-only mode
     pub read_only: bool,
+    /// Automatically save on drop when there are dirty (unsaved) changes.
+    /// Defaults to `false` for backward compatibility. I/O errors during
+    /// auto-save are logged via `eprintln!` since `Drop` cannot return errors.
+    #[serde(default)]
+    pub auto_save: bool,
 }
 
 impl Default for DatabaseConfig {
@@ -80,6 +85,7 @@ impl Default for DatabaseConfig {
             path: PathBuf::from("needle.db"),
             create_if_missing: true,
             read_only: false,
+            auto_save: false,
         }
     }
 }
@@ -92,6 +98,16 @@ impl DatabaseConfig {
             path: path.into(),
             ..Default::default()
         }
+    }
+
+    /// Enable or disable auto-save on drop.
+    ///
+    /// When enabled, the database will attempt to persist unsaved changes
+    /// during [`Drop`]. Defaults to `false`.
+    #[must_use]
+    pub fn with_auto_save(mut self, auto_save: bool) -> Self {
+        self.auto_save = auto_save;
+        self
     }
 }
 
@@ -1808,17 +1824,20 @@ impl Database {
 
 impl Drop for Database {
     fn drop(&mut self) {
-        // Warn about unsaved changes but do NOT perform I/O in Drop.
-        // Performing I/O in Drop is unexpected behavior and can cause issues:
-        // - Panics during Drop are hard to handle
-        // - I/O errors in Drop cannot be properly propagated
-        // - May cause deadlocks in async contexts
-        // Users should explicitly call save() before dropping.
         if self.is_dirty() {
-            eprintln!(
-                "needle: warning: database dropped with unsaved changes. \
-                 Call save() explicitly before dropping to persist data."
-            );
+            if self.config.auto_save {
+                if let Err(e) = self.save() {
+                    eprintln!(
+                        "needle: error: auto-save failed during drop: {e}. \
+                         Data may not have been persisted."
+                    );
+                }
+            } else {
+                eprintln!(
+                    "needle: warning: database dropped with unsaved changes. \
+                     Call save() explicitly before dropping to persist data."
+                );
+            }
         }
     }
 }
@@ -2494,5 +2513,35 @@ mod tests {
         let path2 = "/health";
         let parts2: Vec<&str> = path2.trim_start_matches('/').split('/').collect();
         assert_ne!(parts2[0], "collections");
+    }
+
+    #[test]
+    fn test_auto_save_config_defaults() {
+        let config = DatabaseConfig::default();
+        assert!(!config.auto_save, "auto_save should default to false");
+
+        let config = DatabaseConfig::new("/tmp/test.needle").with_auto_save(true);
+        assert!(config.auto_save);
+    }
+
+    #[test]
+    fn test_auto_save_on_drop() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("auto_save_test.needle");
+
+        // Create database with auto_save, insert data, then drop
+        {
+            let mut db = Database::open_with_config(DatabaseConfig::new(&path).with_auto_save(true)).unwrap();
+            db.create_collection("test", 4).unwrap();
+            let coll = db.collection("test").unwrap();
+            coll.insert("v1", &[1.0, 2.0, 3.0, 4.0], None).unwrap();
+            assert!(db.is_dirty());
+            // Drop triggers auto-save
+        }
+
+        // Reopen and verify data was persisted
+        let db2 = Database::open(&path).unwrap();
+        let coll2 = db2.collection("test").unwrap();
+        assert_eq!(coll2.len(), 1);
     }
 }
