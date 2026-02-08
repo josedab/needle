@@ -50,6 +50,8 @@ unwrap_used = "deny"
 # Deny leftover stubs in production code.
 todo = "deny"
 unimplemented = "deny"
+# Deny leftover debug macros in production code.
+dbg_macro = "deny"
 
 [package]
 name = "needle"
