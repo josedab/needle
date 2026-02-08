@@ -2396,7 +2396,7 @@ mod tests {
         if let SelectClause::Columns(cols) = query.select {
             assert_eq!(cols, vec!["id", "title", "score"]);
         } else {
-            panic!("Expected SelectClause::Columns");
+            panic!("Expected SelectClause::Columns, got {:?}", query.select);
         }
     }
 
@@ -2411,10 +2411,10 @@ mod tests {
                 assert_eq!(similar.column, "vector");
                 assert_eq!(similar.query_param, "query");
             } else {
-                panic!("Expected SimilarTo expression");
+                panic!("Expected SimilarTo expression, got {:?}", where_clause.expression);
             }
         } else {
-            panic!("Expected WHERE clause");
+            panic!("Expected WHERE clause, got None");
         }
     }
 
@@ -2438,10 +2438,10 @@ mod tests {
                 assert_eq!(in_list.values.len(), 2);
                 assert!(!in_list.negated);
             } else {
-                panic!("Expected InList expression");
+                panic!("Expected InList expression, got {:?}", where_clause.expression);
             }
         } else {
-            panic!("Expected WHERE clause");
+            panic!("Expected WHERE clause, got None");
         }
     }
 
@@ -2454,10 +2454,10 @@ mod tests {
             if let Expression::Between(between) = where_clause.expression {
                 assert_eq!(between.column, "score");
             } else {
-                panic!("Expected Between expression");
+                panic!("Expected Between expression, got {:?}", where_clause.expression);
             }
         } else {
-            panic!("Expected WHERE clause");
+            panic!("Expected WHERE clause, got None");
         }
     }
 
@@ -2471,10 +2471,10 @@ mod tests {
                 assert_eq!(like.column, "title");
                 assert_eq!(like.pattern, "%machine learning%");
             } else {
-                panic!("Expected Like expression");
+                panic!("Expected Like expression, got {:?}", where_clause.expression);
             }
         } else {
-            panic!("Expected WHERE clause");
+            panic!("Expected WHERE clause, got None");
         }
     }
 
@@ -2498,7 +2498,7 @@ mod tests {
             assert_eq!(config.function, TimeDecayFunction::Exponential);
             assert!(config.params.contains_key("half_life"));
         } else {
-            panic!("Expected TIME_DECAY clause");
+            panic!("Expected TIME_DECAY clause, got {:?}", query.with_clause);
         }
     }
 
@@ -2512,7 +2512,7 @@ mod tests {
             assert_eq!(using.rag.top_k, Some(5));
             assert_eq!(using.rag.rerank, Some(true));
         } else {
-            panic!("Expected USING RAG clause");
+            panic!("Expected USING RAG clause, got None");
         }
     }
 
@@ -2537,7 +2537,7 @@ mod tests {
             assert_eq!(order_by.columns[0], ("score".to_string(), SortOrder::Desc));
             assert_eq!(order_by.columns[1], ("title".to_string(), SortOrder::Asc));
         } else {
-            panic!("Expected ORDER BY clause");
+            panic!("Expected ORDER BY clause, got None");
         }
     }
 
