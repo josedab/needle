@@ -1952,16 +1952,15 @@ pub fn dev_command(cmd: DevCommands) -> Result<()> {
     match cmd {
         DevCommands::Check => {
             println!("Running pre-commit checks...\n");
-            let steps = [
-                ("Format check", "cargo fmt -- --check"),
-                ("Lint", "cargo clippy --features full -- -D warnings"),
-                ("Unit tests", "cargo test --lib"),
+            let steps: &[(&str, &[&str])] = &[
+                ("Format check", &["fmt", "--", "--check"]),
+                ("Lint", &["clippy", "--features", "full", "--", "-D", "warnings"]),
+                ("Unit tests", &["test", "--lib"]),
             ];
-            for (name, command) in &steps {
+            for (name, args) in steps {
                 println!("▶ {}...", name);
-                let status = std::process::Command::new("sh")
-                    .arg("-c")
-                    .arg(command)
+                let status = std::process::Command::new("cargo")
+                    .args(*args)
                     .status()
                     .map_err(|e| NeedleError::Io(e))?;
                 if !status.success() {
