@@ -345,6 +345,58 @@ fn bench_batch_insert_throughput(c: &mut Criterion) {
 }
 
 // ============================================================================
+// Write Benchmarks - Concurrent Insert Throughput
+// ============================================================================
+
+fn bench_concurrent_insert_throughput(c: &mut Criterion) {
+    use rayon::prelude::*;
+
+    let dim = 128;
+    let total_vectors = 10_000;
+
+    let mut group = c.benchmark_group("concurrent_insert_throughput");
+    group.sample_size(10);
+
+    for &num_threads in &[1, 2, 4, 8] {
+        let vectors = random_vectors(total_vectors, dim);
+
+        group.throughput(Throughput::Elements(total_vectors as u64));
+        group.bench_with_input(
+            BenchmarkId::new("threads", num_threads),
+            &num_threads,
+            |bencher, &threads| {
+                let pool = rayon::ThreadPoolBuilder::new()
+                    .num_threads(threads)
+                    .build()
+                    .unwrap();
+
+                bencher.iter(|| {
+                    let db = Database::in_memory();
+                    db.create_collection("bench", dim).unwrap();
+                    let coll = db.collection("bench").unwrap();
+
+                    pool.install(|| {
+                        vectors
+                            .par_iter()
+                            .enumerate()
+                            .for_each(|(i, vec)| {
+                                coll.insert(
+                                    format!("doc{}", i),
+                                    black_box(vec),
+                                    None,
+                                )
+                                .unwrap();
+                            });
+                    });
+                });
+            },
+        );
+    }
+
+    group.finish();
+}
+
+// ============================================================================
 // Write Benchmarks - Update Performance
 // ============================================================================
 
@@ -1632,6 +1684,7 @@ criterion_group!(
     write_benches,
     bench_single_insert_latency,
     bench_batch_insert_throughput,
+    bench_concurrent_insert_throughput,
     bench_update_performance,
     bench_delete_performance,
 );
