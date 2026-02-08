@@ -570,7 +570,9 @@ impl SharedMemoryFile {
         if offset + 4 > self.mmap.len() {
             return false;
         }
-        // Safety: offset is aligned within the mmap region, and this file allows unsafe_code.
+        // SAFETY: `offset` is bounds-checked above. The header layout guarantees 4-byte
+        // alignment at `WRITER_LOCK`. The mmap region is valid for the lifetime of `self`,
+        // and concurrent access is coordinated via atomic operations.
         let atomic = unsafe {
             &*(self.mmap.as_ptr().add(offset) as *const AtomicU32)
         };
@@ -585,6 +587,8 @@ impl SharedMemoryFile {
         if offset + 4 > self.mmap.len() {
             return;
         }
+        // SAFETY: `offset` is bounds-checked above. Same alignment and lifetime
+        // invariants as `try_acquire_writer_lock`.
         let atomic = unsafe {
             &*(self.mmap.as_ptr().add(offset) as *const AtomicU32)
         };
@@ -597,6 +601,8 @@ impl SharedMemoryFile {
         if offset + 4 > self.mmap.len() {
             return;
         }
+        // SAFETY: `offset` is bounds-checked above. The header layout guarantees 4-byte
+        // alignment at `READER_COUNT`, and the mmap region outlives this reference.
         let atomic = unsafe {
             &*(self.mmap.as_ptr().add(offset) as *const AtomicU32)
         };
@@ -609,6 +615,8 @@ impl SharedMemoryFile {
         if offset + 4 > self.mmap.len() {
             return;
         }
+        // SAFETY: `offset` is bounds-checked above. Same alignment and lifetime
+        // invariants as `increment_readers`.
         let atomic = unsafe {
             &*(self.mmap.as_ptr().add(offset) as *const AtomicU32)
         };
