@@ -67,6 +67,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::num::NonZeroUsize;
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::warn;
 
@@ -443,17 +444,18 @@ impl Collection {
 
             // Try to get from cache
             if let Some(cached) = cache.get(&cache_key) {
-                return Ok(cached.results.clone());
+                return Ok((*cached.results).clone());
             }
 
             // Cache miss - compute result
             let results = compute()?;
 
-            // Store in cache
+            // Store in cache (Arc avoids deep clone on cache put)
+            let shared = Arc::new(results.clone());
             cache.put(
                 cache_key,
                 CachedSearchResult {
-                    results: results.clone(),
+                    results: shared,
                 },
             );
 

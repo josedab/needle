@@ -14,6 +14,7 @@ use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::num::NonZeroUsize;
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Number of shards for the query cache to reduce lock contention.
@@ -51,7 +52,7 @@ impl QueryCacheKey {
 /// Cached search result entry
 #[derive(Clone)]
 pub(super) struct CachedSearchResult {
-    pub(super) results: Vec<SearchResult>,
+    pub(super) results: Arc<Vec<SearchResult>>,
 }
 
 /// Internal query cache with statistics tracking
