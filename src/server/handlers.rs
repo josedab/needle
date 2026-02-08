@@ -443,7 +443,9 @@ pub(super) async fn update_metadata(
     if let Err(e) = coll.insert(&id, &vector, req.metadata) {
         // Rollback: re-insert with original data
         warn!(id = %id, error = %e, "Metadata update insert failed, rolling back");
-        let _ = coll.insert(&id, &vector, original_metadata);
+        if let Err(rollback_err) = coll.insert(&id, &vector, original_metadata) {
+            error!(id = %id, error = %rollback_err, "Rollback failed — vector may be missing from collection");
+        }
         return Err(Into::<(StatusCode, Json<ApiError>)>::into(e));
     }
 
@@ -2219,7 +2221,9 @@ pub(super) async fn graph_search_handler(
                 .unwrap_or_default(),
             community_id: None,
         };
-        let _ = graph.add_entity(entity);
+        if let Err(e) = graph.add_entity(entity) {
+            warn!(id = %id, error = %e, "Failed to index entity in graph");
+        }
     }
 
     let results = match graph.search(&body.vector, body.k, Some(body.max_hops)) {
