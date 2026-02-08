@@ -241,10 +241,21 @@ impl Layer {
         self.connections[id] = neighbors;
     }
 
+    #[inline]
     fn add_connection(&mut self, from: VectorId, to: VectorId) {
         self.ensure_capacity(from);
-        if !self.connections[from].contains(&to) {
-            self.connections[from].push(to);
+        let conns = &mut self.connections[from];
+        // For small connection lists, linear scan is cache-friendly and fast.
+        // For larger lists (M=32+), binary search on sorted vec avoids O(n) scan.
+        if conns.len() < 32 {
+            if !conns.contains(&to) {
+                conns.push(to);
+            }
+        } else {
+            match conns.binary_search(&to) {
+                Ok(_) => {} // already present
+                Err(pos) => conns.insert(pos, to),
+            }
         }
     }
 
