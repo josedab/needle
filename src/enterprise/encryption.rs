@@ -37,7 +37,7 @@ use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 use std::collections::HashMap;
-use zeroize::Zeroize;
+use zeroize::{Zeroize, Zeroizing};
 
 /// Encryption configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -153,11 +153,11 @@ impl KeyManager {
 
         // Use HKDF-SHA256 for proper key derivation
         let hk = Hkdf::<Sha256>::new(None, &self.master_key.bytes);
-        let mut derived = vec![0u8; 32]; // ChaCha20Poly1305 uses 256-bit keys
+        let mut derived = Zeroizing::new(vec![0u8; 32]); // ChaCha20Poly1305 uses 256-bit keys
         hk.expand(purpose.as_bytes(), &mut derived)
             .map_err(|_| NeedleError::InvalidInput("HKDF expand failed".to_string()))?;
 
-        let key = EncryptionKey::new(derived, purpose);
+        let key = EncryptionKey::new(derived.to_vec(), purpose);
         self.derived_keys.insert(purpose.to_string(), key);
         Ok(&self.derived_keys[purpose])
     }
@@ -706,7 +706,7 @@ impl KeyRotationManager {
     pub fn generate_dek(&self) -> Result<(String, Vec<u8>)> {
         use rand::Rng;
         let mut rng = rand::thread_rng();
-        let mut dek = vec![0u8; 32];
+        let mut dek = Zeroizing::new(vec![0u8; 32]);
         rng.fill(&mut dek[..]);
 
         let kek_id = self.provider.current_kek_id();
@@ -737,7 +737,7 @@ impl KeyRotationManager {
         }
         keys.push(entry);
 
-        Ok((key_id, dek))
+        Ok((key_id, dek.to_vec()))
     }
 
     /// Unwrap a DEK by its key ID.
@@ -768,10 +768,10 @@ impl KeyRotationManager {
         let mut count = 0;
 
         for wrapped_key in keys.iter_mut() {
-            let dek_plaintext = self
+            let dek_plaintext = Zeroizing::new(self
                 .provider
                 .unwrap(&wrapped_key.wrapped_dek, &wrapped_key.kek_id)
-                .map_err(|e| NeedleError::EncryptionError(e))?;
+                .map_err(|e| NeedleError::EncryptionError(e))?);
 
             let new_kek_id = new_provider.current_kek_id();
             let re_wrapped = new_provider
