@@ -952,7 +952,6 @@ impl RaftStorage for MemoryStorage {
 }
 
 /// File-based persistent storage.
-#[allow(dead_code)]
 pub struct FileStorage {
     /// Base directory for storage (kept for path derivations).
     dir: PathBuf,

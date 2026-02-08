@@ -17,8 +17,7 @@ pub(crate) const DEFAULT_CHANNEL_CAPACITY: usize = 256;
 pub(crate) const COMPACTION_THRESHOLD: usize = 10000;
 
 /// Default timeout for stream operations in milliseconds
-#[allow(dead_code)]
-pub(crate) const DEFAULT_TIMEOUT_MS: u64 = 30000;
+pub(crate) const _DEFAULT_TIMEOUT_MS: u64 = 30000;
 
 // ============================================================================
 // Helper Functions

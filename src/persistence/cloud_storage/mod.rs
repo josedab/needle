@@ -147,7 +147,6 @@ impl<'a> StreamingReader<'a> {
 }
 
 /// Streaming writer for large objects.
-#[allow(dead_code)]
 pub struct StreamingWriter<'a> {
     backend: &'a dyn StorageBackend,
     key: String,
@@ -220,7 +219,6 @@ pub struct MultipartPart {
 }
 
 /// Multipart upload manager.
-#[allow(dead_code)]
 pub struct MultipartUploader<'a> {
     backend: &'a dyn StorageBackend,
     upload: MultipartUpload,

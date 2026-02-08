@@ -81,7 +81,6 @@ struct FilterPattern {
 }
 
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 enum ValueExtractor {
     /// Next word after keyword
     NextWord,
@@ -105,7 +104,6 @@ pub struct NLFilterParser {
 }
 
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 struct TemporalPattern {
     keywords: Vec<&'static str>,
     offset_seconds: i64,

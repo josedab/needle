@@ -440,7 +440,6 @@ pub struct WalStats {
 }
 
 /// WAL manager for durability.
-#[allow(dead_code)]
 pub struct WalManager {
     /// WAL directory.
     dir: PathBuf,

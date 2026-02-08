@@ -178,8 +178,7 @@ struct RecallSample {
     /// Actual recall (if verified)
     actual: Option<f32>,
     /// Query characteristics hash
-    #[allow(dead_code)]
-    query_hash: u64,
+    _query_hash: u64,
 }
 
 /// Hybrid search combining ANN and exact search
@@ -531,7 +530,7 @@ impl<'a> HybridSearch<'a> {
         samples.push_back(RecallSample {
             estimated,
             actual,
-            query_hash,
+            _query_hash: query_hash,
         });
     }
 

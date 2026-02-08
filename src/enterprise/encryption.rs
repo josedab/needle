@@ -79,7 +79,6 @@ pub enum EncryptionAlgorithm {
 
 /// An encryption key.
 #[derive(Clone)]
-#[allow(dead_code)]
 pub struct EncryptionKey {
     /// Key bytes.
     bytes: Vec<u8>,

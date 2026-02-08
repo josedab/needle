@@ -316,7 +316,6 @@ impl BitSet {
     }
 
     /// Remove an ID from the set, returns true if it was present
-    #[allow(dead_code)]
     pub fn remove(&mut self, id: &usize) -> bool {
         let word_idx = *id / 64;
         let bit_idx = *id % 64;
@@ -342,7 +341,6 @@ impl BitSet {
 
     /// Check if the set is empty
     #[inline]
-    #[allow(dead_code)]
     pub fn is_empty(&self) -> bool {
         self.count == 0
     }

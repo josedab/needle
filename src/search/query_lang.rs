@@ -739,12 +739,6 @@ impl QueryParser {
         Ok(Self { lexer, current })
     }
 
-    /// Get current token
-    #[allow(dead_code)]
-    fn current(&self) -> &Token {
-        &self.current
-    }
-
     /// Advance to next token
     fn advance(&mut self) -> QueryResult<()> {
         self.current = self.lexer.next_token()?;
@@ -762,12 +756,6 @@ impl QueryParser {
                 position: self.lexer.position(),
             })
         }
-    }
-
-    /// Check if current token matches (useful for lookahead)
-    #[allow(dead_code)]
-    fn check(&self, token: &Token) -> bool {
-        std::mem::discriminant(&self.current) == std::mem::discriminant(token)
     }
 
     /// Parse a complete query

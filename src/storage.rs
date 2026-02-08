@@ -293,8 +293,7 @@ pub struct StorageEngine {
     /// Memory-mapped region (if file is large enough)
     mmap: Option<Mmap>,
     /// Mutable memory-mapped region for writes (reserved for future use)
-    #[allow(dead_code)]
-    mmap_mut: Option<MmapMut>,
+    _mmap_mut: Option<MmapMut>,
     /// File header
     header: Header,
     /// File path for atomic writes
@@ -378,7 +377,7 @@ impl StorageEngine {
         Ok(Self {
             file,
             mmap: None,
-            mmap_mut: None,
+            _mmap_mut: None,
             header,
             path: canonical_path,
         })
@@ -436,7 +435,7 @@ impl StorageEngine {
         Ok(Self {
             file,
             mmap,
-            mmap_mut: None,
+            _mmap_mut: None,
             header,
             path: canonical_path,
         })

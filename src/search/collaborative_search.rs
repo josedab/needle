@@ -84,8 +84,7 @@ const PRESENCE_TIMEOUT_SECS: u64 = 60;
 const MAX_ANNOTATIONS_PER_DOC: usize = 100;
 
 /// Maximum session participants
-#[allow(dead_code)]
-const MAX_SESSION_PARTICIPANTS: usize = 100;
+const _MAX_SESSION_PARTICIPANTS: usize = 100;
 
 /// Event buffer size for subscriptions
 const EVENT_BUFFER_SIZE: usize = 1024;
@@ -620,18 +619,6 @@ pub struct AnnotationDelta {
     pub origin: ReplicaId,
 }
 
-impl AnnotationDelta {
-    #[allow(dead_code)]
-    fn empty(origin: ReplicaId) -> Self {
-        Self {
-            operations: Vec::new(),
-            from_timestamp: None,
-            to_timestamp: None,
-            origin,
-        }
-    }
-}
-
 /// Result of annotation merge.
 #[derive(Debug, Clone, Default)]
 pub struct AnnotationMergeResult {
@@ -790,7 +777,6 @@ impl AnnotationStore {
 // ============================================================================
 
 /// State for a live query.
-#[allow(dead_code)]
 struct LiveQueryState {
     query: Vec<f32>,
     k: usize,
@@ -1463,7 +1449,6 @@ pub struct SyncManager {
 
 /// A pending sync operation.
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 struct PendingSync {
     collection_name: String,
     peer_id: ReplicaId,

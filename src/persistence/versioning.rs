@@ -138,7 +138,6 @@ pub struct VectorDiff {
 }
 
 /// Version control repository for vectors.
-#[allow(dead_code)]
 pub struct VectorRepo {
     /// Repository name (for display/identification).
     name: String,
@@ -989,25 +988,6 @@ fn days_from_year_1(year: i32, month: u32, day: u32) -> i64 {
     }
 
     days + d
-}
-
-/// Calculate days since Unix epoch (1970-01-01) - kept for compatibility
-#[allow(dead_code)]
-fn days_since_unix_epoch(year: i32, month: u32, day: u32) -> i64 {
-    let mut y = year as i64;
-    let m = month as i64;
-    let d = day as i64;
-
-    // Adjust for months
-    let a = (14 - m) / 12;
-    y -= a;
-    let m_adj = m + 12 * a - 3;
-
-    // Julian day number
-    let jdn = d + (153 * m_adj + 2) / 5 + 365 * y + y / 4 - y / 100 + y / 400 - 32045;
-
-    // Unix epoch is Julian day 2440588
-    jdn - 2440588
 }
 
 /// Parse relative time string to Unix timestamp

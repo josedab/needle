@@ -316,8 +316,7 @@ pub struct MatryoshkaIndex {
     /// Statistics
     stats: RwLock<MatryoshkaStats>,
     /// Search counter
-    #[allow(dead_code)]
-    search_count: AtomicU64,
+    _search_count: AtomicU64,
 }
 
 impl MatryoshkaIndex {
@@ -328,7 +327,7 @@ impl MatryoshkaIndex {
             vectors: RwLock::new(HashMap::new()),
             metadata: RwLock::new(HashMap::new()),
             stats: RwLock::new(MatryoshkaStats::default()),
-            search_count: AtomicU64::new(0),
+            _search_count: AtomicU64::new(0),
         }
     }
 

@@ -167,7 +167,6 @@ impl CohereConfig {
 }
 
 /// Cohere reranker using the Cohere API
-#[allow(dead_code)]
 pub struct CohereReranker {
     config: CohereConfig,
 }

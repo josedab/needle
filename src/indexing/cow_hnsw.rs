@@ -724,8 +724,7 @@ pub struct ReplayStats {
 /// While held, the base graph snapshot is guaranteed to remain valid.
 pub struct ReadGuard<'a> {
     epoch: &'a EpochTracker,
-    #[allow(dead_code)]
-    entered_epoch: u64,
+    _entered_epoch: u64,
 }
 
 impl<'a> ReadGuard<'a> {
@@ -733,7 +732,7 @@ impl<'a> ReadGuard<'a> {
         let entered = epoch.enter_read();
         Self {
             epoch,
-            entered_epoch: entered,
+            _entered_epoch: entered,
         }
     }
 }

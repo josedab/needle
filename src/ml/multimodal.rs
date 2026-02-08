@@ -320,8 +320,7 @@ pub struct EmbedderStats {
 /// Cache entry for embeddings
 struct CacheEntry {
     embedding: Vec<f32>,
-    #[allow(dead_code)]
-    created_at: u64,
+    _created_at: u64,
 }
 
 /// Multi-modal embedder
@@ -447,7 +446,7 @@ impl MultiModalEmbedder {
                 hash,
                 CacheEntry {
                     embedding: vector.clone(),
-                    created_at: current_timestamp(),
+                    _created_at: current_timestamp(),
                 },
             );
         }

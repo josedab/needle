@@ -502,7 +502,6 @@ impl Default for QueryProfiler {
 }
 
 /// Builder for constructing a query profile.
-#[allow(dead_code)]
 pub struct ProfileBuilder {
     profile: QueryProfile,
     start_time: Instant,

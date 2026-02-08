@@ -535,15 +535,13 @@ pub trait PushSourceConfig: Send + Sync {
 /// The handle is passed to your consumer thread; the source is attached to the pipeline.
 pub struct PushHandleSource<C: PushSourceConfig> {
     name: String,
-    #[allow(dead_code)]
-    config: C,
+    _config: C,
     buffer: Arc<Mutex<VecDeque<IngestionRecord>>>,
     closed: Arc<AtomicBool>,
 }
 
 /// Handle for pushing records into a `PushHandleSource` from a consumer thread.
 pub struct PushHandle<C: PushSourceConfig> {
-    #[allow(dead_code)]
     _marker: std::marker::PhantomData<C>,
     buffer: Arc<Mutex<VecDeque<IngestionRecord>>>,
     closed: Arc<AtomicBool>,
@@ -566,7 +564,7 @@ impl<C: PushSourceConfig> PushHandleSource<C> {
         let closed_label = config.closed_label();
         let source = Self {
             name,
-            config,
+            _config: config,
             buffer: Arc::clone(&buffer),
             closed: Arc::clone(&closed),
         };

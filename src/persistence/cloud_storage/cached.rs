@@ -416,50 +416,6 @@ impl<B: StorageBackend> TieredCacheBackend<B> {
         }
     }
 
-    /// Promote entry from SSD to memory.
-    #[allow(dead_code)]
-    fn promote_to_memory(&self, _key: &str, entry: &mut TieredCacheEntry) -> Result<()> {
-        if entry.tier != CacheTier::Ssd {
-            return Ok(());
-        }
-
-        // Read from SSD
-        let ssd_path = entry.ssd_path.as_ref().ok_or_else(|| {
-            NeedleError::Io(std::io::Error::other("SSD path not found for entry"))
-        })?;
-
-        let data = std::fs::read(ssd_path)?;
-        let size = data.len();
-
-        // Evict memory if needed
-        let mut index = self.cache_index.write();
-        self.evict_memory(size, &mut index);
-
-        // Update entry
-        entry.data = Some(data);
-        entry.tier = CacheTier::Memory;
-        entry.expires_at = Instant::now() + self.config.memory_ttl;
-
-        // Clean up SSD file
-        if let Err(e) = std::fs::remove_file(ssd_path) {
-            warn!(path = %ssd_path.display(), error = %e, "Failed to remove SSD cache file during promotion");
-        }
-        entry.ssd_path = None;
-
-        // Update stats
-        self.ssd_usage.fetch_sub(size as u64, Ordering::Relaxed);
-        self.stats
-            .ssd_bytes
-            .fetch_sub(size as u64, Ordering::Relaxed);
-        self.memory_usage.fetch_add(size as u64, Ordering::Relaxed);
-        self.stats
-            .memory_bytes
-            .fetch_add(size as u64, Ordering::Relaxed);
-        self.stats.promotions.fetch_add(1, Ordering::Relaxed);
-
-        Ok(())
-    }
-
     /// Cache data at the appropriate tier.
     fn cache_data(&self, key: &str, data: &[u8]) {
         let size = data.len();
@@ -772,7 +728,6 @@ pub struct CachedBackend<B: StorageBackend> {
 
 /// Cache entry.
 #[derive(Clone)]
-#[allow(dead_code)]
 struct CacheEntry {
     data: Vec<u8>,
     expires_at: Instant,

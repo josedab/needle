@@ -195,8 +195,7 @@ pub struct TieredSearchResult {
 /// Tiered HNSW-DiskANN index
 pub struct TieredIndex {
     config: TieredConfig,
-    #[allow(dead_code)]
-    base_path: PathBuf,
+    _base_path: PathBuf,
     /// Hot tier (HNSW in-memory)
     hot_tier: RwLock<Collection>,
     /// Cold tier (DiskANN on-disk)
@@ -231,7 +230,7 @@ impl TieredIndex {
 
         Ok(Self {
             config,
-            base_path,
+            _base_path: base_path,
             hot_tier: RwLock::new(hot_tier),
             cold_tier: RwLock::new(cold_tier),
             locations: RwLock::new(HashMap::new()),
@@ -273,7 +272,7 @@ impl TieredIndex {
 
         Ok(Self {
             config,
-            base_path,
+            _base_path: base_path,
             hot_tier: RwLock::new(hot_tier),
             cold_tier: RwLock::new(cold_tier),
             locations: RwLock::new(locations),

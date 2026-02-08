@@ -195,13 +195,6 @@ impl DeltaBuffer {
         self.vectors.is_empty()
     }
 
-    #[allow(dead_code)]
-    fn clear(&mut self) {
-        self.vectors.clear();
-        self.size_bytes = 0;
-        self.created_at = Instant::now();
-    }
-
     fn drain(&mut self) -> Vec<(String, Vec<f32>, Option<Value>)> {
         self.size_bytes = 0;
         self.created_at = Instant::now();

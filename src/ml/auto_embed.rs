@@ -251,8 +251,7 @@ struct CacheEntry {
 pub struct AutoEmbedder {
     config: AutoEmbedConfig,
     cache: Option<RwLock<HashMap<u64, CacheEntry>>>,
-    #[allow(dead_code)]
-    stats: AutoEmbedStats,
+    _stats: AutoEmbedStats,
     stats_lock: RwLock<()>,
     embeddings_generated: AtomicU64,
     cache_hits: AtomicU64,
@@ -274,7 +273,7 @@ impl AutoEmbedder {
         Self {
             config,
             cache,
-            stats: AutoEmbedStats::default(),
+            _stats: AutoEmbedStats::default(),
             stats_lock: RwLock::new(()),
             embeddings_generated: AtomicU64::new(0),
             cache_hits: AtomicU64::new(0),

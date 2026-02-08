@@ -626,16 +626,6 @@ fn stat_card(label: &str, value: &str, icon: &str) -> String {
     )
 }
 
-/// Generate a health badge based on status
-#[allow(dead_code)]
-fn health_badge(healthy: bool) -> String {
-    if healthy {
-        r#"<span class="badge badge-success">Healthy</span>"#.to_string()
-    } else {
-        r#"<span class="badge badge-danger">Unhealthy</span>"#.to_string()
-    }
-}
-
 // ============================================================================
 // Request/Response Types
 // ============================================================================

@@ -228,8 +228,7 @@ pub struct GraphEntity {
     /// Entity ID
     pub id: String,
     /// Internal vector ID
-    #[allow(dead_code)]
-    internal_id: VectorId,
+    _internal_id: VectorId,
     /// Vector embedding
     pub vector: Vec<f32>,
     /// Metadata
@@ -296,8 +295,7 @@ pub struct GraphVectorIndex {
     /// Vector dimensions
     dimensions: usize,
     /// Distance function
-    #[allow(dead_code)]
-    distance: DistanceFunction,
+    _distance: DistanceFunction,
     /// HNSW index for vector search
     index: RwLock<HnswIndex>,
     /// Vector storage
@@ -330,7 +328,7 @@ impl GraphVectorIndex {
         Self {
             config,
             dimensions,
-            distance,
+            _distance: distance,
             index: RwLock::new(index),
             vectors: RwLock::new(Vec::new()),
             entities: RwLock::new(HashMap::new()),
@@ -384,7 +382,7 @@ impl GraphVectorIndex {
         // Create entity
         let entity = GraphEntity {
             id: id.clone(),
-            internal_id,
+            _internal_id: internal_id,
             vector: vector.to_vec(),
             metadata,
             edges: Vec::new(),

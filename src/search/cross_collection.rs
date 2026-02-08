@@ -139,8 +139,7 @@ struct CollectionMeta {
     name: String,
     dimensions: usize,
     vector_count: usize,
-    #[allow(dead_code)]
-    distance_function: DistanceFunction,
+    _distance_function: DistanceFunction,
 }
 
 impl CrossCollectionSearch {
@@ -173,7 +172,7 @@ impl CrossCollectionSearch {
                             name,
                             dimensions: dims,
                             vector_count: col_ref.len(),
-                            distance_function: DistanceFunction::Cosine, // Default
+                            _distance_function: DistanceFunction::Cosine, // Default
                         },
                     );
                 }
