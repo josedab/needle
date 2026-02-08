@@ -216,6 +216,9 @@ subtle = { version = "2.6", optional = true }
 chacha20poly1305 = { version = "0.10", optional = true }
 hkdf = { version = "0.12", optional = true }
 
+# Zeroize sensitive key material on drop
+zeroize = { version = "1.8", optional = true }
+
 # Chrono for timestamps
 chrono = { version = "0.4", features = ["serde"] }
 
@@ -278,7 +281,7 @@ hybrid = ["rust-stemmers"]
 embeddings = ["ort", "ndarray", "tokenizers"]
 embedding-providers = ["async", "async-trait", "reqwest"]
 # Enterprise encryption (ChaCha20-Poly1305)
-encryption = ["chacha20poly1305", "hkdf"]
+encryption = ["chacha20poly1305", "hkdf", "hmac", "zeroize"]
 # DiskANN index support
 diskann = ["bincode"]
 # LangChain / LlamaIndex integration support

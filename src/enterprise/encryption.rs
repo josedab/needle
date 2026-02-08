@@ -32,10 +32,12 @@ use chacha20poly1305::{
     ChaCha20Poly1305, Nonce,
 };
 use hkdf::Hkdf;
+use hmac::Mac;
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 use std::collections::HashMap;
+use zeroize::Zeroize;
 
 /// Encryption configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -111,6 +113,12 @@ impl EncryptionKey {
     }
 }
 
+impl Drop for EncryptionKey {
+    fn drop(&mut self) {
+        self.bytes.zeroize();
+    }
+}
+
 /// Key manager for encryption.
 pub struct KeyManager {
     /// Master key.
@@ -156,22 +164,26 @@ impl KeyManager {
 
     /// Initialize random projection matrix.
     pub fn init_projection(&mut self, input_dims: usize, output_dims: usize) {
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
+        type HmacSha256 = hmac::Hmac<Sha256>;
 
         let mut matrix = Vec::with_capacity(output_dims);
 
         for i in 0..output_dims {
             let mut row = Vec::with_capacity(input_dims);
             for j in 0..input_dims {
-                // Deterministic random based on master key
-                let mut hasher = DefaultHasher::new();
-                self.master_key.bytes.hash(&mut hasher);
-                (i, j).hash(&mut hasher);
-                let hash = hasher.finish();
+                // Deterministic random based on master key via HMAC-SHA256
+                let msg = format!("projection:{}:{}", i, j);
+                let mut mac = HmacSha256::new_from_slice(&self.master_key.bytes)
+                    .expect("HMAC accepts any key length");
+                mac.update(msg.as_bytes());
+                let result = mac.finalize().into_bytes();
+
+                // Use first 4 bytes of HMAC output as f32 seed
+                let hash_bytes = [result[0], result[1], result[2], result[3]];
+                let hash_u32 = u32::from_le_bytes(hash_bytes);
 
                 // Generate random value in [-1, 1]
-                let value = (hash as f32 / u64::MAX as f32) * 2.0 - 1.0;
+                let value = (hash_u32 as f32 / u32::MAX as f32) * 2.0 - 1.0;
                 row.push(value);
             }
             // Normalize row
@@ -460,17 +472,12 @@ impl VectorEncryptor {
 
     /// Add noise for differential privacy.
     fn add_noise(&self, vector: &mut [f32]) {
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
+        use rand::Rng;
 
-        for (i, val) in vector.iter_mut().enumerate() {
-            let mut hasher = DefaultHasher::new();
-            (*val as u32).hash(&mut hasher);
-            i.hash(&mut hasher);
-            let hash = hasher.finish();
-
-            // Laplacian noise approximation
-            let uniform = (hash as f64 / u64::MAX as f64) - 0.5;
+        let mut rng = rand::thread_rng();
+        for val in vector.iter_mut() {
+            // Laplacian noise approximation from uniform random
+            let uniform: f64 = rng.gen_range(-0.5_f64..0.5_f64);
             let noise = self.config.noise_level
                 * uniform.signum() as f32
                 * (1.0 - 2.0 * uniform.abs() as f32).ln();

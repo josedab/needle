@@ -3924,6 +3924,7 @@ dependencies = [
  "wasm-bindgen",
  "web-sys",
  "wide",
+ "zeroize",
 ]
 
 [[package]]
