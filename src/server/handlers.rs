@@ -164,7 +164,10 @@ pub(super) async fn list_collections(State(state): State<Arc<AppState>>) -> impl
         .list_collections()
         .into_iter()
         .filter_map(|name| {
-            let coll = db.collection(&name).ok()?;
+            let coll = db.collection(&name).map_err(|e| {
+                warn!("Collection lookup failed for '{}': {e}", name);
+                e
+            }).ok()?;
             Some(CollectionInfo {
                 name,
                 dimensions: coll.dimensions().unwrap_or(0),
@@ -1961,7 +1964,10 @@ pub(super) async fn index_status_handler(
         Err(e) => return (StatusCode::NOT_FOUND, Json(json!({ "error": e.to_string() }))),
     };
 
-    let stats = coll.stats().ok();
+    let stats = coll.stats().map_err(|e| {
+        warn!("Failed to get collection stats for '{}': {e}", collection);
+        e
+    }).ok();
     let deleted = coll.deleted_count();
     let total = coll.len();
     let fragmentation = if total + deleted > 0 {
@@ -1999,7 +2005,10 @@ pub(super) async fn cluster_status_handler(
     let collections = db.list_collections();
 
     let shards: Vec<Value> = collections.iter().enumerate().map(|(i, name)| {
-        let coll = db.collection(name).ok();
+        let coll = db.collection(name).map_err(|e| {
+            warn!("Collection lookup failed for '{}': {e}", name);
+            e
+        }).ok();
         json!({
             "collection": name,
             "shard_id": i,
