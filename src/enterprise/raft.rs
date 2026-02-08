@@ -42,6 +42,7 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
+use tracing::warn;
 
 /// Maximum allowed file size for deserialization (1 GB).
 const MAX_RAFT_FILE_SIZE: u64 = 1024 * 1024 * 1024;
@@ -1003,7 +1004,10 @@ impl FileStorage {
         let mut max_segment = 0u64;
 
         if let Ok(entries) = fs::read_dir(&self.log_dir) {
-            for entry in entries.filter_map(|e| e.ok()) {
+            for entry in entries.filter_map(|e| match e {
+                Ok(entry) => Some(entry),
+                Err(err) => { warn!("Failed to read raft log dir entry: {err}"); None }
+            }) {
                 let path = entry.path();
                 if let Some(name) = path.file_stem().and_then(|s| s.to_str()) {
                     if let Some(num_str) = name.strip_prefix("segment_") {
@@ -1119,7 +1123,10 @@ impl FileStorage {
         let mut paths = Vec::new();
 
         if let Ok(entries) = fs::read_dir(&self.log_dir) {
-            for entry in entries.filter_map(|e| e.ok()) {
+            for entry in entries.filter_map(|e| match e {
+                Ok(entry) => Some(entry),
+                Err(err) => { warn!("Failed to read raft segment dir entry: {err}"); None }
+            }) {
                 let path = entry.path();
                 if path.extension().map(|e| e == "log").unwrap_or(false) {
                     paths.push(path);
@@ -1288,7 +1295,10 @@ impl RaftStorage for FileStorage {
         let mut snapshots: Vec<PathBuf> = Vec::new();
 
         if let Ok(entries) = fs::read_dir(&self.snapshot_dir) {
-            for entry in entries.filter_map(|e| e.ok()) {
+            for entry in entries.filter_map(|e| match e {
+                Ok(entry) => Some(entry),
+                Err(err) => { warn!("Failed to read raft snapshot dir entry: {err}"); None }
+            }) {
                 let path = entry.path();
                 if path.extension().map(|e| e == "snap").unwrap_or(false) {
                     snapshots.push(path);
@@ -1350,7 +1360,10 @@ impl RaftStorage for FileStorage {
         // Clean up old snapshots (keep only the latest)
         let mut snapshots: Vec<PathBuf> = Vec::new();
         if let Ok(entries) = fs::read_dir(&self.snapshot_dir) {
-            for entry in entries.filter_map(|e| e.ok()) {
+            for entry in entries.filter_map(|e| match e {
+                Ok(entry) => Some(entry),
+                Err(err) => { warn!("Failed to read raft snapshot cleanup dir entry: {err}"); None }
+            }) {
                 let path = entry.path();
                 if path.extension().map(|e| e == "snap").unwrap_or(false) {
                     snapshots.push(path);
