@@ -320,6 +320,12 @@ pub(super) async fn get_metrics() -> impl IntoResponse {
 
 
 /// Middleware that adds security headers to every response.
+///
+/// Each `.parse().expect("static header value")` call converts a compile-time
+/// string literal into an HTTP `HeaderValue`. These calls cannot fail at
+/// runtime because the inputs are hardcoded ASCII strings, so `expect` is
+/// acceptable here (tagged with `// allow-expect` for the CI audit). See
+/// CONTRIBUTING.md § "Acceptable uses of `expect()`" for the project policy.
 pub(super) async fn security_headers_middleware(
     request: Request<Body>,
     next: Next,
