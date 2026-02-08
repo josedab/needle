@@ -8,6 +8,8 @@
 
 #![cfg(feature = "experimental")]
 
+mod common;
+
 use needle::{
     crdt::{ReplicaId, VectorCRDT},
     diskann::{DiskAnnConfig, DiskAnnIndex},
@@ -65,22 +67,7 @@ where
 
 /// Generate random vector using simple PRNG
 fn random_vector(dim: usize) -> Vec<f32> {
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-    use std::time::SystemTime;
-
-    let seed = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos() as u64;
-
-    (0..dim)
-        .map(|i| {
-            let mut hasher = DefaultHasher::new();
-            (seed.wrapping_add(i as u64)).hash(&mut hasher);
-            (hasher.finish() as f32 / u64::MAX as f32) * 2.0 - 1.0
-        })
-        .collect()
+    common::random_vector(dim)
 }
 
 // ============================================================================

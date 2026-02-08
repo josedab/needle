@@ -4,6 +4,8 @@
 
 #![cfg(feature = "experimental")]
 
+mod common;
+
 use rand::Rng;
 use serde_json::json;
 
@@ -14,8 +16,7 @@ use needle::{
 };
 
 fn random_vector(dim: usize) -> Vec<f32> {
-    let mut rng = rand::thread_rng();
-    (0..dim).map(|_| rng.gen::<f32>()).collect()
+    common::random_vector(dim)
 }
 
 // ============================================================================

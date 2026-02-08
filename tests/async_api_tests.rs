@@ -7,6 +7,8 @@
 
 #![cfg(feature = "server")]
 
+mod common;
+
 use needle::async_api::{AsyncDatabase, AsyncDatabaseConfig};
 use needle::collection::CollectionConfig;
 use needle::distance::DistanceFunction;
@@ -15,22 +17,7 @@ use serde_json::json;
 
 /// Helper to create a random vector of given dimension
 fn random_vector(dim: usize) -> Vec<f32> {
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-    use std::time::SystemTime;
-
-    let seed = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos() as u64;
-
-    let mut hasher = DefaultHasher::new();
-    (0..dim)
-        .map(|i| {
-            (seed + i as u64).hash(&mut hasher);
-            (hasher.finish() % 1000) as f32 / 1000.0
-        })
-        .collect()
+    common::random_vector(dim)
 }
 
 // ============================================================================

@@ -1,13 +1,13 @@
 //! Edge case tests for the Needle vector database
 //! Tests boundary conditions, error handling, and unusual inputs
 
+mod common;
+
 use needle::{Collection, CollectionConfig, Database, DistanceFunction};
 use serde_json::json;
 
 fn random_vector(dim: usize) -> Vec<f32> {
-    use rand::Rng;
-    let mut rng = rand::thread_rng();
-    (0..dim).map(|_| rng.gen::<f32>()).collect()
+    common::random_vector(dim)
 }
 
 // ============================================================================

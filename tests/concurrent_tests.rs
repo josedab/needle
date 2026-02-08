@@ -1,14 +1,25 @@
 //! Concurrent access tests for the Needle vector database
 //! Tests thread safety, lock contention, and parallel operations
 
+mod common;
+
 use needle::Database;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
 
+static VECTOR_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+/// Generate a deterministic vector using a seed (default 42, overridable via
+/// NEEDLE_TEST_SEED env var) combined with a monotonic counter so each call
+/// produces a unique but reproducible vector.
 fn random_vector(dim: usize) -> Vec<f32> {
-    use rand::Rng;
-    let mut rng = rand::thread_rng();
-    (0..dim).map(|_| rng.gen::<f32>()).collect()
+    let base_seed: u64 = std::env::var("NEEDLE_TEST_SEED")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(42);
+    let counter = VECTOR_COUNTER.fetch_add(1, Ordering::Relaxed);
+    common::seeded_vector(dim, base_seed.wrapping_add(counter))
 }
 
 // ============================================================================
