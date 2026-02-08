@@ -156,6 +156,52 @@ make doc           # Generate and open documentation
 make doctor        # Check local environment setup
 ```
 
+<details>
+<summary><strong>Full Makefile recipe reference</strong></summary>
+
+| Recipe | Description |
+|--------|-------------|
+| `make help` | Show all available recipes |
+| `make setup` | First-time setup: doctor + pre-commit + build |
+| `make setup-tools` | Install optional Cargo tools (cargo-watch, cargo-llvm-cov, …) |
+| `make dev` | Start developing: setup + continuous check on save |
+| `make quick` | Fast feedback: format check + lint + unit tests |
+| `make check` | Full pre-commit: format check + lint + all tests |
+| `make check-quick` | Quick CI gate: fmt-check + lint + unit tests (~3 min) |
+| `make check-local` | Alias for check-quick (recommended pre-push check) |
+| `make check-all` | Full CI equivalent: fmt, lint, test, doc-check, examples |
+| `make build` | Debug build (default features) |
+| `make build-all` | Debug build (all features) |
+| `make build-release` | Release build (all features) |
+| `make test` | Run all tests (all features) |
+| `make test-unit` | Run unit tests only (fast) |
+| `make test-single NAME=x` | Run a single test by name |
+| `make test-feature FEATURES=x` | Test with specific feature flags |
+| `make fmt` | Format code |
+| `make fmt-check` | Check formatting |
+| `make lint` | Run clippy linter |
+| `make lint-fix` | Auto-fix clippy suggestions |
+| `make watch` | Continuous check on file changes (requires cargo-watch) |
+| `make test-watch` | Continuous test on save — TDD workflow (requires cargo-watch) |
+| `make serve` | Run HTTP server locally (`NEEDLE_PORT=9090 make serve`) |
+| `make demo` | Run quickstart demo |
+| `make doctor` | Check local environment |
+| `make doc` | Generate and open documentation |
+| `make bench` | Run benchmarks |
+| `make coverage` | Generate HTML coverage report (requires cargo-llvm-cov) |
+| `make outdated` | Check for outdated dependencies (requires cargo-outdated) |
+| `make count-debt` | Show tech debt & module size dashboard |
+| `make verify-docs` | Check that all markdown links resolve |
+| `make playground` | Interactive guided walkthrough |
+| `make new-module DOMAIN=x NAME=y` | Scaffold a new service module |
+| `make docker-up` | Start Needle via Docker Compose |
+| `make docker-down` | Stop Docker Compose services |
+| `make docker-build` | Build Docker image from source |
+| `make docker-logs` | Tail Docker Compose logs |
+| `make clean` | Clean build artifacts |
+
+</details>
+
 Alternatively, install [just](https://github.com/casey/just) (`cargo install just`) for the same recipes:
 
 ```bash
