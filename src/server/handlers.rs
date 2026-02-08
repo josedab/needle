@@ -729,6 +729,16 @@ pub(super) async fn radius_search(
     Path(collection): Path<String>,
     Json(req): Json<RadiusSearchRequest>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<ApiError>)> {
+    if req.limit == 0 || req.limit > MAX_SEARCH_K {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ApiError::new(
+                format!("limit must be between 1 and {MAX_SEARCH_K}"),
+                "INVALID_LIMIT",
+            )),
+        ));
+    }
+
     let db = state.db.read().await;
     let coll = db
         .collection(&collection)
