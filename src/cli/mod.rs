@@ -119,7 +119,13 @@ pub fn run(cli: Cli) -> Result<()> {
             analyze,
         } => query_command(&database, &collection, &query, k, analyze),
         Commands::Backup(cmd) => backup_command(cmd),
+        #[cfg(feature = "observability")]
         Commands::Drift(cmd) => drift_command(cmd),
+        #[cfg(not(feature = "observability"))]
+        Commands::Drift(_) => {
+            eprintln!("Drift detection requires the 'observability' feature. Rebuild with --features observability");
+            std::process::exit(1);
+        }
         Commands::Federate(cmd) => federate_command(cmd),
         Commands::Alias(cmd) => alias_command(cmd),
         Commands::Ttl(cmd) => ttl_command(cmd),

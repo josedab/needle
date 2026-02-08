@@ -2,6 +2,7 @@
 //!
 //! Access these via `needle::beta_api::*`.
 
+#[cfg(feature = "observability")]
 pub use crate::anomaly::{
     DistanceOutlierDetector, EnsembleAnomalyDetector, IsolationForest, LocalOutlierFactor,
     StatisticalOutlierDetector,

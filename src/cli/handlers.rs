@@ -6,6 +6,7 @@ use std::io::{self, BufRead};
 use needle::server::{serve, ServerConfig};
 
 use needle::backup::{BackupConfig, BackupManager, BackupType};
+#[cfg(feature = "observability")]
 use needle::drift::{DriftConfig, DriftDetector};
 use needle::query_builder::{QueryAnalyzer, VisualQueryBuilder};
 
@@ -1312,6 +1313,7 @@ fn backup_cleanup(path: &str, keep: usize) -> Result<()> {
 // Drift detection commands
 // ============================================================================
 
+#[cfg(feature = "observability")]
 pub fn drift_command(cmd: DriftCommands) -> Result<()> {
     match cmd {
         DriftCommands::Baseline {
@@ -1335,6 +1337,7 @@ pub fn drift_command(cmd: DriftCommands) -> Result<()> {
     }
 }
 
+#[cfg(feature = "observability")]
 fn drift_baseline(
     database: &str,
     collection_name: &str,
@@ -1400,6 +1403,7 @@ fn drift_baseline(
     Ok(())
 }
 
+#[cfg(feature = "observability")]
 fn drift_detect(
     database: &str,
     collection_name: &str,
@@ -1494,6 +1498,7 @@ fn drift_detect(
     Ok(())
 }
 
+#[cfg(feature = "observability")]
 fn drift_report(
     database: &str,
     collection_name: &str,

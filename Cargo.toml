@@ -281,6 +281,8 @@ async = ["tokio", "futures"]
 server = ["async", "axum", "tower", "tower-http", "governor", "hmac", "base64", "subtle"]
 web-ui = ["async", "axum"]
 metrics = ["prometheus"]
+# Observability modules: telemetry, drift detection, anomaly detection, profiling
+observability = []
 hybrid = ["rust-stemmers"]
 # Note: embeddings feature uses pre-release ort crate, consider unstable
 embeddings = ["ort", "ndarray", "tokenizers"]
@@ -300,7 +302,7 @@ cloud-storage = ["cloud-storage-s3", "cloud-storage-gcs", "cloud-storage-azure"]
 gpu = ["wide"]
 gpu-cuda = ["gpu", "cudarc"]
 gpu-metal = ["gpu", "metal", "objc"]
-full = ["server", "metrics", "hybrid", "web-ui", "embedding-providers", "encryption", "diskann", "integrations", "experimental"]
+full = ["server", "metrics", "hybrid", "web-ui", "embedding-providers", "encryption", "diskann", "integrations", "observability", "experimental"]
 # Experimental modules - under active development, APIs may change
 experimental = []
 python = ["pyo3", "pythonize"]

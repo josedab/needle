@@ -70,6 +70,7 @@ pub use crate::distributed_hnsw::{
     DistributedHnswStats, DistributedQueryBuilder, DistributedSearchResult,
     ShardSearchResult as DistributedShardSearchResult,
 };
+#[cfg(feature = "observability")]
 pub use crate::drift::{
     AdaptiveThreshold, AdaptiveThresholdConfig, DriftAlert, DriftConfig, DriftConfigBuilder,
     DriftDetector, DriftMetrics, DriftReport, DriftSeverity, DriftTrend, MultiBaselineDetector,
@@ -241,6 +242,7 @@ pub use crate::optimizer::{
     IndexType as OptimizerIndexType, QueryOptimizer, QueryPlan as OptimizerQueryPlan,
     QueryStrategy,
 };
+#[cfg(feature = "observability")]
 pub use crate::otel_service::{
     CollectionMetrics as OtelCollectionMetrics, MetricsSnapshot, ObservabilityConfig,
     ObservabilityConfigBuilder, ObservabilityService, OperationType as OtelOperationType,
@@ -344,6 +346,7 @@ pub use crate::sync_protocol::{
     SegmentInfo, SyncConfig, SyncManager as VectorSyncManager, SyncManifest,
     SyncStats as VectorSyncStats, SyncTarget,
 };
+#[cfg(feature = "observability")]
 pub use crate::telemetry::{
     Metric, MetricValue, Span, SpanStatus, Telemetry, TelemetryConfig, TraceContext,
 };

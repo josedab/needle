@@ -82,6 +82,7 @@ pub mod database;
 pub mod distance;
 /// Error types, error codes, and recovery hints for all Needle operations.
 pub mod error;
+#[cfg(feature = "observability")]
 pub(crate) use observe::lineage;
 /// Metadata storage and MongoDB-style query filtering (`$eq`, `$gt`, `$in`, `$or`, etc.).
 pub mod metadata;
@@ -152,7 +153,10 @@ pub use enterprise::{autoscaling, namespace, raft, security, tenant_isolation};
 // Telemetry, drift detection, anomaly detection, profiling.
 
 /// Observability: telemetry, drift detection, anomaly detection, and profiling.
+/// Requires the `observability` feature flag (included in `full`).
+#[cfg(feature = "observability")]
 pub mod observe;
+#[cfg(feature = "observability")]
 pub use observe::{anomaly, audit, dashboard, drift, observability, otel_service, profiler, telemetry};
 
 // ── Framework Integrations ───────────────────────────────────────────────────
@@ -196,14 +200,16 @@ pub use services::{
 // Embedding & model management
 #[cfg(feature = "experimental")]
 pub use services::{
-    auto_embed_endpoint, embedding_router, inference_engine, managed_embeddings,
+    auto_embed_endpoint, embedding_router, managed_embeddings,
     matryoshka_service, model_downloader, model_runtime, smart_auto_embed, text_to_vector,
 };
 
 // Search & query
 #[cfg(feature = "experimental")]
+pub use search::{needleql_executor, needleql_lsp};
+#[cfg(feature = "experimental")]
 pub use services::{
-    adaptive_index_selector, encrypted_search, needleql_executor, needleql_lsp, nl_filter_parser,
+    adaptive_index_selector, encrypted_search, nl_filter_parser,
     query_cache_middleware, query_optimizer, query_replay,
 };
 #[cfg(feature = "experimental")]

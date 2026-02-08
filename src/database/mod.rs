@@ -164,6 +164,7 @@ pub struct Database {
     /// Optional adaptive index manager for workload-driven index selection
     adaptive_index_manager: Option<Arc<crate::indexing::adaptive_index_manager::AdaptiveIndexManager>>,
     /// Optional metrics aggregator for the observability dashboard
+    #[cfg(feature = "observability")]
     dashboard_metrics: Option<Arc<crate::observe::dashboard::MetricsAggregator>>,
     /// Optional replica manager for snapshot-based replication
     replica_manager: Option<Arc<crate::persistence::replica_manager::ReplicaManager>>,
@@ -291,7 +292,9 @@ impl Database {
             dirty: AtomicBool::new(false),
             modification_gen: AtomicU64::new(0),
             saved_gen: AtomicU64::new(0),
-            adaptive_tuner: None, adaptive_index_manager: None, dashboard_metrics: None, replica_manager: None,
+            adaptive_tuner: None, adaptive_index_manager: None, replica_manager: None,
+            #[cfg(feature = "observability")]
+            dashboard_metrics: None,
         })
     }
 
@@ -321,7 +324,9 @@ impl Database {
             dirty: AtomicBool::new(false),
             modification_gen: AtomicU64::new(0),
             saved_gen: AtomicU64::new(0),
-            adaptive_tuner: None, adaptive_index_manager: None, dashboard_metrics: None, replica_manager: None,
+            adaptive_tuner: None, adaptive_index_manager: None, replica_manager: None,
+            #[cfg(feature = "observability")]
+            dashboard_metrics: None,
         }
     }
 
@@ -352,6 +357,7 @@ impl Database {
     }
 
     /// Attach a metrics aggregator for the observability dashboard.
+    #[cfg(feature = "observability")]
     pub fn set_dashboard_metrics(
         &mut self,
         metrics: Arc<crate::observe::dashboard::MetricsAggregator>,
@@ -360,6 +366,7 @@ impl Database {
     }
 
     /// Get a reference to the dashboard metrics aggregator.
+    #[cfg(feature = "observability")]
     pub fn dashboard_metrics(
         &self,
     ) -> Option<&Arc<crate::observe::dashboard::MetricsAggregator>> {
@@ -1210,6 +1217,7 @@ impl Database {
         if let Some(aim) = &self.adaptive_index_manager {
             aim.record_insert();
         }
+        #[cfg(feature = "observability")]
         if let Some(metrics) = &self.dashboard_metrics {
             metrics.record_insert(collection);
         }
@@ -1312,6 +1320,7 @@ impl Database {
         }
 
         // Record metrics for observability dashboard
+        #[cfg(feature = "observability")]
         if let Some(metrics) = &self.dashboard_metrics {
             metrics.record_query(collection, (latency_ms * 1000.0) as u64, results.len());
         }

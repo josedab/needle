@@ -10,6 +10,7 @@ use needle::server::{serve, ServerConfig};
 
 // Import new features for CLI
 use needle::backup::{BackupConfig, BackupManager, BackupType};
+#[cfg(feature = "observability")]
 use needle::drift::{DriftConfig, DriftDetector};
 use needle::query_builder::{QueryAnalyzer, VisualQueryBuilder};
 
@@ -593,7 +594,13 @@ fn main() -> Result<()> {
             analyze,
         } => query_command(&database, &collection, &query, k, analyze),
         Commands::Backup(cmd) => backup_command(cmd),
+        #[cfg(feature = "observability")]
         Commands::Drift(cmd) => drift_command(cmd),
+        #[cfg(not(feature = "observability"))]
+        Commands::Drift(_) => {
+            eprintln!("Drift detection requires the 'observability' feature. Rebuild with --features observability");
+            std::process::exit(1);
+        }
         Commands::Federate(cmd) => federate_command(cmd),
         Commands::Alias(cmd) => alias_command(cmd),
         Commands::Ttl(cmd) => ttl_command(cmd),
@@ -1459,6 +1466,7 @@ fn backup_cleanup(path: &str, keep: usize) -> Result<()> {
 // Drift Detection Commands
 // ============================================================================
 
+#[cfg(feature = "observability")]
 fn drift_command(cmd: DriftCommands) -> Result<()> {
     match cmd {
         DriftCommands::Baseline {
@@ -1482,6 +1490,7 @@ fn drift_command(cmd: DriftCommands) -> Result<()> {
     }
 }
 
+#[cfg(feature = "observability")]
 fn drift_baseline(
     database: &str,
     collection_name: &str,
@@ -1552,6 +1561,7 @@ fn drift_baseline(
     Ok(())
 }
 
+#[cfg(feature = "observability")]
 fn drift_detect(
     database: &str,
     collection_name: &str,
@@ -1651,6 +1661,7 @@ fn drift_detect(
     Ok(())
 }
 
+#[cfg(feature = "observability")]
 fn drift_report(
     database: &str,
     collection_name: &str,
