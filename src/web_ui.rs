@@ -31,7 +31,7 @@
 //! }
 //! ```
 
-#![allow(clippy::unwrap_used)] // tech debt: per-module unwrap cleanup in progress
+#![allow(clippy::unwrap_used)] // tech debt: 1 unwrap() calls remaining
 use crate::database::Database;
 use axum::{
     extract::{Path, Query, State},

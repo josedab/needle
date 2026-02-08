@@ -31,7 +31,7 @@
 //! When using the HTTP server (feature: server), metrics are automatically exposed
 //! at the `/metrics` endpoint for Prometheus scraping.
 
-#![allow(clippy::unwrap_used)] // tech debt: per-module unwrap cleanup in progress
+#![allow(clippy::unwrap_used)] // tech debt: 16 unwrap() calls remaining
 use prometheus::{
     register_counter_vec, register_gauge_vec, register_histogram_vec, CounterVec, Encoder,
     GaugeVec, HistogramVec, TextEncoder,

@@ -53,7 +53,7 @@
 //! val results = collection.search(FloatArray(128) { 0.1f }, 5)
 //! ```
 
-#![allow(clippy::unwrap_used)] // tech debt: per-module unwrap cleanup in progress
+#![allow(clippy::unwrap_used)] // tech debt: 13 unwrap() calls remaining
 use crate::collection::{Collection, CollectionConfig, SearchResult as RustSearchResult};
 use crate::distance::DistanceFunction;
 use crate::metadata::Filter;

@@ -33,7 +33,7 @@
 //! assert!((dist - 1.0).abs() < 1e-6);
 //! ```
 
-#![allow(clippy::unwrap_used)] // tech debt: per-module unwrap cleanup in progress
+#![allow(clippy::unwrap_used)] // tech debt: 13 unwrap() calls remaining
 use serde::{Deserialize, Serialize};
 
 use crate::error::{NeedleError, Result};

@@ -45,7 +45,7 @@
 //! For applications requiring durability, consider using the WAL (Write-Ahead Log)
 //! feature or calling `save()` after critical operations.
 
-#![allow(clippy::unwrap_used)] // tech debt: per-module unwrap cleanup in progress
+#![allow(clippy::unwrap_used)] // tech debt: 220 unwrap() calls remaining
 use crate::collection::{Collection, CollectionConfig, SearchResult};
 use crate::error::{NeedleError, Result};
 use crate::metadata::Filter;

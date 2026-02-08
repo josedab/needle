@@ -1,6 +1,6 @@
 //! Observability: telemetry, drift detection, anomaly detection, profiling.
 
-#![allow(clippy::unwrap_used)] // tech debt: per-module unwrap cleanup in progress
+#![allow(clippy::unwrap_used)] // tech debt: 126 unwrap() calls remaining
 pub mod anomaly;
 pub mod audit;
 pub mod dashboard;
