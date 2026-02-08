@@ -488,7 +488,6 @@ fn test_concurrent_search_consistency() {
 fn test_concurrent_insert_search() {
     use std::sync::Arc;
     use std::thread;
-    use std::time::Duration;
 
     let db = Arc::new(Database::in_memory());
     db.create_collection("test", 16).unwrap();
@@ -513,7 +512,7 @@ fn test_concurrent_insert_search() {
                 .map(|j| ((i * 16 + j + 1000) as f32) / 1000.0)
                 .collect();
             coll.insert(format!("new_{}", i), &vec, None).unwrap();
-            thread::sleep(Duration::from_micros(100));
+            thread::yield_now();
         }
     });
 
@@ -529,7 +528,7 @@ fn test_concurrent_insert_search() {
                 "Search should not fail during concurrent access"
             );
             search_count += 1;
-            thread::sleep(Duration::from_micros(50));
+            thread::yield_now();
         }
         search_count
     });
