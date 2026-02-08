@@ -1,6 +1,7 @@
 //! WebAssembly bindings for Needle using wasm-bindgen
 
 use crate::collection::{Collection, CollectionConfig, SearchResult as RustSearchResult};
+use crate::database::Database;
 use crate::distance::DistanceFunction;
 use crate::metadata::Filter;
 use serde_json::Value;
@@ -1337,46 +1338,39 @@ async function syncCollections() {
 // Multi-Collection WasmDatabase
 // ============================================================================
 
-/// Multi-collection database for WASM environments
+/// Multi-collection database for WASM environments.
+///
+/// Wraps [`Database::in_memory()`] to provide multi-collection support
+/// with thread-safe access and proper collection management.
 #[wasm_bindgen]
 pub struct WasmDatabase {
-    collections: std::collections::HashMap<String, Collection>,
+    inner: Database,
 }
 
 #[wasm_bindgen]
 impl WasmDatabase {
-    /// Create a new empty database
+    /// Create a new empty in-memory database
     #[wasm_bindgen(constructor)]
     pub fn new() -> Self {
         Self {
-            collections: std::collections::HashMap::new(),
+            inner: Database::in_memory(),
         }
     }
 
     /// Create a new collection with the given name and dimensions
     #[wasm_bindgen(js_name = "createCollection")]
-    pub fn create_collection(&mut self, name: &str, dimensions: usize) -> Result<(), JsValue> {
-        if self.collections.contains_key(name) {
-            return Err(JsValue::from_str(&format!(
-                "Collection '{}' already exists",
-                name
-            )));
-        }
-        let config = CollectionConfig::new(name, dimensions);
-        self.collections
-            .insert(name.to_string(), Collection::new(config));
-        Ok(())
+    pub fn create_collection(&self, name: &str, dimensions: usize) -> Result<(), JsValue> {
+        self.inner
+            .create_collection(name, dimensions)
+            .map_err(|e| JsValue::from_str(&e.to_string()))
     }
 
     /// Get a reference to a collection by name
     #[wasm_bindgen(js_name = "getCollection")]
     pub fn get_collection(&self, name: &str) -> Result<WasmCollectionRef, JsValue> {
-        if !self.collections.contains_key(name) {
-            return Err(JsValue::from_str(&format!(
-                "Collection '{}' not found",
-                name
-            )));
-        }
+        // Verify the collection exists
+        let _coll = self.inner.collection(name)
+            .map_err(|e| JsValue::from_str(&e.to_string()))?;
         Ok(WasmCollectionRef {
             name: name.to_string(),
         })
@@ -1385,111 +1379,46 @@ impl WasmDatabase {
     /// List all collection names
     #[wasm_bindgen(js_name = "listCollections")]
     pub fn list_collections(&self) -> Vec<JsValue> {
-        self.collections
-            .keys()
-            .map(|k| JsValue::from_str(k))
+        self.inner
+            .list_collections()
+            .into_iter()
+            .map(|k| JsValue::from_str(&k))
             .collect()
     }
 
     /// Delete a collection by name, returns true if it existed
     #[wasm_bindgen(js_name = "deleteCollection")]
-    pub fn delete_collection(&mut self, name: &str) -> bool {
-        self.collections.remove(name).is_some()
+    pub fn delete_collection(&self, name: &str) -> bool {
+        self.inner.drop_collection(name).unwrap_or(false)
     }
 
-    /// Serialize the entire database to bytes for IndexedDB persistence
+    /// Serialize the entire database to a JSON string for IndexedDB persistence
     #[wasm_bindgen(js_name = "toBytes")]
     pub fn to_bytes(&self) -> Result<Vec<u8>, JsValue> {
-        let mut buf: Vec<u8> = Vec::new();
-        let count = self.collections.len() as u32;
-        buf.extend_from_slice(&count.to_le_bytes());
-
-        for (name, coll) in &self.collections {
-            let name_bytes = name.as_bytes();
-            let name_len = name_bytes.len() as u32;
-            buf.extend_from_slice(&name_len.to_le_bytes());
-            buf.extend_from_slice(name_bytes);
-
-            let coll_bytes = coll
-                .to_bytes()
-                .map_err(|e| JsValue::from_str(&e.to_string()))?;
-            let coll_len = coll_bytes.len() as u64;
-            buf.extend_from_slice(&coll_len.to_le_bytes());
-            buf.extend_from_slice(&coll_bytes);
-        }
-        Ok(buf)
+        let json = self.inner.export_all_json()
+            .map_err(|e| JsValue::from_str(&e.to_string()))?;
+        Ok(json.into_bytes())
     }
 
-    /// Deserialize a database from bytes loaded from IndexedDB
+    /// Deserialize a database from bytes (JSON) loaded from IndexedDB
     #[wasm_bindgen(js_name = "fromBytes")]
     pub fn from_bytes(bytes: &[u8]) -> Result<WasmDatabase, JsValue> {
-        let mut pos = 0usize;
-
-        if bytes.len() < 4 {
-            return Err(JsValue::from_str("Invalid database bytes: too short"));
-        }
-        let count = u32::from_le_bytes(
-            bytes[pos..pos + 4]
-                .try_into()
-                .expect("slice is exactly 4 bytes"),
-        ) as usize;
-        pos += 4;
-
-        let mut collections = std::collections::HashMap::new();
-
-        for _ in 0..count {
-            if pos + 4 > bytes.len() {
-                return Err(JsValue::from_str("Truncated database bytes"));
-            }
-            let name_len = u32::from_le_bytes(
-                bytes[pos..pos + 4]
-                    .try_into()
-                    .expect("slice is exactly 4 bytes"),
-            ) as usize;
-            pos += 4;
-
-            if pos + name_len > bytes.len() {
-                return Err(JsValue::from_str("Truncated collection name"));
-            }
-            let name = String::from_utf8(bytes[pos..pos + name_len].to_vec())
-                .map_err(|e| JsValue::from_str(&format!("Invalid UTF-8 name: {}", e)))?;
-            pos += name_len;
-
-            if pos + 8 > bytes.len() {
-                return Err(JsValue::from_str("Truncated collection length"));
-            }
-            let coll_len = u64::from_le_bytes(
-                bytes[pos..pos + 8]
-                    .try_into()
-                    .expect("slice is exactly 8 bytes"),
-            ) as usize;
-            pos += 8;
-
-            if pos + coll_len > bytes.len() {
-                return Err(JsValue::from_str("Truncated collection data"));
-            }
-            let coll = Collection::from_bytes(&bytes[pos..pos + coll_len])
-                .map_err(|e| JsValue::from_str(&e.to_string()))?;
-            pos += coll_len;
-
-            collections.insert(name, coll);
-        }
-
-        Ok(WasmDatabase { collections })
+        let json = std::str::from_utf8(bytes)
+            .map_err(|e| JsValue::from_str(&format!("Invalid UTF-8: {e}")))?;
+        let db = Database::in_memory();
+        db.import_all_json(json)
+            .map_err(|e| JsValue::from_str(&e.to_string()))?;
+        Ok(WasmDatabase { inner: db })
     }
 
     /// Insert a vector into a named collection
     pub fn insert(
-        &mut self,
+        &self,
         collection: &str,
         id: &str,
         vector: Vec<f32>,
         metadata: Option<String>,
     ) -> Result<(), JsValue> {
-        let coll = self
-            .collections
-            .get_mut(collection)
-            .ok_or_else(|| JsValue::from_str(&format!("Collection '{}' not found", collection)))?;
         let meta_value: Option<Value> = if let Some(json) = metadata {
             Some(
                 serde_json::from_str(&json)
@@ -1498,6 +1427,8 @@ impl WasmDatabase {
         } else {
             None
         };
+        let coll = self.inner.collection(collection)
+            .map_err(|e| JsValue::from_str(&e.to_string()))?;
         coll.insert(id, &vector, meta_value)
             .map_err(|e| JsValue::from_str(&e.to_string()))
     }
@@ -1509,10 +1440,8 @@ impl WasmDatabase {
         query: Vec<f32>,
         k: usize,
     ) -> Result<Vec<SearchResult>, JsValue> {
-        let coll = self
-            .collections
-            .get(collection)
-            .ok_or_else(|| JsValue::from_str(&format!("Collection '{}' not found", collection)))?;
+        let coll = self.inner.collection(collection)
+            .map_err(|e| JsValue::from_str(&e.to_string()))?;
         let results = coll
             .search(&query, k)
             .map_err(|e| JsValue::from_str(&e.to_string()))?;
@@ -1521,14 +1450,12 @@ impl WasmDatabase {
 
     /// Delete a vector from a named collection
     pub fn delete(
-        &mut self,
+        &self,
         collection: &str,
         id: &str,
     ) -> Result<bool, JsValue> {
-        let coll = self
-            .collections
-            .get_mut(collection)
-            .ok_or_else(|| JsValue::from_str(&format!("Collection '{}' not found", collection)))?;
+        let coll = self.inner.collection(collection)
+            .map_err(|e| JsValue::from_str(&e.to_string()))?;
         coll.delete(id)
             .map_err(|e| JsValue::from_str(&e.to_string()))
     }
@@ -1539,10 +1466,8 @@ impl WasmDatabase {
         collection: &str,
         id: &str,
     ) -> Result<JsValue, JsValue> {
-        let coll = self
-            .collections
-            .get(collection)
-            .ok_or_else(|| JsValue::from_str(&format!("Collection '{}' not found", collection)))?;
+        let coll = self.inner.collection(collection)
+            .map_err(|e| JsValue::from_str(&e.to_string()))?;
         match coll.get(id) {
             Some((vector, metadata)) => {
                 let obj = js_sys::Object::new();
@@ -1568,10 +1493,8 @@ impl WasmDatabase {
         k: usize,
         filter_json: &str,
     ) -> Result<Vec<SearchResult>, JsValue> {
-        let coll = self
-            .collections
-            .get(collection)
-            .ok_or_else(|| JsValue::from_str(&format!("Collection '{}' not found", collection)))?;
+        let coll = self.inner.collection(collection)
+            .map_err(|e| JsValue::from_str(&e.to_string()))?;
         let filter_value: Value = serde_json::from_str(filter_json)
             .map_err(|e| JsValue::from_str(&format!("Invalid filter JSON: {e}")))?;
         let filter = Filter::parse(&filter_value)
@@ -1586,29 +1509,32 @@ impl WasmDatabase {
     #[wasm_bindgen(js_name = "getMemoryStats")]
     pub fn get_memory_stats(&self) -> js_sys::Object {
         let obj = js_sys::Object::new();
+        let names = self.inner.list_collections();
         let mut total_vectors = 0usize;
         let mut total_bytes = 0usize;
-        for (name, coll) in &self.collections {
-            let count = coll.len();
-            let dims = coll.dimensions();
-            total_vectors += count;
-            total_bytes += count * dims * 4 + count * 64 * 4;
-            let coll_obj = js_sys::Object::new();
-            js_set(&coll_obj, &"vectors".into(), &(count as u32).into());
-            js_set(&coll_obj, &"dimensions".into(), &(dims as u32).into());
-            js_set(&coll_obj, &"estimatedBytes".into(), &((count * dims * 4) as u32).into());
-            js_set(&obj, &JsValue::from_str(name), &coll_obj);
+        for name in &names {
+            if let Ok(coll) = self.inner.collection(name) {
+                let count = coll.len();
+                let dims = coll.dimensions().unwrap_or(0);
+                total_vectors += count;
+                total_bytes += count * dims * 4 + count * 64 * 4;
+                let coll_obj = js_sys::Object::new();
+                js_set(&coll_obj, &"vectors".into(), &(count as u32).into());
+                js_set(&coll_obj, &"dimensions".into(), &(dims as u32).into());
+                js_set(&coll_obj, &"estimatedBytes".into(), &((count * dims * 4) as u32).into());
+                js_set(&obj, &JsValue::from_str(name), &coll_obj);
+            }
         }
         js_set(&obj, &"totalVectors".into(), &(total_vectors as u32).into());
         js_set(&obj, &"totalEstimatedBytes".into(), &(total_bytes as u32).into());
-        js_set(&obj, &"collectionCount".into(), &(self.collections.len() as u32).into());
+        js_set(&obj, &"collectionCount".into(), &(names.len() as u32).into());
         obj
     }
 
     /// Get the number of collections
     #[wasm_bindgen(getter, js_name = "collectionCount")]
     pub fn collection_count(&self) -> usize {
-        self.collections.len()
+        self.inner.list_collections().len()
     }
 }
 
