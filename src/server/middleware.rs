@@ -318,15 +318,19 @@ pub(super) async fn security_headers_middleware(
 ) -> Response {
     let mut response = next.run(request).await;
     let headers = response.headers_mut();
-    headers.insert(SECURITY_HEADER_XCTO.0.clone(), SECURITY_HEADER_XCTO.1.parse().unwrap());
-    headers.insert(SECURITY_HEADER_XFO.0.clone(), SECURITY_HEADER_XFO.1.parse().unwrap());
+    headers.insert(SECURITY_HEADER_XCTO.0.clone(), SECURITY_HEADER_XCTO.1.parse().expect("static header value")); // allow-expect
+    headers.insert(SECURITY_HEADER_XFO.0.clone(), SECURITY_HEADER_XFO.1.parse().expect("static header value")); // allow-expect
     headers.insert(
         header::STRICT_TRANSPORT_SECURITY,
-        "max-age=63072000; includeSubDomains".parse().unwrap(),
+        "max-age=63072000; includeSubDomains".parse().expect("static header value"), // allow-expect
     );
     headers.insert(
         header::HeaderName::from_static("x-xss-protection"),
-        "1; mode=block".parse().unwrap(),
+        "1; mode=block".parse().expect("static header value"), // allow-expect
+    );
+    headers.insert(
+        header::HeaderName::from_static("content-security-policy"),
+        "default-src 'none'; frame-ancestors 'none'".parse().expect("static header value"), // allow-expect
     );
     response
 }
