@@ -42,6 +42,7 @@ pub(super) fn build_cors_layer(config: &CorsConfig) -> CorsLayer {
         .max_age(std::time::Duration::from_secs(config.max_age_secs));
 
     // Set allowed origins
+    let is_wildcard_origin = config.allowed_origins.is_none();
     cors = match &config.allowed_origins {
         None => cors.allow_origin(AllowOrigin::any()),
         Some(origins) if origins.is_empty() => cors,
@@ -52,6 +53,9 @@ pub(super) fn build_cors_layer(config: &CorsConfig) -> CorsLayer {
     };
 
     if config.allow_credentials {
+        if is_wildcard_origin {
+            warn!("CORS: allow_credentials with wildcard origin is insecure and will be rejected by browsers");
+        }
         cors = cors.allow_credentials(true);
     }
 
@@ -60,7 +64,11 @@ pub(super) fn build_cors_layer(config: &CorsConfig) -> CorsLayer {
 
 
 pub(super) fn create_rate_limiter(config: &RateLimitConfig) -> Option<Arc<PerIpRateLimiter>> {
-    if !config.enabled || config.requests_per_second == 0 {
+    if !config.enabled {
+        return None;
+    }
+    if config.requests_per_second == 0 {
+        warn!("Rate limiting disabled (requests_per_second = 0)");
         return None;
     }
 
