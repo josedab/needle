@@ -40,6 +40,7 @@
 //! collection.save("/path/to/collection.bin")
 //! ```
 
+#![allow(clippy::unwrap_used)] // tech debt: per-module unwrap cleanup in progress
 use crate::collection::{Collection, CollectionConfig, SearchResult as RustSearchResult};
 use crate::database::Database;
 use crate::distance::DistanceFunction;

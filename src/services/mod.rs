@@ -16,6 +16,7 @@
 //! - **`storage/`** — backup_command, hnsw_compactor, snapshot_manager, ...
 //! - **`sync/`** — change_stream, crdt_sync, distributed_federation, ...
 
+#![allow(clippy::unwrap_used)] // tech debt: per-module unwrap cleanup in progress
 #[cfg(feature = "experimental")]
 pub mod ai;
 #[cfg(feature = "experimental")]

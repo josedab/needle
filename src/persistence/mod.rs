@@ -1,4 +1,5 @@
 //! WAL, transactions, time-travel, backups, cloud storage.
+#![allow(clippy::unwrap_used)] // tech debt: per-module unwrap cleanup in progress
 pub mod backup;
 pub mod cloud_storage;
 pub mod cow_storage;

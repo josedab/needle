@@ -1,5 +1,6 @@
 //! Enterprise features: security, encryption, multi-tenancy, RBAC, Raft consensus.
 
+#![allow(clippy::unwrap_used)] // tech debt: per-module unwrap cleanup in progress
 pub mod autoscaling;
 #[cfg(feature = "encryption")]
 pub mod encryption;

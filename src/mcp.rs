@@ -38,6 +38,7 @@
 //! | `forget` | Delete a specific memory by ID |
 //! | `memory_consolidate` | Promote/expire episodic memories based on importance |
 
+#![allow(clippy::unwrap_used)] // tech debt: per-module unwrap cleanup in progress
 use crate::database::Database;
 use crate::error::{NeedleError, Result};
 use crate::metadata::Filter;

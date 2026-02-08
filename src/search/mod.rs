@@ -1,4 +1,5 @@
 //! Query planning, routing, natural language filters, cross-collection search.
+#![allow(clippy::unwrap_used)] // tech debt: per-module unwrap cleanup in progress
 #[cfg(feature = "experimental")]
 pub mod collaborative_search;
 pub mod cross_collection;

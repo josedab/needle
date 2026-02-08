@@ -36,6 +36,7 @@
 //! JWT tokens are passed via the `Authorization: Bearer <token>` header.
 
 
+#![allow(clippy::unwrap_used)] // tech debt: per-module unwrap cleanup in progress
 mod auth;
 mod handlers;
 mod middleware;

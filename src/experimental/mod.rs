@@ -1,5 +1,6 @@
 //! Experimental modules — APIs may change without notice.
 
+#![allow(clippy::unwrap_used)] // tech debt: per-module unwrap cleanup in progress
 #[cfg(feature = "experimental")]
 pub mod adaptive_index;
 #[cfg(feature = "experimental")]

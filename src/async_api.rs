@@ -108,6 +108,7 @@
 //! }
 //! ```
 
+#![allow(clippy::unwrap_used)] // tech debt: per-module unwrap cleanup in progress
 use crate::collection::{CollectionConfig, SearchResult};
 use crate::database::{Database, DatabaseConfig, ExportEntry};
 use crate::error::{NeedleError, Result};

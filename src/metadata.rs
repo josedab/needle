@@ -56,6 +56,7 @@
 //! | `$or` | Logical OR |
 //! | `$not` | Logical NOT |
 
+#![allow(clippy::unwrap_used)] // tech debt: per-module unwrap cleanup in progress
 use crate::error::{NeedleError, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;

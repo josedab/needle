@@ -1,4 +1,5 @@
 //! Embedding generation, models, fine-tuning, RAG.
+#![allow(clippy::unwrap_used)] // tech debt: per-module unwrap cleanup in progress
 pub mod auto_embed;
 pub mod dimreduce;
 pub mod embedded_runtime;

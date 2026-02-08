@@ -75,21 +75,16 @@
 // Fundamental types: database, collections, vectors, errors, storage, metadata.
 
 /// Collection management: vectors, HNSW index, metadata, and search pipeline.
-#[allow(clippy::unwrap_used)] // tech debt: unwrap cleanup needed
 pub mod collection;
 /// Database management: multi-collection container, persistence, and thread-safe access.
-#[allow(clippy::unwrap_used)] // tech debt: unwrap cleanup needed
 pub mod database;
 /// Distance functions for vector similarity (Cosine, Euclidean, Dot Product, Manhattan).
-#[allow(clippy::unwrap_used)] // tech debt: unwrap cleanup needed
 pub mod distance;
 /// Error types, error codes, and recovery hints for all Needle operations.
 pub mod error;
 pub(crate) use observe::lineage;
 /// Metadata storage and MongoDB-style query filtering (`$eq`, `$gt`, `$in`, `$or`, etc.).
-#[allow(clippy::unwrap_used)] // tech debt: unwrap cleanup needed
 pub mod metadata;
-#[allow(clippy::unwrap_used)] // tech debt: unwrap cleanup needed
 pub(crate) mod storage;
 /// Auto-tuning for HNSW parameters based on workload profiling.
 pub mod tuning;
@@ -104,7 +99,6 @@ pub use search::graphrag;
 // Vector index implementations: HNSW, DiskANN, IVF, sparse, multi-vector.
 
 /// Vector index implementations: HNSW, IVF, DiskANN, sparse, multi-vector, and quantization.
-#[allow(clippy::unwrap_used)] // tech debt: unwrap cleanup needed
 pub mod indexing;
 #[cfg(feature = "diskann")]
 pub use indexing::{diskann, tiered_ann};
@@ -116,7 +110,6 @@ pub use indexing::{
 // ── Search & Query ───────────────────────────────────────────────────────────
 
 /// Search query planning, reranking, federated search, and natural language filtering.
-#[allow(clippy::unwrap_used)] // tech debt: unwrap cleanup needed
 pub mod search;
 #[cfg(feature = "experimental")]
 pub use search::collaborative_search;
@@ -128,7 +121,6 @@ pub use search::{
 // ── Storage & Persistence ────────────────────────────────────────────────────
 
 /// Storage and persistence: WAL, backups, migrations, sharding, and cloud storage.
-#[allow(clippy::unwrap_used)] // tech debt: unwrap cleanup needed
 pub mod persistence;
 pub use persistence::{
     backup, cloud_storage, cow_storage, managed_backup, migrations, replica_manager,
@@ -139,7 +131,6 @@ pub use persistence::{
 // ── Embeddings & ML ──────────────────────────────────────────────────────────
 
 /// Machine learning utilities: auto-embedding, model registry, RAG, and dimensionality reduction.
-#[allow(clippy::unwrap_used)] // tech debt: unwrap cleanup needed
 pub mod ml;
 pub use ml::{
     auto_embed, dimreduce, embedded_runtime, embeddings_gateway, finetuning, llm_provider,
@@ -152,7 +143,6 @@ pub use ml::inference_engine;
 // Security, encryption, multi-tenancy, RBAC, Raft consensus.
 
 /// Enterprise features: encryption, RBAC, multi-tenancy, Raft consensus, and autoscaling.
-#[allow(clippy::unwrap_used)] // tech debt: unwrap cleanup needed
 pub mod enterprise;
 #[cfg(feature = "encryption")]
 pub use enterprise::encryption;
@@ -162,7 +152,6 @@ pub use enterprise::{autoscaling, namespace, raft, security, tenant_isolation};
 // Telemetry, drift detection, anomaly detection, profiling.
 
 /// Observability: telemetry, drift detection, anomaly detection, and profiling.
-#[allow(clippy::unwrap_used)] // tech debt: unwrap cleanup needed
 pub mod observe;
 pub use observe::{anomaly, audit, dashboard, drift, observability, otel_service, profiler, telemetry};
 
@@ -170,7 +159,6 @@ pub use observe::{anomaly, audit, dashboard, drift, observability, otel_service,
 // Adapters for LangChain, LlamaIndex, Haystack, Semantic Kernel.
 
 /// Framework integrations: LangChain, LlamaIndex, Haystack, and Semantic Kernel adapters.
-#[allow(clippy::unwrap_used)] // tech debt: unwrap cleanup needed
 pub mod integrations;
 pub(crate) use integrations::framework_common;
 pub use integrations::{haystack, semantic_kernel};
@@ -188,7 +176,6 @@ pub use integrations::{langchain, llamaindex};
 /// `infrastructure/`, `observability/`, `pipeline/`, `plugin/`, `search/`,
 /// `storage/`, `sync/`. All modules are re-exported at the `services::` level
 /// for backward compatibility.
-#[allow(clippy::unwrap_used)] // tech debt: unwrap cleanup needed
 pub mod services;
 #[cfg(feature = "experimental")]
 pub use services::{adaptive_service, ingestion_pipeline, plugin_runtime};
@@ -298,7 +285,6 @@ pub use services::{
 ///
 /// Enable with `--features experimental`. Includes adaptive indexing, GPU acceleration,
 /// clustering, CRDT replication, graph operations, and more.
-#[allow(clippy::unwrap_used)] // tech debt: unwrap cleanup needed
 pub mod experimental;
 
 // Backward-compatible re-exports so `crate::module_name` still works
@@ -410,31 +396,25 @@ pub mod tui;
 
 /// Async database API with streaming support. Requires the `async` feature.
 #[cfg(feature = "async")]
-#[allow(clippy::unwrap_used)] // tech debt: unwrap cleanup needed
 pub mod async_api;
 
 /// BM25 text search and hybrid vector+text search with Reciprocal Rank Fusion. Requires the `hybrid` feature.
 #[cfg(feature = "hybrid")]
-#[allow(clippy::unwrap_used)] // tech debt: unwrap cleanup needed
 pub mod hybrid;
 
 /// HTTP REST API server with authentication and rate limiting. Requires the `server` feature.
 #[cfg(feature = "server")]
-#[allow(clippy::unwrap_used)] // tech debt: unwrap cleanup needed
 pub mod server;
 
 /// Model Context Protocol (MCP) tools for LLM integration.
-#[allow(clippy::unwrap_used)] // tech debt: unwrap cleanup needed
 pub mod mcp;
 
 /// Web-based administration UI. Requires the `web-ui` feature.
 #[cfg(feature = "web-ui")]
-#[allow(clippy::unwrap_used)] // tech debt: unwrap cleanup needed
 pub mod web_ui;
 
 /// Prometheus metrics export and monitoring. Requires the `metrics` feature.
 #[cfg(feature = "metrics")]
-#[allow(clippy::unwrap_used)] // tech debt: unwrap cleanup needed
 pub mod metrics;
 
 /// ONNX Runtime embedding inference. Requires the `embeddings` feature.
@@ -447,7 +427,6 @@ pub use ml::embeddings_provider;
 
 /// Python bindings via PyO3. Requires the `python` feature.
 #[cfg(feature = "python")]
-#[allow(clippy::unwrap_used)] // tech debt: unwrap cleanup needed
 pub mod python;
 
 /// WebAssembly bindings for browser and Node.js. Requires the `wasm` feature.
@@ -456,7 +435,6 @@ pub mod wasm;
 
 /// Swift and Kotlin bindings via UniFFI. Requires the `uniffi-bindings` feature.
 #[cfg(feature = "uniffi-bindings")]
-#[allow(clippy::unwrap_used)] // tech debt: unwrap cleanup needed
 pub mod uniffi_bindings;
 
 // UniFFI scaffolding must be at crate root

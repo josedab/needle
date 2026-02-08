@@ -5,6 +5,7 @@
 //! - Vector similarity for semantic search
 //! - Reciprocal Rank Fusion (RRF) for combining results
 
+#![allow(clippy::unwrap_used)] // tech debt: per-module unwrap cleanup in progress
 use rust_stemmers::{Algorithm, Stemmer};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
