@@ -1,4 +1,5 @@
 //! Storage services.
+#![allow(clippy::unwrap_used)] // tech debt: 95 unwrap() calls remaining
 
 #[cfg(feature = "experimental")]
 pub mod backup_command;

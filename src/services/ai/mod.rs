@@ -1,4 +1,5 @@
 //! Ai services.
+#![allow(clippy::unwrap_used)] // tech debt: 298 unwrap() calls remaining
 
 #[cfg(feature = "experimental")]
 pub mod agentic_memory_protocol;

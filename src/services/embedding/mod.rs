@@ -1,4 +1,5 @@
 //! Embedding services.
+#![allow(clippy::unwrap_used)] // tech debt: 119 unwrap() calls remaining
 
 #[cfg(feature = "experimental")]
 pub mod auto_embed_endpoint;
