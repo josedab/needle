@@ -342,3 +342,115 @@ pub(super) async fn security_headers_middleware(
     );
     response
 }
+
+// ── API Stability Tiers ──────────────────────────────────────────────────
+
+/// Stability tiers for REST endpoints.
+#[derive(Clone, Copy)]
+enum StabilityTier {
+    Stable,
+    Beta,
+    Experimental,
+}
+
+impl StabilityTier {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Stable => "stable",
+            Self::Beta => "beta",
+            Self::Experimental => "experimental",
+        }
+    }
+}
+
+/// Classify a request path into a stability tier.
+fn classify_stability(path: &str) -> StabilityTier {
+    // Experimental endpoints
+    if path.contains("/memory/")
+        || path.contains("/search/graph")
+        || path.contains("/search/matryoshka")
+        || path.contains("/cache/")
+        || path.contains("/ingest")
+        || path.contains("/search/time-travel")
+        || path.contains("/snapshots/diff")
+        || path.contains("/search/estimate")
+        || path.contains("/diff")
+        || path.contains("/changes")
+        || path.contains("/benchmark")
+        || path.contains("/cluster/")
+        || path.contains("/grpc/")
+        || path.contains("/tracing/")
+        || path.contains("/webhooks")
+        || path.contains("/embeddings/router")
+        || path.contains("/mcp")
+        || path.contains("/playground")
+    {
+        return StabilityTier::Experimental;
+    }
+
+    // Beta endpoints
+    if path.contains("/texts")
+        || path.contains("/aliases")
+        || path.contains("/expire")
+        || path.contains("/ttl-stats")
+        || path.contains("/index/status")
+        || path.contains("/snapshots")
+        || path.contains("/dashboard")
+        || path.contains("/openapi.json")
+    {
+        return StabilityTier::Beta;
+    }
+
+    // Everything else is stable (health, info, CRUD, search, save, etc.)
+    StabilityTier::Stable
+}
+
+static STABILITY_HEADER: header::HeaderName = header::HeaderName::from_static("x-needle-api-stability");
+
+/// Middleware that adds an `X-Needle-API-Stability` header to every response.
+pub(super) async fn api_stability_middleware(
+    request: Request<Body>,
+    next: Next,
+) -> Response {
+    let tier = classify_stability(request.uri().path());
+    let mut response = next.run(request).await;
+    response.headers_mut().insert(
+        STABILITY_HEADER.clone(),
+        tier.as_str().parse().expect("static header value"), // allow-expect
+    );
+    response
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_classify_stability_stable() {
+        assert!(matches!(classify_stability("/health"), StabilityTier::Stable));
+        assert!(matches!(classify_stability("/collections"), StabilityTier::Stable));
+        assert!(matches!(classify_stability("/collections/docs/vectors"), StabilityTier::Stable));
+        assert!(matches!(classify_stability("/collections/docs/search"), StabilityTier::Stable));
+        assert!(matches!(classify_stability("/save"), StabilityTier::Stable));
+    }
+
+    #[test]
+    fn test_classify_stability_beta() {
+        assert!(matches!(classify_stability("/collections/docs/texts"), StabilityTier::Beta));
+        assert!(matches!(classify_stability("/aliases"), StabilityTier::Beta));
+        assert!(matches!(classify_stability("/collections/docs/expire"), StabilityTier::Beta));
+        assert!(matches!(classify_stability("/collections/docs/ttl-stats"), StabilityTier::Beta));
+        assert!(matches!(classify_stability("/dashboard"), StabilityTier::Beta));
+        assert!(matches!(classify_stability("/openapi.json"), StabilityTier::Beta));
+    }
+
+    #[test]
+    fn test_classify_stability_experimental() {
+        assert!(matches!(classify_stability("/collections/docs/memory/recall"), StabilityTier::Experimental));
+        assert!(matches!(classify_stability("/collections/docs/search/graph"), StabilityTier::Experimental));
+        assert!(matches!(classify_stability("/mcp"), StabilityTier::Experimental));
+        assert!(matches!(classify_stability("/playground"), StabilityTier::Experimental));
+        assert!(matches!(classify_stability("/webhooks"), StabilityTier::Experimental));
+        assert!(matches!(classify_stability("/collections/docs/cache/lookup"), StabilityTier::Experimental));
+    }
+}

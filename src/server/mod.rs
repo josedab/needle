@@ -499,6 +499,7 @@ pub fn create_router_with_config(state: Arc<AppState>, config: &ServerConfig) ->
     let router = router.layer(axum::middleware::from_fn(metrics_middleware));
 
     router
+        .layer(axum::middleware::from_fn(api_stability_middleware))
         .layer(axum::middleware::from_fn(security_headers_middleware))
         .layer(TraceLayer::new_for_http())
         .layer(timeout_layer)
