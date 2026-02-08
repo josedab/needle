@@ -975,13 +975,8 @@ impl FilterBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_utils::random_vector;
     use serde_json::json;
-
-    fn random_vector(dim: usize) -> Vec<f32> {
-        use rand::Rng;
-        let mut rng = rand::thread_rng();
-        (0..dim).map(|_| rng.gen::<f32>()).collect()
-    }
 
     fn normalize_vector(v: &mut [f32]) {
         let norm: f32 = v.iter().map(|x| x * x).sum::<f32>().sqrt();

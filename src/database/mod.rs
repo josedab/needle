@@ -1820,14 +1820,9 @@ pub use collection_ref::{CollectionRef, SearchParams};
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_utils::random_vector;
     use serde_json::json;
     use tempfile::tempdir;
-
-    fn random_vector(dim: usize) -> Vec<f32> {
-        use rand::Rng;
-        let mut rng = rand::thread_rng();
-        (0..dim).map(|_| rng.gen::<f32>()).collect()
-    }
 
     #[test]
     fn test_database_in_memory() {

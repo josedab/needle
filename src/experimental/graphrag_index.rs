@@ -827,6 +827,7 @@ pub struct GraphStats {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_utils::random_vector;
 
     #[test]
     fn test_entity_extraction() {
@@ -918,12 +919,6 @@ mod tests {
         let index = GraphRagIndex::new(4, GraphRagConfig::default());
         assert!(index.is_empty());
         assert_eq!(index.len(), 0);
-    }
-
-    fn random_vector(dim: usize) -> Vec<f32> {
-        use rand::Rng;
-        let mut rng = rand::thread_rng();
-        (0..dim).map(|_| rng.gen::<f32>()).collect()
     }
 
     #[test]

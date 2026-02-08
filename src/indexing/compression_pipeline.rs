@@ -637,14 +637,7 @@ pub fn recommend_compression(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn random_vectors(count: usize, dims: usize) -> Vec<Vec<f32>> {
-        use rand::Rng;
-        let mut rng = rand::thread_rng();
-        (0..count)
-            .map(|_| (0..dims).map(|_| rng.gen::<f32>()).collect())
-            .collect()
-    }
+    use crate::test_utils::random_vectors;
 
     #[test]
     fn test_sq_pipeline() {

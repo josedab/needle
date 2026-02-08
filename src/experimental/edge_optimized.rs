@@ -732,13 +732,8 @@ impl CompactIndexSnapshot {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_utils::random_vector;
     use serde_json::json;
-
-    fn random_vector(dim: usize) -> Vec<f32> {
-        use rand::Rng;
-        let mut rng = rand::thread_rng();
-        (0..dim).map(|_| rng.gen::<f32>()).collect()
-    }
 
     #[test]
     fn test_platform_limits() {

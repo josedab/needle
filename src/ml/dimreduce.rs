@@ -625,13 +625,7 @@ pub fn find_optimal_components(vectors: &[&[f32]], target_variance: f32) -> Resu
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn random_vectors(n: usize, d: usize) -> Vec<Vec<f32>> {
-        let mut rng = rand::thread_rng();
-        (0..n)
-            .map(|_| (0..d).map(|_| rng.gen::<f32>()).collect())
-            .collect()
-    }
+    use crate::test_utils::random_vectors;
 
     #[test]
     fn test_pca_basic() {

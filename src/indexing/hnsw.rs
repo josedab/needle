@@ -1237,12 +1237,8 @@ pub struct PrefetchStats {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_utils::random_vector;
     use std::collections::HashSet;
-
-    fn random_vector(dim: usize) -> Vec<f32> {
-        let mut rng = rand::thread_rng();
-        (0..dim).map(|_| rng.gen::<f32>()).collect()
-    }
 
     #[test]
     fn test_hnsw_insert_and_search() {

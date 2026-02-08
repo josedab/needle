@@ -470,12 +470,7 @@ pub fn standard_datasets() -> Vec<DatasetConfig> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rand::Rng;
-
-    fn random_vectors(n: usize, dim: usize) -> Vec<Vec<f32>> {
-        let mut rng = rand::thread_rng();
-        (0..n).map(|_| (0..dim).map(|_| rng.gen::<f32>()).collect()).collect()
-    }
+    use crate::test_utils::random_vectors;
 
     fn brute_force_neighbors(vectors: &[Vec<f32>], query: &[f32], k: usize) -> Vec<usize> {
         let mut dists: Vec<(usize, f32)> = vectors.iter().enumerate()

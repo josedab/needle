@@ -925,12 +925,7 @@ pub struct GraphPath {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rand::Rng;
-
-    fn random_vector(dim: usize) -> Vec<f32> {
-        let mut rng = rand::thread_rng();
-        (0..dim).map(|_| rng.gen::<f32>()).collect()
-    }
+    use crate::test_utils::random_vector;
 
     #[test]
     fn test_add_entity_and_search() {
