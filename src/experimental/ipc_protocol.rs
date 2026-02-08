@@ -563,33 +563,59 @@ impl SharedMemoryFile {
         new_epoch
     }
 
-    /// Try to acquire the writer lock using CAS semantics.
+    /// Try to acquire the writer lock using atomic CAS.
     /// Returns true if the lock was acquired.
     pub fn try_acquire_writer_lock(&mut self) -> bool {
-        let current = self.read_u32(header_offsets::WRITER_LOCK);
-        if current == 0 {
-            self.write_u32(header_offsets::WRITER_LOCK, 1);
-            true
-        } else {
-            false
+        let offset = header_offsets::WRITER_LOCK;
+        if offset + 4 > self.mmap.len() {
+            return false;
         }
+        // Safety: offset is aligned within the mmap region, and this file allows unsafe_code.
+        let atomic = unsafe {
+            &*(self.mmap.as_ptr().add(offset) as *const AtomicU32)
+        };
+        atomic
+            .compare_exchange(0, 1, Ordering::Acquire, Ordering::Relaxed)
+            .is_ok()
     }
 
     /// Release the writer lock.
     pub fn release_writer_lock(&mut self) {
-        self.write_u32(header_offsets::WRITER_LOCK, 0);
+        let offset = header_offsets::WRITER_LOCK;
+        if offset + 4 > self.mmap.len() {
+            return;
+        }
+        let atomic = unsafe {
+            &*(self.mmap.as_ptr().add(offset) as *const AtomicU32)
+        };
+        atomic.store(0, Ordering::Release);
     }
 
-    /// Increment the reader count.
+    /// Increment the reader count atomically.
     pub fn increment_readers(&mut self) {
-        let count = self.read_u32(header_offsets::READER_COUNT);
-        self.write_u32(header_offsets::READER_COUNT, count + 1);
+        let offset = header_offsets::READER_COUNT;
+        if offset + 4 > self.mmap.len() {
+            return;
+        }
+        let atomic = unsafe {
+            &*(self.mmap.as_ptr().add(offset) as *const AtomicU32)
+        };
+        atomic.fetch_add(1, Ordering::Acquire);
     }
 
-    /// Decrement the reader count.
+    /// Decrement the reader count atomically.
     pub fn decrement_readers(&mut self) {
-        let count = self.read_u32(header_offsets::READER_COUNT);
-        self.write_u32(header_offsets::READER_COUNT, count.saturating_sub(1));
+        let offset = header_offsets::READER_COUNT;
+        if offset + 4 > self.mmap.len() {
+            return;
+        }
+        let atomic = unsafe {
+            &*(self.mmap.as_ptr().add(offset) as *const AtomicU32)
+        };
+        // Use saturating semantics: fetch_sub with a floor of 0
+        let _ = atomic.fetch_update(Ordering::Release, Ordering::Relaxed, |v| {
+            Some(v.saturating_sub(1))
+        });
     }
 
     /// Get the current reader count.
