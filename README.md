@@ -253,18 +253,25 @@ fn main() -> needle::Result<()> {
 ### Python
 
 ```python
-import needle
+import needle_db as needle
+
+# Create a client (in-memory or file-backed)
+client = needle.Client()
 
 # Create a collection
-collection = needle.PyCollection("documents", 384, "cosine")
+collection = client.get_or_create_collection("documents", dimensions=384)
 
 # Insert vectors
-collection.insert("doc1", [0.1] * 384, {"title": "Hello"})
+collection.add(
+    ids=["doc1"],
+    vectors=[[0.1] * 384],
+    metadatas=[{"title": "Hello"}],
+)
 
 # Search
 results = collection.search([0.1] * 384, k=10)
 for result in results:
-    print(f"ID: {result.id}, Distance: {result.distance}")
+    print(f"ID: {result['id']}, Distance: {result['distance']}")
 # Output:
 # ID: doc1, Distance: 0.0
 
