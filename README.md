@@ -119,7 +119,9 @@ Memory usage: ~1.7GB for 1M vectors (384 dims) with HNSW index.
 | [Distributed Operations](docs/distributed-operations.md) | Sharding, replication, and clustering |
 | [Services Architecture](docs/ARCHITECTURE_SERVICES.md) | Service module organization and dependencies |
 | [Migration Guide](docs/MIGRATION.md) | Version upgrade and migration instructions |
+| [WASM Guide](docs/WASM_GUIDE.md) | WebAssembly bindings usage and setup |
 | [Governance](docs/GOVERNANCE.md) | Project governance model |
+| [MCP Integration](docs/mcp-integration.md) | Claude Desktop and MCP client setup |
 | [Support](docs/SUPPORT.md) | Getting help and support channels |
 | [Security](SECURITY.md) | Security policy and vulnerability reporting |
 | [Examples](examples/README.md) | Runnable example commands |
@@ -155,6 +157,8 @@ Memory usage: ~1.7GB for 1M vectors (384 dims) with HNSW index.
 ### Experimental
 - **GPU Acceleration**: CUDA/Metal/OpenCL support for distance computation *(scaffolding only — CPU fallback)*
 - **Cloud Storage**: S3, Azure Blob, and GCS backends *(interface only — not production-ready)*
+
+> See [Experimental Module Triage Report](docs/experimental-triage.md) for the full module inventory and stabilisation roadmap.
 
 ### Known Issues
 - **GPU & Cloud Storage**: Scaffolding/interface only. These features compile but fall back to in-memory/CPU at runtime. Do not use in production.
@@ -605,7 +609,7 @@ MIT License
 
 ## Contributing
 
-Contributions are welcome! Please see our contributing guidelines.
+Contributions are welcome! Please see our [contributing guidelines](CONTRIBUTING.md).
 
 ## Acknowledgments
 
