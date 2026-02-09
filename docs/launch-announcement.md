@@ -1,5 +1,7 @@
 # Introducing Needle: SQLite for Vectors
 
+*v0.1.0 — February 20, 2026*
+
 **TL;DR**: Needle is an embedded vector database written in Rust. Single-file storage, zero configuration, sub-10ms search, 5 language bindings. Think SQLite, but for vector similarity search.
 
 ## Why Another Vector Database?
