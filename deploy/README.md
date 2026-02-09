@@ -2,6 +2,8 @@
 
 This directory contains deployment configurations for running Needle in various environments.
 
+> **Start here:** For most users, **Docker Compose** ([`docker-compose.yml`](../docker-compose.yml)) is the fastest way to get Needle running in production. For Kubernetes environments, use the **Helm chart** ([`helm/needle/`](../helm/needle/README.md)) which provides the most flexibility.
+
 ## Directory Structure
 
 ```
