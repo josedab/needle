@@ -378,7 +378,7 @@ let feedback = SearchFeedback {
 fusion.record_feedback(feedback);
 
 // Get learned weights
-let stats = fusion.get_stats();
+let stats = fusion.stats();
 println!("Learned vector weight: {:.2}", stats.vector_weight);
 println!("Learned BM25 weight: {:.2}", stats.bm25_weight);
 ```

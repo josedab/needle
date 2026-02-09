@@ -299,7 +299,7 @@ use needle::distributed::RebalanceCoordinator;
 let coordinator = RebalanceCoordinator::new(&cluster);
 
 // Check current balance
-let stats = coordinator.get_stats().await?;
+let stats = coordinator.stats()?;
 println!("Shard sizes: {:?}", stats.shard_sizes);
 println!("Imbalance ratio: {:.2}", stats.imbalance_ratio);
 
