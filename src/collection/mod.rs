@@ -44,7 +44,7 @@
 //! - [`search_builder`](Collection::search_builder) - Fluent search configuration
 //! - [`batch_search`](Collection::batch_search) - Parallel multi-query search
 
-#![allow(clippy::unwrap_used)] // tech debt: 184 unwrap() calls remaining
+#![allow(clippy::unwrap_used)] // tech debt: 175 unwrap() calls remaining
 pub mod config;
 pub use config::*;
 pub mod search;
