@@ -272,17 +272,17 @@ collection.add(
 )
 
 # Search
-results = collection.search([0.1] * 384, k=10)
-for result in results:
-    print(f"ID: {result['id']}, Distance: {result['distance']}")
+results = collection.query(query_vectors=[[0.1] * 384], n_results=10)
+for doc_id, dist in zip(results.ids[0], results.distances[0]):
+    print(f"ID: {doc_id}, Distance: {dist}")
 # Output:
 # ID: doc1, Distance: 0.0
 
 # Search with filter
-results = collection.search_with_filter(
-    [0.1] * 384,
-    k=10,
-    filter={"category": {"$eq": "greeting"}}
+results = collection.query(
+    query_vectors=[[0.1] * 384],
+    n_results=10,
+    where={"category": {"$eq": "greeting"}}
 )
 ```
 
