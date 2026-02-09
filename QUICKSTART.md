@@ -4,6 +4,8 @@ Pick **one** path and copy-paste the block. Each ends with visible output.
 
 ## Path 1: Rust Library
 
+> **Note:** This path compiles from source and may take 5–15 minutes on first build. For the fastest setup (under 2 minutes), use **Path 2: HTTP Server (Docker)** below.
+
 ```bash
 cargo add needle serde_json
 ```
