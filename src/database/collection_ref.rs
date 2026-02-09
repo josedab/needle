@@ -43,6 +43,8 @@ pub struct SearchParams<'a> {
 
 impl<'a> SearchParams<'a> {
     /// Set the maximum number of results to return (default: 10).
+    ///
+    /// A higher value returns more results but may increase query latency.
     #[must_use]
     pub fn limit(mut self, k: usize) -> Self {
         self.k = k;
@@ -50,6 +52,10 @@ impl<'a> SearchParams<'a> {
     }
 
     /// Set a pre-filter applied during ANN search.
+    ///
+    /// Pre-filters are evaluated during graph traversal, which can improve
+    /// performance for highly selective filters but may reduce recall for
+    /// very restrictive conditions. Use [`Filter::parse`] to build filters.
     #[must_use]
     pub fn filter(mut self, filter: &'a Filter) -> Self {
         self.filter = Some(filter);
@@ -57,6 +63,10 @@ impl<'a> SearchParams<'a> {
     }
 
     /// Set a post-filter applied after ANN search.
+    ///
+    /// Post-filters are applied to the ANN result set after retrieval.
+    /// The search over-fetches by [`post_filter_factor`](Self::post_filter_factor)
+    /// to compensate for filtered-out results.
     #[must_use]
     pub fn post_filter(mut self, filter: &'a Filter) -> Self {
         self.post_filter = Some(filter);
@@ -64,6 +74,9 @@ impl<'a> SearchParams<'a> {
     }
 
     /// Set the over-fetch factor for post-filtering (default: 3).
+    ///
+    /// When a post-filter is active, `k * factor` candidates are retrieved
+    /// from the index before filtering down to `k` results.
     #[must_use]
     pub fn post_filter_factor(mut self, factor: usize) -> Self {
         self.post_filter_factor = factor;
@@ -71,7 +84,10 @@ impl<'a> SearchParams<'a> {
     }
 
     /// Override the distance function for this query.
-    /// Falls back to brute-force search when different from the collection's default.
+    ///
+    /// When the override differs from the collection's default distance
+    /// function, the search falls back to brute-force instead of using
+    /// the HNSW index.
     #[must_use]
     pub fn distance(mut self, distance: DistanceFunction) -> Self {
         self.distance_override = Some(distance);
