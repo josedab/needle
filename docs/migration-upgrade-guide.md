@@ -2,6 +2,8 @@
 
 This guide covers upgrading Needle versions, migrating between index types, and migrating from other vector databases.
 
+> **See also:** [Migration Guide](MIGRATION.md) for breaking changes, deprecated APIs, and step-by-step migration instructions between specific versions.
+
 ## Version Compatibility
 
 ### Semantic Versioning

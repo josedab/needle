@@ -2,6 +2,8 @@
 
 This guide covers breaking changes and migration paths between Needle versions.
 
+> **See also:** [Migration and Upgrade Guide](migration-upgrade-guide.md) for version compatibility matrices, file format upgrades, and migrating from other vector databases.
+
 ## v0.1.x → v1.0.0 (Planned)
 
 ### Deprecated APIs
