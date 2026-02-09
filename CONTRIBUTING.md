@@ -688,4 +688,27 @@ cargo bench -- --warm-up-time 3
 
 Contributors will be acknowledged in release notes and the project README.
 
+---
+
+## Error Handling Tech Debt
+
+The codebase currently contains many `.unwrap()` calls behind per-module `#[allow(clippy::unwrap_used)]` overrides (see the tech-debt markers in `src/lib.rs`). The workspace lint `clippy::unwrap_used = "deny"` prevents **new** modules from introducing more, but existing usages need gradual cleanup.
+
+### Tracking
+
+The module `src/services/governance/unwrap_audit.rs` provides tooling for auditing `.unwrap()` usage across the codebase. Run the audit to find remaining call sites.
+
+### Contributing
+
+Converting `.unwrap()` → `?` (or proper pattern matching) is an excellent **good-first-issue** contribution:
+
+1. Pick a module that has `#[allow(clippy::unwrap_used)]` in `src/lib.rs`.
+2. Replace `.unwrap()` calls with `?`, `.unwrap_or()`, or `match` as appropriate.
+3. Once a module is clean, remove the `#[allow(clippy::unwrap_used)]` override.
+4. Run `cargo clippy --features full -- -D warnings` to verify.
+
+Small, focused PRs (one module at a time) are preferred.
+
+---
+
 Thank you for contributing to Needle!
