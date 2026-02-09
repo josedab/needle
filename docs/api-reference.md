@@ -1,5 +1,7 @@
 # Needle API Reference
 
+> **Version**: This reference covers Needle **v0.1.0**. Check the [CHANGELOG](../CHANGELOG.md) for updates to the API.
+
 Complete API reference for Needle vector database.
 
 ## REST API (OpenAPI)
