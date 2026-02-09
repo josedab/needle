@@ -801,6 +801,27 @@ needle tune vectors.needle --profile balanced --apply
 
 ## Appendix: Configuration Reference
 
+### Configuration Precedence
+
+Needle resolves configuration from multiple sources. When the same setting is
+specified in more than one place, the **highest-priority source wins**:
+
+| Priority | Source | Example |
+|----------|--------|---------|
+| 1 (highest) | CLI flags | `needle serve -a 0.0.0.0:9090` |
+| 2 | Environment variables | `NEEDLE_ADDRESS=0.0.0.0:9090` |
+| 3 | Config file (`--config`) | `address = "0.0.0.0:9090"` in TOML |
+| 4 (lowest) | Built-in defaults | `127.0.0.1:8080` |
+
+**Rules:**
+
+- CLI flags always take precedence over environment variables and config files.
+- Environment variables override config-file values but are overridden by explicit CLI flags.
+- The config file (passed via `--config`) provides baseline settings that apply when neither a CLI flag nor an environment variable is set.
+- Built-in defaults are used when no other source provides a value.
+
+> **Tip:** Use environment variables for container/CI deployments (easy to set per-environment) and CLI flags for one-off overrides. Keep a config file for shared team defaults.
+
 ### Environment Variables
 
 | Variable | Description | Default |
