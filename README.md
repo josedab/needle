@@ -119,6 +119,9 @@ Memory usage: ~1.7GB for 1M vectors (384 dims) with HNSW index.
 | [Distributed Operations](docs/distributed-operations.md) | Sharding, replication, and clustering |
 | [Services Architecture](docs/ARCHITECTURE_SERVICES.md) | Service module organization and dependencies |
 | [Migration Guide](docs/MIGRATION.md) | Version upgrade and migration instructions |
+| [Python SDK](docs/python.md) | Python client installation and usage |
+| [Benchmarks](docs/benchmarks.md) | Performance data and methodology |
+| [API Stability](docs/api-stability.md) | API stability tiers policy |
 | [WASM Guide](docs/WASM_GUIDE.md) | WebAssembly bindings usage and setup |
 | [Governance](docs/GOVERNANCE.md) | Project governance model |
 | [MCP Integration](docs/mcp-integration.md) | Claude Desktop and MCP client setup |
@@ -531,17 +534,34 @@ Needle uses Cargo feature flags to enable optional functionality. By default, no
 | Flag | Description | Stability |
 |------|-------------|-----------|
 | `simd` | SIMD-optimized distance functions (AVX2, NEON) | Stable |
+| `async` | Async API without HTTP server (embedded async usage) | Stable |
 | `server` | HTTP REST API server (Axum-based) | Stable |
 | `web-ui` | Web-based admin UI | Stable |
 | `metrics` | Prometheus metrics endpoint | Stable |
+| `observability` | Telemetry, drift detection, anomaly detection, profiling | Stable |
 | `hybrid` | BM25 + vector hybrid search with RRF fusion | Stable |
 | `encryption` | ChaCha20-Poly1305 authenticated encryption at rest | Stable |
 | `diskann` | DiskANN index for large-scale on-disk search | Stable |
 | `integrations` | LangChain / LlamaIndex adapters | Stable |
 | `embeddings` | ONNX embedding inference | **Unstable** (pre-release dependency) |
 | `embedding-providers` | OpenAI, Cohere, Ollama embedding providers | Stable |
+| `embedded-models` | Candle-based embedded model runtime (zero C/C++ deps) | **Experimental** |
 | `tui` | Terminal user interface | Stable |
-| `full` | All stable features (server + web-ui + metrics + hybrid + encryption + diskann + integrations + embedding-providers) | Stable |
+| `cloud-storage` | All cloud storage backends (S3 + GCS + Azure) | **Experimental** (mock/stub) |
+| `cloud-storage-s3` | Amazon S3 storage backend | **Experimental** (mock/stub) |
+| `cloud-storage-gcs` | Google Cloud Storage backend | **Experimental** (mock/stub) |
+| `cloud-storage-azure` | Azure Blob Storage backend | **Experimental** (mock/stub) |
+| `gpu` | GPU acceleration base (currently falls back to CPU) | **Experimental** (scaffolding) |
+| `gpu-cuda` | CUDA GPU backend | **Experimental** (scaffolding) |
+| `gpu-metal` | Metal GPU backend (macOS) | **Experimental** (scaffolding) |
+| `cdc` | All CDC connectors (Kafka + Pulsar + Postgres + MongoDB) | **Experimental** |
+| `cdc-kafka` | Kafka CDC connector | **Experimental** |
+| `cdc-pulsar` | Pulsar CDC connector | **Experimental** |
+| `cdc-postgres` | PostgreSQL CDC connector | **Experimental** |
+| `cdc-mongodb` | MongoDB CDC connector | **Experimental** |
+| `streaming-kafka` | Streaming ingestion via Kafka | **Experimental** |
+| `experimental` | Enable experimental modules (APIs may change) | **Experimental** |
+| `full` | All stable features (server + web-ui + metrics + hybrid + encryption + diskann + integrations + embedding-providers + observability + experimental) | Stable |
 | `python` | Python bindings via PyO3 | Stable |
 | `wasm` | WebAssembly bindings | Stable |
 | `uniffi-bindings` | Swift/Kotlin bindings via UniFFI | Stable |
