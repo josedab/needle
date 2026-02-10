@@ -26,7 +26,7 @@ helm install needle ./helm/needle -f my-values.yaml
 | Key | Default | Description |
 |-----|---------|-------------|
 | `replicaCount` | `1` | Number of replicas |
-| `image.repository` | `ghcr.io/needle-db/needle` | Container image repository |
+| `image.repository` | `ghcr.io/anthropics/needle` | Container image repository |
 | `image.tag` | `""` (appVersion) | Image tag override |
 | `image.pullPolicy` | `IfNotPresent` | Image pull policy |
 | `imagePullSecrets` | `[]` | Docker registry pull secrets |
