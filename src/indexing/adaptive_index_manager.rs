@@ -652,6 +652,109 @@ impl AdaptiveIndexManager {
     pub fn consecutive_recommendation_count(&self) -> usize {
         self.consecutive_recommendation.read().1
     }
+
+    /// Get latency histogram buckets (in ms) from recent queries.
+    /// Returns (bucket_upper_bound_ms, count) pairs.
+    pub fn latency_histogram(&self) -> Vec<(f64, usize)> {
+        let buckets = [0.5, 1.0, 2.5, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, f64::INFINITY];
+        let obs = self.observations.read();
+        let latencies: Vec<f64> = obs
+            .iter()
+            .filter(|o| matches!(o.kind, ObservationKind::Query))
+            .filter_map(|o| o.latency_ms)
+            .collect();
+
+        buckets
+            .iter()
+            .map(|&upper| {
+                let count = latencies.iter().filter(|&&l| l <= upper).count();
+                (upper, count)
+            })
+            .collect()
+    }
+
+    /// Get QPS (queries per second) computed over the observation window.
+    pub fn current_qps(&self) -> f64 {
+        let obs = self.observations.read();
+        let queries = obs
+            .iter()
+            .filter(|o| matches!(o.kind, ObservationKind::Query))
+            .count();
+        if queries < 2 {
+            return 0.0;
+        }
+        let first = obs.front().map(|o| o.timestamp);
+        let last = obs.back().map(|o| o.timestamp);
+        match (first, last) {
+            (Some(f), Some(l)) => {
+                let secs = l.duration_since(f).as_secs_f64().max(0.001);
+                queries as f64 / secs
+            }
+            _ => 0.0,
+        }
+    }
+
+    /// Get insert rate (inserts per second) over the observation window.
+    pub fn current_insert_rate(&self) -> f64 {
+        let obs = self.observations.read();
+        let inserts = obs
+            .iter()
+            .filter(|o| matches!(o.kind, ObservationKind::Insert))
+            .count();
+        if inserts < 2 {
+            return 0.0;
+        }
+        let first = obs.front().map(|o| o.timestamp);
+        let last = obs.back().map(|o| o.timestamp);
+        match (first, last) {
+            (Some(f), Some(l)) => {
+                let secs = l.duration_since(f).as_secs_f64().max(0.001);
+                inserts as f64 / secs
+            }
+            _ => 0.0,
+        }
+    }
+
+    /// Get a summary of the current adaptive state for diagnostics.
+    pub fn diagnostic_summary(&self) -> AdaptiveDiagnostics {
+        let obs = self.observations.read();
+        let query_count = obs
+            .iter()
+            .filter(|o| matches!(o.kind, ObservationKind::Query))
+            .count();
+        let insert_count = obs
+            .iter()
+            .filter(|o| matches!(o.kind, ObservationKind::Insert))
+            .count();
+        AdaptiveDiagnostics {
+            current_index: *self.current_index.read(),
+            observation_count: obs.len(),
+            query_count,
+            insert_count,
+            evaluation_count: *self.evaluation_count.read(),
+            rebuild_state: self.rebuild_state.read().clone(),
+            last_profile: self.last_profile.read().clone(),
+        }
+    }
+}
+
+/// Diagnostic information about the adaptive index state.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdaptiveDiagnostics {
+    /// Current active index type.
+    pub current_index: RecommendedIndex,
+    /// Total observations in the window.
+    pub observation_count: usize,
+    /// Query observations in the window.
+    pub query_count: usize,
+    /// Insert observations in the window.
+    pub insert_count: usize,
+    /// Total evaluations performed.
+    pub evaluation_count: u64,
+    /// Current rebuild state.
+    pub rebuild_state: RebuildState,
+    /// Last computed workload profile.
+    pub last_profile: Option<WorkloadProfile>,
 }
 
 #[cfg(test)]
@@ -787,5 +890,41 @@ mod tests {
         assert_eq!(swapped, Some(RecommendedIndex::Ivf));
         assert_eq!(manager.current_index(), RecommendedIndex::Ivf);
         assert!(matches!(manager.rebuild_state(), RebuildState::Idle));
+    }
+
+    #[test]
+    fn test_latency_histogram() {
+        let config = AdaptiveIndexConfig {
+            min_observations: 3,
+            ..Default::default()
+        };
+        let manager = AdaptiveIndexManager::new(config);
+        manager.record_query(0.3, 5);
+        manager.record_query(1.5, 5);
+        manager.record_query(7.0, 5);
+        manager.record_query(50.0, 5);
+
+        let hist = manager.latency_histogram();
+        assert!(!hist.is_empty());
+        // First bucket (<=0.5ms) should have 1 entry
+        assert_eq!(hist[0].1, 1);
+    }
+
+    #[test]
+    fn test_diagnostic_summary() {
+        let config = AdaptiveIndexConfig {
+            min_observations: 3,
+            ..Default::default()
+        };
+        let manager = AdaptiveIndexManager::new(config);
+        manager.record_query(1.0, 10);
+        manager.record_insert();
+        manager.record_insert();
+
+        let diag = manager.diagnostic_summary();
+        assert_eq!(diag.current_index, RecommendedIndex::Hnsw);
+        assert_eq!(diag.observation_count, 3);
+        assert_eq!(diag.query_count, 1);
+        assert_eq!(diag.insert_count, 2);
     }
 }
