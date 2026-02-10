@@ -255,7 +255,7 @@ impl NLFilterParser {
                 if let Some(pos) = query_lower.find(keyword) {
                     let now = std::time::SystemTime::now()
                         .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap()
+                        .expect("system time before UNIX epoch")
                         .as_secs();
 
                     temporal = Some(TemporalConstraint {
@@ -577,7 +577,7 @@ impl QueryBuilder {
     pub fn from_last_days(mut self, days: u64) -> Self {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
+            .expect("system time before UNIX epoch")
             .as_secs();
 
         self.temporal = Some(TemporalConstraint {
@@ -592,7 +592,7 @@ impl QueryBuilder {
         let filter = if self.filters.is_empty() {
             None
         } else if self.filters.len() == 1 {
-            Some(self.filters.into_iter().next().unwrap())
+            Some(self.filters.into_iter().next().expect("filters has exactly one element"))
         } else {
             Some(Filter::And(self.filters))
         };
@@ -826,7 +826,7 @@ impl ConversationalQueryParser {
                 all_filters.push(f);
             }
             parsed.filter = Some(if all_filters.len() == 1 {
-                all_filters.into_iter().next().unwrap()
+                all_filters.into_iter().next().expect("all_filters has exactly one element")
             } else {
                 Filter::And(all_filters)
             });
@@ -1067,12 +1067,12 @@ impl ConversationalQueryParser {
     }
 
     /// Get the conversation context
-    pub fn context(&self) -> parking_lot::RwLockReadGuard<ConversationContext> {
+    pub fn context(&self) -> parking_lot::RwLockReadGuard<'_, ConversationContext> {
         self.context.read()
     }
 
     /// Get mutable conversation context
-    pub fn context_mut(&self) -> parking_lot::RwLockWriteGuard<ConversationContext> {
+    pub fn context_mut(&self) -> parking_lot::RwLockWriteGuard<'_, ConversationContext> {
         self.context.write()
     }
 
