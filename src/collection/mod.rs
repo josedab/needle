@@ -44,9 +44,14 @@
 //! - [`search_builder`](Collection::search_builder) - Fluent search configuration
 //! - [`batch_search`](Collection::batch_search) - Parallel multi-query search
 
+pub mod config;
+pub use config::*;
+pub mod search;
+pub use search::*;
+
 use crate::distance::DistanceFunction;
 use crate::error::{NeedleError, Result};
-use crate::hnsw::{HnswConfig, HnswIndex, VectorId};
+use crate::hnsw::{HnswIndex, VectorId};
 use crate::metadata::{Filter, MetadataStore};
 use crate::storage::VectorStore;
 use lru::LruCache;
@@ -55,143 +60,15 @@ use parking_lot::Mutex;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::num::NonZeroUsize;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::warn;
 
-/// A single result from a vector similarity search.
-///
-/// Contains the vector's identifier, its distance from the query, and optionally
-/// the associated metadata. Results are typically returned sorted by distance
-/// (ascending for most distance functions).
-///
-/// # Distance Interpretation
-///
-/// The meaning of the `distance` field depends on the collection's distance function:
-///
-/// | Function | Range | Interpretation |
-/// |----------|-------|----------------|
-/// | Cosine | 0.0 - 2.0 | 0 = identical, 2 = opposite |
-/// | Euclidean | 0.0 - ∞ | 0 = identical |
-/// | DotProduct | -∞ - +∞ | Higher (less negative) = more similar |
-/// | Manhattan | 0.0 - ∞ | 0 = identical |
-///
-/// # Example
-///
-/// ```
-/// use needle::SearchResult;
-///
-/// let result = SearchResult::new("doc_123", 0.15, None);
-/// println!("Found {} with distance {}", result.id, result.distance);
-///
-/// if let Some(meta) = &result.metadata {
-///     println!("Metadata: {}", meta);
-/// }
-/// ```
-#[derive(Debug, Clone)]
-pub struct SearchResult {
-    /// The unique string identifier of the vector.
-    pub id: String,
-
-    /// Distance from the query vector. Lower values indicate greater similarity
-    /// for Cosine, Euclidean, and Manhattan; for DotProduct, higher (less negative)
-    /// values indicate greater similarity.
-    pub distance: f32,
-
-    /// Optional JSON metadata associated with this vector. Only populated if
-    /// the vector has metadata and `include_metadata` was not set to false
-    /// in the search builder.
-    pub metadata: Option<Value>,
-}
-
-impl SearchResult {
-    /// Create a new search result
-    #[must_use]
-    pub fn new(id: impl Into<String>, distance: f32, metadata: Option<Value>) -> Self {
-        Self {
-            id: id.into(),
-            distance,
-            metadata,
-        }
-    }
-}
-
-impl From<(String, f32)> for SearchResult {
-    fn from((id, distance): (String, f32)) -> Self {
-        Self {
-            id,
-            distance,
-            metadata: None,
-        }
-    }
-}
-
-impl From<(String, f32, Option<Value>)> for SearchResult {
-    fn from((id, distance, metadata): (String, f32, Option<Value>)) -> Self {
-        Self {
-            id,
-            distance,
-            metadata,
-        }
-    }
-}
-
-impl From<SearchResult> for (String, f32, Option<Value>) {
-    fn from(result: SearchResult) -> Self {
-        (result.id, result.distance, result.metadata)
-    }
-}
-
-/// Detailed query execution plan and profiling information.
-///
-/// Returned by search operations when explain mode is enabled, providing
-/// insights into query performance for optimization and debugging.
-///
-/// # Example
-///
-/// ```
-/// use needle::Collection;
-///
-/// let mut collection = Collection::with_dimensions("test", 4);
-/// collection.insert("v1", &[1.0, 0.0, 0.0, 0.0], None).unwrap();
-///
-/// let (results, explain) = collection.search_explain(&[1.0, 0.0, 0.0, 0.0], 10).unwrap();
-/// println!("Total time: {}μs", explain.total_time_us);
-/// println!("Nodes visited: {}", explain.hnsw_stats.visited_nodes);
-/// ```
-#[derive(Debug, Clone, Default)]
-pub struct SearchExplain {
-    /// Total search time in microseconds
-    pub total_time_us: u64,
-    /// Time spent in HNSW index traversal (microseconds)
-    pub index_time_us: u64,
-    /// Time spent evaluating metadata filters (microseconds)
-    pub filter_time_us: u64,
-    /// Time spent enriching results with metadata (microseconds)
-    pub enrich_time_us: u64,
-    /// Number of results before filtering
-    pub candidates_before_filter: usize,
-    /// Number of results after filtering
-    pub candidates_after_filter: usize,
-    /// HNSW index statistics
-    pub hnsw_stats: crate::hnsw::SearchStats,
-    /// Collection dimensions
-    pub dimensions: usize,
-    /// Collection vector count
-    pub collection_size: usize,
-    /// Requested k value
-    pub requested_k: usize,
-    /// Effective k (clamped to collection size)
-    pub effective_k: usize,
-    /// ef_search parameter used
-    pub ef_search: usize,
-    /// Whether a filter was applied
-    pub filter_applied: bool,
-    /// Distance function used
-    pub distance_function: String,
-}
+/// Over-fetch multiplier for filtered searches: retrieve `k * FILTER_CANDIDATE_MULTIPLIER`
+/// candidates from the HNSW index to compensate for results removed by filtering.
+const FILTER_CANDIDATE_MULTIPLIER: usize = 10;
 
 /// Fluent builder for configuring and executing vector similarity searches.
 ///
@@ -402,45 +279,60 @@ impl<'a> SearchBuilder<'a> {
 
     /// Execute the search and return results
     pub fn execute(self) -> Result<Vec<SearchResult>> {
+        self.validate_query()?;
+
+        // Check if we need brute-force search due to distance override
+        if let Some(distance_fn) = self.brute_force_distance() {
+            warn!(
+                "Distance override ({:?}) differs from index ({:?}), using brute-force search",
+                distance_fn, self.collection.config.distance
+            );
+            return self.collection.brute_force_search(&BruteForceSearchParams {
+                query: self.query,
+                k: self.k,
+                distance_fn,
+                filter: self.filter,
+                post_filter: self.post_filter,
+                include_metadata: self.include_metadata,
+            });
+        }
+
+        let fetch_count = self.calculate_fetch_count();
+        let raw_results = self.fetch_raw_results(fetch_count);
+        let non_expired = self.filter_expired(raw_results);
+        let post_filter_factor = if self.post_filter.is_some() { self.post_filter_factor } else { 1 };
+        let pre_filtered = self.apply_pre_filter(non_expired, self.k * post_filter_factor.max(1));
+        let mut enriched = self.enrich(pre_filtered)?;
+        self.apply_post_filter(&mut enriched);
+        Ok(enriched)
+    }
+
+    /// Validate query dimensions and vector values.
+    fn validate_query(&self) -> Result<()> {
         if self.query.len() != self.collection.config.dimensions {
             return Err(NeedleError::DimensionMismatch {
                 expected: self.collection.config.dimensions,
                 got: self.query.len(),
             });
         }
+        Collection::validate_vector(self.query)
+    }
 
-        Collection::validate_vector(self.query)?;
+    /// Returns the override distance function if brute-force fallback is needed.
+    fn brute_force_distance(&self) -> Option<DistanceFunction> {
+        self.distance_override.filter(|&d| d != self.collection.config.distance)
+    }
 
-        // Check if we need brute-force search due to distance override
-        let use_brute_force = self.distance_override
-            .map(|d| d != self.collection.config.distance)
-            .unwrap_or(false);
-
-        if use_brute_force {
-            let distance_fn = self.distance_override.unwrap();
-            warn!(
-                "Distance override ({:?}) differs from index ({:?}), using brute-force search",
-                distance_fn, self.collection.config.distance
-            );
-            return self.collection.brute_force_search(
-                self.query,
-                self.k,
-                distance_fn,
-                self.filter,
-                self.post_filter,
-                self.include_metadata,
-            );
-        }
-
-        // Calculate how many candidates to fetch:
-        // - Pre-filter: 10x to compensate for filtered-out results
-        // - Post-filter: use post_filter_factor
-        let pre_filter_factor = if self.filter.is_some() { 10 } else { 1 };
+    /// Calculate how many candidates to fetch from the index.
+    fn calculate_fetch_count(&self) -> usize {
+        let pre_filter_factor = if self.filter.is_some() { FILTER_CANDIDATE_MULTIPLIER } else { 1 };
         let post_filter_factor = if self.post_filter.is_some() { self.post_filter_factor } else { 1 };
-        let fetch_count = self.k * pre_filter_factor * post_filter_factor;
+        self.k * pre_filter_factor * post_filter_factor
+    }
 
-        // Get raw results with optional ef_search override
-        let raw_results = if let Some(ef) = self.ef_search {
+    /// Fetch raw results from the HNSW index.
+    fn fetch_raw_results(&self, fetch_count: usize) -> Vec<(VectorId, f32)> {
+        if let Some(ef) = self.ef_search {
             self.collection.index.search_with_ef(
                 self.query,
                 fetch_count,
@@ -453,43 +345,42 @@ impl<'a> SearchBuilder<'a> {
                 fetch_count,
                 self.collection.vectors.as_slice(),
             )
-        };
+        }
+    }
 
-        // Apply lazy expiration filter if enabled
-        let non_expired: Vec<(VectorId, f32)> = if self.collection.config.lazy_expiration {
-            raw_results
+    /// Remove expired vectors if lazy expiration is enabled.
+    fn filter_expired(&self, results: Vec<(VectorId, f32)>) -> Vec<(VectorId, f32)> {
+        if self.collection.config.lazy_expiration {
+            results
                 .into_iter()
                 .filter(|(id, _)| !self.collection.is_expired(*id))
                 .collect()
         } else {
-            raw_results
-        };
+            results
+        }
+    }
 
-        // Apply pre-filter if present (filter during ANN search phase)
-        let pre_filtered: Vec<(VectorId, f32)> = if let Some(filter) = self.filter {
-            non_expired
+    /// Apply the pre-filter (metadata filter during ANN search phase).
+    fn apply_pre_filter(&self, results: Vec<(VectorId, f32)>, limit: usize) -> Vec<(VectorId, f32)> {
+        if let Some(filter) = self.filter {
+            results
                 .into_iter()
                 .filter(|(id, _)| {
-                    if let Some(entry) = self.collection.metadata.get(*id) {
-                        filter.matches(entry.data.as_ref())
-                    } else {
-                        false
-                    }
+                    self.collection.metadata.get(*id)
+                        .map_or(false, |entry| filter.matches(entry.data.as_ref()))
                 })
-                .take(self.k * post_filter_factor.max(1))
+                .take(limit)
                 .collect()
         } else {
-            non_expired
-                .into_iter()
-                .take(self.k * post_filter_factor.max(1))
-                .collect()
-        };
+            results.into_iter().take(limit).collect()
+        }
+    }
 
-        // Enrich results with metadata (needed for post-filter)
-        let mut enriched = if self.include_metadata || self.post_filter.is_some() {
-            self.collection.enrich_results(pre_filtered)?
+    /// Enrich raw results with metadata and external IDs.
+    fn enrich(&self, pre_filtered: Vec<(VectorId, f32)>) -> Result<Vec<SearchResult>> {
+        if self.include_metadata || self.post_filter.is_some() {
+            self.collection.enrich_results(pre_filtered)
         } else {
-            // Return results without metadata
             pre_filtered
                 .into_iter()
                 .map(|(id, distance)| {
@@ -504,28 +395,27 @@ impl<'a> SearchBuilder<'a> {
                         metadata: None,
                     })
                 })
-                .collect::<Result<Vec<_>>>()?
-        };
+                .collect::<Result<Vec<_>>>()
+        }
+    }
 
-        // Apply post-filter if present (filter after ANN search)
+    /// Apply post-filter, truncate to k, and strip metadata if not requested.
+    fn apply_post_filter(&self, enriched: &mut Vec<SearchResult>) {
         if let Some(post_filter) = self.post_filter {
-            enriched = enriched
-                .into_iter()
+            *enriched = enriched
+                .drain(..)
                 .filter(|result| post_filter.matches(result.metadata.as_ref()))
                 .take(self.k)
                 .collect();
         } else {
             enriched.truncate(self.k);
         }
-
         // Strip metadata if not requested (but was needed for post-filter)
         if !self.include_metadata && self.post_filter.is_some() {
-            for result in &mut enriched {
+            for result in enriched.iter_mut() {
                 result.metadata = None;
             }
         }
-
-        Ok(enriched)
     }
 
     /// Execute the search and return only IDs with distances
@@ -534,29 +424,6 @@ impl<'a> SearchBuilder<'a> {
             .execute()
             .map(|results| results.into_iter().map(|r| (r.id, r.distance)).collect())
     }
-}
-
-/// Collection statistics
-#[derive(Debug, Clone)]
-pub struct CollectionStats {
-    /// Collection name
-    pub name: String,
-    /// Number of vectors
-    pub vector_count: usize,
-    /// Vector dimensions
-    pub dimensions: usize,
-    /// Distance function used
-    pub distance_function: DistanceFunction,
-    /// Estimated memory for vectors (bytes)
-    pub vector_memory_bytes: usize,
-    /// Estimated memory for metadata (bytes)
-    pub metadata_memory_bytes: usize,
-    /// Estimated memory for index (bytes)
-    pub index_memory_bytes: usize,
-    /// Total estimated memory (bytes)
-    pub total_memory_bytes: usize,
-    /// HNSW index statistics
-    pub index_stats: crate::hnsw::HnswStats,
 }
 
 /// Cache key for query result caching.
@@ -592,271 +459,6 @@ impl QueryCacheKey {
 #[derive(Clone)]
 struct CachedSearchResult {
     results: Vec<SearchResult>,
-}
-
-/// Query cache statistics
-#[derive(Debug, Clone, Default)]
-pub struct QueryCacheStats {
-    /// Number of cache hits
-    pub hits: u64,
-    /// Number of cache misses
-    pub misses: u64,
-    /// Current number of cached entries
-    pub size: usize,
-    /// Maximum cache capacity
-    pub capacity: usize,
-}
-
-impl QueryCacheStats {
-    /// Returns the cache hit ratio (0.0 to 1.0)
-    pub fn hit_ratio(&self) -> f64 {
-        let total = self.hits + self.misses;
-        if total == 0 {
-            0.0
-        } else {
-            self.hits as f64 / total as f64
-        }
-    }
-}
-
-/// Configuration for query result caching.
-///
-/// Query caching stores search results to avoid redundant HNSW traversals
-/// for identical queries. This is beneficial when the same queries are
-/// executed repeatedly, such as in benchmarking or when serving repeated
-/// user requests.
-///
-/// # Example
-///
-/// ```
-/// use needle::{CollectionConfig, QueryCacheConfig};
-///
-/// // Enable caching with 1000 entries
-/// let cache_config = QueryCacheConfig::new(1000);
-///
-/// let config = CollectionConfig::new("embeddings", 128)
-///     .with_query_cache(cache_config);
-/// ```
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct QueryCacheConfig {
-    /// Maximum number of query results to cache.
-    /// Set to 0 to disable caching.
-    pub capacity: usize,
-}
-
-impl QueryCacheConfig {
-    /// Create a new query cache configuration.
-    ///
-    /// # Arguments
-    ///
-    /// * `capacity` - Maximum number of query results to cache
-    pub fn new(capacity: usize) -> Self {
-        Self { capacity }
-    }
-
-    /// Create a disabled cache configuration.
-    pub fn disabled() -> Self {
-        Self { capacity: 0 }
-    }
-
-    /// Check if caching is enabled.
-    pub fn is_enabled(&self) -> bool {
-        self.capacity > 0
-    }
-}
-
-impl Default for QueryCacheConfig {
-    fn default() -> Self {
-        Self::disabled()
-    }
-}
-
-/// Collection configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CollectionConfig {
-    /// Name of the collection
-    pub name: String,
-    /// Vector dimensions
-    pub dimensions: usize,
-    /// Distance function
-    pub distance: DistanceFunction,
-    /// HNSW configuration
-    pub hnsw: HnswConfig,
-    /// Slow query threshold in microseconds.
-    /// If set, queries exceeding this time will be logged at warn level.
-    #[serde(default)]
-    pub slow_query_threshold_us: Option<u64>,
-    /// Query cache configuration
-    #[serde(default)]
-    pub query_cache: QueryCacheConfig,
-    /// Default TTL (time-to-live) for vectors in seconds.
-    /// If set, vectors without an explicit TTL will expire after this duration.
-    /// Expired vectors are automatically removed during search (lazy) or sweep operations.
-    #[serde(default)]
-    pub default_ttl_seconds: Option<u64>,
-    /// Enable lazy expiration during search operations (default: true).
-    /// When true, expired vectors are filtered out during search results.
-    /// When false, expired vectors remain until explicitly swept or compacted.
-    #[serde(default = "default_lazy_expiration")]
-    pub lazy_expiration: bool,
-}
-
-fn default_lazy_expiration() -> bool {
-    true
-}
-
-impl CollectionConfig {
-    /// Create a new collection config with default settings
-    ///
-    /// # Panics
-    /// Panics if dimensions is 0.
-    #[must_use]
-    pub fn new(name: impl Into<String>, dimensions: usize) -> Self {
-        assert!(dimensions > 0, "Vector dimensions must be greater than 0");
-        Self {
-            name: name.into(),
-            dimensions,
-            distance: DistanceFunction::Cosine,
-            hnsw: HnswConfig::default(),
-            slow_query_threshold_us: None,
-            query_cache: QueryCacheConfig::default(),
-            default_ttl_seconds: None,
-            lazy_expiration: true,
-        }
-    }
-
-    /// Set the distance function
-    #[must_use]
-    pub fn with_distance(mut self, distance: DistanceFunction) -> Self {
-        self.distance = distance;
-        self
-    }
-
-    /// Set the HNSW M parameter
-    #[must_use]
-    pub fn with_m(mut self, m: usize) -> Self {
-        self.hnsw = HnswConfig::with_m(m);
-        self
-    }
-
-    /// Set ef_construction
-    #[must_use]
-    pub fn with_ef_construction(mut self, ef: usize) -> Self {
-        self.hnsw.ef_construction = ef;
-        self
-    }
-
-    /// Set the full HNSW configuration
-    #[must_use]
-    pub fn with_hnsw_config(mut self, config: HnswConfig) -> Self {
-        self.hnsw = config;
-        self
-    }
-
-    /// Set the slow query threshold in microseconds.
-    ///
-    /// When set, search queries that exceed this duration will be logged
-    /// at the warn level with query details.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use needle::CollectionConfig;
-    ///
-    /// // Log queries slower than 100ms
-    /// let config = CollectionConfig::new("embeddings", 128)
-    ///     .with_slow_query_threshold_us(100_000);
-    /// ```
-    #[must_use]
-    pub fn with_slow_query_threshold_us(mut self, threshold_us: u64) -> Self {
-        self.slow_query_threshold_us = Some(threshold_us);
-        self
-    }
-
-    /// Enable query result caching with the specified configuration.
-    ///
-    /// Query caching stores search results to avoid redundant HNSW traversals
-    /// for identical queries. The cache is automatically invalidated when
-    /// vectors are inserted, updated, or deleted.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use needle::{CollectionConfig, QueryCacheConfig};
-    ///
-    /// // Enable caching with 1000 entries
-    /// let config = CollectionConfig::new("embeddings", 128)
-    ///     .with_query_cache(QueryCacheConfig::new(1000));
-    /// ```
-    #[must_use]
-    pub fn with_query_cache(mut self, cache_config: QueryCacheConfig) -> Self {
-        self.query_cache = cache_config;
-        self
-    }
-
-    /// Enable query result caching with a specified capacity.
-    ///
-    /// Shorthand for `with_query_cache(QueryCacheConfig::new(capacity))`.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use needle::CollectionConfig;
-    ///
-    /// // Enable caching with 500 entries
-    /// let config = CollectionConfig::new("embeddings", 128)
-    ///     .with_query_cache_capacity(500);
-    /// ```
-    #[must_use]
-    pub fn with_query_cache_capacity(mut self, capacity: usize) -> Self {
-        self.query_cache = QueryCacheConfig::new(capacity);
-        self
-    }
-
-    /// Set the default TTL (time-to-live) for vectors in seconds.
-    ///
-    /// When set, vectors inserted without an explicit TTL will automatically
-    /// expire after this duration. Expired vectors are filtered out during
-    /// search (if lazy_expiration is enabled) or removed during sweep operations.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use needle::CollectionConfig;
-    ///
-    /// // Vectors expire after 1 hour by default
-    /// let config = CollectionConfig::new("ephemeral", 128)
-    ///     .with_default_ttl_seconds(3600);
-    /// ```
-    #[must_use]
-    pub fn with_default_ttl_seconds(mut self, ttl_seconds: u64) -> Self {
-        self.default_ttl_seconds = Some(ttl_seconds);
-        self
-    }
-
-    /// Configure lazy expiration behavior.
-    ///
-    /// When enabled (default), expired vectors are automatically filtered out
-    /// from search results without requiring an explicit sweep operation.
-    ///
-    /// When disabled, expired vectors remain visible in search results until
-    /// explicitly removed via `expire_vectors()` or `compact()`.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use needle::CollectionConfig;
-    ///
-    /// // Disable lazy expiration - vectors remain until sweep
-    /// let config = CollectionConfig::new("manual-cleanup", 128)
-    ///     .with_default_ttl_seconds(3600)
-    ///     .with_lazy_expiration(false);
-    /// ```
-    #[must_use]
-    pub fn with_lazy_expiration(mut self, enabled: bool) -> Self {
-        self.lazy_expiration = enabled;
-        self
-    }
 }
 
 /// A collection of vectors with the same dimensions.
@@ -969,6 +571,15 @@ impl QueryCache {
     }
 }
 
+struct BruteForceSearchParams<'a> {
+    query: &'a [f32],
+    k: usize,
+    distance_fn: DistanceFunction,
+    filter: Option<&'a Filter>,
+    post_filter: Option<&'a Filter>,
+    include_metadata: bool,
+}
+
 impl Collection {
     /// Create a new collection
     pub fn new(config: CollectionConfig) -> Self {
@@ -992,6 +603,11 @@ impl Collection {
     /// Create a collection with just name and dimensions
     pub fn with_dimensions(name: impl Into<String>, dimensions: usize) -> Self {
         Self::new(CollectionConfig::new(name, dimensions))
+    }
+
+    /// Create a collection with validated dimensions.
+    pub fn try_with_dimensions(name: impl Into<String>, dimensions: usize) -> Result<Self> {
+        CollectionConfig::try_new(name, dimensions).map(Self::new)
     }
 
     /// Get the collection name
@@ -1275,7 +891,6 @@ impl Collection {
         vector: &[f32],
         metadata: Option<Value>,
     ) -> Result<()> {
-        // Use default TTL from config if available
         self.insert_with_ttl(id, vector, metadata, self.config.default_ttl_seconds)
     }
 
@@ -1330,36 +945,7 @@ impl Collection {
         metadata: Option<Value>,
         ttl_seconds: Option<u64>,
     ) -> Result<()> {
-        let id = id.into();
-
-        // Validate dimensions and vector values
-        self.validate_insert_input(vector)?;
-
-        // Check if ID already exists
-        if self.metadata.contains(&id) {
-            return Err(NeedleError::VectorAlreadyExists(id));
-        }
-
-        // Add to vector store
-        let internal_id = self.vectors.add(vector.to_vec())?;
-
-        // Add to metadata
-        self.metadata.insert(internal_id, id, metadata)?;
-
-        // Add to index
-        self.index
-            .insert(internal_id, vector, self.vectors.as_slice())?;
-
-        // Track expiration if TTL is specified
-        if let Some(ttl) = ttl_seconds {
-            let expiration = Self::now_unix() + ttl;
-            self.expirations.insert(internal_id, expiration);
-        }
-
-        // Invalidate cache since collection changed
-        self.invalidate_cache();
-
-        Ok(())
+        self.insert_vec_with_ttl(id, vector.to_vec(), metadata, ttl_seconds)
     }
 
     /// Insert a vector with ID and optional metadata, taking ownership of the vector
@@ -1372,13 +958,13 @@ impl Collection {
         vector: Vec<f32>,
         metadata: Option<Value>,
     ) -> Result<()> {
-        // Use default TTL from config if available
         self.insert_vec_with_ttl(id, vector, metadata, self.config.default_ttl_seconds)
     }
 
     /// Insert a vector with ID, optional metadata, and explicit TTL, taking ownership.
     ///
-    /// Combines the efficiency of `insert_vec()` with TTL support.
+    /// Combines the efficiency of `insert_vec()` with TTL support. This is the core
+    /// insert implementation — all other insert variants delegate here.
     pub fn insert_vec_with_ttl(
         &mut self,
         id: impl Into<String>,
@@ -1433,9 +1019,35 @@ impl Collection {
             ));
         }
 
+        let mut seen_ids = HashSet::new();
+        for id in &ids {
+            if !seen_ids.insert(id.as_str()) {
+                return Err(NeedleError::InvalidConfig(
+                    "Batch contains duplicate IDs".to_string(),
+                ));
+            }
+            if self.metadata.contains(id) {
+                return Err(NeedleError::VectorAlreadyExists(id.clone()));
+            }
+        }
+
+        for vector in &vectors {
+            self.validate_insert_input(vector)?;
+        }
+
         // Use insert_vec to avoid unnecessary clones
+        let mut inserted_ids = Vec::new();
         for ((id, vector), meta) in ids.into_iter().zip(vectors).zip(metadata) {
-            self.insert_vec(id, vector, meta)?;
+            let id_string = id;
+            match self.insert_vec(id_string.clone(), vector, meta) {
+                Ok(_) => inserted_ids.push(id_string),
+                Err(err) => {
+                    for inserted in inserted_ids {
+                        let _ = self.delete(&inserted);
+                    }
+                    return Err(err);
+                }
+            }
         }
 
         Ok(())
@@ -1545,17 +1157,12 @@ impl Collection {
     /// **Warning:** This is O(n) complexity and may be slow on large collections.
     fn brute_force_search(
         &self,
-        query: &[f32],
-        k: usize,
-        distance_fn: DistanceFunction,
-        filter: Option<&Filter>,
-        post_filter: Option<&Filter>,
-        include_metadata: bool,
+        params: &BruteForceSearchParams<'_>,
     ) -> Result<Vec<SearchResult>> {
         use std::cmp::Reverse;
         use std::collections::BinaryHeap;
 
-        let k = self.clamp_k(k);
+        let k = self.clamp_k(params.k);
         if k == 0 {
             return Ok(Vec::new());
         }
@@ -1576,7 +1183,7 @@ impl Collection {
             }
 
             // Apply pre-filter if present
-            if let Some(f) = filter {
+            if let Some(f) = params.filter {
                 if let Some(entry) = self.metadata.get(internal_id) {
                     if !f.matches(entry.data.as_ref()) {
                         continue;
@@ -1587,7 +1194,7 @@ impl Collection {
             }
 
             // Compute distance with the specified function
-            let dist = distance_fn.compute(query, vector);
+            let dist = params.distance_fn.compute(params.query, vector);
 
             // Add to heap
             heap.push((Reverse(OrderedFloat(dist)), internal_id));
@@ -1606,7 +1213,7 @@ impl Collection {
         let mut search_results = Vec::with_capacity(results.len());
         for (Reverse(OrderedFloat(distance)), internal_id) in results {
             if let Some(entry) = self.metadata.get(internal_id) {
-                let metadata = if include_metadata || post_filter.is_some() {
+                let metadata = if params.include_metadata || params.post_filter.is_some() {
                     entry.data.clone()
                 } else {
                     None
@@ -1620,12 +1227,12 @@ impl Collection {
         }
 
         // Apply post-filter if present
-        if let Some(pf) = post_filter {
+        if let Some(pf) = params.post_filter {
             search_results.retain(|r| pf.matches(r.metadata.as_ref()));
         }
 
         // Strip metadata if not requested
-        if !include_metadata {
+        if !params.include_metadata {
             for result in &mut search_results {
                 result.metadata = None;
             }
@@ -1792,7 +1399,7 @@ impl Collection {
         let index_start = Instant::now();
         let (candidates, hnsw_stats) = self.index.search_with_stats(
             query,
-            effective_k * 10,
+            effective_k * FILTER_CANDIDATE_MULTIPLIER,
             self.vectors.as_slice(),
         );
         let index_time = index_start.elapsed();
@@ -1972,7 +1579,7 @@ impl Collection {
         let results: Vec<Result<Vec<SearchResult>>> = queries
             .par_iter()
             .map(|query| {
-                let candidates = self.index.search(query, k * 10, self.vectors.as_slice());
+                let candidates = self.index.search(query, k * FILTER_CANDIDATE_MULTIPLIER, self.vectors.as_slice());
                 let filtered: Vec<(VectorId, f32)> = candidates
                     .into_iter()
                     .filter(|(id, _)| {
@@ -2016,7 +1623,7 @@ impl Collection {
     /// Combines approximate nearest neighbor search with metadata-based
     /// pre-filtering. Only vectors matching the filter are returned.
     ///
-    /// Internally, this fetches more candidates than requested (`k * 10`)
+    /// Internally, this fetches more candidates than requested (`k * FILTER_CANDIDATE_MULTIPLIER`)
     /// to compensate for filtered-out results, then filters and returns
     /// the top `k` matches.
     ///
@@ -2065,7 +1672,7 @@ impl Collection {
         }
 
         // For filtered search, we need to retrieve more candidates and filter
-        let candidates = self.index.search(query, k * 10, self.vectors.as_slice());
+        let candidates = self.index.search(query, k * FILTER_CANDIDATE_MULTIPLIER, self.vectors.as_slice());
 
         let filtered: Vec<(VectorId, f32)> = candidates
             .into_iter()
@@ -2241,7 +1848,7 @@ impl Collection {
         }
 
         // Over-fetch to compensate for filtering
-        let fetch_count = limit * 10;
+        let fetch_count = limit * FILTER_CANDIDATE_MULTIPLIER;
         let candidates = self.index.search(query, fetch_count, self.vectors.as_slice());
 
         // Filter by distance first (can stop early), then by metadata
