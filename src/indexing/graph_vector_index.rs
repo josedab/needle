@@ -289,6 +289,7 @@ pub struct GraphVectorIndex {
     /// Vector dimensions
     dimensions: usize,
     /// Distance function
+    #[allow(dead_code)]
     distance: DistanceFunction,
     /// HNSW index for vector search
     index: RwLock<HnswIndex>,
@@ -434,7 +435,7 @@ impl GraphVectorIndex {
                     .edges
                     .iter()
                     .enumerate()
-                    .min_by(|(_, a), (_, b)| a.weight.partial_cmp(&b.weight).unwrap())
+                    .min_by(|(_, a), (_, b)| a.weight.partial_cmp(&b.weight).unwrap_or(std::cmp::Ordering::Equal))
                     .map(|(i, _)| i)
                 {
                     if from_entity.edges[min_idx].weight < weight {
