@@ -1959,7 +1959,41 @@ impl Collection {
         Ok(())
     }
 
-    /// Insert a vector, or update it if it already exists
+    /// Insert a vector, or update it if it already exists.
+    ///
+    /// If a vector with the given `id` exists, its data and metadata are replaced
+    /// (equivalent to calling [`update`](Self::update)). Otherwise a new vector is inserted.
+    ///
+    /// # Arguments
+    ///
+    /// * `id` - External vector ID
+    /// * `vector` - Vector data (must match collection dimensions)
+    /// * `metadata` - Optional JSON metadata
+    ///
+    /// # Returns
+    ///
+    /// `true` if a new vector was inserted, `false` if an existing vector was updated.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - [`NeedleError::DimensionMismatch`] - Vector dimensions don't match
+    /// - [`NeedleError::InvalidVector`] - Vector contains NaN or Infinity
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use needle::{Collection, CollectionConfig};
+    /// # use serde_json::json;
+    /// # let config = CollectionConfig::new("test", 4);
+    /// # let mut collection = Collection::new(config);
+    /// let is_new = collection.upsert("v1", &[1.0, 0.0, 0.0, 0.0], None)?;
+    /// assert!(is_new); // inserted
+    ///
+    /// let is_new = collection.upsert("v1", &[0.0, 1.0, 0.0, 0.0], Some(json!({"v": 2})))?;
+    /// assert!(!is_new); // updated
+    /// # Ok::<(), needle::NeedleError>(())
+    /// ```
     pub fn upsert(
         &mut self,
         id: impl Into<String>,
@@ -2104,8 +2138,26 @@ impl Collection {
         Ok(deleted_count + expired_count)
     }
 
-    /// Check if the collection needs compaction
-    /// Returns true if deleted vectors exceed the given threshold (0.0-1.0)
+    /// Check if the collection needs compaction.
+    ///
+    /// Returns `true` if the ratio of deleted vectors to total vectors exceeds
+    /// `threshold`. Use this to decide when to call [`compact`](Self::compact)
+    /// to reclaim storage space.
+    ///
+    /// # Arguments
+    ///
+    /// * `threshold` - Ratio threshold in the range 0.0–1.0 (e.g., 0.2 = 20% deleted)
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use needle::{Collection, CollectionConfig};
+    /// # let config = CollectionConfig::new("test", 4);
+    /// # let collection = Collection::new(config);
+    /// if collection.needs_compaction(0.2) {
+    ///     // More than 20% of vectors are deleted; compact to reclaim space
+    /// }
+    /// ```
     pub fn needs_compaction(&self, threshold: f64) -> bool {
         self.index.needs_compaction(threshold)
     }
@@ -2310,7 +2362,29 @@ impl Collection {
         self.metadata.all_external_ids()
     }
 
-    /// Estimate if a dataset of given size would fit in memory
+    /// Estimate memory usage for a dataset of the given size.
+    ///
+    /// This is a static helper that does not require an existing collection.
+    /// Use it to plan capacity before inserting data.
+    ///
+    /// # Arguments
+    ///
+    /// * `vector_count` - Number of vectors to store
+    /// * `dimensions` - Dimensionality of each vector
+    /// * `avg_metadata_bytes` - Average metadata size per vector in bytes
+    ///
+    /// # Returns
+    ///
+    /// Estimated total memory in bytes (vectors + metadata + HNSW index overhead).
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use needle::Collection;
+    ///
+    /// let bytes = Collection::estimate_memory(1_000_000, 384, 256);
+    /// println!("Estimated memory: {} MB", bytes / 1024 / 1024);
+    /// ```
     pub fn estimate_memory(
         vector_count: usize,
         dimensions: usize,
@@ -2428,7 +2502,25 @@ impl Collection {
     }
 
     /// Record relevance feedback for search result quality improvement.
-    /// This feeds into the contextual bandits reranker for learning optimal result ordering.
+    ///
+    /// Logs a relevance signal for the given query–vector pair. This feeds into
+    /// the contextual bandits reranker for learning optimal result ordering.
+    ///
+    /// # Arguments
+    ///
+    /// * `query_id` - Identifier of the originating search query
+    /// * `vector_id` - ID of the result vector being rated
+    /// * `relevance_score` - Relevance score (e.g., 0.0 = irrelevant, 1.0 = highly relevant)
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use needle::{Collection, CollectionConfig};
+    /// # let config = CollectionConfig::new("test", 4);
+    /// # let collection = Collection::new(config);
+    /// // User clicked on "doc42" from query "q_123"
+    /// collection.record_feedback("q_123", "doc42", 1.0);
+    /// ```
     pub fn record_feedback(&self, query_id: &str, vector_id: &str, relevance_score: f32) {
         // Feedback is stored as metadata for now; full bandits integration
         // happens through the BanditsReranker in the search pipeline.
