@@ -294,146 +294,253 @@ pub trait Recoverable {
     fn suggested_retry_delay_ms(&self) -> Option<u64>;
 }
 
-/// Error types for Needle database operations
+/// Error types for Needle database operations.
+///
+/// Each variant maps to an [`ErrorCode`] for programmatic handling. Use
+/// [`Recoverable::error_code()`] to get the code and
+/// [`Recoverable::recovery_hints()`] for actionable remediation steps.
+///
+/// # Matching
+///
+/// ```rust,ignore
+/// match err {
+///     NeedleError::CollectionNotFound(name) => { /* create collection or correct name */ }
+///     NeedleError::DimensionMismatch { expected, got } => { /* fix vector size */ }
+///     other => eprintln!("error {}: {}", other.error_code().code(), other),
+/// }
+/// ```
 #[must_use]
 #[derive(Error, Debug)]
 pub enum NeedleError {
     /// An I/O error occurred during file or network operations.
-    /// Typically caused by file system issues, permission errors, or disk full conditions.
+    ///
+    /// Returned when Needle cannot read from or write to the database file,
+    /// typically caused by file system issues, permission errors, or disk full
+    /// conditions.  Inspect the inner [`std::io::Error`] for the root cause.
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 
     /// Failed to serialize or deserialize data (JSON).
-    /// Usually indicates corrupted data or an incompatible schema version.
+    ///
+    /// Usually indicates corrupted data, an incompatible schema version, or
+    /// a malformed JSON payload sent to the REST API.  Try re-creating the
+    /// database from a backup if the on-disk file is corrupt.
     #[error("Serialization error: {0}")]
     Serialization(#[from] serde_json::Error),
 
     /// The vector dimension does not match the collection's configured dimension.
-    /// Ensure all vectors inserted into a collection have the same dimensionality.
+    ///
+    /// Returned by `insert`, `update`, `search`, and their batch variants when
+    /// the supplied vector length differs from the collection's `dimensions`.
+    /// Verify the embedding model output size matches the collection config.
     #[error("Dimension mismatch: expected {expected}, got {got}")]
     DimensionMismatch { expected: usize, got: usize },
 
     /// The requested collection does not exist in the database.
-    /// Use `Database::list_collections()` to see available collections.
+    ///
+    /// Returned by `Database::collection()` and any method that references a
+    /// collection by name (including aliases).  Call
+    /// `Database::list_collections()` to see available collections, or create
+    /// the collection first with `Database::create_collection()`.
     #[error("Collection '{0}' not found")]
     CollectionNotFound(String),
 
     /// A collection with the given name already exists.
-    /// Use a different name or delete the existing collection first.
+    ///
+    /// Returned by `Database::create_collection()`.  Use a different name,
+    /// delete the existing collection with `Database::drop_collection()`, or
+    /// use `Database::collection()` to access the existing one.
     #[error("Collection '{0}' already exists")]
     CollectionAlreadyExists(String),
 
     /// The requested alias does not exist.
+    ///
+    /// Returned by `Database::update_alias()` or `Database::delete_alias()`
+    /// when the alias name has not been registered.  Create the alias first
+    /// with `Database::create_alias()`.
     #[error("Alias '{0}' not found")]
     AliasNotFound(String),
 
     /// An alias with the given name already exists.
+    ///
+    /// Returned by `Database::create_alias()`.  Use `update_alias()` to
+    /// re-point an existing alias to a different collection.
     #[error("Alias '{0}' already exists")]
     AliasAlreadyExists(String),
 
     /// Cannot drop a collection because one or more aliases still reference it.
-    /// Remove the aliases first before deleting the collection.
+    ///
+    /// Remove or re-point all aliases that target this collection before
+    /// calling `Database::drop_collection()`.
     #[error("Cannot drop collection '{0}': aliases still reference it")]
     CollectionHasAliases(String),
 
     /// The requested vector ID was not found in the collection.
+    ///
+    /// Returned by `get`, `update`, `delete`, `set_ttl`, and similar
+    /// single-vector operations.  The string payload is the missing ID.
     #[error("Vector '{0}' not found")]
     VectorNotFound(String),
 
     /// A vector with the given ID already exists in the collection.
-    /// Use a different ID or delete the existing vector first.
+    ///
+    /// Returned by `insert` and `insert_batch`.  Use `upsert` if you want
+    /// insert-or-update semantics, or `delete` the existing vector first.
     #[error("Vector '{0}' already exists")]
     VectorAlreadyExists(String),
 
     /// A duplicate ID was encountered during a batch operation.
+    ///
+    /// Returned by `insert_batch` when the input contains the same ID more
+    /// than once.  De-duplicate IDs before calling batch methods.
     #[error("Duplicate ID: '{0}'")]
     DuplicateId(String),
 
     /// Another operation is currently in progress and prevents this one.
-    /// Retry after the ongoing operation completes.
+    ///
+    /// Typically transient — retry after the ongoing operation completes.
     #[error("Operation in progress: {0}")]
     OperationInProgress(String),
 
     /// The database file is not a valid Needle database or has an unsupported format version.
+    ///
+    /// Returned by `Database::open()`.  The file may belong to a different
+    /// application, or the Needle version may be too old to read this format.
     #[error("Invalid database file: {0}")]
     InvalidDatabase(String),
 
     /// Data corruption was detected (e.g., checksum mismatch).
-    /// The database may need to be restored from a backup.
+    ///
+    /// The database may need to be restored from a backup.  If the corruption
+    /// is limited to a single collection, try restoring from a snapshot.
     #[error("Database corruption detected: {0}")]
     Corruption(String),
 
     /// An error occurred within an index operation (HNSW, IVF, etc.).
+    ///
+    /// This is a catch-all for internal index failures.  Check the message
+    /// string for details and consider rebuilding the index if it persists.
     #[error("Index error: {0}")]
     Index(String),
 
     /// The provided configuration is invalid.
-    /// Check the field values against the documented constraints.
+    ///
+    /// Returned when `CollectionConfig`, `HnswConfig`, or other config structs
+    /// contain out-of-range values.  Check the field values against the
+    /// documented constraints (e.g., dimensions > 0, M ≥ 4).
     #[error("Invalid configuration: {0}")]
     InvalidConfig(String),
 
     /// A capacity limit has been exceeded (e.g., max vectors per collection).
+    ///
+    /// Consider splitting data across multiple collections, enabling
+    /// quantization to reduce memory, or increasing the configured limit.
     #[error("Capacity exceeded: {0}")]
     CapacityExceeded(String),
 
     /// The provided vector data is invalid (e.g., contains NaN or Inf values).
+    ///
+    /// Returned during insert or search when vector validation fails.  Ensure
+    /// your embedding pipeline produces finite floating-point values.
     #[error("Invalid vector: {0}")]
     InvalidVector(String),
 
     /// The input to an operation is invalid.
+    ///
+    /// A general validation error for non-vector inputs such as malformed
+    /// filter expressions or snapshot names.
     #[error("Invalid input: {0}")]
     InvalidInput(String),
 
     /// A resource quota has been exceeded (e.g., storage or request limits).
+    ///
+    /// Reduce usage or increase the quota in your configuration.
     #[error("Quota exceeded: {0}")]
     QuotaExceeded(String),
 
     /// An error occurred during a backup or restore operation.
+    ///
+    /// Check that the backup path is accessible and the backup file is not
+    /// corrupt.  See [`BackupManager`](crate::BackupManager) for retry options.
     #[error("Backup error: {0}")]
     BackupError(String),
 
     /// A generic not-found error for resources other than collections or vectors.
+    ///
+    /// Used for snapshots, namespaces, and other named resources.
     #[error("Not found: {0}")]
     NotFound(String),
 
     /// A conflicting operation was detected (e.g., concurrent modification).
+    ///
+    /// Retry the operation.  If the conflict persists, check for concurrent
+    /// writers that may need coordination via the `CollectionRef` API.
     #[error("Conflict: {0}")]
     Conflict(String),
 
     /// An error occurred during encryption or decryption.
-    /// Verify that the correct encryption key is being used.
+    ///
+    /// Verify that the correct encryption key is being used and that the
+    /// `encryption` feature is enabled.  Returned by enterprise encryption APIs.
     #[error("Encryption error: {0}")]
     EncryptionError(String),
 
-    /// An error occurred in the Raft consensus protocol.
+    /// An error occurred in the Raft consensus protocol (enterprise distributed mode).
+    ///
+    /// Check network connectivity between cluster nodes and inspect Raft logs
+    /// for leader election or log replication failures.
     #[error("Consensus error: {0}")]
     ConsensusError(String),
 
-    /// Failed to acquire an internal lock. This is typically transient; retry the operation.
+    /// Failed to acquire an internal lock.
+    ///
+    /// This is typically transient and caused by high contention.  Retry the
+    /// operation.  If it persists, check for deadlocks or long-running
+    /// operations holding the lock.
     #[error("Lock error: failed to acquire lock")]
     LockError,
 
     /// The operation exceeded the configured timeout duration.
+    ///
+    /// The inner [`Duration`](std::time::Duration) indicates how long the
+    /// operation waited.  Increase the timeout or optimize the operation
+    /// (e.g., reduce `ef_search` or batch size).
     #[error("Operation timed out after {0:?}")]
     Timeout(std::time::Duration),
 
-    /// Timed out while waiting to acquire a lock. Consider increasing the timeout or reducing contention.
+    /// Timed out while waiting to acquire a lock.
+    ///
+    /// Indicates heavy contention on a collection.  Consider increasing the
+    /// lock timeout, reducing write concurrency, or sharding data across
+    /// multiple collections.
     #[error("Lock acquisition timed out after {0:?}")]
     LockTimeout(std::time::Duration),
 
     /// The requested operation is not valid in the current context.
+    ///
+    /// For example, calling `compact()` while a compaction is already running,
+    /// or attempting a write on a read-only snapshot.
     #[error("Invalid operation: {0}")]
     InvalidOperation(String),
 
     /// The system is in an invalid state for the requested operation.
+    ///
+    /// This usually indicates a programming error or an unexpected internal
+    /// condition.  If reproducible, please file a bug report.
     #[error("Invalid state: {0}")]
     InvalidState(String),
 
     /// The request lacks valid authentication or authorization credentials.
+    ///
+    /// Returned by the REST API when an API key or RBAC token is missing or
+    /// invalid.  Check the `Authorization` header or RBAC configuration.
     #[error("Unauthorized: {0}")]
     Unauthorized(String),
 
     /// An argument passed to a function or API is invalid.
+    ///
+    /// Similar to [`InvalidInput`](Self::InvalidInput) but specific to
+    /// function parameters (e.g., negative `k` value, empty ID string).
     #[error("Invalid argument: {0}")]
     InvalidArgument(String),
 }
