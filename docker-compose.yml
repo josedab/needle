@@ -2,10 +2,11 @@ version: '3.8'
 
 services:
   needle:
+    image: ${NEEDLE_IMAGE:-ghcr.io/anthropics/needle:latest}
     build:
       context: .
       dockerfile: Dockerfile
-    image: needle:latest
+    pull_policy: if-not-present
     container_name: needle
     ports:
       - "8080:8080"
@@ -21,6 +22,21 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
+
+  # Optional: Seed demo data (run with: docker compose --profile demo up)
+  needle-seed:
+    image: curlimages/curl:latest
+    container_name: needle-seed
+    depends_on:
+      needle:
+        condition: service_healthy
+    volumes:
+      - ./scripts/seed-demo.sh:/seed.sh:ro
+    environment:
+      - NEEDLE_URL=http://needle:8080
+    entrypoint: ["sh", "/seed.sh"]
+    profiles:
+      - demo
 
   # Optional: Prometheus for metrics
   prometheus:

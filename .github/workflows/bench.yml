@@ -98,5 +98,19 @@ jobs:
           name: benchmark-results
           path: |
             target/criterion/
+
+      # Publish to GitHub Pages benchmark dashboard (main branch only)
+      - name: Store benchmark result
+        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+        uses: benchmark-action/github-action-benchmark@v1
+        with:
+          tool: 'cargo'
+          output-file-path: benchmark-results.txt
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          auto-push: true
+          alert-threshold: '115%'
+          comment-on-alert: true
+          fail-on-alert: true
+          benchmark-data-dir-path: 'dev/bench'
             benchmark-results.txt
           retention-days: 30
