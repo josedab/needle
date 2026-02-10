@@ -549,92 +549,6 @@ fn value_to_f64(value: &Value) -> Option<f64> {
     }
 }
 
-/// Parse a filter from JSON-like syntax
-/// Example: {"category": {"$eq": "greeting"}}
-pub fn parse_filter(value: &Value) -> Option<Filter> {
-    match value {
-        Value::Object(map) => {
-            // Check for logical operators
-            if let Some(Value::Array(arr)) = map.get("$and") {
-                let filters: Vec<Filter> = arr.iter().filter_map(parse_filter).collect();
-                return Some(Filter::And(filters));
-            }
-            if let Some(Value::Array(arr)) = map.get("$or") {
-                let filters: Vec<Filter> = arr.iter().filter_map(parse_filter).collect();
-                return Some(Filter::Or(filters));
-            }
-            if let Some(not_val) = map.get("$not") {
-                if let Some(filter) = parse_filter(not_val) {
-                    return Some(Filter::Not(Box::new(filter)));
-                }
-            }
-
-            // Field conditions
-            let conditions: Vec<Filter> = map
-                .iter()
-                .filter(|(k, _)| !k.starts_with('$'))
-                .filter_map(|(field, cond)| parse_field_condition(field, cond))
-                .collect();
-
-            if conditions.len() == 1 {
-                conditions.into_iter().next()
-            } else if conditions.len() > 1 {
-                Some(Filter::And(conditions))
-            } else {
-                None
-            }
-        }
-        _ => None,
-    }
-}
-
-/// Parse a field condition
-fn parse_field_condition(field: &str, condition: &Value) -> Option<Filter> {
-    match condition {
-        Value::Object(map) => {
-            let conditions: Vec<FilterCondition> = map
-                .iter()
-                .filter_map(|(op, val)| {
-                    let operator = match op.as_str() {
-                        "$eq" => Some(FilterOperator::Eq),
-                        "$ne" => Some(FilterOperator::Ne),
-                        "$gt" => Some(FilterOperator::Gt),
-                        "$gte" => Some(FilterOperator::Gte),
-                        "$lt" => Some(FilterOperator::Lt),
-                        "$lte" => Some(FilterOperator::Lte),
-                        "$in" => Some(FilterOperator::In),
-                        "$nin" => Some(FilterOperator::NotIn),
-                        "$contains" => Some(FilterOperator::Contains),
-                        _ => None,
-                    }?;
-
-                    Some(FilterCondition {
-                        field: field.to_string(),
-                        operator,
-                        value: val.clone(),
-                    })
-                })
-                .collect();
-
-            if conditions.len() == 1 {
-                Some(Filter::Condition(conditions.into_iter().next()?))
-            } else if conditions.len() > 1 {
-                Some(Filter::And(
-                    conditions.into_iter().map(Filter::Condition).collect(),
-                ))
-            } else {
-                None
-            }
-        }
-        // Shorthand: {"field": value} means {"field": {"$eq": value}}
-        _ => Some(Filter::Condition(FilterCondition {
-            field: field.to_string(),
-            operator: FilterOperator::Eq,
-            value: condition.clone(),
-        })),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -718,7 +632,7 @@ mod tests {
             "priority": {"$gte": 1}
         });
 
-        let filter = parse_filter(&filter_json).unwrap();
+        let filter = Filter::parse(&filter_json).unwrap();
         let metadata = json!({"category": "greeting", "priority": 2});
 
         assert!(filter.matches(Some(&metadata)));
@@ -728,7 +642,7 @@ mod tests {
     fn test_parse_filter_shorthand() {
         let filter_json = json!({"category": "greeting"});
 
-        let filter = parse_filter(&filter_json).unwrap();
+        let filter = Filter::parse(&filter_json).unwrap();
         let metadata = json!({"category": "greeting"});
 
         assert!(filter.matches(Some(&metadata)));

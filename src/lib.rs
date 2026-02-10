@@ -68,90 +68,141 @@
 //! }
 //! ```
 
-pub mod anomaly;
-pub mod auto_embed;
-pub mod autoscaling;
-pub mod backup;
-pub mod cloud_storage;
-pub mod clustering;
-pub mod collaborative_search;
+#![warn(missing_docs)]
+
+// ── Core ──────────────────────────────────────────────────────────────────────
+// Fundamental types: database, collections, vectors, errors, storage, metadata.
 pub mod collection;
-pub mod cross_collection;
 pub mod database;
-pub mod dedup;
-pub mod dimreduce;
-pub mod diskann;
 pub mod distance;
-pub mod distributed_hnsw;
-pub mod drift;
-pub mod edge_partitioning;
-pub mod edge_runtime;
-pub mod embeddings_gateway;
-pub mod encryption;
 pub mod error;
-pub mod federated;
-pub mod finetuning;
-pub mod float16;
-pub mod gpu;
-pub mod graph;
-pub mod graph_vector_index;
-pub mod hnsw;
-pub mod hybrid_ann;
-pub mod incremental;
-pub mod ivf;
-pub mod knowledge_graph;
-pub mod learned_tuning;
-pub mod llm_cache;
 pub mod metadata;
-pub mod migrations;
-pub mod multimodal;
-pub mod multivec;
-pub mod namespace;
-pub mod platform_adapters;
-pub mod quantization;
-pub mod query_builder;
-pub mod query_lang;
-pub mod raft;
-pub mod rag;
-pub mod reranker;
-pub mod routing;
-pub mod security;
-pub mod shard;
-pub mod sparse;
-pub mod vector_streaming;
-
-// Next-Gen Features (v2.0)
-pub mod agentic_memory;
-pub mod analytics;
-pub mod cloud_control;
-pub mod matryoshka;
-pub mod model_registry;
-pub mod playground;
-pub mod zero_copy;
-
-// Internal/experimental modules - not part of stable public API
-// These modules are public for testing but may change without notice
-pub mod crdt;
-pub mod optimizer;
-pub mod profiler;
-pub mod rebalance;
-// LangChain/LlamaIndex integration - public API
-pub mod langchain;
-pub mod llamaindex;
-// These modules are truly internal
-pub(crate) mod lineage;
-pub mod nl_filter;
+pub mod tuning;
 pub(crate) mod storage;
+pub(crate) mod lineage;
+
+// ── Indexing ──────────────────────────────────────────────────────────────────
+// Vector index implementations: HNSW, DiskANN, IVF, sparse, multi-vector.
+pub mod indexing;
+pub use indexing::{hnsw, ivf, sparse, multivec, incremental, graph_vector_index, hybrid_ann, quantization, float16, multimodal_index};
+#[cfg(feature = "diskann")]
+pub use indexing::{diskann, tiered_ann};
+
+// ── Search & Query ───────────────────────────────────────────────────────────
+pub mod search;
+pub use search::{query_builder, query_lang, query_explain, query_planner, nl_filter, cross_collection, federated, routing, reranker};
+#[cfg(feature = "experimental")]
+pub use search::collaborative_search;
+
+// ── Storage & Persistence ────────────────────────────────────────────────────
+pub mod persistence;
+pub use persistence::{wal, transaction, time_travel, backup, managed_backup, cloud_storage, versioning, migrations, snapshot_replication, tiered, shard, sync_protocol};
+
+// ── Embeddings & ML ──────────────────────────────────────────────────────────
+pub mod ml;
+pub use ml::{auto_embed, embeddings_gateway, local_inference, model_registry, finetuning, matryoshka, rag, dimreduce, multimodal};
+
+// ── Enterprise Features ──────────────────────────────────────────────────────
+// Security, encryption, multi-tenancy, RBAC, Raft consensus.
+pub mod enterprise;
+pub use enterprise::{security, raft, tenant_isolation, namespace, autoscaling};
+#[cfg(feature = "encryption")]
+pub use enterprise::encryption;
+
+// ── Observability ────────────────────────────────────────────────────────────
+// Telemetry, drift detection, anomaly detection, profiling.
+pub mod observe;
+pub use observe::{telemetry, observability, anomaly, drift, profiler, otel_service};
+
+// ── Framework Integrations ───────────────────────────────────────────────────
+// Adapters for LangChain, LlamaIndex, Haystack, Semantic Kernel.
+pub mod integrations;
+pub(crate) use integrations::framework_common;
+pub use integrations::{haystack, semantic_kernel};
+#[cfg(feature = "integrations")]
+pub use integrations::{langchain, llamaindex};
+
+// ── High-Level Services ──────────────────────────────────────────────────────
+// Database-level service wrappers with builders and lifecycle management.
+pub mod services;
+pub use services::{ingestion_service, text_collection, pitr_service, multimodal_service, tiered_service};
+#[cfg(feature = "experimental")]
+pub use services::{adaptive_service, plugin_runtime, ingestion_pipeline};
+
+// ── Next-Gen Services ────────────────────────────────────────────────────────
+pub use services::{
+    streaming_ingest, adaptive_optimizer, wasm_sdk, managed_embeddings,
+    time_travel_query, graphrag_service, edge_runtime, nl_filter_parser,
+    incremental_sync, visual_explorer,
+};
+
+// ── Experimental / Advanced ──────────────────────────────────────────────────
+// Features under active development. APIs may change without notice.
+// Enable experimental modules with: --features experimental
+pub mod experimental;
+
+// Backward-compatible re-exports so `crate::module_name` still works
+pub use experimental::clustering;
+pub use experimental::dedup;
+pub use experimental::gpu;
+pub use experimental::graph;
+pub use experimental::plugin;
+pub use experimental::temporal;
+#[cfg(feature = "experimental")]
+pub use experimental::adaptive_index;
+#[cfg(feature = "experimental")]
+pub use experimental::adaptive_runtime;
+#[cfg(feature = "experimental")]
+pub use experimental::agentic_memory;
+#[cfg(feature = "experimental")]
+pub use experimental::analytics;
+#[cfg(feature = "experimental")]
+pub use experimental::cloud_control;
+#[cfg(feature = "experimental")]
+pub use experimental::crdt;
+#[cfg(feature = "experimental")]
+pub use experimental::distributed_hnsw;
+#[cfg(feature = "experimental")]
+pub use experimental::edge_optimized;
+#[cfg(feature = "experimental")]
+pub use experimental::edge_partitioning;
+#[cfg(feature = "experimental")]
+pub use experimental::edge_runtime;
+#[cfg(feature = "experimental")]
+pub use experimental::graphrag_index;
+#[cfg(feature = "experimental")]
+pub use experimental::knowledge_graph;
+#[cfg(feature = "experimental")]
+pub use experimental::learned_tuning;
+#[cfg(feature = "experimental")]
+pub use experimental::llm_cache;
+#[cfg(feature = "experimental")]
+pub use experimental::optimizer;
+#[cfg(feature = "experimental")]
+pub use experimental::platform_adapters;
+#[cfg(feature = "experimental")]
+pub use experimental::playground;
+#[cfg(feature = "experimental")]
+pub use experimental::plugin_registry;
+#[cfg(feature = "experimental")]
+pub use experimental::python_arrow;
+#[cfg(feature = "experimental")]
+pub use experimental::rebalance;
+#[cfg(feature = "experimental")]
+pub use experimental::serverless_runtime;
+#[cfg(feature = "experimental")]
+pub use experimental::streaming_upsert;
+#[cfg(feature = "experimental")]
+pub use experimental::vector_streaming;
+#[cfg(feature = "experimental")]
+pub use experimental::zero_copy;
+
+// ── Streaming (feature-gated) ────────────────────────────────────────────────
 #[cfg(feature = "server")]
 pub mod streaming;
-pub mod telemetry;
-pub mod temporal;
-pub mod tiered;
-pub mod tiered_ann;
-pub mod time_travel;
-pub mod tuning;
-pub mod versioning;
-pub mod wal;
+
+// ── Feature-Gated Modules ────────────────────────────────────────────────────
+// Optional modules enabled by Cargo feature flags.
 
 #[cfg(feature = "tui")]
 pub mod tui;
@@ -190,9 +241,11 @@ pub mod uniffi_bindings;
 #[cfg(feature = "uniffi-bindings")]
 uniffi::setup_scaffolding!();
 
-// Re-export main types at crate root
+// ── Stable API ───────────────────────────────────────────────────────────────
+// These types form the core stable API surface. Breaking changes follow semver.
 pub use collection::{Collection, CollectionConfig, CollectionIter, CollectionStats, QueryCacheConfig, QueryCacheStats, SearchExplain, SearchResult};
 pub use database::{CollectionRef, Database, DatabaseConfig, ExportEntry};
+pub use database::collection_ref::SearchParams;
 pub use distance::DistanceFunction;
 pub use error::{ErrorCode, NeedleError, Recoverable, RecoveryHint, Result};
 pub use hnsw::{HnswConfig, HnswIndex, HnswStats, SearchStats};
@@ -211,248 +264,16 @@ pub use tuning::{
 // Automatic embedding generation
 pub use auto_embed::{
     AutoEmbedConfig, AutoEmbedCollectionBuilder, AutoEmbedStats, AutoEmbedder,
-    EmbeddingBackend, TextInsertable,
+    EmbeddingBackend, EmbeddingModelManager, ModelEntry, ModelHub, ModelType,
+    TextFirstCollection, TextInsertable, TextSearchResult,
 };
 
-// Analytics and advanced features
-pub use anomaly::{
-    DistanceOutlierDetector, EnsembleAnomalyDetector, IsolationForest, LocalOutlierFactor,
-    StatisticalOutlierDetector,
-};
-pub use backup::{
-    BackupConfig, BackupManager, BackupMetadata, BackupType, CloudProvider, CloudSyncConfig,
-    CloudSyncResult, ConsistencyLevel, FollowerState, FollowerStatus, IncrementalBackupInfo,
-    IncrementalBackupManager, IncrementalState, PitrConfig, ReplicationConfig, ReplicationLeader,
-    RestorePoint, RestorePointType, SnapshotSegment, WalEntry, WalOperation,
-};
-pub use clustering::{
-    ClusteringConfig, HierarchicalClustering, KMeans, Linkage, MiniBatchKMeans, elbow_method,
-    silhouette_score,
-};
-pub use dedup::{DeduplicationConfig, DuplicateDetector, DuplicateGroup, DuplicateResult};
-pub use dimreduce::{NeighborEmbedding, PCA, RandomProjection};
-pub use graph::{Community, GraphConfig, GraphPath, NeighborhoodResult, SemanticGraph};
-pub use namespace::{
-    AccessControl, AccessLevel, Namespace, NamespaceCollection, NamespaceManager, TenantConfig,
-};
-#[cfg(feature = "server")]
-pub use streaming::{
-    ChangeEvent, ChangeEventFilter, ChangeStream, EventLog, OperationType, PubSub, ReplayOptions,
-    ResumeToken, StreamError, StreamManager, StreamManagerConfig, StreamResult, StreamStats,
-    Subscriber,
-};
-
-// Next-gen features
-pub use diskann::{DiskAnnConfig, DiskAnnIndex, DiskAnnResult};
-pub use distributed_hnsw::{
-    BatchInsertResult as DistributedBatchInsertResult, DistributedHnsw, DistributedHnswConfig,
-    DistributedHnswStats, DistributedQueryBuilder, DistributedSearchResult, ShardSearchResult as DistributedShardSearchResult,
-};
-pub use incremental::{
-    BulkInsertResult, IncrementalConfig, IncrementalIndex, IncrementalSearchResult,
-    IncrementalStats, MergeResult, OptimizationResult,
-};
-pub use graph_vector_index::{
-    ConnectedEntity, EdgeType, GraphEdge, GraphPath as GraphVectorPath, GraphVectorConfig,
-    GraphVectorIndex, GraphVectorSearchResult, GraphVectorStats,
-};
-pub use drift::{
-    AdaptiveThreshold, AdaptiveThresholdConfig, DriftAlert, DriftConfig, DriftConfigBuilder,
-    DriftDetector, DriftMetrics, DriftReport, DriftSeverity, DriftTrend, MultiBaselineDetector,
-    NamedBaseline, RealTimeCheckResult, RealTimeDriftMonitor, RealTimeMonitorConfig,
-    RealTimeMonitorStats, RecoveryDetector, RecoveryState, VectorStats,
-};
-pub use vector_streaming::{
-    BackpressureConfig, BackpressureController, BackpressureState, BackpressureStats,
-    CdcEvent, CdcEventType, CdcStream, ConsumerConfig, ConsumerStats, MessageSource, ProducerConfig,
-    ProducerStats, ReplayManager, StreamMetrics, StreamMetricsSnapshot, StreamOp, StreamProcessor,
-    StreamSnapshot, VectorConsumer, VectorFormat, VectorMessage, VectorProducer, VectorStreamPipeline,
-};
-pub use encryption::{EncryptedVector, EncryptionConfig, KeyManager, VectorEncryptor};
-pub use federated::{
-    Federation, FederationConfig, FederationError, FederationHealth, FederationResult,
-    FederatedSearchResult, FederatedSearchResponse, HealthCheckResult, HealthMonitor, HealthStatus,
-    InstanceConfig, InstanceInfo, InstanceRegistry, MergeStrategy, ResultMerger, RoutingStrategy,
-};
-pub use finetuning::{
-    ContrastivePair, EmbeddingStore, FineTuneConfig, FineTuner, FineTunerState, FineTunerStats,
-    Interaction, InteractionType, LinearTransform, LossFunction, SharedFineTuner, TrainingBatch,
-    TrainingResult, Triplet,
-};
-pub use gpu::{DataType, DistanceType, GpuAccelerator, GpuBackend, GpuConfig, GpuDevice, GpuMetrics,
-    HardwareCapabilities, KernelDispatch, KernelProfile, select_kernel,
-};
-pub use hybrid_ann::{
-    HybridConfig as HybridAnnConfig, HybridSearch, HybridSearchResult as HybridAnnSearchResult,
-    HybridSearchStats as HybridAnnStats, QualityAwareSearch, RecallStats, SearchStrategy,
-};
-pub use knowledge_graph::{
-    ChunkContext, Entity, EntityLinker, GraphRAGConfig, GraphRAGQueryBuilder, GraphRAGRetriever,
-    GraphSearchResult, GraphStats, KnowledgeGraph, KnowledgeGraphConfig, MultiHopReasoner,
-    ReasoningPath, Relation,
-};
-pub use learned_tuning::{
-    AdaptiveExecutor, LearnedTuner, LearnedTunerState, LearnedTunerStats, QueryFeedback,
-    RecommendedParams, TunerConfig, WorkloadProfile,
-};
-pub use llm_cache::{
-    AdaptiveThresholdConfig as LlmAdaptiveThresholdConfig, CacheHit, CacheWarmingConfig, CachedLlm,
-    ChatCompletionRequest, ChatCompletionResponse, ChatMessage, EnhancedLlmCache, LlmCache,
-    LlmCacheConfig, LlmCacheQueryBuilder, LlmCacheStats, MultiTierCache, MultiTierStats,
-    OpenAIProxy, WarmingQuery,
-};
-pub use multimodal::{
-    CrossModalConfig, CrossModalSearch, EmbedInput, EmbedderBackend,
-    EmbedderStats as MultiModalEmbedderStats, EmbeddingModelRegistry, FusionStrategy,
-    ImagePreprocessor, LateFusion, Modality, ModalityStats, ModelManifest, MultiModalConfig,
-    MultiModalDocument, MultiModalEmbedder, MultiModalEmbedding, MultiModalQuery,
-    MultiModalSearchResult, TextPreprocessor, UnifiedMultiModalIndex,
-};
-pub use query_builder::{
-    AlternativeQuery, CollectionProfile, CollectionStats as QueryCollectionStats, CostEstimate,
-    FieldProfile, FieldSuggestion, FieldType, HintCategory, HintImpact, HintSeverity, IndexProfile,
-    OptimizationHint, QueryAnalysis, QueryAnalyzer, QueryBuildResult, QueryClass, QueryComplexity,
-    QueryExplanation, QuerySuggestion, SuggestionType, VisualQueryBuilder,
-};
-pub use query_lang::{
-    CollectionStatistics, CostBasedOptimizer, CostEstimate as QueryCostEstimate, OptimizedPlan,
-    OptimizedStep, Query, QueryContext, QueryError, QueryExecutor, QueryParser, QueryPlan,
-    QueryResponse, QueryResult, QueryValidator, SearchStrategy as QuerySearchStrategy,
-};
-pub use nl_filter::{
-    ConversationContext, ConversationalQueryParser, ContextEntry, Entity as NLEntity,
-    IntentClassification, NLFilterParser, ParsedQuery, QueryBuilder as NLQueryBuilder,
-    QueryIntent, QuerySuggester, TemporalConstraint,
-};
-// Raft: Only export main types, internal protocol types stay in raft module
-pub use raft::{Command, NodeId, RaftConfig, RaftNode, RaftState, RaftStorage};
-pub use rag::{Chunk, ChunkingStrategy, RagConfig, RagPipeline};
-pub use telemetry::{Metric, MetricValue, Span, SpanStatus, Telemetry, TelemetryConfig, TraceContext};
-pub use temporal::{DecayFunction, TemporalConfig, TemporalIndex, VectorVersion};
-pub use time_travel::{
-    Branch as MvccBranch, BranchManager, ConflictStrategy, ConflictType, DateTimeComponents,
-    GcResult, MergeConflict, MergeResult as MvccMergeResult, MetadataDiff, MvccConfig, NamedTime,
-    Snapshot, TimeExpression, TimeMarker, TimeTravelIndex, TimeTravelQueryBuilder,
-    TimeTravelSearchResult, TimeTravelStats, VectorDiff as TimeTravelVectorDiff,
-    VectorVersion as MvccVectorVersion,
-};
-pub use autoscaling::{
-    AutoScaler, MetricPoint, ScalingAction, ScalingConfig, ScalingDecision, ScalingReason,
-    ScheduledScaling, SeasonalityPattern, ShardMetrics, SharedAutoScaler,
-};
-pub use tiered::{StorageTier, TierPolicy, TieredStorage, VectorMetadata as TieredVectorMetadata};
-pub use tiered_ann::{
-    Tier, TieredConfig, TieredIndex, TieredQueryBuilder, TieredSearchResult,
-    TieredStats,
-};
-pub use versioning::{Branch, ChangeType, Commit, VectorDiff, VectorRepo};
-
-// Next-Gen Features (v2.0)
-pub use agentic_memory::{
-    AgentMemory, ConversationConfig, ConversationRole, ConversationTracker, ConversationTurn,
-    ContextSection, ContextWindowManager, DecayFunction as AgentDecayFunction,
-    Memory, MemoryConfig, MemoryType, RecallResult, ToolCallCache, ToolCallCacheStats,
-};
-pub use analytics::{
-    Alert, AlertCondition, AlertManager, AlertRule, AlertSeverity, AnalyticsConfig,
-    AnalyticsDashboard, CollectionAnalytics, DashboardInsights, MetricsStore, QueryEvent,
-    QueryPattern, QueryTracker, SlowQuery, TimeSeries, TimeSeriesPoint,
-    generate_dashboard_html,
-};
-pub use cloud_control::{
-    ApiKey, BillingInfo, ControlPlane, ControlPlaneConfig, InstanceStatus, LimitCheckResult,
-    LimitViolation, ManagedInstance, OrchestratorConfig, OverageCharge, PaymentStatus,
-    Permission as CloudPermission, Region, RegionHealth, RegionRouter, RegionalEndpoint,
-    ResourceTier, RoutingStrategy as CloudRoutingStrategy, ServiceOrchestrator, SlaBreach,
-    SlaBreachType, SlaMonitor, SlaPolicy, SlaReport, SupportLevel, Tenant,
-    TenantConfig as CloudTenantConfig, TenantStatus, TenantUsage, TierLimits, UsageEvent,
-    UsageEventType, UsageSummary, UsageUtilization,
-};
-pub use matryoshka::{
-    MatryoshkaConfig, MatryoshkaEmbedding, MatryoshkaIndex, MatryoshkaStats, SearchStrategy as MatryoshkaSearchStrategy,
-};
-pub use model_registry::{
-    AutoEmbedConfig as HubAutoEmbedConfig, AutoEmbedHub, BenchmarkResult, ModelId, ModelInfo,
-    ModelPerformanceTracker, ModelRegistry, ModelSelector, RegistryConfig, UseCase,
-};
-pub use playground::{
-    Bookmark, CustomDataset, Dataset, DatasetInfo, Difficulty, ExecutionResult, HistoryEntry,
-    Playground, PlaygroundConfig, PlaygroundState, ProjectionMethod, Theme, Tutorial, TutorialInfo,
-    TutorialStep, VisualizationConfig, VisualizationPoint, generate_playground_html,
-};
-pub use zero_copy::{
-    ArrowBatch, ArrowField, SharedMemoryHandle, VectorBatch, ZeroCopyBuffer,
-};
-
-// Serverless Edge Runtime
-pub use edge_runtime::{
-    EdgeCacheConfig, EdgeConfig, EdgeHnswConfig, EdgeManifest, EdgeRuntime, EdgeRuntimeStats,
-    EdgeStorage, IndexSegment, InMemoryEdgeStorage, Platform, SearchCache, SegmentMetadata,
-};
-pub use edge_partitioning::{
-    ClusterPartitioner, HashPartitioner, HierarchicalPartitioner, PartitionConfig, PartitionId,
-    PartitionManager, PartitionManifest, PartitionMetadata, PartitionRouter,
-};
-pub use platform_adapters::{
-    ChunkedEdgeStorage, CloudflareKvAdapter, CloudflareR2Adapter, DenoKvAdapter,
-    TieredEdgeStorage, VercelBlobAdapter, VercelEdgeConfigAdapter,
-};
-
-// Universal Embeddings Gateway
-pub use embeddings_gateway::{
-    EmbeddingResult, EmbeddingsGateway, GatewayConfig, GatewayMetrics, ProviderConfig,
-    ProviderMetrics, ProviderRouter, ProviderStatus, ProviderType, RoutingStrategy as GatewayRoutingStrategy,
-    SemanticCache, BatchEmbeddingResult,
-};
-
-// Real-Time Collaborative Search
-pub use collaborative_search::{
-    Annotation, AnnotationDelta, AnnotationMergeResult, CollaborativeCollection,
-    CollaborativeCollectionStats, CollaborativeDelta, CollaborativeEvent, CollaborativeMergeResult,
-    CollaborativeSearchResult, CollaborativeVector, EventReceiver, LiveQuery, LiveQueryConfig,
-    Presence, PresenceEvent, PresenceStatus, PresenceTracker, Session, SessionAccess, SessionInfo,
-    SessionManager, SharedSearch, SyncManager, SyncStats,
-};
-
-// Cross-Collection Search
-pub use cross_collection::{
-    CollectionFilter, CrossCollectionAnalytics, CrossCollectionConfig, CrossCollectionQueryBuilder,
-    CrossCollectionResult, CrossCollectionSearch, CrossCollectionStats,
-    ScoreAggregation as CrossCollectionScoreAggregation,
-};
-
-// Schema versioning and migrations
-pub use migrations::{
-    CompatibilityResult, IndexType as MigrationIndexType, IssueSeverity, Migration,
-    MigrationContext, MigrationError, MigrationManager, MigrationOperation, MigrationPreview,
-    MigrationRecord, MigrationResult, MigrationStatus as SchemaMigrationStatus, SchemaVersion, ValidationIssue,
-    built_in_migrations,
-};
-
-// New features: IVF indexing, reranking, and half-precision floats
-pub use float16::{Bf16, Bf16Vector, F16, F16Vector, HalfPrecision};
-pub use ivf::{ClusterStats, IvfConfig, IvfError, IvfIndex, IvfResult};
-pub use reranker::{
-    CohereConfig as CohereRerankerConfig, CohereReranker, EnsembleReranker,
-    HuggingFaceConfig as HuggingFaceRerankerConfig, HuggingFaceReranker,
-    NoOpReranker, Reranker, RerankerError, RerankerResult, RerankResult,
-};
-// Routing: Main types for query routing, internal details stay in module
-pub use routing::{LoadBalancing, QueryRouter, RouteConfig, RoutingError, RoutingResult};
-// Shard: Main types for sharding and cross-shard search
-pub use shard::{
-    CrossShardSearchConfig, CrossShardSearchResult, ShardConfig, ShardError, ShardId, ShardInfo,
-    ShardManager, ShardSearchResult, ShardSearchable, ShardState, ShardedCollection,
-    merge_shard_results,
-};
-// WAL: Only export main types, internal record types stay in module
-pub use wal::{Lsn, WalConfig, WalManager, WalStats};
-
-// Cloud storage: Main backend types, internal streaming/pool details stay in module
-pub use cloud_storage::{
-    AzureBlobBackend, AzureBlobConfig, CacheConfig, CachedBackend, GCSBackend,
-    GCSConfig, LocalBackend, RetryPolicy, S3Backend, S3Config, StorageBackend, StorageConfig,
-};
+// ── Beta & Experimental API ──────────────────────────────────────────────────
+// Beta and experimental types have been moved behind dedicated module paths.
+// Use `needle::beta_api::*` for beta types and `needle::experimental_api::*`
+// for experimental types.
+pub mod beta_api;
+pub mod experimental_api;
 
 #[cfg(feature = "hybrid")]
 pub use hybrid::{
@@ -481,13 +302,6 @@ pub use embeddings::{EmbedderBuilder, EmbedderConfig, EmbeddingError, PoolingStr
 #[cfg(feature = "web-ui")]
 pub use web_ui::{WebUiConfig, WebUiState, serve_web_ui, serve_web_ui_default, create_web_ui_router};
 
-// Security - RBAC and Audit Logging
-pub use security::{
-    AccessControl as SecurityAccessControl, AccessController, AuditAction, AuditEvent,
-    AuditLogger, AuditQuery, AuditResult, FileAuditLog, FileAuditLogConfig, InMemoryAuditLog,
-    Permission, PermissionGrant, PolicyDecision, Resource, Role, SecurityContext, User,
-};
-
 #[cfg(feature = "embedding-providers")]
 pub use embeddings_provider::{
     BatchConfig, CachedProvider, CohereConfig, CohereInputType, EmbeddingProvider,
@@ -495,23 +309,18 @@ pub use embeddings_provider::{
     OpenAIConfig, OpenAIProvider, RateLimiter,
 };
 
-// LangChain/LlamaIndex Integration
-pub use langchain::{
-    Document, DocumentWithScore, FilterBuilder, NeedleVectorStore, NeedleVectorStoreConfig,
-    RelevanceScoreFunction, CollectionStats as LangChainCollectionStats,
-};
-pub use llamaindex::{
-    ChatMessage as LlamaIndexChatMessage, ChunkConfig, ConversationMemory, DocumentChunker,
-    MemoryConfig as ConversationMemoryConfig, MessageRole, NeedleIndexConfig, NeedleVectorStoreIndex,
-    NodeRelationship, NodeWithScore, RelatedNode, RetrieverQueryEngine, TextNode,
-};
-
-/// Prelude module for convenient imports
+/// Prelude module for convenient imports.
+///
+/// ```rust
+/// use needle::prelude::*;
+/// ```
 pub mod prelude {
-    pub use crate::collection::{Collection, SearchResult};
-    pub use crate::database::Database;
+    pub use crate::collection::{Collection, CollectionConfig, SearchResult};
+    pub use crate::database::{CollectionRef, Database, DatabaseConfig};
+    pub use crate::database::collection_ref::SearchParams;
     pub use crate::distance::DistanceFunction;
     pub use crate::error::{NeedleError, Result};
+    pub use crate::hnsw::HnswConfig;
     pub use crate::metadata::Filter;
 }
 
