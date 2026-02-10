@@ -46,7 +46,7 @@ fn generate_hash() -> CommitHash {
 
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .unwrap()
+        .unwrap_or_default()
         .as_nanos();
 
     let mut hasher = DefaultHasher::new();
@@ -203,7 +203,7 @@ impl VectorRepo {
     fn now() -> u64 {
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or_default()
             .as_secs()
     }
 
@@ -963,7 +963,7 @@ fn days_since_unix_epoch(year: i32, month: u32, day: u32) -> i64 {
 fn parse_relative_time(s: &str) -> Result<u64> {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .unwrap()
+        .unwrap_or_default()
         .as_secs();
 
     let s = s.to_lowercase();
