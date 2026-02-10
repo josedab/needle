@@ -1,7 +1,12 @@
+[workspace]
+members = [".", "crates/needle-core", "crates/needle-cli", "crates/needle-python"]
+default-members = [".", "crates/needle-core", "crates/needle-cli"]
+
 [package]
 name = "needle"
 version = "0.1.0"
 edition = "2021"
+rust-version = "1.85"
 authors = ["Anthropic <support@anthropic.com>"]
 description = "An embedded vector database - SQLite for vectors"
 license = "MIT"
@@ -9,17 +14,21 @@ keywords = ["vector", "database", "embedding", "hnsw", "similarity-search"]
 categories = ["database", "algorithms", "science"]
 repository = "https://github.com/anthropics/needle"
 readme = "README.md"
+default-run = "needle"
+
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/v{ version }/needle-{ target }{ archive-suffix }"
+bin-dir = "needle-{ target }/{ bin }{ binary-ext }"
 
 [lib]
 name = "needle"
 path = "src/lib.rs"
-crate-type = ["cdylib", "rlib"]
-
-[[bin]]
-name = "needle"
-path = "src/main.rs"
+crate-type = ["rlib"]
 
 [dependencies]
+# Core types (workspace crate)
+needle-core = { path = "crates/needle-core" }
+
 # Error handling
 thiserror = "2.0"
 
@@ -128,18 +137,18 @@ sha2 = "0.10"
 hmac = { version = "0.12", optional = true }
 base64 = { version = "0.22", optional = true }
 
-# Cryptography - AEAD encryption
-chacha20poly1305 = "0.10"
-hkdf = "0.12"
+# Cryptography - AEAD encryption (optional, used by enterprise/encryption)
+chacha20poly1305 = { version = "0.10", optional = true }
+hkdf = { version = "0.12", optional = true }
 
 # Chrono for timestamps
 chrono = { version = "0.4", features = ["serde"] }
 
-# UUID generation for LangChain compatibility
-uuid = { version = "1.0", features = ["v4"] }
+# UUID generation for LangChain/LlamaIndex compatibility
+uuid = { version = "1.0", features = ["v4"], optional = true }
 
 # Binary serialization for DiskANN
-bincode = "1.3"
+bincode = { version = "1.3", optional = true }
 
 [dev-dependencies]
 pretty_assertions = "1.0"
@@ -156,6 +165,10 @@ uniffi = { version = "0.28", features = ["build"], optional = true }
 name = "benchmarks"
 harness = false
 
+[[example]]
+name = "hybrid_search"
+required-features = ["hybrid"]
+
 [features]
 default = []
 simd = []
@@ -169,6 +182,12 @@ hybrid = ["rust-stemmers"]
 # Note: embeddings feature uses pre-release ort crate, consider unstable
 embeddings = ["ort", "ndarray", "tokenizers"]
 embedding-providers = ["async", "async-trait", "reqwest"]
+# Enterprise encryption (ChaCha20-Poly1305)
+encryption = ["chacha20poly1305", "hkdf"]
+# DiskANN index support
+diskann = ["bincode"]
+# LangChain / LlamaIndex integration support
+integrations = ["uuid"]
 # Cloud storage backends
 cloud-storage-s3 = ["async", "aws-config", "aws-sdk-s3", "aws-smithy-types"]
 cloud-storage-gcs = ["async", "google-cloud-storage"]
@@ -178,7 +197,9 @@ cloud-storage = ["cloud-storage-s3", "cloud-storage-gcs", "cloud-storage-azure"]
 gpu = ["wide"]
 gpu-cuda = ["gpu", "cudarc"]
 gpu-metal = ["gpu", "metal", "objc"]
-full = ["server", "metrics", "hybrid", "web-ui", "embedding-providers", "cloud-storage"]
+full = ["server", "metrics", "hybrid", "web-ui", "embedding-providers", "encryption", "diskann", "integrations", "experimental"]
+# Experimental modules - under active development, APIs may change
+experimental = []
 python = ["pyo3", "pythonize"]
 wasm = ["wasm-bindgen", "js-sys", "web-sys"]
 uniffi-bindings = ["uniffi"]

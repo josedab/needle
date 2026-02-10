@@ -4,7 +4,7 @@
 # ============================================================================
 # Stage 1: Build
 # ============================================================================
-FROM rust:1.75-bookworm AS builder
+FROM rust:1.85-bookworm AS builder
 
 WORKDIR /build
 
@@ -43,6 +43,7 @@ FROM debian:bookworm-slim AS runtime
 # Install runtime dependencies
 RUN apt-get update && apt-get install -y \
     ca-certificates \
+    curl \
     libssl3 \
     && rm -rf /var/lib/apt/lists/* \
     && useradd -r -s /bin/false needle

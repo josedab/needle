@@ -1,0 +1,8 @@
+version: '3.8'
+
+services:
+  needle:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: needle:local

@@ -1,0 +1,13 @@
+# Default development configuration
+#
+# The root crate uses crate-type = ["cdylib", "rlib"] for Python/WASM bindings.
+# This adds linker overhead to every build. For fast iteration use:
+#   make quick        — format check + lint + unit tests (skips cdylib)
+#   cargo test --lib  — unit tests only (skips cdylib)
+#   cargo t           — alias for: cargo test --features full
+
+[alias]
+build-all = "build --features full"
+test-all  = "test --features full"
+lint      = "clippy --features full -- -D warnings"
+t         = "test --features full"

@@ -1,15 +1,15 @@
 # Clippy configuration for Needle
 # Maximum cognitive complexity for functions
-cognitive-complexity-threshold = 30
+cognitive-complexity-threshold = 25
 
 # Allow slightly longer type names
 type-complexity-threshold = 300
 
 # Warn on functions with too many arguments
-too-many-arguments-threshold = 8
+too-many-arguments-threshold = 7
 
 # Warn on functions with too many lines
-too-many-lines-threshold = 150
+too-many-lines-threshold = 100
 
 # Maximum number of enum variants
 enum-variant-name-threshold = 3
