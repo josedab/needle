@@ -806,6 +806,35 @@ impl QueryVectorCacheStats {
     }
 }
 
+impl std::fmt::Display for QueryVectorCacheStats {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "Query Vector Cache Statistics")?;
+        writeln!(f, "  Entries:                {}", self.entry_count)?;
+        writeln!(f, "  Hits:                   {}", self.hits)?;
+        writeln!(f, "  Misses:                 {}", self.misses)?;
+        writeln!(f, "  Hit ratio:              {:.1}%", self.hit_ratio() * 100.0)?;
+        writeln!(f, "  Mutation invalidations: {}", self.mutation_invalidations)?;
+        writeln!(f, "  Evictions:              {}", self.evictions)?;
+        writeln!(f, "  Generation:             {}", self.generation)?;
+        Ok(())
+    }
+}
+
+impl std::fmt::Display for CacheStats {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "Semantic Cache Statistics")?;
+        writeln!(f, "  L1 size:    {}", self.l1_size)?;
+        writeln!(f, "  L2 size:    {}", self.l2_size)?;
+        writeln!(f, "  Hits:       {}", self.hits)?;
+        writeln!(f, "  Misses:     {}", self.misses)?;
+        writeln!(f, "  Hit ratio:  {:.1}%", self.hit_ratio * 100.0)?;
+        writeln!(f, "  Avg lookup: {:.1}µs", self.avg_lookup_us)?;
+        writeln!(f, "  Evictions:  {}", self.evictions)?;
+        writeln!(f, "  Promotions: {}", self.promotions)?;
+        Ok(())
+    }
+}
+
 /// Internal cache entry.
 #[derive(Clone)]
 struct QvCacheEntry {
