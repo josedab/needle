@@ -1,5 +1,13 @@
 # Needle LangChain Integration
 
+> **⚠️ Reference Implementation — Not Production-Ready**
+>
+> This package is a **reference/in-memory stub** that stores vectors in plain
+> Python dicts. It is intended for prototyping, testing, and as a starting point
+> for a full Needle-backed LangChain integration. **Do not use it in production
+> workloads** — data is not persisted to a Needle database and will be lost when
+> the process exits.
+
 This package provides a LangChain vector store wrapper for Needle.
 
 ## Install (from source)
