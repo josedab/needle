@@ -110,6 +110,7 @@ use tracing::debug;
 pub type VectorId = usize;
 
 /// Statistics from an HNSW search operation
+#[must_use]
 #[derive(Debug, Clone, Default)]
 pub struct SearchStats {
     /// Number of nodes visited during the search
@@ -659,61 +660,7 @@ impl HnswIndex {
         layer: usize,
         vectors: &[Vec<f32>],
     ) -> Vec<(VectorId, f32)> {
-        // Use Vec<u8> for O(1) visited checks with better cache behavior than Vec<bool>
-        // (Vec<bool> uses bit-packing which causes more CPU operations)
-        let mut visited = vec![0u8; vectors.len()];
-        // Min-heap for candidates (closest first)
-        let mut candidates: BinaryHeap<Reverse<(OrderedFloat<f32>, VectorId)>> = BinaryHeap::new();
-        // Max-heap for results (farthest first, for easy pruning)
-        let mut results: BinaryHeap<(OrderedFloat<f32>, VectorId)> = BinaryHeap::new();
-
-        let entry_dist = self.distance.compute(query, &vectors[entry]);
-        candidates.push(Reverse((OrderedFloat(entry_dist), entry)));
-        // Only add to results if not deleted
-        if !self.deleted.contains(&entry) {
-            results.push((OrderedFloat(entry_dist), entry));
-        }
-        visited[entry] = 1;
-
-        while let Some(Reverse((OrderedFloat(c_dist), c_id))) = candidates.pop() {
-            // Get the worst distance in results
-            let worst_dist = results.peek().map(|(d, _)| d.0).unwrap_or(f32::INFINITY);
-
-            // If the best candidate is worse than our worst result, we're done
-            if c_dist > worst_dist && results.len() >= ef {
-                break;
-            }
-
-            // Explore neighbors
-            let connections = self.layers[layer].get_connections(c_id);
-            for &neighbor in connections {
-                if visited[neighbor] == 0 {
-                    visited[neighbor] = 1;
-                    let dist = self.distance.compute(query, &vectors[neighbor]);
-
-                    // Always add to candidates for graph traversal
-                    if dist < worst_dist || results.len() < ef {
-                        candidates.push(Reverse((OrderedFloat(dist), neighbor)));
-
-                        // Only add to results if not deleted
-                        if !self.deleted.contains(&neighbor) {
-                            results.push((OrderedFloat(dist), neighbor));
-
-                            // Keep only top ef results
-                            if results.len() > ef {
-                                results.pop();
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // Convert to sorted vector (closest first)
-        let mut result_vec: Vec<_> = results.into_iter().map(|(d, id)| (id, d.0)).collect();
-        // Use sort_unstable_by for 5-10% faster sorting (stable ordering not needed for results)
-        result_vec.sort_unstable_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
-        result_vec
+        self.search_layer_core(query, entry, ef, layer, vectors).0
     }
 
     /// Search a single layer and return the number of visited nodes
@@ -725,8 +672,23 @@ impl HnswIndex {
         layer: usize,
         vectors: &[Vec<f32>],
     ) -> (Vec<(VectorId, f32)>, usize) {
+        self.search_layer_core(query, entry, ef, layer, vectors)
+    }
+
+    /// Core layer search implementation. Returns (results, visited_count).
+    fn search_layer_core(
+        &self,
+        query: &[f32],
+        entry: VectorId,
+        ef: usize,
+        layer: usize,
+        vectors: &[Vec<f32>],
+    ) -> (Vec<(VectorId, f32)>, usize) {
+        // Use Vec<u8> for O(1) visited checks with better cache behavior than Vec<bool>
         let mut visited = vec![0u8; vectors.len()];
+        // Min-heap for candidates (closest first)
         let mut candidates: BinaryHeap<Reverse<(OrderedFloat<f32>, VectorId)>> = BinaryHeap::new();
+        // Max-heap for results (farthest first, for easy pruning)
         let mut results: BinaryHeap<(OrderedFloat<f32>, VectorId)> = BinaryHeap::new();
         let mut visited_count = 0usize;
 
@@ -741,10 +703,12 @@ impl HnswIndex {
         while let Some(Reverse((OrderedFloat(c_dist), c_id))) = candidates.pop() {
             let worst_dist = results.peek().map(|(d, _)| d.0).unwrap_or(f32::INFINITY);
 
+            // If the best candidate is worse than our worst result, we're done
             if c_dist > worst_dist && results.len() >= ef {
                 break;
             }
 
+            // Explore neighbors
             let connections = self.layers[layer].get_connections(c_id);
             for &neighbor in connections {
                 if visited[neighbor] == 0 {
@@ -767,6 +731,7 @@ impl HnswIndex {
             }
         }
 
+        // Convert to sorted vector (closest first)
         let mut result_vec: Vec<_> = results.into_iter().map(|(d, id)| (id, d.0)).collect();
         result_vec.sort_unstable_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
         (result_vec, visited_count)
@@ -933,6 +898,7 @@ impl HnswIndex {
 }
 
 /// HNSW index statistics
+#[must_use]
 #[derive(Debug, Clone)]
 pub struct HnswStats {
     /// Number of active vectors in the index

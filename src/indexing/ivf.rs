@@ -367,7 +367,7 @@ impl IvfIndex {
         for _ in 1..k {
             // Update distances to nearest centroid
             for (i, v) in vectors.iter().enumerate() {
-                let d = euclidean_distance(v, centroids.last().unwrap());
+                let d = euclidean_distance(v, centroids.last().expect("centroids is non-empty"));
                 distances[i] = distances[i].min(d);
             }
 
@@ -381,7 +381,7 @@ impl IvfIndex {
                 if remaining.is_empty() {
                     break;
                 }
-                let idx = *remaining.choose(&mut rng).unwrap();
+                let idx = *remaining.choose(&mut rng).expect("remaining is non-empty");
                 centroids.push(vectors[idx].to_vec());
             } else {
                 let threshold = rand::random::<f32>() * total;
