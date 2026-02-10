@@ -624,6 +624,41 @@ impl Collection {
         Ok(())
     }
 
+    /// Insert a text document, automatically embedding it using the provided model.
+    ///
+    /// This convenience method embeds `text` using the given `EmbeddingModel` and
+    /// stores the resulting vector with optional metadata. The model's output
+    /// dimensions must match the collection's configured dimensions.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The embedding model fails
+    /// - Vector dimensions don't match the collection
+    /// - A vector with the same ID already exists
+    pub fn insert_with_text(
+        &mut self,
+        id: impl Into<String>,
+        text: &str,
+        model: &dyn crate::ml::embedded_runtime::EmbeddingModel,
+        metadata: Option<Value>,
+    ) -> Result<()> {
+        let embedding = model.embed(text)?;
+        self.insert_vec(id, embedding, metadata)
+    }
+
+    /// Insert multiple text documents in batch, embedding them with the given model.
+    pub fn insert_batch_with_text(
+        &mut self,
+        ids: Vec<String>,
+        texts: &[&str],
+        model: &dyn crate::ml::embedded_runtime::EmbeddingModel,
+        metadata: Vec<Option<Value>>,
+    ) -> Result<()> {
+        let embeddings = model.embed_batch(texts)?;
+        self.insert_batch(ids, embeddings, metadata)
+    }
+
     /// Insert multiple vectors in batch.
     ///
     /// Atomically inserts all vectors or rolls back on failure. Each ID must be
