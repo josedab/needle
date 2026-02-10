@@ -162,6 +162,42 @@ impl AsyncDatabaseConfig {
     }
 }
 
+/// Reduces `spawn_blocking` boilerplate in `AsyncDatabase` methods.
+///
+/// Three variants:
+/// - `db_op!(self, |db| expr)` — immutable lock, returns `Result<T>`
+/// - `db_op!(self, mut |db| expr)` — mutable lock, returns `Result<T>`
+/// - `db_op!(self, default val, |db| expr)` — immutable lock, returns `T` with fallback
+macro_rules! db_op {
+    ($s:ident, |$db:ident| $body:expr) => {{
+        let inner = $s.inner.clone();
+        tokio::task::spawn_blocking(move || {
+            let $db = inner.blocking_lock();
+            $body
+        })
+        .await
+        .map_err(|e| NeedleError::Io(std::io::Error::other(e)))?
+    }};
+    ($s:ident, mut |$db:ident| $body:expr) => {{
+        let inner = $s.inner.clone();
+        tokio::task::spawn_blocking(move || {
+            let mut $db = inner.blocking_lock();
+            $body
+        })
+        .await
+        .map_err(|e| NeedleError::Io(std::io::Error::other(e)))?
+    }};
+    ($s:ident, default $default:expr, |$db:ident| $body:expr) => {{
+        let inner = $s.inner.clone();
+        tokio::task::spawn_blocking(move || {
+            let $db = inner.blocking_lock();
+            $body
+        })
+        .await
+        .unwrap_or($default)
+    }};
+}
+
 /// Async wrapper for the Needle vector database
 ///
 /// Provides async/await interface for all database operations. Uses
@@ -261,13 +297,7 @@ impl AsyncDatabase {
     /// ```
     pub async fn create_collection(&self, name: impl Into<String>, dimensions: usize) -> Result<()> {
         let name = name.into();
-        let inner = self.inner.clone();
-        tokio::task::spawn_blocking(move || {
-            let db = inner.blocking_lock();
-            db.create_collection(name, dimensions)
-        })
-        .await
-        .map_err(|e| NeedleError::Io(std::io::Error::other(e)))?
+        db_op!(self, |db| db.create_collection(name, dimensions))
     }
 
     /// Create a new collection with custom configuration
@@ -286,13 +316,7 @@ impl AsyncDatabase {
     /// db.create_collection_with_config(config).await?;
     /// ```
     pub async fn create_collection_with_config(&self, config: CollectionConfig) -> Result<()> {
-        let inner = self.inner.clone();
-        tokio::task::spawn_blocking(move || {
-            let db = inner.blocking_lock();
-            db.create_collection_with_config(config)
-        })
-        .await
-        .map_err(|e| NeedleError::Io(std::io::Error::other(e)))?
+        db_op!(self, |db| db.create_collection_with_config(config))
     }
 
     /// List all collection names
@@ -306,13 +330,7 @@ impl AsyncDatabase {
     /// }
     /// ```
     pub async fn list_collections(&self) -> Vec<String> {
-        let inner = self.inner.clone();
-        tokio::task::spawn_blocking(move || {
-            let db = inner.blocking_lock();
-            db.list_collections()
-        })
-        .await
-        .unwrap_or_default()
+        db_op!(self, default Vec::new(), |db| db.list_collections())
     }
 
     /// Check if a collection exists
@@ -321,14 +339,8 @@ impl AsyncDatabase {
     ///
     /// * `name` - Collection name
     pub async fn has_collection(&self, name: &str) -> bool {
-        let inner = self.inner.clone();
         let name = name.to_string();
-        tokio::task::spawn_blocking(move || {
-            let db = inner.blocking_lock();
-            db.has_collection(&name)
-        })
-        .await
-        .unwrap_or(false)
+        db_op!(self, default false, |db| db.has_collection(&name))
     }
 
     /// Drop a collection
@@ -339,16 +351,16 @@ impl AsyncDatabase {
     ///
     /// # Returns
     ///
-    /// `true` if the collection was dropped, `false` if it didn't exist
-    pub async fn drop_collection(&self, name: &str) -> Result<bool> {
-        let inner = self.inner.clone();
+    /// `true` if the collection was deleted, `false` if it didn't exist
+    pub async fn delete_collection(&self, name: &str) -> Result<bool> {
         let name = name.to_string();
-        tokio::task::spawn_blocking(move || {
-            let db = inner.blocking_lock();
-            db.drop_collection(&name)
-        })
-        .await
-        .map_err(|e| NeedleError::Io(std::io::Error::other(e)))?
+        db_op!(self, |db| db.delete_collection(&name))
+    }
+
+    /// Delete a collection and all its data.
+    #[deprecated(since = "0.2.0", note = "renamed to `delete_collection`")]
+    pub async fn drop_collection(&self, name: &str) -> Result<bool> {
+        self.delete_collection(name).await
     }
 
     /// Insert a vector into a collection
@@ -379,17 +391,13 @@ impl AsyncDatabase {
         vector: Vec<f32>,
         metadata: Option<Value>,
     ) -> Result<()> {
-        let inner = self.inner.clone();
         let collection = collection.to_string();
         let id = id.into();
-        tokio::task::spawn_blocking(move || {
-            let db = inner.blocking_lock();
+        db_op!(self, |db| {
             let coll = db.collection(&collection)?;
             // Use insert_vec to avoid cloning the vector we already own
             coll.insert_vec(id, vector, metadata)
         })
-        .await
-        .map_err(|e| NeedleError::Io(std::io::Error::other(e)))?
     }
 
     /// Batch insert multiple vectors
@@ -413,18 +421,14 @@ impl AsyncDatabase {
         collection: &str,
         entries: Vec<(String, Vec<f32>, Option<Value>)>,
     ) -> Result<()> {
-        let inner = self.inner.clone();
         let collection = collection.to_string();
-        tokio::task::spawn_blocking(move || {
-            let db = inner.blocking_lock();
+        db_op!(self, |db| {
             let coll = db.collection(&collection)?;
             for (id, vector, metadata) in entries {
                 coll.insert(id, &vector, metadata)?;
             }
             Ok(())
         })
-        .await
-        .map_err(|e| NeedleError::Io(std::io::Error::other(e)))?
     }
 
     /// Search for similar vectors
@@ -449,15 +453,11 @@ impl AsyncDatabase {
         query: Vec<f32>,
         k: usize,
     ) -> Result<Vec<SearchResult>> {
-        let inner = self.inner.clone();
         let collection = collection.to_string();
-        tokio::task::spawn_blocking(move || {
-            let db = inner.blocking_lock();
+        db_op!(self, |db| {
             let coll = db.collection(&collection)?;
             coll.search(&query, k)
         })
-        .await
-        .map_err(|e| NeedleError::Io(std::io::Error::other(e)))?
     }
 
     /// Search with a metadata filter
@@ -484,15 +484,11 @@ impl AsyncDatabase {
         k: usize,
         filter: Filter,
     ) -> Result<Vec<SearchResult>> {
-        let inner = self.inner.clone();
         let collection = collection.to_string();
-        tokio::task::spawn_blocking(move || {
-            let db = inner.blocking_lock();
+        db_op!(self, |db| {
             let coll = db.collection(&collection)?;
             coll.search_with_filter(&query, k, &filter)
         })
-        .await
-        .map_err(|e| NeedleError::Io(std::io::Error::other(e)))?
     }
 
     /// Batch search with multiple queries
@@ -520,10 +516,8 @@ impl AsyncDatabase {
         queries: Vec<Vec<f32>>,
         k: usize,
     ) -> Result<Vec<Vec<SearchResult>>> {
-        let inner = self.inner.clone();
         let collection = collection.to_string();
-        tokio::task::spawn_blocking(move || {
-            let db = inner.blocking_lock();
+        db_op!(self, |db| {
             let coll = db.collection(&collection)?;
             // Use rayon's parallel search internally
             let results: Result<Vec<Vec<SearchResult>>> = queries
@@ -532,8 +526,6 @@ impl AsyncDatabase {
                 .collect();
             results
         })
-        .await
-        .map_err(|e| NeedleError::Io(std::io::Error::other(e)))?
     }
 
     /// Batch search with filter
@@ -551,10 +543,8 @@ impl AsyncDatabase {
         k: usize,
         filter: Filter,
     ) -> Result<Vec<Vec<SearchResult>>> {
-        let inner = self.inner.clone();
         let collection = collection.to_string();
-        tokio::task::spawn_blocking(move || {
-            let db = inner.blocking_lock();
+        db_op!(self, |db| {
             let coll = db.collection(&collection)?;
             let results: Result<Vec<Vec<SearchResult>>> = queries
                 .iter()
@@ -562,8 +552,6 @@ impl AsyncDatabase {
                 .collect();
             results
         })
-        .await
-        .map_err(|e| NeedleError::Io(std::io::Error::other(e)))?
     }
 
     /// Get a vector by ID
@@ -577,20 +565,15 @@ impl AsyncDatabase {
     ///
     /// Vector data and metadata if found
     pub async fn get(&self, collection: &str, id: &str) -> Option<(Vec<f32>, Option<Value>)> {
-        let inner = self.inner.clone();
         let collection = collection.to_string();
         let id = id.to_string();
-        tokio::task::spawn_blocking(move || {
-            let db = inner.blocking_lock();
+        db_op!(self, default None, |db| {
             if let Ok(coll) = db.collection(&collection) {
                 coll.get(&id)
             } else {
                 None
             }
         })
-        .await
-        .ok()
-        .flatten()
     }
 
     /// Delete a vector by ID
@@ -604,16 +587,12 @@ impl AsyncDatabase {
     ///
     /// `true` if the vector was deleted, `false` if it didn't exist
     pub async fn delete(&self, collection: &str, id: &str) -> Result<bool> {
-        let inner = self.inner.clone();
         let collection = collection.to_string();
         let id = id.to_string();
-        tokio::task::spawn_blocking(move || {
-            let db = inner.blocking_lock();
+        db_op!(self, |db| {
             let coll = db.collection(&collection)?;
             coll.delete(&id)
         })
-        .await
-        .map_err(|e| NeedleError::Io(std::io::Error::other(e)))?
     }
 
     /// Batch delete multiple vectors
@@ -627,10 +606,8 @@ impl AsyncDatabase {
     ///
     /// Number of vectors actually deleted
     pub async fn batch_delete(&self, collection: &str, ids: Vec<String>) -> Result<usize> {
-        let inner = self.inner.clone();
         let collection = collection.to_string();
-        tokio::task::spawn_blocking(move || {
-            let db = inner.blocking_lock();
+        db_op!(self, |db| {
             let coll = db.collection(&collection)?;
             let mut deleted = 0;
             for id in &ids {
@@ -640,8 +617,6 @@ impl AsyncDatabase {
             }
             Ok(deleted)
         })
-        .await
-        .map_err(|e| NeedleError::Io(std::io::Error::other(e)))?
     }
 
     /// Export all vectors from a collection
@@ -652,15 +627,11 @@ impl AsyncDatabase {
     ///
     /// * `collection` - Collection name
     pub async fn export(&self, collection: &str) -> Result<Vec<ExportEntry>> {
-        let inner = self.inner.clone();
         let collection = collection.to_string();
-        tokio::task::spawn_blocking(move || {
-            let db = inner.blocking_lock();
+        db_op!(self, |db| {
             let coll = db.collection(&collection)?;
             coll.export_all()
         })
-        .await
-        .map_err(|e| NeedleError::Io(std::io::Error::other(e)))?
     }
 
     /// Stream export vectors from a collection in batches
@@ -714,15 +685,11 @@ impl AsyncDatabase {
     ///
     /// * `collection` - Collection name
     pub async fn ids(&self, collection: &str) -> Result<Vec<String>> {
-        let inner = self.inner.clone();
         let collection = collection.to_string();
-        tokio::task::spawn_blocking(move || {
-            let db = inner.blocking_lock();
+        db_op!(self, |db| {
             let coll = db.collection(&collection)?;
             coll.ids()
         })
-        .await
-        .map_err(|e| NeedleError::Io(std::io::Error::other(e)))?
     }
 
     /// Get the number of vectors in a collection
@@ -731,18 +698,14 @@ impl AsyncDatabase {
     ///
     /// * `collection` - Collection name
     pub async fn count(&self, collection: &str) -> usize {
-        let inner = self.inner.clone();
         let collection = collection.to_string();
-        tokio::task::spawn_blocking(move || {
-            let db = inner.blocking_lock();
+        db_op!(self, default 0, |db| {
             if let Ok(coll) = db.collection(&collection) {
                 coll.len()
             } else {
                 0
             }
         })
-        .await
-        .unwrap_or(0)
     }
 
     /// Count vectors matching a filter
@@ -752,15 +715,11 @@ impl AsyncDatabase {
     /// * `collection` - Collection name
     /// * `filter` - Optional metadata filter
     pub async fn count_with_filter(&self, collection: &str, filter: Option<Filter>) -> Result<usize> {
-        let inner = self.inner.clone();
         let collection = collection.to_string();
-        tokio::task::spawn_blocking(move || {
-            let db = inner.blocking_lock();
+        db_op!(self, |db| {
             let coll = db.collection(&collection)?;
             coll.count(filter.as_ref())
         })
-        .await
-        .map_err(|e| NeedleError::Io(std::io::Error::other(e)))?
     }
 
     /// Compact a collection, removing deleted vectors
@@ -773,15 +732,11 @@ impl AsyncDatabase {
     ///
     /// Number of vectors removed
     pub async fn compact(&self, collection: &str) -> Result<usize> {
-        let inner = self.inner.clone();
         let collection = collection.to_string();
-        tokio::task::spawn_blocking(move || {
-            let db = inner.blocking_lock();
+        db_op!(self, |db| {
             let coll = db.collection(&collection)?;
             coll.compact()
         })
-        .await
-        .map_err(|e| NeedleError::Io(std::io::Error::other(e)))?
     }
 
     /// Check if a collection needs compaction
@@ -791,18 +746,14 @@ impl AsyncDatabase {
     /// * `collection` - Collection name
     /// * `threshold` - Deleted ratio threshold (0.0-1.0)
     pub async fn needs_compaction(&self, collection: &str, threshold: f64) -> bool {
-        let inner = self.inner.clone();
         let collection = collection.to_string();
-        tokio::task::spawn_blocking(move || {
-            let db = inner.blocking_lock();
+        db_op!(self, default false, |db| {
             if let Ok(coll) = db.collection(&collection) {
                 coll.needs_compaction(threshold)
             } else {
                 false
             }
         })
-        .await
-        .unwrap_or(false)
     }
 
     /// Save changes to disk
@@ -813,35 +764,17 @@ impl AsyncDatabase {
     /// db.save().await?;
     /// ```
     pub async fn save(&self) -> Result<()> {
-        let inner = self.inner.clone();
-        tokio::task::spawn_blocking(move || {
-            let mut db = inner.blocking_lock();
-            db.save()
-        })
-        .await
-        .map_err(|e| NeedleError::Io(std::io::Error::other(e)))?
+        db_op!(self, mut |db| db.save())
     }
 
     /// Check if there are unsaved changes
     pub async fn is_dirty(&self) -> bool {
-        let inner = self.inner.clone();
-        tokio::task::spawn_blocking(move || {
-            let db = inner.blocking_lock();
-            db.is_dirty()
-        })
-        .await
-        .unwrap_or(false)
+        db_op!(self, default false, |db| db.is_dirty())
     }
 
     /// Get total number of vectors across all collections
     pub async fn total_vectors(&self) -> usize {
-        let inner = self.inner.clone();
-        tokio::task::spawn_blocking(move || {
-            let db = inner.blocking_lock();
-            db.total_vectors()
-        })
-        .await
-        .unwrap_or(0)
+        db_op!(self, default 0, |db| db.total_vectors())
     }
 
     /// Get the underlying database for advanced operations

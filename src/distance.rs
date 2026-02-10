@@ -157,7 +157,7 @@ pub fn euclidean_distance_squared(a: &[f32], b: &[f32]) -> f32 {
 
 /// Scalar fallback for squared Euclidean distance
 #[inline]
-#[allow(dead_code)]
+#[cfg_attr(all(target_arch = "aarch64", target_feature = "neon"), allow(dead_code))]
 fn euclidean_squared_scalar(a: &[f32], b: &[f32]) -> f32 {
     a.iter()
         .zip(b.iter())
@@ -204,7 +204,7 @@ pub fn dot_product(a: &[f32], b: &[f32]) -> f32 {
 
 /// Scalar fallback for dot product
 #[inline]
-#[allow(dead_code)]
+#[cfg_attr(all(target_arch = "aarch64", target_feature = "neon"), allow(dead_code))]
 fn dot_product_scalar(a: &[f32], b: &[f32]) -> f32 {
     a.iter().zip(b.iter()).map(|(x, y)| x * y).sum()
 }
@@ -236,7 +236,7 @@ pub fn manhattan_distance(a: &[f32], b: &[f32]) -> f32 {
 
 /// Scalar fallback for Manhattan distance
 #[inline]
-#[allow(dead_code)]
+#[cfg_attr(all(target_arch = "aarch64", target_feature = "neon"), allow(dead_code))]
 fn manhattan_scalar(a: &[f32], b: &[f32]) -> f32 {
     a.iter().zip(b.iter()).map(|(x, y)| (x - y).abs()).sum()
 }
@@ -289,6 +289,19 @@ mod simd_x86 {
     #[cfg(target_feature = "avx2")]
     use std::arch::x86_64::*;
 
+    /// Horizontal sum of all 8 floats in a __m256 register.
+    #[inline(always)]
+    #[target_feature(enable = "avx2")]
+    #[cfg(target_feature = "avx2")]
+    unsafe fn hsum_avx(v: __m256) -> f32 {
+        let sum128 = _mm_add_ps(_mm256_extractf128_ps(v, 0), _mm256_extractf128_ps(v, 1));
+        let sum64 = _mm_add_ps(sum128, _mm_movehl_ps(sum128, sum128));
+        let sum32 = _mm_add_ss(sum64, _mm_shuffle_ps(sum64, sum64, 1));
+        let mut result: f32 = 0.0;
+        _mm_store_ss(&mut result, sum32);
+        result
+    }
+
     /// Compute dot product using AVX2 SIMD instructions.
     ///
     /// # Safety
@@ -307,13 +320,7 @@ mod simd_x86 {
             sum = _mm256_fmadd_ps(va, vb, sum);
         }
 
-        // Horizontal sum
-        let sum128 = _mm_add_ps(_mm256_extractf128_ps(sum, 0), _mm256_extractf128_ps(sum, 1));
-        let sum64 = _mm_add_ps(sum128, _mm_movehl_ps(sum128, sum128));
-        let sum32 = _mm_add_ss(sum64, _mm_shuffle_ps(sum64, sum64, 1));
-
-        let mut result: f32 = 0.0;
-        _mm_store_ss(&mut result, sum32);
+        let mut result = hsum_avx(sum);
 
         // Handle remainder
         for i in (chunks * 8)..a.len() {
@@ -342,13 +349,7 @@ mod simd_x86 {
             sum = _mm256_fmadd_ps(diff, diff, sum);
         }
 
-        // Horizontal sum
-        let sum128 = _mm_add_ps(_mm256_extractf128_ps(sum, 0), _mm256_extractf128_ps(sum, 1));
-        let sum64 = _mm_add_ps(sum128, _mm_movehl_ps(sum128, sum128));
-        let sum32 = _mm_add_ss(sum64, _mm_shuffle_ps(sum64, sum64, 1));
-
-        let mut result: f32 = 0.0;
-        _mm_store_ss(&mut result, sum32);
+        let mut result = hsum_avx(sum);
 
         // Handle remainder
         for i in (chunks * 8)..a.len() {
@@ -380,13 +381,7 @@ mod simd_x86 {
             sum = _mm256_add_ps(sum, abs_diff);
         }
 
-        // Horizontal sum
-        let sum128 = _mm_add_ps(_mm256_extractf128_ps(sum, 0), _mm256_extractf128_ps(sum, 1));
-        let sum64 = _mm_add_ps(sum128, _mm_movehl_ps(sum128, sum128));
-        let sum32 = _mm_add_ss(sum64, _mm_shuffle_ps(sum64, sum64, 1));
-
-        let mut result: f32 = 0.0;
-        _mm_store_ss(&mut result, sum32);
+        let mut result = hsum_avx(sum);
 
         // Handle remainder
         for i in (chunks * 8)..a.len() {

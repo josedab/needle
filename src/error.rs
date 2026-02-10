@@ -68,77 +68,111 @@
 
 use thiserror::Error;
 
-/// Error code categories for programmatic error handling
+/// Error code categories for programmatic error handling.
+///
+/// Each error code belongs to a category indicated by its numeric range.
+/// Use [`ErrorCode::category()`] to get the human-readable category name.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ErrorCode {
-    // IO errors (1xxx)
+    /// Failed to read from disk or network
     IoRead = 1001,
+    /// Failed to write to disk or network
     IoWrite = 1002,
+    /// Insufficient file system permissions
     IoPermission = 1003,
+    /// Disk is full or quota exceeded
     IoDiskFull = 1004,
 
-    // Serialization errors (2xxx)
+    /// Failed to serialize data (e.g., JSON encoding)
     SerializationFailed = 2001,
+    /// Failed to deserialize data (e.g., corrupt JSON)
     DeserializationFailed = 2002,
+    /// Data format is invalid or unsupported
     InvalidFormat = 2003,
 
-    // Collection errors (3xxx)
+    /// Referenced collection does not exist
     CollectionNotFound = 3001,
+    /// A collection with this name already exists
     CollectionAlreadyExists = 3002,
+    /// Collection data is corrupted
     CollectionCorrupted = 3003,
+    /// Referenced alias does not exist
     AliasNotFound = 3004,
+    /// An alias with this name already exists
     AliasAlreadyExists = 3005,
+    /// Cannot drop collection because aliases reference it
     AliasTargetHasAliases = 3006,
 
-    // Vector errors (4xxx)
+    /// Referenced vector ID does not exist
     VectorNotFound = 4001,
+    /// A vector with this ID already exists
     VectorAlreadyExists = 4002,
+    /// Vector dimensions do not match collection
     DimensionMismatch = 4003,
+    /// Vector contains invalid values (NaN, Infinity)
     InvalidVector = 4004,
 
-    // Database errors (5xxx)
+    /// Database file is invalid or unrecognized
     InvalidDatabase = 5001,
+    /// Database file is corrupted
     DatabaseCorrupted = 5002,
+    /// Database is locked by another process
     DatabaseLocked = 5003,
 
-    // Index errors (6xxx)
+    /// General index operation failure
     IndexError = 6001,
+    /// Index data is corrupted
     IndexCorrupted = 6002,
+    /// Index construction failed
     IndexBuildFailed = 6003,
 
-    // Configuration errors (7xxx)
+    /// Configuration value is invalid
     InvalidConfig = 7001,
+    /// Required configuration is missing
     MissingConfig = 7002,
 
-    // Resource errors (8xxx)
+    /// Collection or database capacity limit reached
     CapacityExceeded = 8001,
+    /// Usage quota exceeded
     QuotaExceeded = 8002,
+    /// System memory exhausted
     MemoryExhausted = 8003,
 
-    // Operational errors (9xxx)
+    /// Operation timed out
     Timeout = 9001,
+    /// Lock acquisition timed out
     LockTimeout = 9002,
+    /// Conflicting concurrent operation
     Conflict = 9003,
+    /// Generic resource not found
     NotFound = 9004,
 
-    // Security errors (10xxx)
+    /// Encryption operation failed
     EncryptionError = 10001,
+    /// Decryption operation failed
     DecryptionError = 10002,
+    /// Authentication check failed
     AuthenticationFailed = 10003,
 
-    // Distributed errors (11xxx)
+    /// Raft consensus failure
     ConsensusError = 11001,
+    /// Data replication failure
     ReplicationError = 11002,
+    /// Network communication failure
     NetworkError = 11003,
 
-    // Backup errors (12xxx)
+    /// Backup creation failed
     BackupFailed = 12001,
+    /// Backup restoration failed
     RestoreFailed = 12002,
+    /// Backup file is corrupted
     BackupCorrupted = 12003,
 
-    // State/Operation errors (13xxx)
+    /// Operation is not valid in current context
     InvalidOperation = 13001,
+    /// System is in an invalid state
     InvalidState = 13002,
+    /// Caller lacks required authorization
     Unauthorized = 13003,
 }
 
@@ -231,6 +265,7 @@ pub trait Recoverable {
 }
 
 /// Error types for Needle database operations
+#[must_use]
 #[derive(Error, Debug)]
 pub enum NeedleError {
     #[error("IO error: {0}")]
@@ -325,6 +360,9 @@ pub enum NeedleError {
 
     #[error("Unauthorized: {0}")]
     Unauthorized(String),
+
+    #[error("Invalid argument: {0}")]
+    InvalidArgument(String),
 }
 
 impl Recoverable for NeedleError {
@@ -368,6 +406,7 @@ impl Recoverable for NeedleError {
             NeedleError::InvalidOperation(_) => ErrorCode::InvalidOperation,
             NeedleError::InvalidState(_) => ErrorCode::InvalidState,
             NeedleError::Unauthorized(_) => ErrorCode::Unauthorized,
+            NeedleError::InvalidArgument(_) => ErrorCode::InvalidConfig,
         }
     }
 
@@ -578,6 +617,11 @@ impl Recoverable for NeedleError {
                 RecoveryHint::new("Ensure you have access to the requested resource"),
             ],
 
+            NeedleError::InvalidArgument(msg) => vec![
+                RecoveryHint::new(format!("Invalid argument: {}", msg)),
+                RecoveryHint::new("Check the argument values and try again"),
+            ],
+
             NeedleError::DuplicateId(id) => vec![
                 RecoveryHint::new(format!("ID '{}' already exists", id)),
                 RecoveryHint::new("Use a different ID or update the existing vector"),
@@ -636,6 +680,54 @@ impl NeedleError {
         }
 
         output
+    }
+
+    /// Returns a concise, actionable help string for the most common errors.
+    ///
+    /// Designed for display in CLI output and HTTP error responses. Returns
+    /// the single most useful suggestion for fixing the error.
+    pub fn help(&self) -> String {
+        match self {
+            NeedleError::DimensionMismatch { expected, got } => format!(
+                "The collection expects {}-dimensional vectors, but got {}. \
+                 Ensure your embedding model output matches the collection dimensions. \
+                 Check with: collection.dimensions()",
+                expected, got
+            ),
+            NeedleError::CollectionNotFound(name) => format!(
+                "Collection '{}' does not exist. Create it with \
+                 db.create_collection(\"{}\", dims) or POST /collections. \
+                 Use db.list_collections() or GET /collections to see available collections.",
+                name, name
+            ),
+            NeedleError::CollectionAlreadyExists(name) => format!(
+                "Collection '{}' already exists. Use db.collection(\"{}\") to access it, \
+                 or delete it first with db.delete_collection(\"{}\").",
+                name, name, name
+            ),
+            NeedleError::VectorNotFound(id) => format!(
+                "Vector '{}' does not exist. It may have been deleted or never inserted. \
+                 Use collection.contains(\"{}\") to check before accessing.",
+                id, id
+            ),
+            NeedleError::InvalidVector(reason) => format!(
+                "Vector data is invalid: {}. \
+                 Ensure the vector contains only finite f32 values (no NaN or Infinity).",
+                reason
+            ),
+            NeedleError::InvalidInput(reason) => format!(
+                "Invalid input: {}. Check the JSON format and field types match the API spec.",
+                reason
+            ),
+            NeedleError::Serialization(_) => String::from(
+                "Failed to parse JSON input. Verify the request body is valid JSON \
+                 and matches the expected schema."
+            ),
+            _ => {
+                let hints = self.recovery_hints();
+                hints.first().map(|h| h.to_string()).unwrap_or_default()
+            }
+        }
     }
 }
 
@@ -705,5 +797,45 @@ mod tests {
         let hints = error.recovery_hints();
         assert!(hints.iter().any(|h| h.summary.contains("permission")));
         assert_eq!(error.error_code(), ErrorCode::IoPermission);
+    }
+
+    #[test]
+    fn test_help_dimension_mismatch() {
+        let error = NeedleError::DimensionMismatch { expected: 384, got: 128 };
+        let help = error.help();
+        assert!(help.contains("384"));
+        assert!(help.contains("128"));
+        assert!(help.contains("embedding model"));
+    }
+
+    #[test]
+    fn test_help_collection_not_found() {
+        let error = NeedleError::CollectionNotFound("docs".to_string());
+        let help = error.help();
+        assert!(help.contains("docs"));
+        assert!(help.contains("create_collection"));
+        assert!(help.contains("list_collections"));
+    }
+
+    #[test]
+    fn test_help_collection_already_exists() {
+        let error = NeedleError::CollectionAlreadyExists("mydata".to_string());
+        let help = error.help();
+        assert!(help.contains("mydata"));
+        assert!(help.contains("already exists"));
+    }
+
+    #[test]
+    fn test_help_vector_not_found() {
+        let error = NeedleError::VectorNotFound("doc42".to_string());
+        let help = error.help();
+        assert!(help.contains("doc42"));
+    }
+
+    #[test]
+    fn test_help_fallback_to_recovery_hints() {
+        let error = NeedleError::LockError;
+        let help = error.help();
+        assert!(!help.is_empty());
     }
 }
