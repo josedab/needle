@@ -128,5 +128,10 @@ fn main() -> needle::Result<()> {
         println!("  {} - ${:.2}", name, price);
     }
 
+    println!("\n\u{1f4a1} Next steps:");
+    println!("  cargo run --example persistence   \u{2014} Save to disk and reload");
+    println!("  cargo run --example quantization  \u{2014} Compress vectors to save memory");
+    println!("  See all examples: examples/README.md");
+
     Ok(())
 }

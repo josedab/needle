@@ -5,10 +5,8 @@
 //!
 //! Run with: cargo run --example multi_tenant
 
-use needle::{
-    Database, Filter, CollectionConfig, DistanceFunction,
-    Namespace, NamespaceManager, TenantConfig,
-};
+use needle::{Database, Filter, CollectionConfig, DistanceFunction};
+use needle::namespace::{Namespace, NamespaceManager, TenantConfig};
 use serde_json::json;
 use std::collections::HashMap;
 

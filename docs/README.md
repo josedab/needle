@@ -7,6 +7,8 @@ Welcome to the Needle documentation. Needle is an embedded vector database writt
 | I want to... | Go to... |
 |--------------|----------|
 | Get started quickly | [Getting Started](#getting-started) |
+| Run the HTTP API | [HTTP Quickstart](http-quickstart.md) |
+| Install Python bindings | [Python Installation](python.md) |
 | Understand the API | [API Reference](api-reference.md) |
 | Deploy to production | [Production Checklist](production-checklist.md) |
 | Choose an index type | [Index Selection Guide](index-selection-guide.md) |
@@ -23,6 +25,14 @@ Welcome to the Needle documentation. Needle is an embedded vector database writt
 # Cargo.toml
 [dependencies]
 needle = "0.1"
+```
+
+### Python (from source)
+
+```bash
+pip install maturin
+maturin develop --features python
+python -c "import needle; print('needle import ok')"
 ```
 
 ### Quick Example
@@ -80,6 +90,13 @@ For more examples, see [How-To Guides](how-to-guides.md).
 | [Distributed Operations](distributed-operations.md) | Sharding, Raft replication, and clustering |
 | [Migration Guide](migration-upgrade-guide.md) | Version upgrades and database migrations |
 | [WASM Guide](WASM_GUIDE.md) | WebAssembly integration guide |
+
+### Developer Resources
+
+| Document | Description |
+|----------|-------------|
+| [Examples](../examples/README.md) | Runnable example commands |
+| [JavaScript SDK](../sdk/js/README.md) | SDK build and usage notes |
 
 ### Reference
 
@@ -186,7 +203,7 @@ See [Hybrid Search Setup](how-to-guides.md#hybrid-search-setup) for details.
 ## Version Information
 
 - **Current Version**: 0.1.x
-- **Minimum Rust Version**: 1.70+
+- **Minimum Rust Version**: 1.85+
 - **File Format Version**: 1
 
 See [Migration Guide](migration-upgrade-guide.md) for upgrade information.

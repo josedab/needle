@@ -17,12 +17,26 @@ This guide covers deploying Needle in production environments using Docker, Kube
 
 ## Quick Start
 
+### One-command Demo
+
+```bash
+just demo
+# or
+./scripts/quickstart.sh
+```
+
 ### Local Development
 
 ```bash
-# Build and run with all features
-cargo build --release --features full
+# Fast path: server-only features
+cargo run --features server -- serve -a 127.0.0.1:8080
+
+# Release build
+cargo build --release --features server
 ./target/release/needle serve --address 127.0.0.1:8080
+
+# Full feature build (slower)
+cargo build --release --features full
 ```
 
 ### Docker (Fastest)

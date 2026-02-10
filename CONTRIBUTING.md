@@ -23,9 +23,26 @@ Please be respectful and constructive in all interactions. We welcome contributo
 
 ## Getting Started
 
+### 15-Minute Dev Quickstart
+
+```bash
+git clone https://github.com/anthropics/needle.git
+cd needle
+./scripts/doctor.sh
+cargo build
+cargo test --lib
+```
+
+If you use `just`:
+
+```bash
+cargo install just
+just quick
+```
+
 ### Prerequisites
 
-- Rust 1.75+ (install via [rustup](https://rustup.rs/))
+- Rust 1.85+ (install via [rustup](https://rustup.rs/))
 - Git
 - (Optional) Docker for integration testing
 - (Optional) cargo-fuzz for fuzzing (requires nightly Rust)
@@ -40,8 +57,11 @@ cd needle
 # Build the project
 cargo build
 
-# Run tests
+# Run tests (unit tests + basic integration tests)
 cargo test
+
+# Run all tests including experimental/enterprise features
+cargo t          # alias for: cargo test --features full
 
 # Run with all features
 cargo build --features full
@@ -52,6 +72,10 @@ cargo build --features full
 ## Development Setup
 
 ### Building
+
+> **Tip**: The Python and WASM bindings live in `crates/needle-python/` (cdylib).
+> The root library uses `crate-type = ["rlib"]` so regular `cargo build` and
+> `cargo test` are fast. Build Python bindings with `maturin develop`.
 
 ```bash
 # Debug build
@@ -101,6 +125,39 @@ cargo bench
 # Generate documentation
 cargo doc --open
 ```
+
+### Task Runner (Make or Just)
+
+A `Makefile` is included so you can run common tasks without installing anything:
+
+```bash
+make help          # Show all available recipes
+make quick         # Fast feedback: format check + lint + unit tests
+make check         # Full pre-commit: format check + lint + all tests
+make serve         # Run the HTTP server locally
+make doc           # Generate and open documentation
+make doctor        # Check local environment setup
+```
+
+Alternatively, install [just](https://github.com/casey/just) (`cargo install just`) for the same recipes:
+
+```bash
+just --list        # Show all available recipes
+just quick         # Fast feedback
+just check         # Full pre-commit
+```
+
+### Pre-commit Hooks
+
+We provide pre-commit hooks for automatic formatting and linting:
+
+```bash
+pip install pre-commit
+pre-commit install
+```
+
+This runs `cargo fmt`, `cargo clippy`, and file hygiene checks on every commit.
+`cargo test --lib` and `cargo audit` run on push.
 
 ---
 
