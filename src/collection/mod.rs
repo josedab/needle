@@ -624,7 +624,41 @@ impl Collection {
         Ok(())
     }
 
-    /// Insert multiple vectors in batch
+    /// Insert multiple vectors in batch.
+    ///
+    /// Atomically inserts all vectors or rolls back on failure. Each ID must be
+    /// unique both within the batch and against existing vectors in the collection.
+    ///
+    /// # Arguments
+    ///
+    /// * `ids` - External IDs for the vectors (must be unique)
+    /// * `vectors` - Vector data (each must match collection dimensions)
+    /// * `metadata` - Optional JSON metadata for each vector
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - [`NeedleError::InvalidConfig`] - Batch sizes don't match or batch contains duplicate IDs
+    /// - [`NeedleError::VectorAlreadyExists`] - An ID already exists in the collection
+    /// - [`NeedleError::DimensionMismatch`] - Any vector has wrong dimensions
+    /// - [`NeedleError::InvalidVector`] - Any vector contains NaN or Infinity
+    ///
+    /// On error, all previously inserted vectors in the batch are rolled back.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use needle::{Collection, CollectionConfig};
+    /// # use serde_json::json;
+    /// # let config = CollectionConfig::new("test", 4);
+    /// # let mut collection = Collection::new(config);
+    /// let ids = vec!["a".to_string(), "b".to_string()];
+    /// let vectors = vec![vec![1.0, 0.0, 0.0, 0.0], vec![0.0, 1.0, 0.0, 0.0]];
+    /// let metadata = vec![Some(json!({"type": "x"})), None];
+    /// collection.insert_batch(ids, vectors, metadata)?;
+    /// assert_eq!(collection.len(), 2);
+    /// # Ok::<(), needle::NeedleError>(())
+    /// ```
     pub fn insert_batch(
         &mut self,
         ids: Vec<String>,
@@ -1239,7 +1273,34 @@ impl Collection {
             .collect()
     }
 
-    /// Batch search for multiple queries in parallel
+    /// Batch search for multiple queries in parallel.
+    ///
+    /// Executes all queries concurrently using Rayon and returns results
+    /// in the same order as the input queries.
+    ///
+    /// # Arguments
+    ///
+    /// * `queries` - Slice of query vectors (each must match collection dimensions)
+    /// * `k` - Maximum number of results per query
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - [`NeedleError::DimensionMismatch`] - Any query has wrong dimensions
+    /// - [`NeedleError::InvalidVector`] - Any query contains NaN or Infinity
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use needle::{Collection, CollectionConfig};
+    /// # let config = CollectionConfig::new("test", 4);
+    /// # let mut collection = Collection::new(config);
+    /// # collection.insert("v1", &[1.0, 0.0, 0.0, 0.0], None).unwrap();
+    /// let queries = vec![vec![1.0, 0.0, 0.0, 0.0], vec![0.0, 1.0, 0.0, 0.0]];
+    /// let all_results = collection.batch_search(&queries, 5)?;
+    /// assert_eq!(all_results.len(), 2); // One result set per query
+    /// # Ok::<(), needle::NeedleError>(())
+    /// ```
     pub fn batch_search(&self, queries: &[Vec<f32>], k: usize) -> Result<Vec<Vec<SearchResult>>> {
         use std::time::Instant;
         let start = Instant::now();
@@ -1285,7 +1346,37 @@ impl Collection {
         Ok(results)
     }
 
-    /// Batch search with metadata filter in parallel
+    /// Batch search with metadata filter in parallel.
+    ///
+    /// Like [`batch_search`](Self::batch_search), but applies a metadata filter to
+    /// every query. Over-fetches candidates by `FILTER_CANDIDATE_MULTIPLIER` to
+    /// compensate for filtered-out results.
+    ///
+    /// # Arguments
+    ///
+    /// * `queries` - Slice of query vectors (each must match collection dimensions)
+    /// * `k` - Maximum number of results per query
+    /// * `filter` - MongoDB-style metadata filter applied to all queries
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - [`NeedleError::DimensionMismatch`] - Any query has wrong dimensions
+    /// - [`NeedleError::InvalidVector`] - Any query contains NaN or Infinity
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use needle::{Collection, CollectionConfig, Filter};
+    /// # use serde_json::json;
+    /// # let config = CollectionConfig::new("test", 4);
+    /// # let mut collection = Collection::new(config);
+    /// # collection.insert("v1", &[1.0, 0.0, 0.0, 0.0], Some(json!({"tag": "a"}))).unwrap();
+    /// let queries = vec![vec![1.0, 0.0, 0.0, 0.0]];
+    /// let filter = Filter::eq("tag", "a");
+    /// let results = collection.batch_search_with_filter(&queries, 5, &filter)?;
+    /// # Ok::<(), needle::NeedleError>(())
+    /// ```
     pub fn batch_search_with_filter(
         &self,
         queries: &[Vec<f32>],
@@ -1749,8 +1840,34 @@ impl Collection {
         Ok(true)
     }
 
-    /// Delete multiple vectors by their external IDs
-    /// Returns the number of vectors actually deleted
+    /// Delete multiple vectors by their external IDs.
+    ///
+    /// Skips IDs that do not exist (no error is raised for missing IDs).
+    ///
+    /// # Arguments
+    ///
+    /// * `ids` - Slice of external vector IDs to delete
+    ///
+    /// # Returns
+    ///
+    /// The number of vectors that were actually found and deleted.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if an underlying index operation fails.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use needle::{Collection, CollectionConfig};
+    /// # let config = CollectionConfig::new("test", 4);
+    /// # let mut collection = Collection::new(config);
+    /// # collection.insert("a", &[1.0, 0.0, 0.0, 0.0], None).unwrap();
+    /// # collection.insert("b", &[0.0, 1.0, 0.0, 0.0], None).unwrap();
+    /// let deleted = collection.delete_batch(&["a", "b", "nonexistent"])?;
+    /// assert_eq!(deleted, 2);
+    /// # Ok::<(), needle::NeedleError>(())
+    /// ```
     pub fn delete_batch(&mut self, ids: &[impl AsRef<str>]) -> Result<usize> {
         let mut deleted = 0;
         for id in ids {
