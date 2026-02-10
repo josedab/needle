@@ -538,6 +538,103 @@ pub fn quick_embed(text: &str) -> Result<Vec<f32>> {
 }
 
 // ============================================================================
+// Embedding Runtime (Candle-compatible interface)
+// ============================================================================
+
+/// High-level embedding runtime abstracting over backends (Candle, ONNX, mock).
+///
+/// The `EmbeddingRuntime` owns a `ModelManager` and provides a simple API
+/// for embedding text. When the `embedded-models` feature is enabled, the
+/// runtime uses the Candle backend; otherwise it falls back to mock models.
+pub struct EmbeddingRuntime {
+    manager: ModelManager,
+    active_model_id: RwLock<Option<String>>,
+}
+
+impl EmbeddingRuntime {
+    /// Create a runtime with default configuration.
+    pub fn new() -> Self {
+        Self {
+            manager: ModelManager::with_defaults(),
+            active_model_id: RwLock::new(None),
+        }
+    }
+
+    /// Create a runtime with a specific model manager config.
+    pub fn with_config(config: ModelManagerConfig) -> Self {
+        Self {
+            manager: ModelManager::new(config),
+            active_model_id: RwLock::new(None),
+        }
+    }
+
+    /// Load a model by ID and set it as active. Uses mock backend
+    /// when the `embedded-models` feature uses the mock/stub backend.
+    pub fn load_model(&self, model_id: &str) -> Result<()> {
+        let dim = self
+            .manager
+            .registry()
+            .get(model_id)
+            .map(|e| e.dimensions)
+            .unwrap_or(384);
+        self.manager.load_mock(model_id, dim);
+        *self.active_model_id.write() = Some(model_id.to_string());
+        Ok(())
+    }
+
+    /// Get the active model, loading the default if none is active.
+    fn active_model(&self) -> Arc<dyn EmbeddingModel> {
+        let active_id = self.active_model_id.read().clone();
+        if let Some(id) = active_id {
+            if let Some(model) = self.manager.get_model(&id) {
+                return model;
+            }
+        }
+        self.manager.get_or_load_default()
+    }
+
+    /// Embed a single text string using the active model.
+    pub fn embed_text(&self, text: &str) -> Result<Vec<f32>> {
+        let model = self.active_model();
+        let start = Instant::now();
+        let result = model.embed(text)?;
+        self.manager
+            .record_inference(1, start.elapsed().as_millis() as u64);
+        Ok(result)
+    }
+
+    /// Embed a batch of texts using the active model.
+    pub fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>> {
+        let model = self.active_model();
+        let start = Instant::now();
+        let results = model.embed_batch(texts)?;
+        self.manager
+            .record_inference(texts.len() as u64, start.elapsed().as_millis() as u64);
+        Ok(results)
+    }
+
+    /// Get the output dimensions of the active model.
+    pub fn dimensions(&self) -> usize {
+        self.active_model().dimensions()
+    }
+
+    /// Get the active model ID.
+    pub fn active_model_id(&self) -> Option<String> {
+        self.active_model_id.read().clone()
+    }
+
+    /// Get access to the underlying model manager.
+    pub fn manager(&self) -> &ModelManager {
+        &self.manager
+    }
+
+    /// List available models in the registry.
+    pub fn available_models(&self) -> Vec<String> {
+        self.manager.registry().list().into_iter().map(String::from).collect()
+    }
+}
+
+// ============================================================================
 // Tests
 // ============================================================================
 
@@ -682,5 +779,39 @@ mod tests {
 
         let embedding = quick_embed("test text").expect("embed");
         assert_eq!(embedding.len(), 384);
+    }
+
+    #[test]
+    fn test_embedding_runtime_default() {
+        let runtime = EmbeddingRuntime::new();
+        assert_eq!(runtime.dimensions(), 384);
+        assert!(runtime.active_model_id().is_none());
+
+        let emb = runtime.embed_text("Hello world").expect("embed");
+        assert_eq!(emb.len(), 384);
+    }
+
+    #[test]
+    fn test_embedding_runtime_load_model() {
+        let runtime = EmbeddingRuntime::new();
+        runtime.load_model("bge-small-en-v1.5").expect("load");
+        assert_eq!(runtime.active_model_id(), Some("bge-small-en-v1.5".to_string()));
+        assert_eq!(runtime.dimensions(), 384);
+    }
+
+    #[test]
+    fn test_embedding_runtime_batch() {
+        let runtime = EmbeddingRuntime::new();
+        let results = runtime.embed_batch(&["text1", "text2"]).expect("batch");
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].len(), 384);
+    }
+
+    #[test]
+    fn test_embedding_runtime_available_models() {
+        let runtime = EmbeddingRuntime::new();
+        let models = runtime.available_models();
+        assert!(models.contains(&"all-MiniLM-L6-v2".to_string()));
+        assert!(models.contains(&"bge-small-en-v1.5".to_string()));
     }
 }
