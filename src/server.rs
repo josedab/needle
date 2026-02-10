@@ -41,7 +41,7 @@ use crate::metadata::Filter;
 use crate::security::{Role, User};
 use axum::{
     body::Body,
-    extract::{Path, Query, State},
+    extract::{ConnectInfo, Path, Query, State},
     http::{header, Method, Request, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Response},
@@ -53,10 +53,9 @@ use governor::{
     state::keyed::DashMapStateStore,
     Quota, RateLimiter,
 };
-use std::net::IpAddr;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::net::SocketAddr;
 use std::num::NonZeroU32;
 use std::sync::Arc;
 use std::time::Duration;
@@ -440,6 +439,9 @@ pub struct ServerConfig {
     /// Request timeout in seconds (default: 30)
     /// Requests exceeding this duration will be terminated
     pub request_timeout_secs: u64,
+    /// Trusted proxies for honoring X-Forwarded-For/X-Real-IP headers.
+    /// Only requests from these IPs may override the client IP.
+    pub trusted_proxies: Vec<IpAddr>,
 }
 
 /// CORS configuration
@@ -559,6 +561,10 @@ impl RateLimitConfig {
     }
 }
 
+fn default_trusted_proxies() -> Vec<IpAddr> {
+    vec![IpAddr::V4(Ipv4Addr::LOCALHOST), IpAddr::V6(Ipv6Addr::LOCALHOST)]
+}
+
 impl Default for ServerConfig {
     fn default() -> Self {
         Self {
@@ -572,6 +578,7 @@ impl Default for ServerConfig {
             max_body_size: 100 * 1024 * 1024, // 100MB
             max_batch_size: 10_000, // 10k items max per batch
             request_timeout_secs: 30, // 30 seconds default timeout
+            trusted_proxies: default_trusted_proxies(),
         }
     }
 }
@@ -614,6 +621,18 @@ impl ServerConfig {
         self
     }
 
+    /// Add a trusted proxy IP for forwarded header handling.
+    pub fn with_trusted_proxy(mut self, proxy: IpAddr) -> Self {
+        self.trusted_proxies.push(proxy);
+        self
+    }
+
+    /// Replace the trusted proxy list. Use an empty list to disable trust.
+    pub fn with_trusted_proxies(mut self, proxies: Vec<IpAddr>) -> Self {
+        self.trusted_proxies = proxies;
+        self
+    }
+
     /// Set authentication configuration.
     pub fn with_auth(mut self, config: AuthConfig) -> Self {
         self.auth = config;
@@ -632,6 +651,8 @@ pub struct AppState {
     auth: AuthConfig,
     /// Maximum items allowed in batch operations
     max_batch_size: usize,
+    /// Trusted proxies for forwarded header handling
+    trusted_proxies: Vec<IpAddr>,
 }
 
 impl AppState {
@@ -642,6 +663,7 @@ impl AppState {
             rate_limiter: None,
             auth: AuthConfig::default(),
             max_batch_size: 10_000, // default
+            trusted_proxies: default_trusted_proxies(),
         }
     }
 
@@ -652,6 +674,7 @@ impl AppState {
             rate_limiter: create_rate_limiter(config),
             auth: AuthConfig::default(),
             max_batch_size: 10_000, // default
+            trusted_proxies: default_trusted_proxies(),
         }
     }
 
@@ -662,6 +685,7 @@ impl AppState {
             rate_limiter: create_rate_limiter(&config.rate_limit),
             auth: config.auth.clone(),
             max_batch_size: config.max_batch_size,
+            trusted_proxies: config.trusted_proxies.clone(),
         }
     }
 }
@@ -671,6 +695,18 @@ impl AppState {
 struct ApiError {
     error: String,
     code: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    help: String,
+}
+
+impl ApiError {
+    fn new(error: impl Into<String>, code: impl Into<String>) -> Self {
+        Self {
+            error: error.into(),
+            code: code.into(),
+            help: String::new(),
+        }
+    }
 }
 
 impl From<NeedleError> for (StatusCode, Json<ApiError>) {
@@ -689,11 +725,14 @@ impl From<NeedleError> for (StatusCode, Json<ApiError>) {
             _ => (StatusCode::INTERNAL_SERVER_ERROR, "INTERNAL_ERROR"),
         };
 
+        let help = err.help();
+
         (
             status,
             Json(ApiError {
                 error: err.to_string(),
                 code: code.to_string(),
+                help,
             }),
         )
     }
@@ -1023,17 +1062,14 @@ async fn delete_collection(
     Path(name): Path<String>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<ApiError>)> {
     let db = state.db.write().await;
-    let dropped = db.drop_collection(&name).map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
+    let dropped = db.delete_collection(&name).map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
 
     if dropped {
         Ok(Json(json!({"deleted": name})))
     } else {
         Err((
             StatusCode::NOT_FOUND,
-            Json(ApiError {
-                error: format!("Collection '{}' not found", name),
-                code: "COLLECTION_NOT_FOUND".to_string(),
-            }),
+            Json(ApiError::new(format!("Collection '{}' not found", name), "COLLECTION_NOT_FOUND".to_string())),
         ))
     }
 }
@@ -1063,14 +1099,11 @@ async fn batch_insert(
     if req.vectors.len() > state.max_batch_size {
         return Err((
             StatusCode::PAYLOAD_TOO_LARGE,
-            Json(ApiError {
-                error: format!(
+            Json(ApiError::new(format!(
                     "Batch size {} exceeds maximum allowed {}",
                     req.vectors.len(),
                     state.max_batch_size
-                ),
-                code: "BATCH_TOO_LARGE".to_string(),
-            }),
+                ), "BATCH_TOO_LARGE".to_string())),
         ));
     }
 
@@ -1135,10 +1168,7 @@ async fn get_vector(
         })),
         None => Err((
             StatusCode::NOT_FOUND,
-            Json(ApiError {
-                error: format!("Vector '{}' not found", id),
-                code: "VECTOR_NOT_FOUND".to_string(),
-            }),
+            Json(ApiError::new(format!("Vector '{}' not found", id), "VECTOR_NOT_FOUND".to_string())),
         )),
     }
 }
@@ -1158,10 +1188,7 @@ async fn delete_vector(
     } else {
         Err((
             StatusCode::NOT_FOUND,
-            Json(ApiError {
-                error: format!("Vector '{}' not found", id),
-                code: "VECTOR_NOT_FOUND".to_string(),
-            }),
+            Json(ApiError::new(format!("Vector '{}' not found", id), "VECTOR_NOT_FOUND".to_string())),
         ))
     }
 }
@@ -1179,10 +1206,7 @@ async fn update_metadata(
     let (vector, _) = coll.get(&id).ok_or_else(|| {
         (
             StatusCode::NOT_FOUND,
-            Json(ApiError {
-                error: format!("Vector '{}' not found", id),
-                code: "VECTOR_NOT_FOUND".to_string(),
-            }),
+            Json(ApiError::new(format!("Vector '{}' not found", id), "VECTOR_NOT_FOUND".to_string())),
         )
     })?;
 
@@ -1208,20 +1232,20 @@ async fn search(
     // Parse filters once
     let pre_filter = if let Some(filter_value) = &req.filter {
         Some(Filter::parse(filter_value)
-            .map_err(|e| (StatusCode::BAD_REQUEST, Json(ApiError {
-                error: format!("Invalid pre-filter: {}", e),
-                code: "INVALID_FILTER".to_string()
-            })))?)
+            .map_err(|e| (StatusCode::BAD_REQUEST, Json(ApiError::new(
+                format!("Invalid pre-filter: {}", e),
+                "INVALID_FILTER"
+            ))))?)
     } else {
         None
     };
 
     let post_filter = if let Some(filter_value) = &req.post_filter {
         Some(Filter::parse(filter_value)
-            .map_err(|e| (StatusCode::BAD_REQUEST, Json(ApiError {
-                error: format!("Invalid post-filter: {}", e),
-                code: "INVALID_POST_FILTER".to_string()
-            })))?)
+            .map_err(|e| (StatusCode::BAD_REQUEST, Json(ApiError::new(
+                format!("Invalid post-filter: {}", e),
+                "INVALID_POST_FILTER"
+            ))))?)
     } else {
         None
     };
@@ -1235,10 +1259,9 @@ async fn search(
             "manhattan" => Some(DistanceFunction::Manhattan),
             _ => return Err((
                 StatusCode::BAD_REQUEST,
-                Json(ApiError {
-                    error: format!("Invalid distance function: '{}'. Use: cosine, euclidean, dot, manhattan", dist_str),
-                    code: "INVALID_DISTANCE".to_string(),
-                }),
+                Json(ApiError::new(
+                    format!("Invalid distance function: '{}'. Use: cosine, euclidean, dot, manhattan", dist_str),
+                    "INVALID_DISTANCE")),
             )),
         }
     } else {
@@ -1378,14 +1401,11 @@ async fn batch_search(
     if req.vectors.len() > state.max_batch_size {
         return Err((
             StatusCode::PAYLOAD_TOO_LARGE,
-            Json(ApiError {
-                error: format!(
+            Json(ApiError::new(format!(
                     "Batch size {} exceeds maximum allowed {}",
                     req.vectors.len(),
                     state.max_batch_size
-                ),
-                code: "BATCH_TOO_LARGE".to_string(),
-            }),
+                ), "BATCH_TOO_LARGE".to_string())),
         ));
     }
 
@@ -1394,7 +1414,7 @@ async fn batch_search(
 
     let all_results: Vec<Vec<SearchResultResponse>> = if let Some(filter_value) = &req.filter {
         let filter = Filter::parse(filter_value)
-            .map_err(|e| (StatusCode::BAD_REQUEST, Json(ApiError { error: format!("Invalid filter: {}", e), code: "INVALID_FILTER".to_string() })))?;
+            .map_err(|e| (StatusCode::BAD_REQUEST, Json(ApiError::new(format!("Invalid filter: {}", e), "INVALID_FILTER".to_string()))))?;
 
         let mut results = Vec::new();
         for query in &req.vectors {
@@ -1442,10 +1462,10 @@ async fn radius_search(
     // Perform radius search with optional filter
     let raw_results = if let Some(filter_value) = &req.filter {
         let filter = Filter::parse(filter_value)
-            .map_err(|e| (StatusCode::BAD_REQUEST, Json(ApiError {
-                error: format!("Invalid filter: {}", e),
-                code: "INVALID_FILTER".to_string()
-            })))?;
+            .map_err(|e| (StatusCode::BAD_REQUEST, Json(ApiError::new(
+                format!("Invalid filter: {}", e),
+                "INVALID_FILTER"
+            ))))?;
         coll.search_radius_with_filter(&req.vector, req.max_distance, req.limit, &filter)
     } else {
         coll.search_radius(&req.vector, req.max_distance, req.limit)
@@ -1603,10 +1623,7 @@ async fn get_alias_handler(
         Some(collection) => Ok(Json(AliasInfo { alias, collection })),
         None => Err((
             StatusCode::NOT_FOUND,
-            Json(ApiError {
-                error: format!("Alias '{}' not found", alias),
-                code: "ALIAS_NOT_FOUND".to_string(),
-            }),
+            Json(ApiError::new(format!("Alias '{}' not found", alias), "ALIAS_NOT_FOUND".to_string())),
         )),
     }
 }
@@ -1625,10 +1642,7 @@ async fn delete_alias_handler(
     } else {
         Err((
             StatusCode::NOT_FOUND,
-            Json(ApiError {
-                error: format!("Alias '{}' not found", alias),
-                code: "ALIAS_NOT_FOUND".to_string(),
-            }),
+            Json(ApiError::new(format!("Alias '{}' not found", alias), "ALIAS_NOT_FOUND".to_string())),
         ))
     }
 }
@@ -1806,40 +1820,49 @@ fn create_rate_limiter(config: &RateLimitConfig) -> Option<Arc<PerIpRateLimiter>
 
     // Create quota: requests_per_second with burst_size burst capacity
     let quota = Quota::per_second(
-        NonZeroU32::new(config.requests_per_second).unwrap_or(NonZeroU32::new(100).unwrap()),
+        NonZeroU32::new(config.requests_per_second).unwrap_or(NonZeroU32::new(100).expect("100 is non-zero")),
     )
     .allow_burst(
-        NonZeroU32::new(config.burst_size).unwrap_or(NonZeroU32::new(1).unwrap()),
+        NonZeroU32::new(config.burst_size).unwrap_or(NonZeroU32::new(1).expect("1 is non-zero")),
     );
 
     Some(Arc::new(RateLimiter::dashmap(quota)))
 }
 
-/// Extract client IP from request, checking X-Forwarded-For header first
-fn extract_client_ip(request: &Request<Body>) -> IpAddr {
-    // Check X-Forwarded-For header first (for proxied requests)
-    if let Some(forwarded_for) = request.headers().get("x-forwarded-for") {
-        if let Ok(value) = forwarded_for.to_str() {
-            // X-Forwarded-For can contain multiple IPs, take the first one
-            if let Some(first_ip) = value.split(',').next() {
-                if let Ok(ip) = first_ip.trim().parse::<IpAddr>() {
+/// Extract client IP from request. Forwarded headers are trusted only for known proxies.
+fn extract_client_ip(request: &Request<Body>, trusted_proxies: &[IpAddr]) -> IpAddr {
+    let remote_ip = request
+        .extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .map(|info| info.0.ip());
+    let trust_headers = remote_ip
+        .map(|ip| trusted_proxies.contains(&ip))
+        .unwrap_or(false);
+
+    if trust_headers {
+        // Check X-Forwarded-For header first (for proxied requests)
+        if let Some(forwarded_for) = request.headers().get("x-forwarded-for") {
+            if let Ok(value) = forwarded_for.to_str() {
+                // X-Forwarded-For can contain multiple IPs, take the first one
+                if let Some(first_ip) = value.split(',').next() {
+                    if let Ok(ip) = first_ip.trim().parse::<IpAddr>() {
+                        return ip;
+                    }
+                }
+            }
+        }
+
+        // Check X-Real-IP header
+        if let Some(real_ip) = request.headers().get("x-real-ip") {
+            if let Ok(value) = real_ip.to_str() {
+                if let Ok(ip) = value.trim().parse::<IpAddr>() {
                     return ip;
                 }
             }
         }
     }
 
-    // Check X-Real-IP header
-    if let Some(real_ip) = request.headers().get("x-real-ip") {
-        if let Ok(value) = real_ip.to_str() {
-            if let Ok(ip) = value.trim().parse::<IpAddr>() {
-                return ip;
-            }
-        }
-    }
-
-    // Fallback to localhost if no IP found
-    IpAddr::V4(std::net::Ipv4Addr::new(127, 0, 0, 1))
+    remote_ip.unwrap_or(IpAddr::V4(Ipv4Addr::LOCALHOST))
 }
 
 /// Rate limiting middleware - returns 429 if rate limit exceeded (per-IP)
@@ -1849,7 +1872,7 @@ async fn rate_limit_middleware(
     next: Next,
 ) -> Response {
     if let Some(limiter) = &state.rate_limiter {
-        let client_ip = extract_client_ip(&request);
+        let client_ip = extract_client_ip(&request, &state.trusted_proxies);
         match limiter.check_key(&client_ip) {
             Ok(_) => next.run(request).await,
             Err(_) => {
@@ -1857,10 +1880,7 @@ async fn rate_limit_middleware(
                     client_ip = %client_ip,
                     "Rate limit exceeded"
                 );
-                let error = ApiError {
-                    error: "Rate limit exceeded. Please slow down.".to_string(),
-                    code: "RATE_LIMIT_EXCEEDED".to_string(),
-                };
+                let error = ApiError::new("Rate limit exceeded. Please slow down.".to_string(), "RATE_LIMIT_EXCEEDED".to_string());
                 (StatusCode::TOO_MANY_REQUESTS, Json(error)).into_response()
             }
         }
@@ -1912,10 +1932,7 @@ async fn auth_middleware(
         }
         None => {
             warn!(path = %path, "Authentication required but no valid credentials provided");
-            let error = ApiError {
-                error: "Authentication required".to_string(),
-                code: "UNAUTHORIZED".to_string(),
-            };
+            let error = ApiError::new("Authentication required".to_string(), "UNAUTHORIZED".to_string());
             (
                 StatusCode::UNAUTHORIZED,
                 [(header::WWW_AUTHENTICATE, "Bearer, ApiKey")],
@@ -2043,7 +2060,7 @@ pub async fn serve(config: ServerConfig) -> Result<(), Box<dyn std::error::Error
         info!("Shutdown signal received, starting graceful shutdown");
     };
 
-    axum::serve(listener, app)
+    axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
         .with_graceful_shutdown(shutdown_signal)
         .await?;
 
