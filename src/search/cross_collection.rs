@@ -139,6 +139,7 @@ struct CollectionMeta {
     name: String,
     dimensions: usize,
     vector_count: usize,
+    #[allow(dead_code)]
     distance_function: DistanceFunction,
 }
 
