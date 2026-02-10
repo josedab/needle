@@ -50,6 +50,8 @@ pub enum Modality {
     Audio,
     /// Video content (frames + audio)
     Video,
+    /// Source code content
+    Code,
     /// Generic binary content
     Binary,
 }
@@ -62,6 +64,7 @@ impl Modality {
             Modality::Image => "image",
             Modality::Audio => "audio",
             Modality::Video => "video",
+            Modality::Code => "code",
             Modality::Binary => "binary",
         }
     }
@@ -69,7 +72,9 @@ impl Modality {
     /// Detect modality from MIME type
     pub fn from_mime_type(mime: &str) -> Option<Self> {
         let lower = mime.to_lowercase();
-        if lower.starts_with("text/") {
+        if lower.starts_with("text/x-") || lower.starts_with("application/x-") {
+            Some(Modality::Code)
+        } else if lower.starts_with("text/") {
             Some(Modality::Text)
         } else if lower.starts_with("image/") {
             Some(Modality::Image)
@@ -1571,6 +1576,163 @@ impl ModelAdapterRegistry {
     }
 }
 
+// =============================================================================
+// Dimension Alignment via Projection Matrices
+// =============================================================================
+
+/// Learned projection matrix for aligning embeddings from different modalities
+/// into a shared space.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModalityProjection {
+    /// Source modality.
+    pub source_modality: Modality,
+    /// Source dimensions.
+    pub source_dims: usize,
+    /// Target (shared space) dimensions.
+    pub target_dims: usize,
+    /// Row-major projection matrix (source_dims x target_dims).
+    pub matrix: Vec<f32>,
+}
+
+impl ModalityProjection {
+    /// Create a projection from a pre-computed matrix.
+    pub fn new(
+        source_modality: Modality,
+        source_dims: usize,
+        target_dims: usize,
+        matrix: Vec<f32>,
+    ) -> Result<Self> {
+        if matrix.len() != source_dims * target_dims {
+            return Err(NeedleError::InvalidConfig(format!(
+                "Projection matrix size mismatch: expected {}x{}={}, got {}",
+                source_dims,
+                target_dims,
+                source_dims * target_dims,
+                matrix.len()
+            )));
+        }
+        Ok(Self {
+            source_modality,
+            source_dims,
+            target_dims,
+            matrix,
+        })
+    }
+
+    /// Create a random projection matrix (Gaussian random projection).
+    pub fn random(source_modality: Modality, source_dims: usize, target_dims: usize, seed: u64) -> Self {
+        let scale = 1.0 / (target_dims as f32).sqrt();
+        let mut matrix = Vec::with_capacity(source_dims * target_dims);
+        let mut state = seed;
+        for _ in 0..source_dims * target_dims {
+            state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            let sign = if (state >> 63) == 0 { 1.0 } else { -1.0 };
+            matrix.push(sign * scale);
+        }
+        Self {
+            source_modality,
+            source_dims,
+            target_dims,
+            matrix,
+        }
+    }
+
+    /// Project a vector from source to target space.
+    pub fn project(&self, vector: &[f32]) -> Result<Vec<f32>> {
+        if vector.len() != self.source_dims {
+            return Err(NeedleError::DimensionMismatch {
+                expected: self.source_dims,
+                got: vector.len(),
+            });
+        }
+        let mut result = vec![0.0f32; self.target_dims];
+        for (j, &v) in vector.iter().enumerate() {
+            for (i, val) in result.iter_mut().enumerate() {
+                *val += v * self.matrix[j * self.target_dims + i];
+            }
+        }
+        Ok(result)
+    }
+}
+
+/// Configuration for multi-modal cross-search.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MultiModalSearchConfig {
+    /// Per-modality weights for RRF fusion.
+    pub modality_weights: HashMap<Modality, f32>,
+    /// RRF constant k (default: 60).
+    pub rrf_k: f32,
+    /// Maximum results per modality before fusion.
+    pub per_modality_k: usize,
+    /// Final result count after fusion.
+    pub final_k: usize,
+}
+
+impl Default for MultiModalSearchConfig {
+    fn default() -> Self {
+        let mut weights = HashMap::new();
+        weights.insert(Modality::Text, 1.0);
+        weights.insert(Modality::Image, 1.0);
+        weights.insert(Modality::Audio, 0.8);
+        weights.insert(Modality::Code, 0.9);
+        Self {
+            modality_weights: weights,
+            rrf_k: 60.0,
+            per_modality_k: 50,
+            final_k: 10,
+        }
+    }
+}
+
+/// Result from a multi-modal cross-search with modality-weighted RRF fusion.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CrossModalFusionResult {
+    /// Document ID.
+    pub id: String,
+    /// Fused score (higher is better).
+    pub score: f32,
+    /// Per-modality scores.
+    pub modality_scores: HashMap<Modality, f32>,
+    /// Per-modality ranks.
+    pub modality_ranks: HashMap<Modality, usize>,
+}
+
+/// Perform modality-weighted RRF fusion over per-modality search results.
+///
+/// Each input is `(modality, results)` where results are `(id, distance)` pairs
+/// sorted by distance (ascending). Returns fused results sorted by score (descending).
+pub fn search_multimodal(
+    per_modality_results: &[(Modality, Vec<(String, f32)>)],
+    config: &MultiModalSearchConfig,
+) -> Vec<CrossModalFusionResult> {
+    let mut id_scores: HashMap<String, CrossModalFusionResult> = HashMap::new();
+
+    for (modality, results) in per_modality_results {
+        let weight = config.modality_weights.get(modality).copied().unwrap_or(1.0);
+
+        for (rank, (id, distance)) in results.iter().enumerate() {
+            let rrf_score = weight / (config.rrf_k + rank as f32 + 1.0);
+
+            let entry = id_scores.entry(id.clone()).or_insert_with(|| {
+                CrossModalFusionResult {
+                    id: id.clone(),
+                    score: 0.0,
+                    modality_scores: HashMap::new(),
+                    modality_ranks: HashMap::new(),
+                }
+            });
+            entry.score += rrf_score;
+            entry.modality_scores.insert(*modality, 1.0 - distance); // similarity
+            entry.modality_ranks.insert(*modality, rank + 1);
+        }
+    }
+
+    let mut results: Vec<CrossModalFusionResult> = id_scores.into_values().collect();
+    results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    results.truncate(config.final_k);
+    results
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1789,5 +1951,59 @@ mod tests {
 
         registry.mark_ready("clip");
         assert!(registry.is_ready("clip"));
+    }
+
+    #[test]
+    fn test_code_modality() {
+        assert_eq!(Modality::Code.name(), "code");
+        assert_eq!(Modality::from_mime_type("text/x-python"), Some(Modality::Code));
+        assert_eq!(Modality::from_mime_type("application/x-rust"), Some(Modality::Code));
+    }
+
+    #[test]
+    fn test_modality_projection() {
+        let proj = ModalityProjection::random(Modality::Image, 512, 384, 42);
+        let vector = vec![0.1; 512];
+        let projected = proj.project(&vector).expect("project");
+        assert_eq!(projected.len(), 384);
+    }
+
+    #[test]
+    fn test_modality_projection_dimension_mismatch() {
+        let proj = ModalityProjection::random(Modality::Image, 512, 384, 42);
+        let bad_vector = vec![0.1; 256];
+        assert!(proj.project(&bad_vector).is_err());
+    }
+
+    #[test]
+    fn test_search_multimodal_rrf_fusion() {
+        let text_results = vec![
+            ("doc1".to_string(), 0.1),
+            ("doc2".to_string(), 0.3),
+            ("doc3".to_string(), 0.5),
+        ];
+        let image_results = vec![
+            ("doc2".to_string(), 0.05),
+            ("doc4".to_string(), 0.2),
+            ("doc1".to_string(), 0.4),
+        ];
+
+        let config = MultiModalSearchConfig {
+            final_k: 3,
+            ..Default::default()
+        };
+
+        let results = search_multimodal(
+            &[(Modality::Text, text_results), (Modality::Image, image_results)],
+            &config,
+        );
+        assert!(!results.is_empty());
+        assert!(results.len() <= 3);
+        // doc1 and doc2 appear in both, should have higher scores
+        let doc2 = results.iter().find(|r| r.id == "doc2");
+        assert!(doc2.is_some());
+        let doc2 = doc2.expect("doc2");
+        assert!(doc2.modality_scores.contains_key(&Modality::Text));
+        assert!(doc2.modality_scores.contains_key(&Modality::Image));
     }
 }
