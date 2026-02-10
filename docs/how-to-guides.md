@@ -13,6 +13,9 @@ Practical tutorials for common tasks with Needle vector database.
 - [Migrating Between Index Types](#migrating-between-index-types)
 - [Metadata Filtering Patterns](#metadata-filtering-patterns)
 - [Multi-Collection Workflows](#multi-collection-workflows)
+- [Vector TTL & Automatic Expiration](#vector-ttl--automatic-expiration)
+- [Snapshots & Collection Bundles](#snapshots--collection-bundles)
+- [Evaluating Index Quality](#evaluating-index-quality)
 
 ---
 
@@ -788,6 +791,249 @@ db.drop_collection("documents_v1")?;
 
 ---
 
+## Vector TTL & Automatic Expiration
+
+Needle supports per-vector Time-To-Live (TTL) for automatically expiring stale data such as session embeddings, cache entries, or temporary search indexes.
+
+### Setting a Default TTL on a Collection
+
+```rust
+use needle::{Collection, CollectionConfig};
+
+// Every vector in this collection expires after 1 hour by default
+let config = CollectionConfig::new("sessions", 384)
+    .with_default_ttl_seconds(3600);
+let mut collection = Collection::new(config);
+
+// This vector will expire ~3600 seconds after insertion
+collection.insert("sess_abc", &vec![0.1; 384], None)?;
+# Ok::<(), needle::NeedleError>(())
+```
+
+### Managing TTL on Individual Vectors
+
+```rust
+use needle::Collection;
+
+let mut collection = Collection::with_dimensions("cache", 384);
+collection.insert("item1", &vec![0.1; 384], None)?;
+
+// Set a 30-minute TTL on an existing vector
+collection.set_ttl("item1", Some(1800))?;
+
+// Check when a vector expires (Unix timestamp)
+if let Some(expiration) = collection.get_ttl("item1") {
+    println!("Expires at Unix timestamp: {}", expiration);
+}
+
+// Remove TTL (vector lives forever)
+collection.set_ttl("item1", None)?;
+# Ok::<(), needle::NeedleError>(())
+```
+
+### Monitoring and Sweeping Expired Vectors
+
+```rust
+use needle::Collection;
+
+let mut collection = Collection::with_dimensions("ephemeral", 384);
+
+// Get TTL statistics
+let (total_with_ttl, expired_count, earliest, latest) = collection.ttl_stats();
+println!("Vectors with TTL: {}, expired: {}", total_with_ttl, expired_count);
+
+// Check if a sweep is needed (e.g., >10% expired)
+if collection.needs_expiration_sweep(0.1) {
+    let removed = collection.expire_vectors()?;
+    println!("Swept {} expired vectors", removed);
+}
+# Ok::<(), needle::NeedleError>(())
+```
+
+### REST API
+
+```bash
+# Sweep expired vectors
+curl -X POST http://localhost:8080/collections/sessions/expire
+# → {"expired_count": 42}
+
+# Get TTL statistics
+curl http://localhost:8080/collections/sessions/ttl-stats
+# → {"vectors_with_ttl": 150, "expired_count": 42, "earliest_expiration": 1700000000, "latest_expiration": 1700003600}
+```
+
+### Best Practices
+
+- Call `expire_vectors()` periodically (e.g., on a timer or before searches) rather than on every operation.
+- Use `needs_expiration_sweep(threshold)` to avoid unnecessary sweeps on collections with few expired vectors.
+- Follow up expiration sweeps with `compact()` to reclaim storage space from deleted vectors.
+
+---
+
+## Snapshots & Collection Bundles
+
+Snapshots capture point-in-time copies of a collection for backup and rollback. Bundles export a collection as a portable file for sharing or migration.
+
+### Creating and Restoring Snapshots
+
+```rust
+use needle::Database;
+
+let db = Database::open("production.needle")?;
+db.create_collection("documents", 384)?;
+let coll = db.collection("documents")?;
+coll.insert("doc1", &vec![0.1; 384], None)?;
+db.save()?;
+
+// Create a named snapshot
+db.create_snapshot("documents", "before_migration")?;
+
+// ... make changes ...
+
+// Restore to the snapshot state
+db.restore_snapshot("documents", "before_migration")?;
+
+// List available snapshots
+let snapshots = db.list_snapshots("documents");
+println!("Snapshots: {:?}", snapshots);
+# Ok::<(), needle::NeedleError>(())
+```
+
+### Exporting and Importing Collection Bundles
+
+Bundles are self-contained JSON files with a manifest (name, dimensions, checksum) and all collection data.
+
+```rust
+use needle::Collection;
+use std::path::Path;
+
+let mut collection = Collection::with_dimensions("docs", 384);
+collection.insert("v1", &vec![0.1; 384], None)?;
+
+// Export to a portable bundle file
+let manifest = collection.export_bundle(Path::new("/backups/docs_bundle.json"))?;
+println!("Exported {} vectors, checksum: {}", manifest.vector_count, manifest.checksum);
+
+// Import on another instance
+let restored = Collection::import_bundle(Path::new("/backups/docs_bundle.json"))?;
+assert_eq!(restored.len(), 1);
+# Ok::<(), needle::NeedleError>(())
+```
+
+### REST API
+
+```bash
+# List snapshots
+curl http://localhost:8080/collections/documents/snapshots
+# → {"snapshots": ["before_migration", "daily_2024-01-15"]}
+
+# Create a snapshot
+curl -X POST http://localhost:8080/collections/documents/snapshots \
+  -H "Content-Type: application/json" \
+  -d '{"name": "before_migration"}'
+
+# Restore from a snapshot
+curl -X POST http://localhost:8080/collections/documents/snapshots/before_migration/restore
+```
+
+### When to Use Snapshots vs Bundles
+
+| Feature | Snapshots | Bundles |
+|---------|-----------|---------|
+| **Storage** | Stored inside the database | Standalone file on disk |
+| **Use case** | Quick rollback, A/B testing | Migration, sharing, archival |
+| **Granularity** | Per-collection | Per-collection |
+| **Portability** | Same database only | Any Needle instance |
+
+---
+
+## Evaluating Index Quality
+
+The `evaluate()` method measures how well your index configuration retrieves relevant results, reporting recall, precision, MAP, MRR, and NDCG metrics.
+
+### Running an Evaluation
+
+```rust
+use needle::{Collection, GroundTruthEntry, EvaluationReport};
+
+let mut collection = Collection::with_dimensions("test", 4);
+collection.insert("v1", &[1.0, 0.0, 0.0, 0.0], None)?;
+collection.insert("v2", &[0.0, 1.0, 0.0, 0.0], None)?;
+collection.insert("v3", &[0.9, 0.1, 0.0, 0.0], None)?;
+
+// Define ground truth: for each query, which IDs are relevant?
+let ground_truth = vec![
+    GroundTruthEntry {
+        query: vec![1.0, 0.0, 0.0, 0.0],
+        relevant_ids: vec!["v1".to_string(), "v3".to_string()],
+    },
+    GroundTruthEntry {
+        query: vec![0.0, 1.0, 0.0, 0.0],
+        relevant_ids: vec!["v2".to_string()],
+    },
+];
+
+let report: EvaluationReport = collection.evaluate(&ground_truth, 10)?;
+
+println!("Queries evaluated: {}", report.num_queries);
+println!("Mean Recall@{}: {:.2}%", report.k, report.mean_recall_at_k * 100.0);
+println!("Mean Precision@{}: {:.2}%", report.k, report.mean_precision_at_k * 100.0);
+println!("MAP: {:.4}", report.map);
+println!("MRR: {:.4}", report.mrr);
+println!("Mean NDCG: {:.4}", report.mean_ndcg);
+println!("Evaluation time: {:.1}ms", report.eval_time_ms);
+# Ok::<(), needle::NeedleError>(())
+```
+
+### Interpreting the Report
+
+| Metric | Meaning | Good Value |
+|--------|---------|------------|
+| **Recall@k** | Fraction of relevant items found in top-k | >0.95 for production |
+| **Precision@k** | Fraction of top-k results that are relevant | Depends on k and dataset |
+| **MAP** | Mean Average Precision across queries | >0.8 |
+| **MRR** | Mean Reciprocal Rank of first relevant result | >0.9 |
+| **NDCG** | Normalized Discounted Cumulative Gain | >0.9 |
+
+### Using Evaluation to Tune Parameters
+
+```rust
+use needle::{Collection, CollectionConfig, HnswConfig, GroundTruthEntry};
+
+// Compare recall across different ef_search values
+for ef in [20, 50, 100, 200] {
+    let hnsw = HnswConfig::default().ef_search(ef);
+    let config = CollectionConfig::new("bench", 384).with_hnsw_config(hnsw);
+    let mut coll = Collection::new(config);
+
+    // ... insert test vectors ...
+
+    let report = coll.evaluate(&ground_truth, 10)?;
+    println!("ef_search={}: recall={:.2}%, time={:.1}ms",
+        ef, report.mean_recall_at_k * 100.0, report.eval_time_ms);
+}
+# Ok::<(), needle::NeedleError>(())
+```
+
+### Per-Query Diagnostics
+
+Access `report.per_query` for individual query metrics to identify poorly performing queries:
+
+```rust
+# use needle::{Collection, GroundTruthEntry};
+# let collection = Collection::with_dimensions("test", 4);
+# let ground_truth: Vec<GroundTruthEntry> = vec![];
+# let report = collection.evaluate(&ground_truth, 10)?;
+for qm in &report.per_query {
+    if qm.recall_at_k < 0.8 {
+        println!("Query {} has low recall: {:.2}", qm.query_index, qm.recall_at_k);
+    }
+}
+# Ok::<(), needle::NeedleError>(())
+```
+
+---
+
 ## Summary
 
 | Task | Key Approach |
@@ -800,6 +1046,10 @@ db.drop_collection("documents_v1")?;
 | **Production reliability** | Regular backups + WAL |
 | **Query debugging** | Use `search_explain()` |
 | **Zero-downtime updates** | Collection aliases for blue-green |
+| **Vector TTL** | `set_ttl()`, `expire_vectors()`, periodic sweeps |
+| **Snapshots** | `create_snapshot()` / `restore_snapshot()` for rollback |
+| **Collection bundles** | `export_bundle()` / `import_bundle()` for portability |
+| **Index evaluation** | `evaluate()` with ground truth for recall/precision |
 
 ---
 
