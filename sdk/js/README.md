@@ -47,7 +47,7 @@ await db.persist();
 ```javascript
 const db = await NeedleDB.create('my-db', {
   dimensions: 384,           // required: vector dimensionality
-  distanceFunction: 'cosine' // optional: 'cosine' | 'euclidean' | 'dot_product'
+  distance: 'cosine'         // optional: 'cosine' | 'euclidean' | 'dotproduct'
 });
 ```
 
