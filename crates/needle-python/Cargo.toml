@@ -1,0 +1,15 @@
+[package]
+name = "needle-python"
+version = "0.1.0"
+edition = "2021"
+description = "Python bindings for the Needle vector database (cdylib wrapper)"
+license = "MIT"
+publish = false
+
+[lib]
+name = "needle_python"
+crate-type = ["cdylib"]
+
+[dependencies]
+needle = { path = "../..", features = ["python"] }
+pyo3 = { version = "0.23", features = ["extension-module"] }

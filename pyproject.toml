@@ -1,0 +1,33 @@
+[build-system]
+requires = ["maturin>=1.5,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "needle-db"
+version = "0.1.0"
+description = "An embedded vector database - SQLite for vectors"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.8"
+keywords = ["vector", "database", "embedding", "hnsw", "similarity-search"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Programming Language :: Python :: Implementation :: PyPy",
+    "Topic :: Database",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+[project.urls]
+Homepage = "https://github.com/anthropics/needle"
+Repository = "https://github.com/anthropics/needle"
+Documentation = "https://docs.rs/needle"
+
+[tool.maturin]
+manifest-path = "crates/needle-python/Cargo.toml"
+features = ["needle/python"]
+module-name = "needle"
+python-source = "python"
