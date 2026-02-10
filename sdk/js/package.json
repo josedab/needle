@@ -1,0 +1,18 @@
+{
+  "name": "@anthropic/needle",
+  "version": "0.1.0",
+  "description": "Browser-native vector database SDK with IndexedDB persistence",
+  "main": "dist/needle.js",
+  "module": "dist/needle.mjs",
+  "types": "dist/needle.d.ts",
+  "files": ["dist/", "README.md"],
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": ["vector", "database", "search", "embeddings", "wasm", "browser"],
+  "license": "MIT",
+  "devDependencies": {
+    "typescript": "^5.0.0"
+  }
+}

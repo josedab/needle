@@ -55,7 +55,7 @@
 
 use crate::collection::{Collection, CollectionConfig, SearchResult as RustSearchResult};
 use crate::distance::DistanceFunction;
-use crate::metadata::parse_filter;
+use crate::metadata::Filter;
 use parking_lot::RwLock;
 use serde_json::Value;
 use std::sync::Arc;
@@ -318,8 +318,8 @@ impl NeedleCollection {
                 msg: format!("Invalid filter JSON: {}", e),
             })?;
 
-        let filter = parse_filter(&filter_value).ok_or_else(|| NeedleError::InvalidConfig {
-            msg: "Invalid filter format".to_string(),
+        let filter = Filter::parse(&filter_value).map_err(|e| NeedleError::InvalidConfig {
+            msg: format!("Invalid filter format: {}", e),
         })?;
 
         let results = self

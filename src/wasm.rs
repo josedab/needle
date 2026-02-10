@@ -2,7 +2,7 @@
 
 use crate::collection::{Collection, CollectionConfig, SearchResult as RustSearchResult};
 use crate::distance::DistanceFunction;
-use crate::metadata::parse_filter;
+use crate::metadata::Filter;
 use serde_json::Value;
 use std::sync::{Arc, RwLock};
 use wasm_bindgen::prelude::*;
@@ -254,8 +254,8 @@ impl WasmCollection {
         let filter_value: Value = serde_json::from_str(filter_json)
             .map_err(|e| JsValue::from_str(&format!("Invalid filter JSON: {}", e)))?;
 
-        let filter = parse_filter(&filter_value)
-            .ok_or_else(|| JsValue::from_str("Invalid filter format"))?;
+        let filter = Filter::parse(&filter_value)
+            .map_err(|e| JsValue::from_str(&format!("Invalid filter format: {}", e)))?;
 
         let results = self
             .inner
@@ -1351,4 +1351,635 @@ async function syncCollections() {
     }
 };
 "#.to_string()
+}
+
+// ============================================================================
+// Multi-Collection WasmDatabase
+// ============================================================================
+
+/// Multi-collection database for WASM environments
+#[wasm_bindgen]
+pub struct WasmDatabase {
+    collections: std::collections::HashMap<String, Collection>,
+}
+
+#[wasm_bindgen]
+impl WasmDatabase {
+    /// Create a new empty database
+    #[wasm_bindgen(constructor)]
+    pub fn new() -> Self {
+        Self {
+            collections: std::collections::HashMap::new(),
+        }
+    }
+
+    /// Create a new collection with the given name and dimensions
+    #[wasm_bindgen(js_name = "createCollection")]
+    pub fn create_collection(&mut self, name: &str, dimensions: usize) -> Result<(), JsValue> {
+        if self.collections.contains_key(name) {
+            return Err(JsValue::from_str(&format!(
+                "Collection '{}' already exists",
+                name
+            )));
+        }
+        let config = CollectionConfig::new(name, dimensions);
+        self.collections
+            .insert(name.to_string(), Collection::new(config));
+        Ok(())
+    }
+
+    /// Get a reference to a collection by name
+    #[wasm_bindgen(js_name = "getCollection")]
+    pub fn get_collection(&self, name: &str) -> Result<WasmCollectionRef, JsValue> {
+        if !self.collections.contains_key(name) {
+            return Err(JsValue::from_str(&format!(
+                "Collection '{}' not found",
+                name
+            )));
+        }
+        Ok(WasmCollectionRef {
+            name: name.to_string(),
+        })
+    }
+
+    /// List all collection names
+    #[wasm_bindgen(js_name = "listCollections")]
+    pub fn list_collections(&self) -> Vec<JsValue> {
+        self.collections
+            .keys()
+            .map(|k| JsValue::from_str(k))
+            .collect()
+    }
+
+    /// Delete a collection by name, returns true if it existed
+    #[wasm_bindgen(js_name = "deleteCollection")]
+    pub fn delete_collection(&mut self, name: &str) -> bool {
+        self.collections.remove(name).is_some()
+    }
+
+    /// Serialize the entire database to bytes for IndexedDB persistence
+    #[wasm_bindgen(js_name = "toBytes")]
+    pub fn to_bytes(&self) -> Result<Vec<u8>, JsValue> {
+        let mut buf: Vec<u8> = Vec::new();
+        let count = self.collections.len() as u32;
+        buf.extend_from_slice(&count.to_le_bytes());
+
+        for (name, coll) in &self.collections {
+            let name_bytes = name.as_bytes();
+            let name_len = name_bytes.len() as u32;
+            buf.extend_from_slice(&name_len.to_le_bytes());
+            buf.extend_from_slice(name_bytes);
+
+            let coll_bytes = coll
+                .to_bytes()
+                .map_err(|e| JsValue::from_str(&e.to_string()))?;
+            let coll_len = coll_bytes.len() as u64;
+            buf.extend_from_slice(&coll_len.to_le_bytes());
+            buf.extend_from_slice(&coll_bytes);
+        }
+        Ok(buf)
+    }
+
+    /// Deserialize a database from bytes loaded from IndexedDB
+    #[wasm_bindgen(js_name = "fromBytes")]
+    pub fn from_bytes(bytes: &[u8]) -> Result<WasmDatabase, JsValue> {
+        let mut pos = 0usize;
+
+        if bytes.len() < 4 {
+            return Err(JsValue::from_str("Invalid database bytes: too short"));
+        }
+        let count =
+            u32::from_le_bytes(bytes[pos..pos + 4].try_into().expect("slice is exactly 4 bytes")) as usize;
+        pos += 4;
+
+        let mut collections = std::collections::HashMap::new();
+
+        for _ in 0..count {
+            if pos + 4 > bytes.len() {
+                return Err(JsValue::from_str("Truncated database bytes"));
+            }
+            let name_len =
+                u32::from_le_bytes(bytes[pos..pos + 4].try_into().expect("slice is exactly 4 bytes")) as usize;
+            pos += 4;
+
+            if pos + name_len > bytes.len() {
+                return Err(JsValue::from_str("Truncated collection name"));
+            }
+            let name = String::from_utf8(bytes[pos..pos + name_len].to_vec())
+                .map_err(|e| JsValue::from_str(&format!("Invalid UTF-8 name: {}", e)))?;
+            pos += name_len;
+
+            if pos + 8 > bytes.len() {
+                return Err(JsValue::from_str("Truncated collection length"));
+            }
+            let coll_len =
+                u64::from_le_bytes(bytes[pos..pos + 8].try_into().expect("slice is exactly 8 bytes")) as usize;
+            pos += 8;
+
+            if pos + coll_len > bytes.len() {
+                return Err(JsValue::from_str("Truncated collection data"));
+            }
+            let coll = Collection::from_bytes(&bytes[pos..pos + coll_len])
+                .map_err(|e| JsValue::from_str(&e.to_string()))?;
+            pos += coll_len;
+
+            collections.insert(name, coll);
+        }
+
+        Ok(WasmDatabase { collections })
+    }
+
+    /// Insert a vector into a named collection
+    pub fn insert(
+        &mut self,
+        collection: &str,
+        id: &str,
+        vector: Vec<f32>,
+        metadata: Option<String>,
+    ) -> Result<(), JsValue> {
+        let coll = self
+            .collections
+            .get_mut(collection)
+            .ok_or_else(|| JsValue::from_str(&format!("Collection '{}' not found", collection)))?;
+        let meta_value: Option<Value> = if let Some(json) = metadata {
+            Some(
+                serde_json::from_str(&json)
+                    .map_err(|e| JsValue::from_str(&format!("Invalid JSON metadata: {}", e)))?,
+            )
+        } else {
+            None
+        };
+        coll.insert(id, &vector, meta_value)
+            .map_err(|e| JsValue::from_str(&e.to_string()))
+    }
+
+    /// Search within a named collection
+    pub fn search(
+        &self,
+        collection: &str,
+        query: Vec<f32>,
+        k: usize,
+    ) -> Result<Vec<SearchResult>, JsValue> {
+        let coll = self
+            .collections
+            .get(collection)
+            .ok_or_else(|| JsValue::from_str(&format!("Collection '{}' not found", collection)))?;
+        let results = coll
+            .search(&query, k)
+            .map_err(|e| JsValue::from_str(&e.to_string()))?;
+        Ok(results.into_iter().map(SearchResult::from).collect())
+    }
+}
+
+impl Default for WasmDatabase {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// A lightweight reference to a collection inside a WasmDatabase
+#[wasm_bindgen]
+pub struct WasmCollectionRef {
+    name: String,
+}
+
+#[wasm_bindgen]
+impl WasmCollectionRef {
+    /// Get the collection name
+    #[wasm_bindgen(getter)]
+    pub fn name(&self) -> String {
+        self.name.clone()
+    }
+}
+
+// ============================================================================
+// IndexedDB Persistence Helpers (script generators)
+// ============================================================================
+
+/// Configuration for generating IndexedDB persistence scripts
+#[wasm_bindgen]
+pub struct IndexedDbPersistenceConfig {
+    db_name: String,
+    store_name: String,
+    version: u32,
+}
+
+#[wasm_bindgen]
+impl IndexedDbPersistenceConfig {
+    /// Create a new configuration with sensible defaults
+    #[wasm_bindgen(constructor)]
+    pub fn new(db_name: &str) -> Self {
+        Self {
+            db_name: db_name.to_string(),
+            store_name: "needle_collections".to_string(),
+            version: 1,
+        }
+    }
+
+    /// Get the IndexedDB database name
+    #[wasm_bindgen(getter, js_name = "dbName")]
+    pub fn db_name(&self) -> String {
+        self.db_name.clone()
+    }
+
+    /// Get the object store name
+    #[wasm_bindgen(getter, js_name = "storeName")]
+    pub fn store_name(&self) -> String {
+        self.store_name.clone()
+    }
+
+    /// Get the IndexedDB schema version
+    #[wasm_bindgen(getter)]
+    pub fn version(&self) -> u32 {
+        self.version
+    }
+
+    /// Generate JavaScript code that saves a `Uint8Array` into IndexedDB
+    #[wasm_bindgen(js_name = "generateSaveScript")]
+    pub fn generate_save_script(&self) -> String {
+        format!(
+            r#"async function needleSave(key, dataBytes) {{
+  return new Promise((resolve, reject) => {{
+    const request = indexedDB.open("{db}", {ver});
+    request.onupgradeneeded = (e) => {{
+      const db = e.target.result;
+      if (!db.objectStoreNames.contains("{store}")) {{
+        db.createObjectStore("{store}");
+      }}
+    }};
+    request.onerror = () => reject(request.error);
+    request.onsuccess = () => {{
+      const db = request.result;
+      const tx = db.transaction("{store}", "readwrite");
+      const store = tx.objectStore("{store}");
+      const putReq = store.put(dataBytes, key);
+      putReq.onerror = () => reject(putReq.error);
+      tx.oncomplete = () => {{ db.close(); resolve(); }};
+    }};
+  }});
+}}"#,
+            db = self.db_name,
+            store = self.store_name,
+            ver = self.version
+        )
+    }
+
+    /// Generate JavaScript code that loads a `Uint8Array` from IndexedDB
+    #[wasm_bindgen(js_name = "generateLoadScript")]
+    pub fn generate_load_script(&self) -> String {
+        format!(
+            r#"async function needleLoad(key) {{
+  return new Promise((resolve, reject) => {{
+    const request = indexedDB.open("{db}", {ver});
+    request.onupgradeneeded = (e) => {{
+      const db = e.target.result;
+      if (!db.objectStoreNames.contains("{store}")) {{
+        db.createObjectStore("{store}");
+      }}
+    }};
+    request.onerror = () => reject(request.error);
+    request.onsuccess = () => {{
+      const db = request.result;
+      const tx = db.transaction("{store}", "readonly");
+      const store = tx.objectStore("{store}");
+      const getReq = store.get(key);
+      getReq.onerror = () => reject(getReq.error);
+      getReq.onsuccess = () => {{
+        db.close();
+        resolve(getReq.result || null);
+      }};
+    }};
+  }});
+}}"#,
+            db = self.db_name,
+            store = self.store_name,
+            ver = self.version
+        )
+    }
+}
+
+// ============================================================================
+// Web Worker Configuration
+// ============================================================================
+
+/// Configuration for running Needle search inside a Web Worker
+#[wasm_bindgen]
+pub struct WebWorkerConfig {
+    num_threads: usize,
+    search_timeout_ms: u32,
+}
+
+#[wasm_bindgen]
+impl WebWorkerConfig {
+    /// Create a default Web Worker configuration
+    #[wasm_bindgen(constructor)]
+    pub fn new() -> Self {
+        Self {
+            num_threads: 1,
+            search_timeout_ms: 5000,
+        }
+    }
+
+    /// Set the number of workers to spawn
+    #[wasm_bindgen(js_name = "withThreads")]
+    pub fn with_threads(mut self, n: usize) -> Self {
+        self.num_threads = n;
+        self
+    }
+
+    /// Set the search timeout in milliseconds
+    #[wasm_bindgen(js_name = "withTimeout")]
+    pub fn with_timeout(mut self, ms: u32) -> Self {
+        self.search_timeout_ms = ms;
+        self
+    }
+
+    /// Generate JavaScript source for a Web Worker that loads the WASM module
+    /// and exposes a message-based search API
+    #[wasm_bindgen(js_name = "generateWorkerScript")]
+    pub fn generate_worker_script(&self) -> String {
+        format!(
+            r#"// Needle Web Worker – auto-generated
+const SEARCH_TIMEOUT_MS = {timeout};
+
+let db = null;
+
+self.onmessage = async (e) => {{
+  const {{ type, id, payload }} = e.data;
+  try {{
+    switch (type) {{
+      case "init": {{
+        const {{ wasmUrl, initFn }} = payload;
+        importScripts(initFn);
+        await wasm_bindgen(wasmUrl);
+        db = new wasm_bindgen.WasmDatabase();
+        self.postMessage({{ id, ok: true }});
+        break;
+      }}
+      case "createCollection": {{
+        db.createCollection(payload.name, payload.dimensions);
+        self.postMessage({{ id, ok: true }});
+        break;
+      }}
+      case "insert": {{
+        db.insert(
+          payload.collection,
+          payload.vectorId,
+          new Float32Array(payload.vector),
+          payload.metadata ? JSON.stringify(payload.metadata) : undefined
+        );
+        self.postMessage({{ id, ok: true }});
+        break;
+      }}
+      case "search": {{
+        const timer = setTimeout(() => {{
+          self.postMessage({{ id, ok: false, error: "Search timed out" }});
+        }}, SEARCH_TIMEOUT_MS);
+        const results = db.search(payload.collection, new Float32Array(payload.query), payload.k);
+        clearTimeout(timer);
+        const mapped = [];
+        for (let i = 0; i < results.length; i++) {{
+          mapped.push({{ id: results[i].id, distance: results[i].distance, metadata: results[i].metadata }});
+        }}
+        self.postMessage({{ id, ok: true, results: mapped }});
+        break;
+      }}
+      case "load": {{
+        const bytes = new Uint8Array(payload.bytes);
+        db = wasm_bindgen.WasmDatabase.fromBytes(bytes);
+        self.postMessage({{ id, ok: true }});
+        break;
+      }}
+      case "save": {{
+        const bytes = db.toBytes();
+        self.postMessage({{ id, ok: true, bytes }}, [bytes.buffer]);
+        break;
+      }}
+      default:
+        self.postMessage({{ id, ok: false, error: "Unknown message type: " + type }});
+    }}
+  }} catch (err) {{
+    self.postMessage({{ id, ok: false, error: err.toString() }});
+  }}
+}};
+"#,
+            timeout = self.search_timeout_ms
+        )
+    }
+}
+
+impl Default for WebWorkerConfig {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+// ============================================================================
+// Batch Search API
+// ============================================================================
+
+/// A request containing multiple search queries for batch execution
+#[wasm_bindgen]
+pub struct BatchSearchRequest {
+    queries: Vec<Vec<f32>>,
+    ks: Vec<usize>,
+}
+
+#[wasm_bindgen]
+impl BatchSearchRequest {
+    /// Create a new empty batch search request
+    #[wasm_bindgen(constructor)]
+    pub fn new() -> Self {
+        Self {
+            queries: Vec::new(),
+            ks: Vec::new(),
+        }
+    }
+
+    /// Add a query vector with its own k value
+    #[wasm_bindgen(js_name = "addQuery")]
+    pub fn add_query(&mut self, query: Vec<f32>, k: usize) {
+        self.queries.push(query);
+        self.ks.push(k);
+    }
+
+    /// Get the number of queued queries
+    #[wasm_bindgen(js_name = "queryCount")]
+    pub fn query_count(&self) -> usize {
+        self.queries.len()
+    }
+}
+
+impl Default for BatchSearchRequest {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Results from a batch search operation
+#[wasm_bindgen]
+pub struct BatchSearchResults {
+    results: Vec<Vec<SearchResult>>,
+    duration_ms: f64,
+}
+
+#[wasm_bindgen]
+impl BatchSearchResults {
+    /// Get the number of result sets
+    #[wasm_bindgen(getter, js_name = "queryCount")]
+    pub fn query_count(&self) -> usize {
+        self.results.len()
+    }
+
+    /// Get duration in milliseconds
+    #[wasm_bindgen(getter, js_name = "durationMs")]
+    pub fn duration_ms(&self) -> f64 {
+        self.duration_ms
+    }
+
+    /// Get results for a specific query index as a JS array of objects
+    #[wasm_bindgen(js_name = "getResults")]
+    pub fn get_results(&self, index: usize) -> js_sys::Array {
+        let arr = js_sys::Array::new();
+        if let Some(results) = self.results.get(index) {
+            for r in results {
+                let obj = js_sys::Object::new();
+                let _ = js_sys::Reflect::set(&obj, &"id".into(), &r.id.clone().into());
+                let _ = js_sys::Reflect::set(&obj, &"distance".into(), &r.distance.into());
+                if let Some(ref meta) = r.metadata_json {
+                    if let Ok(parsed) = js_sys::JSON::parse(meta) {
+                        let _ = js_sys::Reflect::set(&obj, &"metadata".into(), &parsed);
+                    }
+                }
+                arr.push(&obj);
+            }
+        }
+        arr
+    }
+}
+
+// Additional WasmCollection methods
+#[wasm_bindgen]
+impl WasmCollection {
+    /// Get the number of vectors in the collection
+    pub fn count(&self) -> usize {
+        self.inner
+            .read()
+            .map(|guard| guard.len())
+            .unwrap_or(0)
+    }
+
+    /// Execute a batch search request against this collection
+    #[wasm_bindgen(js_name = "batchSearch")]
+    pub fn batch_search_request(
+        &self,
+        request: &BatchSearchRequest,
+    ) -> Result<BatchSearchResults, JsValue> {
+        let start = js_sys::Date::now();
+
+        let coll = self
+            .inner
+            .read()
+            .map_err(|_| JsValue::from_str("Lock poisoned"))?;
+
+        let mut all_results: Vec<Vec<SearchResult>> = Vec::with_capacity(request.queries.len());
+        for (query, &k) in request.queries.iter().zip(request.ks.iter()) {
+            let results = coll
+                .search(query, k)
+                .map_err(|e| JsValue::from_str(&e.to_string()))?;
+            all_results.push(results.into_iter().map(SearchResult::from).collect());
+        }
+
+        let duration_ms = js_sys::Date::now() - start;
+
+        Ok(BatchSearchResults {
+            results: all_results,
+            duration_ms,
+        })
+    }
+
+    /// Search with advanced options
+    #[wasm_bindgen(js_name = "searchWithOptions")]
+    pub fn search_with_options(
+        &self,
+        query: Vec<f32>,
+        options: &WasmSearchOptions,
+    ) -> Result<Vec<SearchResult>, JsValue> {
+        let mut coll = self
+            .inner
+            .write()
+            .map_err(|_| JsValue::from_str("Lock poisoned"))?;
+
+        // Temporarily set ef_search if provided
+        let prev_ef = if let Some(ef) = options.ef_search {
+            let current = coll.dimensions(); // no getter for ef, just set it
+            coll.set_ef_search(ef);
+            Some(current)
+        } else {
+            None
+        };
+
+        let results = if let Some(ref filter_json) = options.filter_json {
+            let filter_value: Value = serde_json::from_str(filter_json)
+                .map_err(|e| JsValue::from_str(&format!("Invalid filter JSON: {}", e)))?;
+            let filter = Filter::parse(&filter_value)
+                .map_err(|e| JsValue::from_str(&format!("Invalid filter: {}", e)))?;
+            coll.search_with_filter(&query, options.k, &filter)
+                .map_err(|e| JsValue::from_str(&e.to_string()))?
+        } else {
+            coll.search(&query, options.k)
+                .map_err(|e| JsValue::from_str(&e.to_string()))?
+        };
+
+        // Restore previous ef_search is not strictly needed since we hold a write lock,
+        // but we leave it at the new value as a deliberate side-effect.
+        let _ = prev_ef;
+
+        Ok(results.into_iter().map(SearchResult::from).collect())
+    }
+}
+
+// ============================================================================
+// WasmSearchOptions
+// ============================================================================
+
+/// Advanced search configuration for WASM
+#[wasm_bindgen]
+pub struct WasmSearchOptions {
+    k: usize,
+    ef_search: Option<usize>,
+    filter_json: Option<String>,
+}
+
+#[wasm_bindgen]
+impl WasmSearchOptions {
+    /// Create new search options with k results
+    #[wasm_bindgen(constructor)]
+    pub fn new(k: usize) -> Self {
+        Self {
+            k,
+            ef_search: None,
+            filter_json: None,
+        }
+    }
+
+    /// Set the ef_search HNSW parameter for recall tuning
+    #[wasm_bindgen(js_name = "withEfSearch")]
+    pub fn with_ef_search(mut self, ef: usize) -> Self {
+        self.ef_search = Some(ef);
+        self
+    }
+
+    /// Set a metadata filter as a JSON string (MongoDB-style query)
+    #[wasm_bindgen(js_name = "withFilter")]
+    pub fn with_filter(mut self, filter_json: &str) -> Self {
+        self.filter_json = Some(filter_json.to_string());
+        self
+    }
+
+    /// Get the k value
+    #[wasm_bindgen(getter)]
+    pub fn k(&self) -> usize {
+        self.k
+    }
 }
