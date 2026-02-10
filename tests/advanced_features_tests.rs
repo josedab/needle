@@ -4,18 +4,11 @@
 //! - Drift Detection
 //! - Backup/Restore
 
-use needle::{
-    Database,
-    // Query builder
-    QueryAnalyzer, VisualQueryBuilder,
-    query_builder::{CollectionProfile, QueryClass},
-    // Federated
-    Federation, FederationConfig, InstanceConfig, RoutingStrategy, MergeStrategy,
-    // Drift
-    DriftDetector, DriftConfig,
-    // Backup
-    BackupManager, BackupConfig, BackupType,
-};
+use needle::Database;
+use needle::query_builder::{CollectionProfile, QueryAnalyzer, QueryClass, VisualQueryBuilder};
+use needle::federated::{Federation, FederationConfig, InstanceConfig, MergeStrategy, RoutingStrategy};
+use needle::drift::{DriftConfig, DriftDetector};
+use needle::backup::{BackupConfig, BackupManager, BackupType};
 use tempfile::TempDir;
 
 fn random_vector(dim: usize) -> Vec<f32> {

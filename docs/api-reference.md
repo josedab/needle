@@ -2,6 +2,16 @@
 
 Complete API reference for Needle vector database.
 
+## REST API (OpenAPI)
+
+The HTTP server includes a built-in OpenAPI 3.1 spec available at `/openapi.json` when running:
+```bash
+cargo run --features server -- serve
+# Then: curl http://localhost:8080/openapi.json
+```
+
+For a runnable walkthrough, see [HTTP Quickstart](http-quickstart.md).
+
 ## Table of Contents
 
 - [Database](#database)
@@ -47,7 +57,7 @@ let db = Database::with_config("vectors.needle", config)?;
 | `create_collection(name, dimensions)` | Create a new collection |
 | `create_collection_with_config(config)` | Create with custom config |
 | `collection(name)` | Get a reference to a collection |
-| `drop_collection(name)` | Delete a collection |
+| `delete_collection(name)` | Delete a collection |
 | `list_collections()` | List all collection names |
 | `save()` | Persist to disk |
 | `collection_exists(name)` | Check if collection exists |
@@ -930,7 +940,7 @@ let outlier_scores = lof.fit_predict(&vectors)?;
 | `create_collection_with_config` | `fn create_collection_with_config(&self, config: CollectionConfig) -> Result<()>` | Create with custom configuration |
 | `collection` | `fn collection(&self, name: &str) -> Result<CollectionRef>` | Get thread-safe collection reference |
 | `list_collections` | `fn list_collections(&self) -> Vec<String>` | List all collection names |
-| `drop_collection` | `fn drop_collection(&self, name: &str) -> Result<bool>` | Delete collection, returns true if existed |
+| `delete_collection` | `fn delete_collection(&self, name: &str) -> Result<bool>` | Delete collection, returns true if existed |
 | `has_collection` | `fn has_collection(&self, name: &str) -> bool` | Check if collection exists |
 | `create_alias` | `fn create_alias(&self, alias: &str, collection: &str) -> Result<()>` | Create alias for collection |
 | `delete_alias` | `fn delete_alias(&self, alias: &str) -> Result<bool>` | Remove alias |

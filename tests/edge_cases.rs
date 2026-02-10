@@ -1496,7 +1496,7 @@ fn test_batch_search_with_filter_nan() {
 /// Test recommend_index with edge case inputs
 #[test]
 fn test_recommend_index_edge_cases() {
-    use needle::{quick_recommend_index, recommend_index, IndexSelectionConstraints, RecommendedIndex};
+    use needle::tuning::{quick_recommend_index, recommend_index, IndexSelectionConstraints, RecommendedIndex};
 
     // Very small dataset
     assert_eq!(quick_recommend_index(10, 128), RecommendedIndex::Hnsw);
@@ -1541,7 +1541,7 @@ fn test_recommend_index_edge_cases() {
 /// Test backup to invalid directory path
 #[test]
 fn test_backup_to_invalid_path() {
-    use needle::{BackupConfig, BackupManager};
+    use needle::backup::{BackupConfig, BackupManager};
     use tempfile::tempdir;
 
     let dir = tempdir().unwrap();
@@ -2083,8 +2083,7 @@ fn test_concurrent_inserts() {
 #[cfg(unix)]
 #[test]
 fn test_wal_basic_persistence() {
-    use needle::{WalConfig, WalManager};
-    use needle::wal::WalEntry;
+    use needle::wal::{WalConfig, WalEntry, WalManager};
     use tempfile::tempdir;
 
     let dir = tempdir().unwrap();

@@ -3,6 +3,10 @@
 //! Tests that verify modules work correctly together in realistic scenarios.
 //! These tests focus on module combinations, end-to-end workflows, and
 //! performance validation.
+//!
+//! Run with: cargo test --test integration_tests --features full
+
+#![cfg(feature = "experimental")]
 
 use needle::{
     crdt::{ReplicaId, VectorCRDT},

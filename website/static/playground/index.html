@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Needle Playground — Interactive Vector Database</title>
+  <style>
+    :root {
+      --bg: #0d1117; --surface: #161b22; --border: #30363d;
+      --text: #c9d1d9; --accent: #58a6ff; --green: #3fb950; --red: #f85149;
+      --mono: 'SF Mono', 'Fira Code', monospace;
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: var(--bg); color: var(--text); font-family: -apple-system, sans-serif; }
+    header { padding: 1rem 2rem; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 1rem; }
+    header h1 { font-size: 1.2rem; color: var(--accent); }
+    header .badge { background: var(--green); color: #000; padding: 2px 8px; border-radius: 12px; font-size: 0.7rem; font-weight: 600; }
+    .container { display: grid; grid-template-columns: 1fr 1fr; height: calc(100vh - 60px); }
+    .panel { padding: 1rem; overflow-y: auto; }
+    .panel-left { border-right: 1px solid var(--border); }
+    .panel h2 { font-size: 0.9rem; color: var(--accent); margin-bottom: 0.5rem; text-transform: uppercase; letter-spacing: 0.05em; }
+    textarea { width: 100%; height: 200px; background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 0.75rem; font-family: var(--mono); font-size: 0.85rem; resize: vertical; }
+    button { background: var(--accent); color: #000; border: none; padding: 0.5rem 1rem; border-radius: 6px; cursor: pointer; font-weight: 600; margin: 0.5rem 0.25rem 0.5rem 0; }
+    button:hover { opacity: 0.9; }
+    button.secondary { background: var(--surface); color: var(--text); border: 1px solid var(--border); }
+    .output { background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 0.75rem; font-family: var(--mono); font-size: 0.8rem; min-height: 150px; white-space: pre-wrap; overflow-y: auto; max-height: 400px; }
+    .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.5rem; margin: 1rem 0; }
+    .stat-card { background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 0.75rem; text-align: center; }
+    .stat-card .value { font-size: 1.5rem; font-weight: 700; color: var(--accent); }
+    .stat-card .label { font-size: 0.7rem; color: #8b949e; margin-top: 0.25rem; }
+    .tutorial { background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 1rem; margin-top: 1rem; }
+    .tutorial h3 { color: var(--green); margin-bottom: 0.5rem; }
+    .tutorial p { font-size: 0.85rem; line-height: 1.5; }
+    .tutorial code { background: var(--bg); padding: 1px 4px; border-radius: 3px; font-family: var(--mono); font-size: 0.8rem; }
+    select { background: var(--surface); color: var(--text); border: 1px solid var(--border); padding: 0.4rem; border-radius: 4px; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>🪡 Needle Playground</h1>
+    <span class="badge">WASM</span>
+    <span style="color:#8b949e; font-size:0.8rem;">Interactive vector database in your browser — no install required</span>
+  </header>
+  <div class="container">
+    <div class="panel panel-left">
+      <h2>Command</h2>
+      <select id="examples" onchange="loadExample()">
+        <option value="">— Load example —</option>
+        <option value="create">Create Collection</option>
+        <option value="insert">Insert Vectors</option>
+        <option value="search">Search</option>
+        <option value="filter">Filtered Search</option>
+        <option value="stats">Collection Stats</option>
+      </select>
+      <textarea id="input" spellcheck="false" placeholder="Enter JSON command...">{
+  "action": "create_collection",
+  "name": "demo",
+  "dimensions": 4
+}</textarea>
+      <button onclick="execute()">▶ Run</button>
+      <button class="secondary" onclick="clearOutput()">Clear</button>
+      <button class="secondary" onclick="resetState()">Reset DB</button>
+
+      <h2 style="margin-top:1rem;">Output</h2>
+      <div id="output" class="output">Ready. Enter a command and click Run.</div>
+
+      <div class="stats">
+        <div class="stat-card"><div class="value" id="stat-collections">0</div><div class="label">Collections</div></div>
+        <div class="stat-card"><div class="value" id="stat-vectors">0</div><div class="label">Vectors</div></div>
+        <div class="stat-card"><div class="value" id="stat-queries">0</div><div class="label">Queries</div></div>
+        <div class="stat-card"><div class="value" id="stat-latency">0</div><div class="label">Last (ms)</div></div>
+      </div>
+    </div>
+    <div class="panel">
+      <h2>Tutorial</h2>
+      <div class="tutorial" id="tutorial">
+        <h3>Welcome to Needle Playground</h3>
+        <p>This playground runs <strong>entirely in your browser</strong> using WebAssembly — no data leaves your machine.</p>
+        <p style="margin-top:0.5rem;">Try these steps:</p>
+        <ol style="margin:0.5rem 0 0 1.2rem; font-size:0.85rem; line-height:1.8;">
+          <li>Click <strong>Run</strong> to create the "demo" collection</li>
+          <li>Select <em>Insert Vectors</em> from the dropdown</li>
+          <li>Run to insert sample vectors</li>
+          <li>Select <em>Search</em> and run to find similar vectors</li>
+          <li>Try <em>Filtered Search</em> to see metadata filtering</li>
+        </ol>
+      </div>
+      <h2 style="margin-top:1rem;">API Reference</h2>
+      <div class="tutorial">
+        <h3>Supported Actions</h3>
+        <p><code>create_collection</code> — Create a new collection with dimensions</p>
+        <p><code>insert</code> — Insert a vector with ID, vector data, and optional metadata</p>
+        <p><code>search</code> — Find k nearest neighbors to a query vector</p>
+        <p><code>search_filtered</code> — Search with metadata filter</p>
+        <p><code>get</code> — Retrieve a vector by ID</p>
+        <p><code>delete</code> — Delete a vector by ID</p>
+        <p><code>stats</code> — Get collection statistics</p>
+        <p><code>list_collections</code> — List all collections</p>
+      </div>
+    </div>
+  </div>
+  <script>
+    // In-browser vector database simulation (production would load needle.wasm)
+    const state = { collections: {}, queryCount: 0 };
+
+    const EXAMPLES = {
+      create: '{\n  "action": "create_collection",\n  "name": "demo",\n  "dimensions": 4\n}',
+      insert: '{\n  "action": "insert",\n  "collection": "demo",\n  "vectors": [\n    {"id": "v1", "vector": [1.0, 0.0, 0.0, 0.0], "metadata": {"color": "red"}},\n    {"id": "v2", "vector": [0.0, 1.0, 0.0, 0.0], "metadata": {"color": "blue"}},\n    {"id": "v3", "vector": [0.7, 0.7, 0.0, 0.0], "metadata": {"color": "red"}},\n    {"id": "v4", "vector": [0.0, 0.0, 1.0, 0.0], "metadata": {"color": "green"}}\n  ]\n}',
+      search: '{\n  "action": "search",\n  "collection": "demo",\n  "query": [1.0, 0.0, 0.0, 0.0],\n  "k": 3\n}',
+      filter: '{\n  "action": "search_filtered",\n  "collection": "demo",\n  "query": [1.0, 0.0, 0.0, 0.0],\n  "k": 3,\n  "filter": {"color": "red"}\n}',
+      stats: '{\n  "action": "stats",\n  "collection": "demo"\n}',
+    };
+
+    function loadExample() {
+      const sel = document.getElementById('examples').value;
+      if (sel && EXAMPLES[sel]) document.getElementById('input').value = EXAMPLES[sel];
+    }
+
+    function cosineDist(a, b) {
+      let dot = 0, na = 0, nb = 0;
+      for (let i = 0; i < a.length; i++) { dot += a[i]*b[i]; na += a[i]*a[i]; nb += b[i]*b[i]; }
+      na = Math.sqrt(na); nb = Math.sqrt(nb);
+      return (na === 0 || nb === 0) ? 1.0 : 1.0 - dot/(na*nb);
+    }
+
+    function execute() {
+      const t0 = performance.now();
+      try {
+        const cmd = JSON.parse(document.getElementById('input').value);
+        const result = processCommand(cmd);
+        const ms = (performance.now() - t0).toFixed(1);
+        document.getElementById('output').textContent = JSON.stringify(result, null, 2);
+        document.getElementById('stat-latency').textContent = ms;
+        updateStats();
+      } catch(e) {
+        document.getElementById('output').textContent = 'Error: ' + e.message;
+      }
+    }
+
+    function processCommand(cmd) {
+      switch(cmd.action) {
+        case 'create_collection': {
+          state.collections[cmd.name] = { dimensions: cmd.dimensions, vectors: {} };
+          return { ok: true, message: `Collection "${cmd.name}" created (${cmd.dimensions}D)` };
+        }
+        case 'insert': {
+          const col = state.collections[cmd.collection];
+          if (!col) return { error: `Collection "${cmd.collection}" not found` };
+          let count = 0;
+          for (const v of cmd.vectors) {
+            col.vectors[v.id] = { vector: v.vector, metadata: v.metadata || null };
+            count++;
+          }
+          return { ok: true, inserted: count };
+        }
+        case 'search': case 'search_filtered': {
+          const col = state.collections[cmd.collection];
+          if (!col) return { error: `Collection "${cmd.collection}" not found` };
+          state.queryCount++;
+          let candidates = Object.entries(col.vectors);
+          if (cmd.filter) {
+            candidates = candidates.filter(([_, v]) => {
+              if (!v.metadata) return false;
+              return Object.entries(cmd.filter).every(([k, val]) => v.metadata[k] === val);
+            });
+          }
+          const scored = candidates.map(([id, v]) => ({ id, distance: cosineDist(cmd.query, v.vector), metadata: v.metadata }));
+          scored.sort((a,b) => a.distance - b.distance);
+          return { results: scored.slice(0, cmd.k || 10) };
+        }
+        case 'get': {
+          const col = state.collections[cmd.collection];
+          if (!col) return { error: `Collection not found` };
+          const v = col.vectors[cmd.id];
+          return v ? { id: cmd.id, ...v } : { error: 'Not found' };
+        }
+        case 'delete': {
+          const col = state.collections[cmd.collection];
+          if (!col) return { error: `Collection not found` };
+          delete col.vectors[cmd.id];
+          return { ok: true };
+        }
+        case 'stats': {
+          const col = state.collections[cmd.collection];
+          if (!col) return { error: `Collection not found` };
+          return { collection: cmd.collection, dimensions: col.dimensions, vectors: Object.keys(col.vectors).length };
+        }
+        case 'list_collections':
+          return { collections: Object.keys(state.collections).map(n => ({ name: n, vectors: Object.keys(state.collections[n].vectors).length })) };
+        default:
+          return { error: `Unknown action: ${cmd.action}` };
+      }
+    }
+
+    function updateStats() {
+      let totalVec = 0;
+      Object.values(state.collections).forEach(c => totalVec += Object.keys(c.vectors).length);
+      document.getElementById('stat-collections').textContent = Object.keys(state.collections).length;
+      document.getElementById('stat-vectors').textContent = totalVec;
+      document.getElementById('stat-queries').textContent = state.queryCount;
+    }
+
+    function clearOutput() { document.getElementById('output').textContent = 'Ready.'; }
+    function resetState() { state.collections = {}; state.queryCount = 0; updateStats(); clearOutput(); }
+  </script>
+</body>
+</html>

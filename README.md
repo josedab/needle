@@ -11,6 +11,58 @@
 
 Needle is a high-performance, zero-configuration vector database designed for AI applications. It provides fast approximate nearest neighbor (ANN) search with a single-file storage format.
 
+> **New here?** Jump to the [Quickstart](QUICKSTART.md) — three copy-paste paths to a working setup.
+
+## Get Started
+
+### Try it (no Rust required)
+
+```bash
+docker compose --profile demo up -d --build
+# Search the pre-loaded demo collection:
+curl -X POST http://127.0.0.1:8080/collections/demo/search \
+  -H "Content-Type: application/json" \
+  -d '{"vector":[0.1,0.2,0.3],"k":3}'
+```
+
+### Develop with it (Rust)
+
+```bash
+git clone https://github.com/anthropics/needle.git
+cd needle
+cargo run --example basic_usage
+```
+
+<details>
+<summary><strong>More ways to run</strong></summary>
+
+```bash
+# One-command demo (builds server, seeds data, runs a search)
+./scripts/quickstart.sh
+
+# With custom port / debug logging
+NEEDLE_PORT=9090 RUST_LOG=debug ./scripts/quickstart.sh
+
+# Check your environment for prerequisites
+./scripts/doctor.sh
+
+# Run the server manually
+cargo run --features server -- serve -a 127.0.0.1:8080
+curl http://127.0.0.1:8080/health
+
+# Task runner shortcuts (make works out of the box; just needs: cargo install just)
+make demo
+just demo
+
+# Docker: run the image directly
+docker run --rm -p 8080:8080 ghcr.io/anthropics/needle:latest
+
+# Docker: build from source
+docker compose -f docker-compose.yml -f docker-compose.source.yml up -d --build
+```
+
+</details>
+
 ## Performance
 
 Benchmarks on 1M vectors (384 dimensions, M=16, ef_search=50):
@@ -44,6 +96,8 @@ Memory usage: ~1.7GB for 1M vectors (384 dims) with HNSW index.
 | Guide | Description |
 |-------|-------------|
 | [Getting Started](docs/how-to-guides.md) | First database, search, and common tasks |
+| [HTTP Quickstart](docs/http-quickstart.md) | Run the REST API and make your first requests |
+| [RAG Quickstart](docs/rag-quickstart.md) | End-to-end RAG pipeline with OpenAI embeddings |
 | [API Reference](docs/api-reference.md) | Complete method documentation |
 | [Architecture](docs/architecture.md) | Internal design and data flow diagrams |
 | [Index Selection Guide](docs/index-selection-guide.md) | HNSW vs IVF vs DiskANN decision guide |
@@ -51,6 +105,7 @@ Memory usage: ~1.7GB for 1M vectors (384 dims) with HNSW index.
 | [Operations Guide](docs/OPERATIONS.md) | Monitoring, backup, and tuning |
 | [Deployment Guide](docs/deployment.md) | Docker, Kubernetes, and cloud deployment |
 | [Distributed Operations](docs/distributed-operations.md) | Sharding, replication, and clustering |
+| [Examples](examples/README.md) | Runnable example commands |
 
 ## Features
 
@@ -86,7 +141,17 @@ Memory usage: ~1.7GB for 1M vectors (384 dims) with HNSW index.
 
 ## Installation
 
-### Rust
+### CLI / Server
+
+```bash
+# From crates.io (builds from source)
+cargo install needle
+
+# Or with pre-built binary (no compilation)
+cargo binstall needle
+```
+
+### Rust Library
 
 Add to your `Cargo.toml`:
 
@@ -101,11 +166,23 @@ needle = "0.1"
 pip install needle-db
 ```
 
+See [Python Installation](docs/python.md) for wheels vs source builds.
+
+### Python (from source)
+
+```bash
+pip install maturin
+maturin develop --features python
+python -c "import needle; print('needle import ok')"
+```
+
 ### JavaScript/WASM
 
 ```bash
 npm install @anthropic/needle
 ```
+
+For local SDK development, see [sdk/js/README.md](sdk/js/README.md).
 
 ## Quick Start
 
@@ -343,41 +420,48 @@ cargo build --release --features uniffi-bindings
 Needle includes a CLI for database management:
 
 ```bash
-# Build the CLI
+# Run without installing
+cargo run --bin needle -- --help
+
+# Or build once and run the binary
 cargo build --release
+./target/release/needle --help
+
+# Optional: install to PATH
+cargo install --path .
 
 # Create a new database
-needle create mydata.needle
+./target/release/needle create mydata.needle
 
 # Create a collection
-needle create-collection mydata.needle -n documents -d 384 --distance cosine
+./target/release/needle create-collection mydata.needle -n documents -d 384 --distance cosine
 
 # Show database info
-needle info mydata.needle
+./target/release/needle info mydata.needle
 
 # List collections
-needle collections mydata.needle
+./target/release/needle collections mydata.needle
 
 # Insert vectors from stdin (JSON format)
-echo '{"id":"doc1","vector":[0.1,0.2,...],"metadata":{"title":"Hello"}}' | needle insert mydata.needle -c documents
+echo '{"id":"doc1","vector":[0.1,0.2,0.3],"metadata":{"title":"Hello"}}' | ./target/release/needle insert mydata.needle -c documents
 
 # Get a vector by ID
-needle get mydata.needle -c documents -i doc1
+./target/release/needle get mydata.needle -c documents -i doc1
 
 # Search for similar vectors
-needle search mydata.needle -c documents -q "0.1,0.2,0.3,..." -k 10
+./target/release/needle search mydata.needle -c documents -q "0.1,0.2,0.3" -k 10
 
 # Delete a vector
-needle delete mydata.needle -c documents -i doc1
+./target/release/needle delete mydata.needle -c documents -i doc1
 
 # Export collection to JSON
-needle export mydata.needle -c documents
+./target/release/needle export mydata.needle -c documents
 
 # Compact database (remove deleted vectors)
-needle compact mydata.needle
+./target/release/needle compact mydata.needle
 
 # Show collection statistics
-needle stats mydata.needle -c documents
+./target/release/needle stats mydata.needle -c documents
 ```
 
 ### CLI Commands
@@ -412,10 +496,13 @@ Needle uses Cargo feature flags to enable optional functionality. By default, no
 | `web-ui` | Web-based admin UI | Stable |
 | `metrics` | Prometheus metrics endpoint | Stable |
 | `hybrid` | BM25 + vector hybrid search with RRF fusion | Stable |
+| `encryption` | ChaCha20-Poly1305 authenticated encryption at rest | Stable |
+| `diskann` | DiskANN index for large-scale on-disk search | Stable |
+| `integrations` | LangChain / LlamaIndex adapters | Stable |
 | `embeddings` | ONNX embedding inference | **Unstable** (pre-release dependency) |
 | `embedding-providers` | OpenAI, Cohere, Ollama embedding providers | Stable |
 | `tui` | Terminal user interface | Stable |
-| `full` | All stable features (server + web-ui + metrics + hybrid + embedding-providers) | Stable |
+| `full` | All stable features (server + web-ui + metrics + hybrid + encryption + diskann + integrations + embedding-providers) | Stable |
 | `python` | Python bindings via PyO3 | Stable |
 | `wasm` | WebAssembly bindings | Stable |
 | `uniffi-bindings` | Swift/Kotlin bindings via UniFFI | Stable |
@@ -437,6 +524,19 @@ cargo build --features server,metrics
 
 # Build with all features including unstable
 cargo build --features full,embeddings
+```
+
+## Testing
+
+```bash
+# Fast feedback (format check + lint + unit tests)
+make quick          # or: just quick
+
+# Full checks (format check + lint + full tests)
+make check          # or: just check
+
+# Cargo fallback
+cargo test --features full
 ```
 
 ## Benchmarks

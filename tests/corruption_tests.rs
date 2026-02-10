@@ -4,8 +4,7 @@
 //! including WAL crash-recovery scenarios.
 
 use needle::{Database, CollectionConfig, DistanceFunction};
-use needle::{WalConfig, WalManager};
-use needle::wal::WalEntry;
+use needle::wal::{WalConfig, WalEntry, WalManager};
 use std::fs;
 use std::io::{Write, Seek, SeekFrom};
 use tempfile::tempdir;
