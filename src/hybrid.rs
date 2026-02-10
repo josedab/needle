@@ -170,7 +170,15 @@ impl Bm25Index {
         .collect()
     }
 
-    /// Tokenize and stem text
+    /// Tokenize and stem text.
+    ///
+    /// Applies a multi-step NLP pipeline:
+    /// 1. Lowercase the input for case-insensitive matching
+    /// 2. Split on non-alphanumeric characters (punctuation, whitespace)
+    /// 3. Remove single-character tokens (too short to be meaningful)
+    /// 4. Remove common English stop words ("the", "and", …) to focus on content terms
+    /// 5. Apply Porter stemming so morphological variants ("running" → "run")
+    ///    collapse to the same root, improving recall
     fn tokenize(&self, text: &str) -> Vec<String> {
         let stemmer = Stemmer::create(Algorithm::English);
 
@@ -178,7 +186,7 @@ impl Bm25Index {
             .split(|c: char| !c.is_alphanumeric())
             .filter(|s| !s.is_empty() && s.len() > 1)
             .filter(|s| !self.stop_words.contains(*s))
-            .map(|s| stemmer.stem(s).to_string())
+            .map(|s| stemmer.stem(s).to_string()) // Porter-stem each token
             .collect()
     }
 
@@ -245,7 +253,23 @@ impl Bm25Index {
         }
     }
 
-    /// Calculate BM25 score for a document given a query
+    /// Calculate BM25 score for a document given a query.
+    ///
+    /// Implements the Okapi BM25 ranking function (Robertson & Zaragoza, 2009):
+    ///
+    /// ```text
+    /// score(D, Q) = Σ  IDF(t) · TF(t, D) · (k1 + 1)
+    ///               t∈Q       ─────────────────────────────
+    ///                          TF(t, D) + k1 · (1 - b + b · |D| / avgdl)
+    /// ```
+    ///
+    /// where:
+    /// - `TF(t, D)` = raw term frequency of term `t` in document `D`
+    /// - `IDF(t)` = `ln((N - df(t) + 0.5) / (df(t) + 0.5) + 1)` (smoothed inverse document frequency)
+    /// - `k1` = term-frequency saturation parameter (higher → raw TF matters more)
+    /// - `b` = length normalization parameter (0 = no normalization, 1 = full normalization)
+    /// - `|D|` = document length in tokens
+    /// - `avgdl` = average document length across the corpus
     fn score_document(&self, doc: &Document, query_terms: &[String]) -> f32 {
         let k1 = self.config.k1;
         let b = self.config.b;
@@ -254,18 +278,26 @@ impl Bm25Index {
         let mut score = 0.0;
 
         for term in query_terms {
+            // Raw term frequency in this document
             let tf = *doc.term_freqs.get(term).unwrap_or(&0) as f32;
+            // Number of documents containing this term
             let df = *self.doc_freqs.get(term).unwrap_or(&0) as f32;
 
             if df == 0.0 || tf == 0.0 {
                 continue;
             }
 
-            // IDF component
+            // IDF component: log-smoothed inverse document frequency.
+            // Rare terms (low df) get high IDF; ubiquitous terms get low IDF.
             let idf = ((n - df + 0.5) / (df + 0.5) + 1.0).ln();
 
-            // TF component with length normalization
+            // Length normalization: penalizes long documents so that a term
+            // occurring once in a short document scores higher than the same
+            // term occurring once in a long document.
             let length_norm = 1.0 - b + b * (doc.length as f32 / self.avg_doc_length);
+
+            // TF saturation: raw TF is dampened so that repeating a term many
+            // times has diminishing returns (controlled by k1).
             let tf_norm = (tf * (k1 + 1.0)) / (tf + k1 * length_norm);
 
             score += idf * tf_norm;
@@ -274,7 +306,11 @@ impl Bm25Index {
         score
     }
 
-    /// Search the index and return scored results
+    /// Search the index and return scored results.
+    ///
+    /// Tokenizes and stems the query using the same pipeline as `index_document`,
+    /// scores every indexed document with [`score_document`](Self::score_document),
+    /// and returns the top `limit` results sorted by BM25 score descending.
     pub fn search(&self, query: &str, limit: usize) -> Vec<(String, f32)> {
         let query_terms = self.tokenize(query);
 
