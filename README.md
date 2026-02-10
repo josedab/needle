@@ -457,6 +457,38 @@ wasm-pack build --features wasm
 cargo build --release --features uniffi-bindings
 ```
 
+#### Swift
+
+```swift
+import Needle
+
+let db = try Database.open(path: "vectors.needle")
+try db.createCollection(name: "docs", dimensions: 384)
+
+let coll = try db.collection(name: "docs")
+try coll.insert(id: "doc1", vector: Array(repeating: 0.1, count: 384), metadata: nil)
+
+let results = try coll.search(query: Array(repeating: 0.1, count: 384), k: 5)
+for result in results {
+    print("\(result.id): \(result.distance)")
+}
+```
+
+#### Kotlin
+
+```kotlin
+import needle.Database
+
+val db = Database.open("vectors.needle")
+db.createCollection("docs", 384u)
+
+val coll = db.collection("docs")
+coll.insert("doc1", FloatArray(384) { 0.1f }, null)
+
+val results = coll.search(FloatArray(384) { 0.1f }, 5u)
+results.forEach { println("${it.id}: ${it.distance}") }
+```
+
 ## Command Line Interface
 
 Needle includes a CLI for database management:
