@@ -1193,6 +1193,153 @@ impl Default for ThreadSafeLineageTracker {
     }
 }
 
+// ============================================================================
+// Lineage Policy
+// ============================================================================
+
+/// Policy controlling when and how lineage is captured for a collection.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LineagePolicy {
+    /// Whether lineage tracking is enabled.
+    pub enabled: bool,
+    /// Track lineage on insert operations.
+    pub track_inserts: bool,
+    /// Track lineage on upsert operations.
+    pub track_upserts: bool,
+    /// Track lineage on update operations.
+    pub track_updates: bool,
+    /// Track lineage on delete operations.
+    pub track_deletes: bool,
+    /// Default model identifier to attach when not explicitly provided.
+    pub default_model: Option<String>,
+    /// Default source URI prefix.
+    pub default_source_uri: Option<String>,
+    /// Maximum transformation history entries per vector (0 = unlimited).
+    pub max_transformation_history: usize,
+}
+
+impl Default for LineagePolicy {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            track_inserts: true,
+            track_upserts: true,
+            track_updates: true,
+            track_deletes: true,
+            default_model: None,
+            default_source_uri: None,
+            max_transformation_history: 100,
+        }
+    }
+}
+
+impl LineagePolicy {
+    /// Create an enabled policy that tracks all operations.
+    pub fn enabled() -> Self {
+        Self {
+            enabled: true,
+            ..Self::default()
+        }
+    }
+
+    /// Create a disabled policy (no tracking).
+    pub fn disabled() -> Self {
+        Self::default()
+    }
+
+    /// Set the default model identifier.
+    #[must_use]
+    pub fn with_default_model(mut self, model: impl Into<String>) -> Self {
+        self.default_model = Some(model.into());
+        self
+    }
+
+    /// Set the default source URI prefix.
+    #[must_use]
+    pub fn with_default_source_uri(mut self, uri: impl Into<String>) -> Self {
+        self.default_source_uri = Some(uri.into());
+        self
+    }
+}
+
+// ============================================================================
+// Lineage Export (JSON / CSV)
+// ============================================================================
+
+impl LineageTracker {
+    /// Export a single vector's lineage as JSON.
+    pub fn export_lineage_json(&self, vector_id: &str) -> Result<String> {
+        let lineage = self
+            .lineages
+            .get(vector_id)
+            .ok_or_else(|| NeedleError::NotFound(format!("Vector '{}' not found", vector_id)))?;
+        serde_json::to_string_pretty(lineage)
+            .map_err(|e| NeedleError::InvalidInput(format!("JSON serialization: {e}")))
+    }
+
+    /// Export all lineage records as a JSON array.
+    pub fn export_all_json(&self) -> Result<String> {
+        let all: Vec<&VectorLineage> = self.lineages.values().collect();
+        serde_json::to_string_pretty(&all)
+            .map_err(|e| NeedleError::InvalidInput(format!("JSON serialization: {e}")))
+    }
+
+    /// Export a single vector's lineage as CSV rows.
+    /// Format: vector_id, source_type, model, model_version, created_at, transformation_count
+    pub fn export_lineage_csv(&self, vector_id: &str) -> Result<String> {
+        let lineage = self
+            .lineages
+            .get(vector_id)
+            .ok_or_else(|| NeedleError::NotFound(format!("Vector '{}' not found", vector_id)))?;
+        Ok(self.lineage_to_csv_row(lineage))
+    }
+
+    /// Export all lineage records as CSV.
+    pub fn export_all_csv(&self) -> String {
+        let mut output =
+            String::from("vector_id,source_type,model,model_version,created_at,transformations\n");
+        for lineage in self.lineages.values() {
+            output.push_str(&self.lineage_to_csv_row(lineage));
+            output.push('\n');
+        }
+        output
+    }
+
+    fn lineage_to_csv_row(&self, l: &VectorLineage) -> String {
+        format!(
+            "{},{},{},{},{},{}",
+            l.vector_id,
+            self.source_type_name(&l.source),
+            l.model,
+            l.model_version,
+            l.created_at,
+            l.transformations.len(),
+        )
+    }
+
+    /// Estimate the storage overhead of lineage tracking as a ratio.
+    /// Returns bytes used by lineage data / number of vectors tracked.
+    pub fn estimated_overhead_bytes_per_vector(&self) -> usize {
+        if self.lineages.is_empty() {
+            return 0;
+        }
+        // Rough estimate: JSON serialization size / count
+        let total: usize = self
+            .lineages
+            .values()
+            .map(|l| {
+                l.vector_id.len()
+                    + l.model.len()
+                    + l.model_version.len()
+                    + l.transformations.len() * 64
+                    + l.tags.len() * 16
+                    + 128 // base struct overhead
+            })
+            .sum();
+        total / self.lineages.len()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2030,5 +2177,69 @@ mod tests {
 
         assert_eq!(descendants.len(), 1);
         assert!(descendants.contains(&"child".to_string()));
+    }
+
+    #[test]
+    fn test_lineage_policy_defaults() {
+        let policy = LineagePolicy::default();
+        assert!(!policy.enabled);
+        assert!(policy.track_inserts);
+
+        let enabled = LineagePolicy::enabled();
+        assert!(enabled.enabled);
+
+        let with_model = LineagePolicy::enabled()
+            .with_default_model("test-model")
+            .with_default_source_uri("s3://bucket/");
+        assert_eq!(with_model.default_model, Some("test-model".to_string()));
+    }
+
+    #[test]
+    fn test_lineage_export_json() {
+        let mut tracker = LineageTracker::new();
+        let lineage = LineageBuilder::new("vec1")
+            .from_document("doc1", 0)
+            .model("all-MiniLM-L6-v2", "1.0.0")
+            .build();
+        tracker.register("vec1", lineage).unwrap();
+
+        let json = tracker.export_lineage_json("vec1").unwrap();
+        assert!(json.contains("vec1"));
+        assert!(json.contains("all-MiniLM-L6-v2"));
+
+        let all_json = tracker.export_all_json().unwrap();
+        assert!(all_json.contains("vec1"));
+    }
+
+    #[test]
+    fn test_lineage_export_csv() {
+        let mut tracker = LineageTracker::new();
+        let lineage = LineageBuilder::new("vec1")
+            .from_document("doc1", 0)
+            .model("test-model", "1.0")
+            .build();
+        tracker.register("vec1", lineage).unwrap();
+
+        let csv = tracker.export_lineage_csv("vec1").unwrap();
+        assert!(csv.contains("vec1"));
+        assert!(csv.contains("test-model"));
+
+        let all_csv = tracker.export_all_csv();
+        assert!(all_csv.contains("vector_id"));
+        assert!(all_csv.contains("vec1"));
+    }
+
+    #[test]
+    fn test_lineage_overhead_estimate() {
+        let mut tracker = LineageTracker::new();
+        let lineage = LineageBuilder::new("vec1")
+            .from_document("doc1", 0)
+            .model("model1", "1.0")
+            .build();
+        tracker.register("vec1", lineage).unwrap();
+
+        let overhead = tracker.estimated_overhead_bytes_per_vector();
+        assert!(overhead > 0);
+        assert!(overhead < 1024); // reasonable per-vector overhead
     }
 }
