@@ -20,3 +20,7 @@ Thumbs.db
 
 # Test files
 *.tmp
+
+# Python
+__pycache__/
+*.py[cod]
