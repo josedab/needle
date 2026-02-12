@@ -717,6 +717,232 @@ impl<'a> QualityAwareSearch<'a> {
     }
 }
 
+// ── Sparse-Dense Fusion Index ───────────────────────────────────────────────
+
+/// Configuration for the sparse-dense fusion index.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SparseDenseFusionConfig {
+    /// Weight for dense (vector) similarity in [0, 1].
+    pub dense_weight: f32,
+    /// Weight for sparse (term) similarity in [0, 1].
+    pub sparse_weight: f32,
+    /// Whether to dynamically tune alpha based on query characteristics.
+    pub dynamic_alpha: bool,
+    /// Minimum number of sparse matches before including sparse scores.
+    pub min_sparse_matches: usize,
+    /// RRF k parameter for rank fusion.
+    pub rrf_k: f32,
+}
+
+impl Default for SparseDenseFusionConfig {
+    fn default() -> Self {
+        Self {
+            dense_weight: 0.6,
+            sparse_weight: 0.4,
+            dynamic_alpha: true,
+            min_sparse_matches: 1,
+            rrf_k: 60.0,
+        }
+    }
+}
+
+impl SparseDenseFusionConfig {
+    /// Set dense weight (automatically adjusts sparse weight).
+    #[must_use]
+    pub fn with_dense_weight(mut self, weight: f32) -> Self {
+        self.dense_weight = weight.clamp(0.0, 1.0);
+        self.sparse_weight = 1.0 - self.dense_weight;
+        self
+    }
+
+    /// Enable or disable dynamic alpha tuning.
+    #[must_use]
+    pub fn with_dynamic_alpha(mut self, enabled: bool) -> Self {
+        self.dynamic_alpha = enabled;
+        self
+    }
+}
+
+/// Result from a fused sparse-dense search.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FusionSearchResult {
+    /// Vector ID.
+    pub id: String,
+    /// Combined fused score (lower is better).
+    pub fused_score: f32,
+    /// Dense (vector) score component.
+    pub dense_score: f32,
+    /// Sparse (term) score component.
+    pub sparse_score: f32,
+    /// The alpha (dense weight) used for this result.
+    pub alpha_used: f32,
+}
+
+/// In-memory sparse-dense fusion index that scores both dense similarity
+/// and sparse term overlap simultaneously during traversal.
+pub struct SparseDenseFusionIndex {
+    config: SparseDenseFusionConfig,
+    /// Dense vectors: id -> vector.
+    dense_vectors: HashMap<String, Vec<f32>>,
+    /// Sparse inverted index: term_index -> [(id, weight)].
+    sparse_postings: HashMap<u32, Vec<(String, f32)>>,
+    /// Sparse vectors: id -> sparse representation.
+    sparse_vectors: HashMap<String, Vec<(u32, f32)>>,
+}
+
+impl SparseDenseFusionIndex {
+    /// Create a new fusion index.
+    pub fn new(config: SparseDenseFusionConfig) -> Self {
+        Self {
+            config,
+            dense_vectors: HashMap::new(),
+            sparse_postings: HashMap::new(),
+            sparse_vectors: HashMap::new(),
+        }
+    }
+
+    /// Insert a document with both dense and sparse representations.
+    pub fn insert(
+        &mut self,
+        id: &str,
+        dense_vector: Vec<f32>,
+        sparse_terms: Vec<(u32, f32)>,
+    ) {
+        self.dense_vectors.insert(id.to_string(), dense_vector);
+
+        for &(term_idx, weight) in &sparse_terms {
+            self.sparse_postings
+                .entry(term_idx)
+                .or_default()
+                .push((id.to_string(), weight));
+        }
+        self.sparse_vectors.insert(id.to_string(), sparse_terms);
+    }
+
+    /// Search with interleaved dense + sparse scoring.
+    pub fn search(
+        &self,
+        dense_query: &[f32],
+        sparse_query: &[(u32, f32)],
+        k: usize,
+    ) -> Vec<FusionSearchResult> {
+        let alpha = if self.config.dynamic_alpha {
+            self.compute_dynamic_alpha(sparse_query)
+        } else {
+            self.config.dense_weight
+        };
+
+        // Compute dense scores for all documents
+        let mut scores: HashMap<String, (f32, f32)> = HashMap::new(); // (dense, sparse)
+
+        for (id, vec) in &self.dense_vectors {
+            let dense_score = cosine_dist(dense_query, vec);
+            scores.insert(id.clone(), (dense_score, 0.0));
+        }
+
+        // Compute sparse scores via inverted index lookup
+        for &(term_idx, query_weight) in sparse_query {
+            if let Some(postings) = self.sparse_postings.get(&term_idx) {
+                for (id, doc_weight) in postings {
+                    let sparse_contribution = query_weight * doc_weight;
+                    if let Some(entry) = scores.get_mut(id) {
+                        entry.1 += sparse_contribution;
+                    }
+                }
+            }
+        }
+
+        // Normalize sparse scores to [0, 1] range
+        let max_sparse = scores.values().map(|(_, s)| *s).fold(0.0_f32, f32::max);
+        if max_sparse > 0.0 {
+            for entry in scores.values_mut() {
+                entry.1 = 1.0 - (entry.1 / max_sparse); // Convert to distance (lower = better)
+            }
+        }
+
+        // Combine scores: fused = alpha * dense + (1 - alpha) * sparse
+        let mut results: Vec<FusionSearchResult> = scores
+            .into_iter()
+            .map(|(id, (dense, sparse))| {
+                let fused = alpha * dense + (1.0 - alpha) * sparse;
+                FusionSearchResult {
+                    id,
+                    fused_score: fused,
+                    dense_score: dense,
+                    sparse_score: sparse,
+                    alpha_used: alpha,
+                }
+            })
+            .collect();
+
+        results.sort_by(|a, b| {
+            a.fused_score
+                .partial_cmp(&b.fused_score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        results.truncate(k);
+        results
+    }
+
+    /// Dynamically compute alpha based on query sparsity.
+    /// More sparse terms → lower alpha (more weight on sparse).
+    fn compute_dynamic_alpha(&self, sparse_query: &[(u32, f32)]) -> f32 {
+        if sparse_query.is_empty() {
+            return 1.0; // No sparse terms → pure dense search
+        }
+
+        // Count how many documents have sparse term matches
+        let mut matched_docs = HashSet::new();
+        for &(term_idx, _) in sparse_query {
+            if let Some(postings) = self.sparse_postings.get(&term_idx) {
+                for (id, _) in postings {
+                    matched_docs.insert(id.clone());
+                }
+            }
+        }
+
+        let coverage = if self.dense_vectors.is_empty() {
+            0.0
+        } else {
+            matched_docs.len() as f32 / self.dense_vectors.len() as f32
+        };
+
+        // High coverage → more trust in sparse signal → lower alpha
+        // Low coverage → sparse is too selective → higher alpha
+        let base = self.config.dense_weight;
+        if coverage > 0.5 {
+            (base - 0.1).max(0.3)
+        } else if coverage < 0.1 {
+            (base + 0.1).min(0.9)
+        } else {
+            base
+        }
+    }
+
+    /// Number of indexed documents.
+    pub fn len(&self) -> usize {
+        self.dense_vectors.len()
+    }
+
+    /// Whether the index is empty.
+    pub fn is_empty(&self) -> bool {
+        self.dense_vectors.is_empty()
+    }
+}
+
+/// Simple cosine distance computation.
+fn cosine_dist(a: &[f32], b: &[f32]) -> f32 {
+    let dot: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
+    let na: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
+    let nb: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
+    if na < f32::EPSILON || nb < f32::EPSILON {
+        return 1.0;
+    }
+    1.0 - (dot / (na * nb))
+}
+
+use std::collections::HashMap;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -857,5 +1083,56 @@ mod tests {
             .unwrap();
 
         assert_eq!(result.results.len(), 5);
+    }
+
+    #[test]
+    fn test_sparse_dense_fusion_basic() {
+        let mut index = SparseDenseFusionIndex::new(SparseDenseFusionConfig::default());
+
+        index.insert("doc1", vec![1.0, 0.0, 0.0, 0.0], vec![(0, 1.0), (1, 0.5)]);
+        index.insert("doc2", vec![0.0, 1.0, 0.0, 0.0], vec![(1, 1.0), (2, 0.5)]);
+        index.insert("doc3", vec![0.0, 0.0, 1.0, 0.0], vec![(2, 1.0), (3, 0.5)]);
+
+        let results = index.search(
+            &[1.0, 0.0, 0.0, 0.0],
+            &[(0, 1.0)],
+            2,
+        );
+
+        assert_eq!(results.len(), 2);
+        // doc1 should be the best match (closest in both dense and sparse)
+        assert_eq!(results[0].id, "doc1");
+    }
+
+    #[test]
+    fn test_sparse_dense_fusion_pure_dense() {
+        let mut index = SparseDenseFusionIndex::new(SparseDenseFusionConfig::default());
+
+        index.insert("doc1", vec![1.0, 0.0], vec![]);
+        index.insert("doc2", vec![0.0, 1.0], vec![]);
+
+        // No sparse query → pure dense search
+        let results = index.search(&[1.0, 0.0], &[], 2);
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].id, "doc1");
+    }
+
+    #[test]
+    fn test_sparse_dense_fusion_dynamic_alpha() {
+        let config = SparseDenseFusionConfig::default().with_dynamic_alpha(true);
+        let mut index = SparseDenseFusionIndex::new(config);
+
+        for i in 0..10 {
+            index.insert(
+                &format!("doc{}", i),
+                vec![i as f32 * 0.1, 1.0 - i as f32 * 0.1],
+                vec![(i as u32, 1.0)],
+            );
+        }
+
+        let results = index.search(&[0.5, 0.5], &[(0, 1.0)], 3);
+        assert_eq!(results.len(), 3);
+        // Dynamic alpha should be adjusted based on coverage
+        assert!(results[0].alpha_used > 0.0 && results[0].alpha_used < 1.0);
     }
 }
