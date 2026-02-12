@@ -120,6 +120,251 @@ pub struct SelectivityBucket {
     pub cardinality: usize,
 }
 
+/// Histogram for cardinality estimation on a metadata field.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FieldHistogram {
+    /// Field name.
+    pub field: String,
+    /// Bucket boundaries and counts.
+    pub buckets: Vec<HistogramBucket>,
+    /// Total number of values.
+    pub total_count: usize,
+    /// Number of distinct values.
+    pub distinct_count: usize,
+    /// Number of null values.
+    pub null_count: usize,
+    /// Most common values (value, frequency).
+    pub most_common: Vec<(String, usize)>,
+}
+
+/// A single bucket in a histogram.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HistogramBucket {
+    /// Lower bound (inclusive).
+    pub lower: f64,
+    /// Upper bound (exclusive).
+    pub upper: f64,
+    /// Number of values in this bucket.
+    pub count: usize,
+}
+
+impl FieldHistogram {
+    /// Estimate selectivity for an equality predicate.
+    pub fn estimate_equality_selectivity(&self, _value: &str) -> f32 {
+        // Check most common values first
+        for (mcv, freq) in &self.most_common {
+            if mcv == _value {
+                return *freq as f32 / self.total_count.max(1) as f32;
+            }
+        }
+        // Assume uniform distribution among distinct values
+        if self.distinct_count > 0 {
+            1.0 / self.distinct_count as f32
+        } else {
+            1.0
+        }
+    }
+
+    /// Estimate selectivity for a range predicate.
+    pub fn estimate_range_selectivity(&self, lower: f64, upper: f64) -> f32 {
+        if self.buckets.is_empty() || self.total_count == 0 {
+            return 0.5; // Unknown: assume 50%
+        }
+
+        let mut matching = 0usize;
+        for bucket in &self.buckets {
+            if bucket.upper > lower && bucket.lower < upper {
+                // Bucket overlaps with range
+                let overlap_lower = lower.max(bucket.lower);
+                let overlap_upper = upper.min(bucket.upper);
+                let bucket_width = bucket.upper - bucket.lower;
+                if bucket_width > 0.0 {
+                    let fraction = (overlap_upper - overlap_lower) / bucket_width;
+                    matching += (bucket.count as f64 * fraction) as usize;
+                }
+            }
+        }
+
+        matching as f32 / self.total_count as f32
+    }
+}
+
+/// Statistics collector that builds histograms from metadata values.
+pub struct StatisticsCollector {
+    /// Number of histogram buckets to create.
+    pub num_buckets: usize,
+    /// Maximum number of most-common-values to track.
+    pub max_mcv: usize,
+}
+
+impl Default for StatisticsCollector {
+    fn default() -> Self {
+        Self {
+            num_buckets: 20,
+            max_mcv: 10,
+        }
+    }
+}
+
+impl StatisticsCollector {
+    /// Build a histogram from numeric values.
+    pub fn build_numeric_histogram(&self, field: &str, values: &[f64]) -> FieldHistogram {
+        if values.is_empty() {
+            return FieldHistogram {
+                field: field.to_string(),
+                buckets: Vec::new(),
+                total_count: 0,
+                distinct_count: 0,
+                null_count: 0,
+                most_common: Vec::new(),
+            };
+        }
+
+        let mut sorted = values.to_vec();
+        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+
+        let min_val = sorted[0];
+        let max_val = sorted[sorted.len() - 1];
+        let range = max_val - min_val;
+
+        let num_buckets = self.num_buckets.min(sorted.len());
+        let bucket_width = if num_buckets > 0 && range > 0.0 {
+            range / num_buckets as f64
+        } else {
+            1.0
+        };
+
+        let mut buckets = Vec::with_capacity(num_buckets);
+        for i in 0..num_buckets {
+            let lower = min_val + i as f64 * bucket_width;
+            let upper = if i == num_buckets - 1 {
+                max_val + f64::EPSILON
+            } else {
+                min_val + (i + 1) as f64 * bucket_width
+            };
+            let count = sorted.iter().filter(|&&v| v >= lower && v < upper).count();
+            buckets.push(HistogramBucket { lower, upper, count });
+        }
+
+        // Count distinct values
+        let mut distinct = sorted.clone();
+        distinct.dedup();
+
+        // Most common values
+        let mut freq_map: HashMap<String, usize> = HashMap::new();
+        for v in &sorted {
+            *freq_map.entry(format!("{:.6}", v)).or_default() += 1;
+        }
+        let mut most_common: Vec<(String, usize)> = freq_map.into_iter().collect();
+        most_common.sort_by(|a, b| b.1.cmp(&a.1));
+        most_common.truncate(self.max_mcv);
+
+        FieldHistogram {
+            field: field.to_string(),
+            buckets,
+            total_count: values.len(),
+            distinct_count: distinct.len(),
+            null_count: 0,
+            most_common,
+        }
+    }
+}
+
+/// Rich EXPLAIN output formatter.
+pub struct ExplainFormatter;
+
+impl ExplainFormatter {
+    /// Format a query plan as a rich EXPLAIN output string.
+    pub fn format(plan: &QueryPlan, stats: &CollectionStatistics) -> String {
+        let mut out = String::new();
+        out.push_str("╔══════════════════════════════════════════════════╗\n");
+        out.push_str("║              EXPLAIN QUERY PLAN                  ║\n");
+        out.push_str("╠══════════════════════════════════════════════════╣\n");
+        out.push_str(&format!("║ Strategy: {:<38} ║\n", plan.index_choice));
+        out.push_str("╠══════════════════════════════════════════════════╣\n");
+        out.push_str("║ Cost Breakdown:                                  ║\n");
+        out.push_str(&format!(
+            "║   Estimated Latency:    {:>10.2} ms            ║\n",
+            plan.cost.estimated_latency_ms
+        ));
+        out.push_str(&format!(
+            "║   Memory Usage:         {:>10.2} MB            ║\n",
+            plan.cost.estimated_memory_mb
+        ));
+        out.push_str(&format!(
+            "║   Distance Computations: {:>9}              ║\n",
+            plan.cost.distance_computations
+        ));
+        out.push_str(&format!(
+            "║   Nodes Visited:        {:>10}              ║\n",
+            plan.cost.nodes_visited
+        ));
+        out.push_str(&format!(
+            "║   Candidate Set:        {:>10}              ║\n",
+            plan.cost.candidate_set_size
+        ));
+
+        if let Some(ref fc) = plan.cost.filter_cost {
+            out.push_str("║                                                  ║\n");
+            out.push_str("║ Filter:                                          ║\n");
+            out.push_str(&format!(
+                "║   Strategy:     {:?}{:>26} ║\n",
+                fc.strategy, ""
+            ));
+            out.push_str(&format!(
+                "║   Selectivity:  {:>8.1}%                        ║\n",
+                fc.selectivity * 100.0
+            ));
+            out.push_str(&format!(
+                "║   Evaluations:  {:>8}                         ║\n",
+                fc.evaluations
+            ));
+        }
+
+        out.push_str("║                                                  ║\n");
+        out.push_str("║ Collection Stats:                                ║\n");
+        out.push_str(&format!(
+            "║   Vectors:      {:>10}                       ║\n",
+            stats.total_vectors
+        ));
+        out.push_str(&format!(
+            "║   Dimensions:   {:>10}                       ║\n",
+            stats.dimensions
+        ));
+        out.push_str(&format!(
+            "║   Active:       {:>10}                       ║\n",
+            stats.active_vectors()
+        ));
+        out.push_str(&format!(
+            "║   Memory Est:   {:>7.1} MB                       ║\n",
+            stats.estimated_memory_bytes() as f64 / (1024.0 * 1024.0)
+        ));
+
+        if !plan.rationale.is_empty() {
+            out.push_str("║                                                  ║\n");
+            out.push_str("║ Rationale:                                       ║\n");
+            for r in &plan.rationale {
+                let truncated = if r.len() > 46 { &r[..46] } else { r };
+                out.push_str(&format!("║   • {:<44} ║\n", truncated));
+            }
+        }
+
+        if !plan.alternatives.is_empty() {
+            out.push_str("║                                                  ║\n");
+            out.push_str("║ Alternatives:                                    ║\n");
+            for alt in &plan.alternatives {
+                out.push_str(&format!(
+                    "║   {} {:>8.2}ms (rejected)                  ║\n",
+                    alt.index_choice, alt.estimated_latency_ms
+                ));
+            }
+        }
+
+        out.push_str("╚══════════════════════════════════════════════════╝\n");
+        out
+    }
+}
+
 // ── Index Choice ─────────────────────────────────────────────────────────────
 
 /// Which index strategy the optimizer chose.
@@ -1114,5 +1359,52 @@ mod tests {
         let deser: LatencyObservation = serde_json::from_str(&json).unwrap();
         assert_eq!(deser.index, IndexChoice::Hnsw);
         assert!((deser.latency_ms - 3.5).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_histogram_equality_selectivity() {
+        let collector = StatisticsCollector::default();
+        let values: Vec<f64> = (0..100).map(|i| (i % 10) as f64).collect();
+        let hist = collector.build_numeric_histogram("score", &values);
+
+        assert_eq!(hist.total_count, 100);
+        assert_eq!(hist.distinct_count, 10);
+        // Each value appears 10 times → selectivity = 10/100 = 0.1
+        let sel = hist.estimate_equality_selectivity("0.000000");
+        assert!(sel > 0.05 && sel < 0.15);
+    }
+
+    #[test]
+    fn test_histogram_range_selectivity() {
+        let collector = StatisticsCollector { num_buckets: 10, max_mcv: 5 };
+        let values: Vec<f64> = (0..100).map(|i| i as f64).collect();
+        let hist = collector.build_numeric_histogram("score", &values);
+
+        // Range [0, 50) should have ~50% selectivity
+        let sel = hist.estimate_range_selectivity(0.0, 50.0);
+        assert!(sel > 0.3 && sel < 0.7, "range sel was {}", sel);
+    }
+
+    #[test]
+    fn test_explain_formatter() {
+        let stats = CollectionStatistics::new(100_000, 384, 0.05);
+        let estimator = CostEstimator::new();
+        let plan = estimator.plan(&stats, 10, Some(0.1));
+
+        let explain = ExplainFormatter::format(&plan, &stats);
+        assert!(explain.contains("EXPLAIN QUERY PLAN"));
+        assert!(explain.contains("Estimated Latency"));
+        assert!(explain.contains("Dimensions"));
+    }
+
+    #[test]
+    fn test_empty_histogram() {
+        let collector = StatisticsCollector::default();
+        let hist = collector.build_numeric_histogram("empty", &[]);
+        assert_eq!(hist.total_count, 0);
+        assert_eq!(hist.distinct_count, 0);
+        // Should return safe defaults
+        assert_eq!(hist.estimate_equality_selectivity("any"), 1.0);
+        assert_eq!(hist.estimate_range_selectivity(0.0, 100.0), 0.5);
     }
 }
