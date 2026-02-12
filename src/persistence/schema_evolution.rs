@@ -674,6 +674,141 @@ pub fn dual_read_metadata(
 }
 
 // ============================================================================
+// Recall Validation for Dimension Changes
+// ============================================================================
+
+/// Configuration for recall validation before committing a dimension change.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RecallValidationConfig {
+    /// Number of sample queries to test.
+    pub sample_queries: usize,
+    /// k value for recall@k.
+    pub k: usize,
+    /// Minimum acceptable recall (0.0 - 1.0). Migration is rejected below this.
+    pub min_recall: f64,
+}
+
+impl Default for RecallValidationConfig {
+    fn default() -> Self {
+        Self {
+            sample_queries: 100,
+            k: 10,
+            min_recall: 0.9,
+        }
+    }
+}
+
+/// Result of a recall validation check.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RecallValidationResult {
+    /// Recall@k achieved by the projected vectors.
+    pub recall_at_k: f64,
+    /// Number of queries tested.
+    pub queries_tested: usize,
+    /// Whether the recall meets the minimum threshold.
+    pub passed: bool,
+    /// k value used.
+    pub k: usize,
+    /// Average distance distortion (how much distances changed after projection).
+    pub avg_distance_distortion: f64,
+}
+
+/// Validate that a dimension change preserves search quality by computing
+/// recall between original and projected vectors on sample queries.
+///
+/// This uses brute-force comparison: for each sample query, compute the true
+/// top-k in original space and the top-k in projected space, then measure overlap.
+pub fn validate_recall(
+    original_vectors: &[Vec<f32>],
+    projected_vectors: &[Vec<f32>],
+    sample_queries: &[Vec<f32>],
+    projected_queries: &[Vec<f32>],
+    k: usize,
+    min_recall: f64,
+) -> Result<RecallValidationResult> {
+    if original_vectors.len() != projected_vectors.len() {
+        return Err(NeedleError::InvalidConfig(
+            "Original and projected vector counts must match".into(),
+        ));
+    }
+    if sample_queries.len() != projected_queries.len() {
+        return Err(NeedleError::InvalidConfig(
+            "Sample and projected query counts must match".into(),
+        ));
+    }
+    if original_vectors.is_empty() || sample_queries.is_empty() {
+        return Ok(RecallValidationResult {
+            recall_at_k: 1.0,
+            queries_tested: 0,
+            passed: true,
+            k,
+            avg_distance_distortion: 0.0,
+        });
+    }
+
+    let mut total_recall = 0.0;
+    let mut total_distortion = 0.0;
+
+    for (orig_query, proj_query) in sample_queries.iter().zip(projected_queries.iter()) {
+        // Brute-force top-k in original space
+        let mut orig_distances: Vec<(usize, f32)> = original_vectors
+            .iter()
+            .enumerate()
+            .map(|(i, v)| (i, cosine_distance(orig_query, v)))
+            .collect();
+        orig_distances.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+        let orig_topk: std::collections::HashSet<usize> =
+            orig_distances.iter().take(k).map(|(i, _)| *i).collect();
+
+        // Brute-force top-k in projected space
+        let mut proj_distances: Vec<(usize, f32)> = projected_vectors
+            .iter()
+            .enumerate()
+            .map(|(i, v)| (i, cosine_distance(proj_query, v)))
+            .collect();
+        proj_distances.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+        let proj_topk: std::collections::HashSet<usize> =
+            proj_distances.iter().take(k).map(|(i, _)| *i).collect();
+
+        // Recall = intersection / k
+        let intersection = orig_topk.intersection(&proj_topk).count();
+        total_recall += intersection as f64 / k.max(1) as f64;
+
+        // Distance distortion
+        if let (Some(orig_nn), Some(proj_nn)) = (orig_distances.first(), proj_distances.first()) {
+            if orig_nn.1.abs() > 1e-10 {
+                total_distortion += ((proj_nn.1 - orig_nn.1) / orig_nn.1).abs() as f64;
+            }
+        }
+    }
+
+    let avg_recall = total_recall / sample_queries.len() as f64;
+    let avg_distortion = total_distortion / sample_queries.len() as f64;
+
+    Ok(RecallValidationResult {
+        recall_at_k: avg_recall,
+        queries_tested: sample_queries.len(),
+        passed: avg_recall >= min_recall,
+        k,
+        avg_distance_distortion: avg_distortion,
+    })
+}
+
+/// Simple cosine distance for validation (1 - cosine_similarity).
+fn cosine_distance(a: &[f32], b: &[f32]) -> f32 {
+    let mut dot = 0.0f32;
+    let mut norm_a = 0.0f32;
+    let mut norm_b = 0.0f32;
+    for (x, y) in a.iter().zip(b.iter()) {
+        dot += x * y;
+        norm_a += x * x;
+        norm_b += y * y;
+    }
+    let denom = (norm_a.sqrt() * norm_b.sqrt()).max(1e-10);
+    1.0 - (dot / denom)
+}
+
+// ============================================================================
 // Tests
 // ============================================================================
 
@@ -968,5 +1103,35 @@ mod tests {
         let r = result.expect("result");
         assert_eq!(r["existing"], "value");
         assert_eq!(r["added"], "default");
+    }
+
+    #[test]
+    fn test_recall_validation_identical_vectors() {
+        let vectors: Vec<Vec<f32>> = (0..20)
+            .map(|i| vec![i as f32 * 0.1, 1.0 - i as f32 * 0.05, 0.5, 0.3])
+            .collect();
+        let queries = vec![vec![0.1, 0.9, 0.5, 0.3], vec![0.5, 0.5, 0.5, 0.3]];
+
+        // Same vectors = perfect recall
+        let result = validate_recall(
+            &vectors, &vectors, &queries, &queries, 5, 0.9,
+        ).expect("validate");
+        assert!((result.recall_at_k - 1.0).abs() < 0.01);
+        assert!(result.passed);
+    }
+
+    #[test]
+    fn test_recall_validation_config_defaults() {
+        let config = RecallValidationConfig::default();
+        assert_eq!(config.sample_queries, 100);
+        assert_eq!(config.k, 10);
+        assert!((config.min_recall - 0.9).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_recall_validation_empty_input() {
+        let result = validate_recall(&[], &[], &[], &[], 5, 0.9).expect("validate");
+        assert!(result.passed);
+        assert_eq!(result.queries_tested, 0);
     }
 }
