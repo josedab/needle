@@ -26,42 +26,49 @@ let db = Database::open("vectors.needle")?;
 Creates an in-memory database.
 
 ```rust
-pub fn in_memory() -> Result<Database>
+pub fn in_memory() -> Database
 ```
 
 **Example:**
 ```rust
-let db = Database::in_memory()?;
+let db = Database::in_memory();
 ```
 
 ### `Database::create_collection`
 
-Creates a new collection.
+Creates a new collection with default settings (cosine distance).
 
 ```rust
 pub fn create_collection(
     &self,
-    name: &str,
+    name: impl Into<String>,
     dimensions: usize,
-    distance: DistanceFunction,
 ) -> Result<()>
 ```
 
 **Example:**
 ```rust
-db.create_collection("documents", 384, DistanceFunction::Cosine)?;
+db.create_collection("documents", 384)?;
 ```
 
 ### `Database::create_collection_with_config`
 
-Creates a collection with custom configuration.
+Creates a collection with custom configuration (distance function, HNSW params, etc.).
 
 ```rust
 pub fn create_collection_with_config(
     &self,
-    name: &str,
     config: CollectionConfig,
 ) -> Result<()>
+```
+
+**Example:**
+```rust
+use needle::{CollectionConfig, DistanceFunction};
+
+let config = CollectionConfig::new("documents", 384)
+    .with_distance(DistanceFunction::DotProduct);
+db.create_collection_with_config(config)?;
 ```
 
 ### `Database::collection`
@@ -176,7 +183,8 @@ pub struct CollectionConfig {
 
 ```rust
 impl CollectionConfig {
-    pub fn new(dimensions: usize, distance: DistanceFunction) -> Self;
+    pub fn new(name: impl Into<String>, dimensions: usize) -> Self;
+    pub fn with_distance(self, distance: DistanceFunction) -> Self;
     pub fn with_hnsw_m(self, m: usize) -> Self;
     pub fn with_hnsw_ef_construction(self, ef: usize) -> Self;
     pub fn with_quantization(self, quantization: QuantizationType) -> Self;
@@ -187,7 +195,8 @@ impl CollectionConfig {
 
 **Example:**
 ```rust
-let config = CollectionConfig::new(384, DistanceFunction::Cosine)
+let config = CollectionConfig::new("documents", 384)
+    .with_distance(DistanceFunction::Cosine)
     .with_hnsw_m(32)
     .with_hnsw_ef_construction(400)
     .with_quantization(QuantizationType::Scalar)
@@ -198,20 +207,21 @@ let config = CollectionConfig::new(384, DistanceFunction::Cosine)
 
 ### `Collection::insert`
 
-Inserts a vector with metadata.
+Inserts a vector with optional metadata.
 
 ```rust
 pub fn insert(
     &self,
-    id: &str,
+    id: impl Into<String>,
     vector: &[f32],
-    metadata: serde_json::Value,
+    metadata: Option<serde_json::Value>,
 ) -> Result<()>
 ```
 
 **Example:**
 ```rust
-collection.insert("doc1", &embedding, json!({"title": "Hello"}))?;
+collection.insert("doc1", &embedding, Some(json!({"title": "Hello"})))?;
+collection.insert("doc2", &embedding, None)?; // No metadata
 ```
 
 ### `Collection::insert_with_ttl`
@@ -239,41 +249,70 @@ collection.insert_with_ttl("doc2", &embedding, None, None)?;
 
 ### `Collection::get`
 
-Gets a vector by ID.
+Gets a vector by ID. Returns `None` if not found.
 
 ```rust
-pub fn get(&self, id: &str) -> Result<VectorEntry>
+pub fn get(&self, id: &str) -> Option<(Vec<f32>, Option<Value>)>
 ```
-
-**Returns:** `VectorEntry { id, vector, metadata }`
 
 ### `Collection::delete`
 
-Deletes a vector by ID.
+Deletes a vector by ID. Returns `Ok(true)` if deleted, `Ok(false)` if not found.
 
 ```rust
-pub fn delete(&self, id: &str) -> Result<()>
+pub fn delete(&self, id: &str) -> Result<bool>
 ```
 
 ### `Collection::search`
 
-Searches for similar vectors.
+Searches for the k most similar vectors.
 
 ```rust
 pub fn search(
     &self,
     query: &[f32],
     k: usize,
-    filter: Option<&Filter>,
 ) -> Result<Vec<SearchResult>>
 ```
 
 **Example:**
 ```rust
-let results = collection.search(&query_vector, 10, None)?;
+let results = collection.search(&query_vector, 10)?;
+```
 
+### `Collection::search_with_filter`
+
+Searches with metadata filtering applied during the search.
+
+```rust
+pub fn search_with_filter(
+    &self,
+    query: &[f32],
+    k: usize,
+    filter: &Filter,
+) -> Result<Vec<SearchResult>>
+```
+
+**Example:**
+```rust
 let filter = Filter::parse(&json!({"category": "programming"}))?;
-let results = collection.search(&query_vector, 10, Some(&filter))?;
+let results = collection.search_with_filter(&query_vector, 10, &filter)?;
+```
+
+### `Collection::query` (Builder Pattern)
+
+Fluent builder for searches with filters, limits, and distance overrides.
+
+```rust
+pub fn query(&self, query: &[f32]) -> SearchParams
+```
+
+**Example:**
+```rust
+let results = collection.query(&query_vector)
+    .limit(5)
+    .filter(&filter)
+    .execute()?;
 ```
 
 ### `Collection::search_with_params`
