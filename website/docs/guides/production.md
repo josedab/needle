@@ -99,7 +99,7 @@ let db = Database::open_with_config("/data/vectors.needle", config)?;
 ### Collection Sizing
 
 ```rust
-use needle::{CollectionConfig, DistanceFunction, QuantizationType};
+use needle::{CollectionConfig, QuantizationType};
 
 // Calculate memory requirements
 let num_vectors = 10_000_000;
@@ -202,7 +202,8 @@ let constraints = TuningConstraints::new(num_vectors, dimensions)
 
 let tuned = auto_tune(&constraints);
 
-let config = CollectionConfig::new(dimensions, DistanceFunction::Cosine)
+let config = CollectionConfig::new("collection", dimensions)
+    .with_distance(DistanceFunction::Cosine)
     .with_hnsw_m(tuned.config.hnsw_m)
     .with_hnsw_ef_construction(tuned.config.ef_construction);
 ```
@@ -214,7 +215,7 @@ let config = CollectionConfig::new(dimensions, DistanceFunction::Cosine)
 let batch_size = 1000;
 for chunk in vectors.chunks(batch_size) {
     for (id, vec, meta) in chunk {
-        collection.insert(id, vec, meta.clone())?;
+        collection.insert(id, vec, Some(meta.clone()))?;
     }
 }
 db.save()?;
@@ -256,7 +257,7 @@ fn warm_up(db: &Database) -> needle::Result<()> {
 
         // Run a sample query to warm up HNSW
         let dummy_query = vec![0.0; collection.dimensions()];
-        let _ = collection.search(&dummy_query, 1, None)?;
+        let _ = collection.search(&dummy_query, 1)?;
     }
     Ok(())
 }
@@ -328,13 +329,13 @@ impl ReplicatedDatabase {
             .unwrap_or(&self.primary);
 
         let collection = db.collection("documents")?;
-        collection.search(query, k, None)
+        collection.search(query, k)
     }
 
     fn insert(&self, id: &str, vector: &[f32], metadata: Value) -> needle::Result<()> {
         // Writes go to primary
         let collection = self.primary.collection("documents")?;
-        collection.insert(id, vector, metadata)?;
+        collection.insert(id, vector, Some(metadata))?;
         self.primary.save()?;
 
         // Replicas sync via file copy (background)

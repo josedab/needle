@@ -66,13 +66,13 @@ needle = { version = "0.1", features = ["hybrid"] }
 ### Create a Collection with BM25
 
 ```rust
-use needle::{Database, DistanceFunction, Bm25Index};
+use needle::{Database, Bm25Index};
 
 fn setup_hybrid_search() -> needle::Result<(Database, Bm25Index)> {
     let db = Database::open("hybrid.needle")?;
 
     // Create vector collection
-    db.create_collection("documents", 384, DistanceFunction::Cosine)?;
+    db.create_collection("documents", 384)?;
 
     // Create BM25 index
     let bm25 = Bm25Index::default();
@@ -102,10 +102,10 @@ fn index_document(
 
     // Vector index
     let embedding = model.encode(&full_text)?;
-    collection.insert(id, &embedding, json!({
+    collection.insert(id, &embedding, Some(json!({
         "title": title,
         "content": content,
-    }))?;
+    })))?;
 
     // BM25 index
     bm25.index_document(id, &full_text);
@@ -132,7 +132,7 @@ fn hybrid_search(
 
     // Vector search
     let query_embedding = model.encode(query)?;
-    let vector_results = collection.search(&query_embedding, k * 2, None)?;
+    let vector_results = collection.search(&query_embedding, k * 2)?;
 
     // BM25 search
     let bm25_results = bm25.search(query, k * 2);
@@ -183,7 +183,7 @@ fn weighted_hybrid_search(
 
     // Get results
     let query_embedding = model.encode(query)?;
-    let vector_results = collection.search(&query_embedding, k * 3, None)?;
+    let vector_results = collection.search(&query_embedding, k * 3)?;
     let bm25_results = bm25.search(query, k * 3);
 
     // Normalize scores
@@ -326,7 +326,7 @@ fn filtered_hybrid_search(
 
     // Vector search with filter
     let query_embedding = model.encode(query)?;
-    let vector_results = collection.search(&query_embedding, k * 2, Some(filter))?;
+    let vector_results = collection.search_with_filter(&query_embedding, k * 2, filter)?;
 
     // BM25 search (no filter - apply post-hoc)
     let bm25_results = bm25.search(query, k * 4);
@@ -366,7 +366,7 @@ fn field_boosted_hybrid(
 
     // Vector search
     let query_embedding = model.encode(query)?;
-    let vector_results = collection.search(&query_embedding, k * 2, None)?;
+    let vector_results = collection.search(&query_embedding, k * 2)?;
 
     // BM25 on titles (boosted)
     let title_results = title_bm25.search(query, k * 2);
@@ -413,7 +413,7 @@ fn parallel_hybrid_search(
 
     // Run searches in parallel
     let (vector_results, bm25_results) = rayon::join(
-        || collection.search(&query_embedding, k * 2, None).unwrap(),
+        || collection.search(&query_embedding, k * 2).unwrap(),
         || bm25.search(query, k * 2),
     );
 
@@ -481,7 +481,7 @@ fn evaluate_search_methods(
 
         // Vector search
         let query_embedding = model.encode(query).unwrap();
-        let vector_results = collection.search(&query_embedding, k, None).unwrap();
+        let vector_results = collection.search(&query_embedding, k).unwrap();
         vector_recall += compute_recall(&vector_results, relevant_ids);
 
         // BM25 search

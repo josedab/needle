@@ -51,7 +51,7 @@ flowchart LR
 ### Step 1: Set Up Needle
 
 ```rust
-use needle::{Database, DistanceFunction, EmbeddingModel};
+use needle::{Database, EmbeddingModel};
 use serde_json::json;
 
 struct RagSystem {
@@ -63,8 +63,8 @@ impl RagSystem {
     fn new(db_path: &str) -> needle::Result<Self> {
         let db = Database::open(db_path)?;
 
-        if !db.collection_exists("knowledge")? {
-            db.create_collection("knowledge", 384, DistanceFunction::Cosine)?;
+        if db.collection("knowledge").is_err() {
+            db.create_collection("knowledge", 384)?;
         }
 
         let model = EmbeddingModel::load("all-MiniLM-L6-v2")?;
@@ -92,7 +92,7 @@ impl RagSystem {
             chunk_metadata["chunk_index"] = json!(i);
             chunk_metadata["chunk_text"] = json!(chunk);
 
-            collection.insert(&chunk_id, &embedding, chunk_metadata)?;
+            collection.insert(&chunk_id, &embedding, Some(chunk_metadata))?;
         }
 
         self.db.save()?;
@@ -140,7 +140,7 @@ impl RagSystem {
         let collection = self.db.collection("knowledge")?;
         let query_embedding = self.model.encode(query)?;
 
-        let results = collection.search(&query_embedding, k, None)?;
+        let results = collection.search(&query_embedding, k)?;
 
         Ok(results
             .into_iter()
@@ -223,7 +223,7 @@ impl RagSystem {
 
         // Vector search
         let query_embedding = self.model.encode(query)?;
-        let vector_results = collection.search(&query_embedding, k * 2, None)?;
+        let vector_results = collection.search(&query_embedding, k * 2)?;
 
         // BM25 search
         let bm25_results = self.bm25_index.search(query, k * 2);
@@ -347,7 +347,7 @@ impl RagSystem {
     async fn answer_with_citations(&self, question: &str) -> Result<AnswerWithCitations, Box<dyn std::error::Error>> {
         let collection = self.db.collection("knowledge")?;
         let query_embedding = self.model.encode(question)?;
-        let results = collection.search(&query_embedding, 5, None)?;
+        let results = collection.search(&query_embedding, 5)?;
 
         // Build context with source markers
         let mut context_parts = Vec::new();
@@ -476,7 +476,7 @@ impl RagEvaluator {
 ## Complete Example
 
 ```rust
-use needle::{Database, DistanceFunction, EmbeddingModel};
+use needle::{Database, EmbeddingModel};
 use serde_json::json;
 
 #[tokio::main]

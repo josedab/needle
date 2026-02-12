@@ -36,10 +36,11 @@ Converts 32-bit floats to 8-bit integers. Simple and effective.
 ```rust
 use needle::{CollectionConfig, DistanceFunction, QuantizationType};
 
-let config = CollectionConfig::new(384, DistanceFunction::Cosine)
+let config = CollectionConfig::new("collection", 384)
+    .with_distance(DistanceFunction::Cosine)
     .with_quantization(QuantizationType::Scalar);
 
-db.create_collection_with_config("documents", config)?;
+db.create_collection_with_config(config)?;
 ```
 
 ### How It Works
@@ -64,13 +65,14 @@ Quantized: [89, 153, 25, 204]  // 4 bytes instead of 16
 Divides vectors into subvectors and quantizes each separately using codebooks.
 
 ```rust
-let config = CollectionConfig::new(384, DistanceFunction::Cosine)
+let config = CollectionConfig::new("collection", 384)
+    .with_distance(DistanceFunction::Cosine)
     .with_quantization(QuantizationType::Product {
         num_subvectors: 48,      // 384 / 48 = 8 dims per subvector
         num_centroids: 256,       // 8-bit codes
     });
 
-db.create_collection_with_config("documents", config)?;
+db.create_collection_with_config(config)?;
 ```
 
 ### How It Works
@@ -124,10 +126,11 @@ QuantizationType::Product {
 Converts each dimension to a single bit based on sign.
 
 ```rust
-let config = CollectionConfig::new(384, DistanceFunction::Cosine)
+let config = CollectionConfig::new("collection", 384)
+    .with_distance(DistanceFunction::Cosine)
     .with_quantization(QuantizationType::Binary);
 
-db.create_collection_with_config("documents", config)?;
+db.create_collection_with_config(config)?;
 ```
 
 ### How It Works
@@ -196,10 +199,11 @@ let pq = ProductQuantizer::train(
 )?;
 
 // Create collection with trained PQ
-let config = CollectionConfig::new(384, DistanceFunction::Cosine)
+let config = CollectionConfig::new("collection", 384)
+    .with_distance(DistanceFunction::Cosine)
     .with_product_quantizer(pq);
 
-db.create_collection_with_config("documents", config)?;
+db.create_collection_with_config(config)?;
 ```
 
 ### Migration: Full Precision to Quantized
@@ -228,9 +232,10 @@ let source_db = Database::open("original.needle")?;
 let target_db = Database::open("quantized.needle")?;
 
 // Create quantized collection
-let config = CollectionConfig::new(384, DistanceFunction::Cosine)
+let config = CollectionConfig::new("collection", 384)
+    .with_distance(DistanceFunction::Cosine)
     .with_quantization(QuantizationType::Scalar);
-target_db.create_collection_with_config("documents", config)?;
+target_db.create_collection_with_config(config)?;
 
 migrate_to_quantized(&source_db, &target_db, "documents", "documents")?;
 ```
@@ -318,7 +323,8 @@ Quantized vectors may need different HNSW parameters:
 
 ```rust
 // Compensate for quantization loss with higher ef_search
-let config = CollectionConfig::new(384, DistanceFunction::Cosine)
+let config = CollectionConfig::new("collection", 384)
+    .with_distance(DistanceFunction::Cosine)
     .with_quantization(QuantizationType::Scalar)
     .with_hnsw_m(24)              // Slightly higher M
     .with_hnsw_ef_construction(300);  // Higher ef_construction

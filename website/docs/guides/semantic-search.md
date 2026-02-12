@@ -50,11 +50,12 @@ fn setup_database() -> needle::Result<Database> {
     let db = Database::open("search.needle")?;
 
     // Create collection for 384-dim embeddings (all-MiniLM-L6-v2)
-    if !db.collection_exists("documents")? {
-        let config = CollectionConfig::new(384, DistanceFunction::Cosine)
+    if db.collection("documents").is_err() {
+        let config = CollectionConfig::new("documents", 384)
+            .with_distance(DistanceFunction::Cosine)
             .with_hnsw_m(16)
             .with_hnsw_ef_construction(200);
-        db.create_collection_with_config("documents", config)?;
+        db.create_collection_with_config(config)?;
     }
 
     Ok(db)
@@ -153,12 +154,12 @@ fn index_documents(
         collection.insert(
             &doc.id,
             &embedding,
-            json!({
+            Some(json!({
                 "title": doc.title,
                 "url": doc.url,
                 "category": doc.category,
                 "content_preview": &doc.content[..200.min(doc.content.len())]
-            }),
+            })),
         )?;
     }
 
@@ -192,11 +193,11 @@ fn index_documents_batch(
             collection.insert(
                 &doc.id,
                 &embedding,
-                json!({
+                Some(json!({
                     "title": doc.title,
                     "url": doc.url,
                     "category": doc.category,
-                }),
+                })),
             )?;
         }
     }
@@ -238,11 +239,11 @@ fn search(
     });
 
     // Search
-    let results = collection.search(
-        &query_embedding,
-        limit,
-        filter.as_ref(),
-    )?;
+    let results = if let Some(ref f) = filter {
+        collection.search_with_filter(&query_embedding, limit, f)?
+    } else {
+        collection.search(&query_embedding, limit)?
+    };
 
     // Format results
     Ok(results
@@ -380,7 +381,7 @@ fn hybrid_search(
 
     // Vector search
     let query_embedding = model.encode(query)?;
-    let vector_results = collection.search(&query_embedding, limit * 2, None)?;
+    let vector_results = collection.search(&query_embedding, limit * 2)?;
 
     // BM25 search
     let bm25_results = bm25.search(query, limit * 2);
@@ -426,11 +427,11 @@ for (i, chunk) in chunk_document(&doc.content, 200, 50).iter().enumerate() {
     collection.insert(
         &format!("{}_{}", doc.id, i),
         &model.encode(chunk)?,
-        json!({
+        Some(json!({
             "parent_id": doc.id,
             "chunk_index": i,
             "title": doc.title,
-        }),
+        })),
     )?;
 }
 ```
@@ -441,10 +442,10 @@ Don't bloat metadata with full content:
 
 ```rust
 // Store vectors with minimal metadata
-collection.insert(&doc.id, &embedding, json!({
+collection.insert(&doc.id, &embedding, Some(json!({
     "title": doc.title,
     "url": doc.url,
-}))?;
+})))?;
 
 // Store full content elsewhere (e.g., another database)
 content_store.insert(&doc.id, &doc.content)?;
@@ -473,11 +474,11 @@ fn update_document(
 
     // Insert updated version
     let embedding = model.encode(&format!("{}\n\n{}", doc.title, doc.content))?;
-    collection.insert(&doc.id, &embedding, json!({
+    collection.insert(&doc.id, &embedding, Some(json!({
         "title": doc.title,
         "url": doc.url,
         "updated_at": chrono::Utc::now().to_rfc3339(),
-    }))?;
+    })))?;
 
     Ok(())
 }
