@@ -40,6 +40,9 @@ pub mod storage;
 #[cfg(feature = "experimental")]
 pub mod sync;
 
+/// Live migration toolkit for importing from external vector databases.
+pub mod live_migration_service;
+
 // ── Re-exports for backward compatibility ─────────────────────────────────
 // Modules are re-exported at the services:: level so existing code continues
 // to work with crate::services::module_name paths.

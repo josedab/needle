@@ -11,6 +11,7 @@ pub mod distributed_federation;
 pub mod incremental_sync;
 #[cfg(feature = "experimental")]
 pub mod live_replication;
+pub mod live_migration;
 #[cfg(feature = "experimental")]
 pub mod multi_writer;
 #[cfg(feature = "experimental")]
