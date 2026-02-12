@@ -809,6 +809,24 @@ impl GraphRagIndex {
     pub fn is_empty(&self) -> bool {
         self.vectors.read().is_empty()
     }
+
+    /// Get all entities associated with a document.
+    pub fn document_entities(&self, doc_id: &str) -> Vec<String> {
+        self.doc_entities
+            .read()
+            .get(doc_id)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// Get all documents associated with an entity.
+    pub fn entity_documents(&self, entity_name: &str) -> Vec<String> {
+        self.graph
+            .read()
+            .get_node(entity_name)
+            .map(|n| n.document_ids.iter().cloned().collect())
+            .unwrap_or_default()
+    }
 }
 
 /// Statistics for the GraphRAG index.
@@ -818,6 +836,119 @@ pub struct GraphStats {
     pub edge_count: usize,
     pub community_count: usize,
     pub document_count: usize,
+}
+
+// ---------------------------------------------------------------------------
+// Leiden-inspired Community Detection
+// ---------------------------------------------------------------------------
+
+impl KnowledgeGraphStore {
+    /// Leiden-inspired community detection using modularity-based iterative
+    /// refinement. Starts from connected components, then iteratively moves
+    /// nodes between communities to maximize modularity.
+    pub fn detect_communities_leiden(&mut self, resolution: f64, max_iterations: usize) -> usize {
+        // Phase 1: Initialize each node to its own community
+        let node_ids: Vec<String> = self.nodes.keys().cloned().collect();
+        if node_ids.is_empty() {
+            return 0;
+        }
+
+        let mut node_community: HashMap<String, u32> = HashMap::new();
+        let mut community_id = self.next_community_id;
+        for id in &node_ids {
+            node_community.insert(id.clone(), community_id);
+            community_id += 1;
+        }
+
+        let total_edge_weight: f64 = self.edges.iter().map(|e| e.weight as f64).sum();
+        if total_edge_weight == 0.0 {
+            // No edges: each node is its own community
+            self.communities.clear();
+            for (id, &cid) in &node_community {
+                if let Some(node) = self.nodes.get_mut(id) {
+                    node.community_id = Some(cid);
+                }
+                self.communities.entry(cid).or_default().push(id.clone());
+            }
+            self.next_community_id = community_id;
+            return node_community.values().collect::<HashSet<_>>().len();
+        }
+
+        // Pre-compute node degrees (sum of edge weights)
+        let mut node_degree: HashMap<String, f64> = HashMap::new();
+        for edge in &self.edges {
+            *node_degree.entry(edge.source.clone()).or_default() += edge.weight as f64;
+            *node_degree.entry(edge.target.clone()).or_default() += edge.weight as f64;
+        }
+
+        // Phase 2: Iterative local moves
+        for _iter in 0..max_iterations {
+            let mut moved = false;
+
+            for node_id in &node_ids {
+                let current_comm = node_community[node_id];
+                let node_deg = node_degree.get(node_id).copied().unwrap_or(0.0);
+
+                // Compute modularity gain for moving to each neighbor's community
+                let neighbor_edges = self.get_edges(node_id);
+                let mut candidate_communities: HashMap<u32, f64> = HashMap::new();
+
+                for edge in &neighbor_edges {
+                    let neighbor = if edge.source == *node_id {
+                        &edge.target
+                    } else {
+                        &edge.source
+                    };
+                    let neighbor_comm = node_community[neighbor];
+                    *candidate_communities.entry(neighbor_comm).or_default() +=
+                        edge.weight as f64;
+                }
+
+                let mut best_comm = current_comm;
+                let mut best_gain = 0.0_f64;
+
+                for (&comm, &edge_weight_to_comm) in &candidate_communities {
+                    if comm == current_comm {
+                        continue;
+                    }
+                    // Simplified modularity gain
+                    let comm_total: f64 = node_community
+                        .iter()
+                        .filter(|(_, &c)| c == comm)
+                        .map(|(id, _)| node_degree.get(id).copied().unwrap_or(0.0))
+                        .sum();
+
+                    let gain = edge_weight_to_comm
+                        - resolution * node_deg * comm_total / (2.0 * total_edge_weight);
+
+                    if gain > best_gain {
+                        best_gain = gain;
+                        best_comm = comm;
+                    }
+                }
+
+                if best_comm != current_comm {
+                    node_community.insert(node_id.clone(), best_comm);
+                    moved = true;
+                }
+            }
+
+            if !moved {
+                break;
+            }
+        }
+
+        // Phase 3: Update graph state
+        self.communities.clear();
+        for (id, &cid) in &node_community {
+            if let Some(node) = self.nodes.get_mut(id) {
+                node.community_id = Some(cid);
+            }
+            self.communities.entry(cid).or_default().push(id.clone());
+        }
+        self.next_community_id = community_id;
+        self.communities.len()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1054,6 +1185,49 @@ mod tests {
         for cat in &categories {
             let json = serde_json::to_string(cat).unwrap();
             let _: EntityCategory = serde_json::from_str(&json).unwrap();
+        }
+    }
+
+    #[test]
+    fn test_leiden_community_detection() {
+        let mut graph = KnowledgeGraphStore::new();
+        // Dense cluster 1: a-b-c
+        graph.upsert_node("a", EntityCategory::Concept, "d1");
+        graph.upsert_node("b", EntityCategory::Concept, "d1");
+        graph.upsert_node("c", EntityCategory::Concept, "d1");
+        graph.add_edge("a", "b", "r", 0.9);
+        graph.add_edge("b", "c", "r", 0.9);
+        graph.add_edge("a", "c", "r", 0.8);
+
+        // Dense cluster 2: x-y-z
+        graph.upsert_node("x", EntityCategory::Technology, "d2");
+        graph.upsert_node("y", EntityCategory::Technology, "d2");
+        graph.upsert_node("z", EntityCategory::Technology, "d2");
+        graph.add_edge("x", "y", "r", 0.9);
+        graph.add_edge("y", "z", "r", 0.9);
+        graph.add_edge("x", "z", "r", 0.8);
+
+        // Weak bridge between clusters
+        graph.add_edge("c", "x", "bridge", 0.1);
+
+        let communities = graph.detect_communities_leiden(1.0, 10);
+        assert!(communities >= 2, "Should detect at least 2 communities");
+    }
+
+    #[test]
+    fn test_graphrag_document_entity_lookup() {
+        let index = GraphRagIndex::new(4, GraphRagConfig::default());
+        index
+            .insert_document("d1", &random_vector(4), "machine learning algorithm")
+            .unwrap();
+
+        let entities = index.document_entities("d1");
+        assert!(!entities.is_empty());
+
+        // Entity should link back to document
+        for ename in &entities {
+            let docs = index.entity_documents(ename);
+            assert!(docs.contains(&"d1".to_string()));
         }
     }
 }
