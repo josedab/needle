@@ -44,7 +44,7 @@ use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::Instant;
+use std::time::{Instant, SystemTime};
 
 // ─── Configuration ───────────────────────────────────────────────────────────
 
@@ -400,6 +400,265 @@ impl SyncManager {
         let data = serde_json::to_vec_pretty(&manifest)
             .map_err(|e| NeedleError::InvalidInput(format!("Manifest serialization: {}", e)))?;
         self.write_to_target("manifest.json", &data)
+    }
+}
+
+// ─── LSN-based Incremental Sync ──────────────────────────────────────────────
+
+/// Log Sequence Number for tracking HNSW graph mutations.
+pub type Lsn = u64;
+
+/// A single mutation to the HNSW graph, tagged with an LSN.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GraphMutation {
+    /// Monotonically increasing sequence number.
+    pub lsn: Lsn,
+    /// Collection this mutation applies to.
+    pub collection: String,
+    /// The kind of mutation.
+    pub kind: GraphMutationKind,
+    /// Unix epoch timestamp (ms).
+    pub timestamp_ms: u64,
+}
+
+/// Kinds of HNSW graph mutations.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum GraphMutationKind {
+    /// A new vector was inserted with links to neighbors.
+    InsertNode {
+        vector_id: String,
+        internal_id: usize,
+        level: usize,
+        neighbors: Vec<usize>,
+        vector_data: Vec<f32>,
+        metadata: Option<serde_json::Value>,
+    },
+    /// A vector was deleted and links were repaired.
+    DeleteNode {
+        vector_id: String,
+        internal_id: usize,
+    },
+    /// Neighbor links were updated (re-index, compaction).
+    UpdateLinks {
+        internal_id: usize,
+        level: usize,
+        new_neighbors: Vec<usize>,
+    },
+}
+
+/// Compact binary diff format for shipping graph segments.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GraphDiff {
+    /// Base LSN this diff starts from.
+    pub base_lsn: Lsn,
+    /// Target LSN after applying this diff.
+    pub target_lsn: Lsn,
+    /// Collection name.
+    pub collection: String,
+    /// The mutations in this diff.
+    pub mutations: Vec<GraphMutation>,
+    /// Compressed byte size (0 if uncompressed).
+    pub compressed_bytes: u64,
+}
+
+impl GraphDiff {
+    /// Create a diff from a slice of mutations.
+    pub fn from_mutations(collection: &str, mutations: &[GraphMutation]) -> Option<Self> {
+        if mutations.is_empty() {
+            return None;
+        }
+        let base_lsn = mutations.first().map(|m| m.lsn).unwrap_or(0);
+        let target_lsn = mutations.last().map(|m| m.lsn).unwrap_or(0);
+        Some(Self {
+            base_lsn,
+            target_lsn,
+            collection: collection.to_string(),
+            mutations: mutations.to_vec(),
+            compressed_bytes: 0,
+        })
+    }
+
+    /// Number of mutations in this diff.
+    pub fn len(&self) -> usize {
+        self.mutations.len()
+    }
+
+    /// Check if diff is empty.
+    pub fn is_empty(&self) -> bool {
+        self.mutations.is_empty()
+    }
+
+    /// Estimated bandwidth as a fraction of full snapshot size.
+    pub fn estimated_bandwidth_ratio(&self, full_snapshot_bytes: u64) -> f64 {
+        if full_snapshot_bytes == 0 {
+            return 1.0;
+        }
+        let diff_bytes = self.compressed_bytes.max(
+            self.mutations.len() as u64 * 128, // rough estimate per mutation
+        );
+        diff_bytes as f64 / full_snapshot_bytes as f64
+    }
+}
+
+/// Tracks LSN state and buffers mutations for delta replication.
+pub struct DeltaReplicationManager {
+    /// Current LSN counter.
+    current_lsn: AtomicU64,
+    /// Buffered mutations since last ship.
+    mutation_log: RwLock<Vec<GraphMutation>>,
+    /// LSN of the last shipped diff.
+    last_shipped_lsn: AtomicU64,
+    /// Per-collection mutation counts.
+    collection_counts: RwLock<HashMap<String, u64>>,
+    /// Configuration.
+    config: DeltaReplicationConfig,
+}
+
+/// Configuration for delta replication.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeltaReplicationConfig {
+    /// Maximum mutations to buffer before forcing a ship.
+    pub max_buffer_size: usize,
+    /// Ship interval in milliseconds.
+    pub ship_interval_ms: u64,
+    /// Maximum diff size in bytes before falling back to full snapshot.
+    pub max_diff_bytes: u64,
+    /// Target replication lag in milliseconds.
+    pub target_lag_ms: u64,
+}
+
+impl Default for DeltaReplicationConfig {
+    fn default() -> Self {
+        Self {
+            max_buffer_size: 10_000,
+            ship_interval_ms: 500,
+            max_diff_bytes: 64 * 1024 * 1024,
+            target_lag_ms: 1000,
+        }
+    }
+}
+
+impl DeltaReplicationManager {
+    /// Create a new delta replication manager.
+    pub fn new(config: DeltaReplicationConfig) -> Self {
+        Self {
+            current_lsn: AtomicU64::new(0),
+            mutation_log: RwLock::new(Vec::new()),
+            last_shipped_lsn: AtomicU64::new(0),
+            collection_counts: RwLock::new(HashMap::new()),
+            config,
+        }
+    }
+
+    /// Record a graph mutation and assign it an LSN.
+    pub fn record_mutation(&self, collection: &str, kind: GraphMutationKind) -> Lsn {
+        let lsn = self.current_lsn.fetch_add(1, Ordering::SeqCst) + 1;
+        let now_ms = SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+        let mutation = GraphMutation {
+            lsn,
+            collection: collection.to_string(),
+            kind,
+            timestamp_ms: now_ms,
+        };
+        self.mutation_log.write().push(mutation);
+        *self
+            .collection_counts
+            .write()
+            .entry(collection.to_string())
+            .or_insert(0) += 1;
+        lsn
+    }
+
+    /// Get the current LSN.
+    pub fn current_lsn(&self) -> Lsn {
+        self.current_lsn.load(Ordering::SeqCst)
+    }
+
+    /// Get the last shipped LSN.
+    pub fn last_shipped_lsn(&self) -> Lsn {
+        self.last_shipped_lsn.load(Ordering::SeqCst)
+    }
+
+    /// Get the number of pending (unshipped) mutations.
+    pub fn pending_count(&self) -> usize {
+        self.mutation_log.read().len()
+    }
+
+    /// Whether the buffer is full and should be shipped.
+    pub fn should_ship(&self) -> bool {
+        self.mutation_log.read().len() >= self.config.max_buffer_size
+    }
+
+    /// Pull deltas since a given LSN for a specific collection.
+    pub fn pull_deltas(&self, since_lsn: Lsn, collection: &str) -> GraphDiff {
+        let log = self.mutation_log.read();
+        let mutations: Vec<GraphMutation> = log
+            .iter()
+            .filter(|m| m.lsn > since_lsn && m.collection == collection)
+            .cloned()
+            .collect();
+        GraphDiff::from_mutations(collection, &mutations).unwrap_or(GraphDiff {
+            base_lsn: since_lsn,
+            target_lsn: self.current_lsn(),
+            collection: collection.to_string(),
+            mutations: Vec::new(),
+            compressed_bytes: 0,
+        })
+    }
+
+    /// Pull all deltas since a given LSN across all collections.
+    pub fn pull_all_deltas(&self, since_lsn: Lsn) -> Vec<GraphDiff> {
+        let log = self.mutation_log.read();
+        let mut by_collection: HashMap<String, Vec<GraphMutation>> = HashMap::new();
+        for m in log.iter().filter(|m| m.lsn > since_lsn) {
+            by_collection
+                .entry(m.collection.clone())
+                .or_default()
+                .push(m.clone());
+        }
+        by_collection
+            .into_iter()
+            .filter_map(|(col, muts)| GraphDiff::from_mutations(&col, &muts))
+            .collect()
+    }
+
+    /// Ship (drain) all buffered mutations, returning the diffs.
+    /// Updates the last_shipped_lsn.
+    pub fn ship_deltas(&self) -> Vec<GraphDiff> {
+        let mut log = self.mutation_log.write();
+        if log.is_empty() {
+            return Vec::new();
+        }
+        let last_lsn = log.last().map(|m| m.lsn).unwrap_or(0);
+        let mutations = std::mem::take(&mut *log);
+        drop(log);
+
+        self.last_shipped_lsn.store(last_lsn, Ordering::SeqCst);
+
+        let mut by_collection: HashMap<String, Vec<GraphMutation>> = HashMap::new();
+        for m in mutations {
+            by_collection
+                .entry(m.collection.clone())
+                .or_default()
+                .push(m);
+        }
+        by_collection
+            .into_iter()
+            .filter_map(|(col, muts)| GraphDiff::from_mutations(&col, &muts))
+            .collect()
+    }
+
+    /// Get replication lag in number of mutations.
+    pub fn replication_lag(&self) -> u64 {
+        self.current_lsn() - self.last_shipped_lsn()
+    }
+
+    /// Get per-collection mutation statistics.
+    pub fn collection_stats(&self) -> HashMap<String, u64> {
+        self.collection_counts.read().clone()
     }
 }
 
@@ -999,5 +1258,83 @@ mod tests {
 
         // The pending delta should be resolved to the remote version (higher timestamp)
         assert_eq!(mgr.pending_deltas[0].timestamp, 100);
+    }
+
+    // ── Delta Replication Tests ──────────────────────────────────────
+
+    #[test]
+    fn test_delta_replication_record_and_pull() {
+        let mgr = DeltaReplicationManager::new(DeltaReplicationConfig::default());
+
+        mgr.record_mutation(
+            "test_col",
+            GraphMutationKind::InsertNode {
+                vector_id: "v1".into(),
+                internal_id: 0,
+                level: 0,
+                neighbors: vec![],
+                vector_data: vec![1.0, 2.0],
+                metadata: None,
+            },
+        );
+        mgr.record_mutation(
+            "test_col",
+            GraphMutationKind::InsertNode {
+                vector_id: "v2".into(),
+                internal_id: 1,
+                level: 0,
+                neighbors: vec![0],
+                vector_data: vec![3.0, 4.0],
+                metadata: None,
+            },
+        );
+
+        assert_eq!(mgr.current_lsn(), 2);
+        assert_eq!(mgr.pending_count(), 2);
+
+        let diff = mgr.pull_deltas(0, "test_col");
+        assert_eq!(diff.mutations.len(), 2);
+        assert_eq!(diff.base_lsn, 1);
+        assert_eq!(diff.target_lsn, 2);
+    }
+
+    #[test]
+    fn test_delta_replication_ship() {
+        let mgr = DeltaReplicationManager::new(DeltaReplicationConfig::default());
+
+        mgr.record_mutation(
+            "col_a",
+            GraphMutationKind::DeleteNode {
+                vector_id: "v1".into(),
+                internal_id: 0,
+            },
+        );
+        mgr.record_mutation(
+            "col_b",
+            GraphMutationKind::UpdateLinks {
+                internal_id: 1,
+                level: 0,
+                new_neighbors: vec![2, 3],
+            },
+        );
+
+        let diffs = mgr.ship_deltas();
+        assert_eq!(diffs.len(), 2);
+        assert_eq!(mgr.pending_count(), 0);
+        assert_eq!(mgr.last_shipped_lsn(), 2);
+        assert_eq!(mgr.replication_lag(), 0);
+    }
+
+    #[test]
+    fn test_graph_diff_bandwidth_ratio() {
+        let diff = GraphDiff {
+            base_lsn: 0,
+            target_lsn: 10,
+            collection: "test".into(),
+            mutations: vec![],
+            compressed_bytes: 100,
+        };
+        let ratio = diff.estimated_bandwidth_ratio(10_000);
+        assert!(ratio < 0.05, "Diff should use <5% bandwidth");
     }
 }
