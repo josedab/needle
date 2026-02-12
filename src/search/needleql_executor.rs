@@ -73,6 +73,25 @@ pub enum Statement {
     DropCollection(String),
     /// SHOW COLLECTIONS statement.
     ShowCollections,
+    /// CREATE VIEW statement.
+    CreateView(CreateViewStatement),
+    /// DROP VIEW statement.
+    DropView(String),
+}
+
+/// CREATE VIEW statement.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateViewStatement {
+    /// View name.
+    pub name: String,
+    /// Source collection.
+    pub source_collection: String,
+    /// The full view definition query.
+    pub definition: String,
+    /// Result limit.
+    pub limit: usize,
+    /// Optional metadata filter.
+    pub filter: Option<ServiceWhereClause>,
 }
 
 /// A SELECT query in NeedleQL.
@@ -96,6 +115,21 @@ pub struct SelectQuery {
     pub offset: usize,
     /// WITH options.
     pub options: HashMap<String, OptionValue>,
+    /// AS OF clause for time-travel queries (Unix timestamp or time expression).
+    pub as_of: Option<AsOfClause>,
+}
+
+/// AS OF clause for point-in-time time-travel queries.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AsOfClause {
+    /// Unix timestamp to query at.
+    pub timestamp: Option<u64>,
+    /// Time expression string (e.g. "yesterday", "2 hours ago").
+    pub time_expression: Option<String>,
+    /// Named snapshot to query at.
+    pub snapshot: Option<String>,
+    /// Version number to query at.
+    pub version: Option<u64>,
 }
 
 /// Column in SELECT.
@@ -274,6 +308,8 @@ pub enum PlanStepType {
     Limit { count: usize },
     /// Scan (full collection scan).
     Scan,
+    /// Time-travel scan at a historical point.
+    TimeTravelScan { timestamp: Option<u64>, version: Option<u64> },
     /// Insert operation.
     Insert,
     /// Delete operation.
@@ -405,7 +441,11 @@ impl NeedleQLExecutor {
         }
 
         if upper.starts_with("SELECT ") || upper.starts_with("SELECT\n") {
-            let select = self.parse_select_via_query_parser(query)?;
+            let (query_str, as_of) = self.extract_as_of_clause(query);
+            let mut select = self.parse_select_via_query_parser(&query_str)?;
+            if as_of.is_some() {
+                select.as_of = as_of;
+            }
             let collection = select.collection.clone();
             let limit = select.limit;
             let steps = self.plan_steps(&Statement::Select(select.clone()));
@@ -485,6 +525,74 @@ impl NeedleQLExecutor {
                 collection: String::new(),
                 limit: 0,
                 steps: vec![],
+                estimated_cost: 0.1,
+            });
+        }
+
+        if upper.starts_with("CREATE VIEW ") || upper.starts_with("CREATE MATERIALIZED VIEW ") {
+            let is_materialized = upper.starts_with("CREATE MATERIALIZED VIEW ");
+            let after = if is_materialized { &query[25..] } else { &query[12..] };
+
+            let as_pos = after.to_uppercase().find(" AS ").ok_or_else(|| {
+                NeedleError::InvalidArgument("Missing AS in CREATE VIEW".into())
+            })?;
+            let view_name = after[..as_pos].trim().to_string();
+
+            let rest = &after[as_pos + 4..];
+            let rest_upper = rest.to_uppercase();
+            let from_pos = rest_upper.find("FROM ").unwrap_or(0);
+            let after_from = &rest[from_pos + 5..];
+            let collection_end = after_from
+                .find(|c: char| c.is_whitespace())
+                .unwrap_or(after_from.len());
+            let collection = after_from[..collection_end].trim().to_string();
+
+            let limit = if let Some(pos) = rest_upper.find("LIMIT ") {
+                let after_limit = &rest[pos + 6..];
+                let end = after_limit
+                    .find(|c: char| !c.is_ascii_digit())
+                    .unwrap_or(after_limit.len());
+                after_limit[..end].parse().unwrap_or(10)
+            } else {
+                10
+            };
+
+            let filter = self.parse_where_clause_fallback(rest, &rest_upper);
+
+            let create_view = CreateViewStatement {
+                name: view_name,
+                source_collection: collection.clone(),
+                definition: query.to_string(),
+                limit,
+                filter,
+            };
+
+            return Ok(ServiceQueryPlan {
+                statement: Statement::CreateView(create_view),
+                collection,
+                limit,
+                steps: vec![PlanStep {
+                    name: "Create View".into(),
+                    step_type: PlanStepType::Ddl,
+                    estimated_rows: 0,
+                    cost: 0.1,
+                }],
+                estimated_cost: 0.1,
+            });
+        }
+
+        if upper.starts_with("DROP VIEW ") {
+            let name = query[10..].trim().trim_end_matches(';').trim().to_string();
+            return Ok(ServiceQueryPlan {
+                statement: Statement::DropView(name.clone()),
+                collection: name,
+                limit: 0,
+                steps: vec![PlanStep {
+                    name: "Drop View".into(),
+                    step_type: PlanStepType::Ddl,
+                    estimated_rows: 0,
+                    cost: 0.1,
+                }],
                 estimated_cost: 0.1,
             });
         }
@@ -637,6 +745,30 @@ impl NeedleQLExecutor {
             rrf_k: 60.0,
         });
 
+        // Parse AS OF clause from options or query string
+        let as_of = options.get("as_of_timestamp").map(|v| {
+            match v {
+                OptionValue::Number(ts) => AsOfClause {
+                    timestamp: Some(*ts as u64),
+                    time_expression: None,
+                    snapshot: None,
+                    version: None,
+                },
+                OptionValue::String(expr) => AsOfClause {
+                    timestamp: None,
+                    time_expression: Some(expr.clone()),
+                    snapshot: None,
+                    version: None,
+                },
+                _ => AsOfClause {
+                    timestamp: None,
+                    time_expression: None,
+                    snapshot: None,
+                    version: None,
+                },
+            }
+        });
+
         Ok(SelectQuery {
             columns,
             collection,
@@ -647,6 +779,7 @@ impl NeedleQLExecutor {
             limit,
             offset,
             options,
+            as_of,
         })
     }
 
@@ -771,6 +904,97 @@ impl NeedleQLExecutor {
         (ident, rest)
     }
 
+    /// Extract AS OF clause from a query string, returning the cleaned query and the clause.
+    /// Supports: `AS OF TIMESTAMP <unix_ts>`, `AS OF VERSION <version>`,
+    /// `AS OF SNAPSHOT '<name>'`, and `AS OF '<time_expression>'`.
+    fn extract_as_of_clause(&self, query: &str) -> (String, Option<AsOfClause>) {
+        let upper = query.to_uppercase();
+        let as_of_pos = match upper.find(" AS OF ") {
+            Some(pos) => pos,
+            None => return (query.to_string(), None),
+        };
+
+        let before = &query[..as_of_pos];
+        let after = query[as_of_pos + 7..].trim();
+        let after_upper = after.to_uppercase();
+
+        let (clause, rest) = if after_upper.starts_with("TIMESTAMP ") {
+            let val_str = &after[10..].trim();
+            let end = val_str
+                .find(|c: char| c.is_whitespace())
+                .unwrap_or(val_str.len());
+            let ts: u64 = val_str[..end].parse().unwrap_or(0);
+            (
+                AsOfClause {
+                    timestamp: Some(ts),
+                    time_expression: None,
+                    snapshot: None,
+                    version: None,
+                },
+                val_str[end..].to_string(),
+            )
+        } else if after_upper.starts_with("VERSION ") {
+            let val_str = &after[8..].trim();
+            let end = val_str
+                .find(|c: char| c.is_whitespace())
+                .unwrap_or(val_str.len());
+            let version: u64 = val_str[..end].parse().unwrap_or(0);
+            (
+                AsOfClause {
+                    timestamp: None,
+                    time_expression: None,
+                    snapshot: None,
+                    version: Some(version),
+                },
+                val_str[end..].to_string(),
+            )
+        } else if after_upper.starts_with("SNAPSHOT ") {
+            let val_str = &after[9..].trim();
+            let name = val_str.trim_matches('\'').trim_matches('"');
+            let end = val_str
+                .find(|c: char| c.is_whitespace() && c != '\'' && c != '"')
+                .unwrap_or(val_str.len());
+            (
+                AsOfClause {
+                    timestamp: None,
+                    time_expression: None,
+                    snapshot: Some(name.to_string()),
+                    version: None,
+                },
+                val_str[end..].to_string(),
+            )
+        } else {
+            // Time expression in quotes: AS OF 'yesterday'
+            let expr = after.trim_matches('\'').trim_matches('"');
+            let end = if after.starts_with('\'') || after.starts_with('"') {
+                let quote = &after[..1];
+                after[1..]
+                    .find(quote)
+                    .map(|p| p + 2)
+                    .unwrap_or(after.len())
+            } else {
+                after
+                    .find(|c: char| c == ';')
+                    .unwrap_or(after.len())
+            };
+            let expr_end = expr
+                .find(|c: char| c == '\'' || c == '"' || c == ';')
+                .unwrap_or(expr.len());
+            (
+                AsOfClause {
+                    timestamp: None,
+                    time_expression: Some(expr[..expr_end].trim().to_string()),
+                    snapshot: None,
+                    version: None,
+                },
+                after[end..].to_string(),
+            )
+        };
+
+        let cleaned_query = format!("{} {}", before.trim(), rest.trim());
+        (cleaned_query.trim().to_string(), Some(clause))
+    }
+
     /// Fallback WHERE parser for DELETE (non-SELECT) statements.
     fn parse_where_clause_fallback(
         &self,
@@ -859,6 +1083,17 @@ impl NeedleQLExecutor {
         match statement {
             Statement::Select(q) | Statement::Explain(q) => {
                 let mut steps = Vec::new();
+                if let Some(as_of) = &q.as_of {
+                    steps.push(PlanStep {
+                        name: "Time-Travel Scan".into(),
+                        step_type: PlanStepType::TimeTravelScan {
+                            timestamp: as_of.timestamp,
+                            version: as_of.version,
+                        },
+                        estimated_rows: q.limit * 5,
+                        cost: 5.0,
+                    });
+                }
                 if q.nearest_to.is_some() {
                     let k = q.limit;
                     steps.push(PlanStep {
@@ -939,7 +1174,7 @@ impl NeedleQLExecutor {
                 estimated_rows: 1,
                 cost: 1.0,
             }],
-            Statement::CreateCollection(_) | Statement::DropCollection(_) => vec![PlanStep {
+            Statement::CreateCollection(_) | Statement::DropCollection(_) | Statement::CreateView(_) | Statement::DropView(_) => vec![PlanStep {
                 name: "DDL".into(),
                 step_type: PlanStepType::Ddl,
                 estimated_rows: 0,
@@ -1310,6 +1545,49 @@ mod tests {
         });
         let plan = ex.parse("SELECT * FROM docs LIMIT 50000").unwrap();
         assert_eq!(plan.limit, 100);
+    }
+
+    #[test]
+    fn test_as_of_timestamp() {
+        let ex = executor();
+        let plan = ex
+            .parse("SELECT * FROM docs AS OF TIMESTAMP 1700000000 LIMIT 10")
+            .unwrap();
+        if let Statement::Select(q) = &plan.statement {
+            let as_of = q.as_of.as_ref().expect("AS OF should be present");
+            assert_eq!(as_of.timestamp, Some(1_700_000_000));
+        } else {
+            panic!("Expected Select");
+        }
+        assert!(plan.steps.iter().any(|s| matches!(s.step_type, PlanStepType::TimeTravelScan { .. })));
+    }
+
+    #[test]
+    fn test_as_of_version() {
+        let ex = executor();
+        let plan = ex
+            .parse("SELECT * FROM docs AS OF VERSION 42 LIMIT 10")
+            .unwrap();
+        if let Statement::Select(q) = &plan.statement {
+            let as_of = q.as_of.as_ref().expect("AS OF should be present");
+            assert_eq!(as_of.version, Some(42));
+        } else {
+            panic!("Expected Select");
+        }
+    }
+
+    #[test]
+    fn test_as_of_expression() {
+        let ex = executor();
+        let plan = ex
+            .parse("SELECT * FROM docs AS OF 'yesterday' LIMIT 10")
+            .unwrap();
+        if let Statement::Select(q) = &plan.statement {
+            let as_of = q.as_of.as_ref().expect("AS OF should be present");
+            assert_eq!(as_of.time_expression, Some("yesterday".to_string()));
+        } else {
+            panic!("Expected Select");
+        }
     }
 
     #[test]
