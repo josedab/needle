@@ -185,6 +185,160 @@ impl AdvisorReport {
         ));
         s
     }
+
+    /// Generate a memory savings projection for a given total vector count.
+    pub fn project_memory_savings(&self, total_vectors: usize) -> Vec<MemoryProjection> {
+        self.strategies
+            .iter()
+            .map(|s| {
+                let original_bytes = self.distribution.dimensions * 4 * total_vectors;
+                let compressed_bytes = s.bytes_per_vector * total_vectors;
+                let saved_bytes = original_bytes.saturating_sub(compressed_bytes);
+                MemoryProjection {
+                    strategy: s.strategy,
+                    original_bytes,
+                    compressed_bytes,
+                    saved_bytes,
+                    recall_at_k: s.recall_at_k,
+                    compression_ratio: s.compression_ratio,
+                }
+            })
+            .collect()
+    }
+
+    /// Generate a migration plan for applying the recommended strategy.
+    pub fn migration_plan(&self, collection_name: &str, total_vectors: usize) -> MigrationPlan {
+        let best = self
+            .recommendations
+            .first()
+            .map(|r| r.strategy)
+            .unwrap_or(QuantizationStrategy::None);
+
+        let projection = self.project_memory_savings(total_vectors);
+        let target_projection = projection
+            .iter()
+            .find(|p| p.strategy == best)
+            .cloned();
+
+        let steps = match best {
+            QuantizationStrategy::None => vec![
+                MigrationStep::new("No migration needed", "Collection is already optimal"),
+            ],
+            QuantizationStrategy::SQ8 => vec![
+                MigrationStep::new(
+                    "Train scalar quantizer",
+                    "Sample vectors and compute min/max per dimension",
+                ),
+                MigrationStep::new(
+                    "Quantize vectors",
+                    &format!("Convert {} vectors from f32 to int8", total_vectors),
+                ),
+                MigrationStep::new(
+                    "Rebuild index",
+                    "Rebuild HNSW index with quantized distance function",
+                ),
+                MigrationStep::new(
+                    "Validate recall",
+                    "Run recall benchmark on test queries to verify quality",
+                ),
+            ],
+            QuantizationStrategy::PQ { subvectors } => vec![
+                MigrationStep::new(
+                    "Train codebooks",
+                    &format!("Train {} PQ codebooks via k-means", subvectors),
+                ),
+                MigrationStep::new(
+                    "Encode vectors",
+                    &format!("Encode {} vectors to PQ codes", total_vectors),
+                ),
+                MigrationStep::new(
+                    "Build lookup tables",
+                    "Pre-compute asymmetric distance tables",
+                ),
+                MigrationStep::new(
+                    "Rebuild index",
+                    "Rebuild HNSW index with PQ distance function",
+                ),
+                MigrationStep::new(
+                    "Validate recall",
+                    "Run recall benchmark on test queries to verify quality",
+                ),
+            ],
+            QuantizationStrategy::Binary => vec![
+                MigrationStep::new(
+                    "Compute thresholds",
+                    "Determine per-dimension binarization thresholds",
+                ),
+                MigrationStep::new(
+                    "Binarize vectors",
+                    &format!("Convert {} vectors to binary codes", total_vectors),
+                ),
+                MigrationStep::new(
+                    "Build binary index",
+                    "Build index with Hamming distance",
+                ),
+                MigrationStep::new(
+                    "Validate recall",
+                    "Run recall benchmark — consider re-ranking with original vectors",
+                ),
+            ],
+        };
+
+        MigrationPlan {
+            collection: collection_name.to_string(),
+            strategy: best,
+            steps,
+            estimated_memory_savings: target_projection,
+        }
+    }
+}
+
+/// Memory savings projection for a strategy at a given scale.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MemoryProjection {
+    /// Strategy.
+    pub strategy: QuantizationStrategy,
+    /// Original memory usage in bytes.
+    pub original_bytes: usize,
+    /// Compressed memory usage in bytes.
+    pub compressed_bytes: usize,
+    /// Bytes saved.
+    pub saved_bytes: usize,
+    /// Recall at k.
+    pub recall_at_k: f64,
+    /// Compression ratio.
+    pub compression_ratio: f64,
+}
+
+/// Migration plan for applying a compression strategy.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MigrationPlan {
+    /// Target collection name.
+    pub collection: String,
+    /// Strategy to apply.
+    pub strategy: QuantizationStrategy,
+    /// Ordered migration steps.
+    pub steps: Vec<MigrationStep>,
+    /// Estimated memory savings.
+    pub estimated_memory_savings: Option<MemoryProjection>,
+}
+
+/// A single step in a migration plan.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MigrationStep {
+    /// Step name.
+    pub name: String,
+    /// Step description.
+    pub description: String,
+}
+
+impl MigrationStep {
+    fn new(name: &str, description: &str) -> Self {
+        Self {
+            name: name.to_string(),
+            description: description.to_string(),
+        }
+    }
 }
 
 /// Compression advisor engine.
