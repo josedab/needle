@@ -86,13 +86,13 @@ The **dimensionality** of a vector is the number of elements it contains. All ve
 
 ```rust
 // Create a collection for 384-dimensional vectors
-db.create_collection("docs", 384, DistanceFunction::Cosine)?;
+db.create_collection("docs", 384)?;
 
 // This will work
-collection.insert("doc1", &vec![0.0; 384], json!({}))?;
+collection.insert("doc1", &vec![0.0; 384], Some(json!({})))?;
 
 // This will fail - wrong dimension
-collection.insert("doc2", &vec![0.0; 512], json!({}))?;
+collection.insert("doc2", &vec![0.0; 512], Some(json!({})))?;
 ```
 
 ### Normalization
@@ -101,7 +101,7 @@ For **cosine similarity**, vectors should be normalized (length = 1). Needle han
 
 ```rust
 // Needle normalizes automatically for cosine distance
-db.create_collection("docs", 384, DistanceFunction::Cosine)?;
+db.create_collection("docs", 384)?;
 
 // For other distance functions, you may want to normalize manually
 fn normalize(v: &mut Vec<f32>) {
@@ -133,9 +133,10 @@ Reduce memory usage with quantization:
 use needle::{QuantizationType, CollectionConfig};
 
 // Create collection with scalar quantization (4x compression)
-let config = CollectionConfig::new(384, DistanceFunction::Cosine)
+let config = CollectionConfig::new("docs", 384)
+    .with_distance(DistanceFunction::Cosine)
     .with_quantization(QuantizationType::Scalar);
-db.create_collection_with_config("docs", config)?;
+db.create_collection_with_config(config)?;
 ```
 
 See the [Quantization Guide](/docs/guides/quantization) for details.
@@ -160,7 +161,7 @@ let vectors: Vec<(&str, Vec<f32>, Value)> = documents
     .collect();
 
 for (id, vector, metadata) in vectors {
-    collection.insert(id, &vector, metadata)?;
+    collection.insert(id, &vector, Some(metadata))?;
 }
 ```
 

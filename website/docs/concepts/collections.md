@@ -21,12 +21,12 @@ Each collection includes:
 ### Basic Creation
 
 ```rust
-use needle::{Database, DistanceFunction};
+use needle::Database;
 
 let db = Database::open("mydb.needle")?;
 
-// Create a collection with 384 dimensions and cosine distance
-db.create_collection("documents", 384, DistanceFunction::Cosine)?;
+// Create a collection with 384 dimensions (cosine distance by default)
+db.create_collection("documents", 384)?;
 ```
 
 ### With Custom Configuration
@@ -34,12 +34,13 @@ db.create_collection("documents", 384, DistanceFunction::Cosine)?;
 ```rust
 use needle::{CollectionConfig, DistanceFunction, QuantizationType};
 
-let config = CollectionConfig::new(384, DistanceFunction::Cosine)
+let config = CollectionConfig::new("high_quality_docs", 384)
+    .with_distance(DistanceFunction::Cosine)
     .with_hnsw_m(32)                    // More connections = better recall
     .with_hnsw_ef_construction(400)     // Higher = better index quality
     .with_quantization(QuantizationType::Scalar);
 
-db.create_collection_with_config("high_quality_docs", config)?;
+db.create_collection_with_config(config)?;
 ```
 
 ### Configuration Options
@@ -68,7 +69,7 @@ let collection_clone = collection.clone();
 
 ```rust
 // Insert a vector
-collection.insert("doc1", &embedding, json!({"title": "Hello"}))?;
+collection.insert("doc1", &embedding, Some(json!({"title": "Hello"})))?;
 
 // Get a vector by ID
 let vector = collection.get("doc1")?;
@@ -80,7 +81,7 @@ collection.delete("doc1")?;
 let count = collection.count()?;
 
 // Search
-let results = collection.search(&query, 10, None)?;
+let results = collection.search(&query, 10)?;
 
 // Clear all vectors
 collection.clear()?;
@@ -142,7 +143,7 @@ Changes are kept in memory until you explicitly save:
 
 ```rust
 // Insert some vectors
-collection.insert("doc1", &embedding, json!({}))?;
+collection.insert("doc1", &embedding, Some(json!({})))?;
 
 // Save to disk
 db.save()?;
@@ -189,15 +190,15 @@ db.save()?;
 
 ```rust
 // Create separate collections for different categories
-db.create_collection("products_electronics", 384, DistanceFunction::Cosine)?;
-db.create_collection("products_clothing", 384, DistanceFunction::Cosine)?;
-db.create_collection("products_books", 384, DistanceFunction::Cosine)?;
+db.create_collection("products_electronics", 384)?;
+db.create_collection("products_clothing", 384)?;
+db.create_collection("products_books", 384)?;
 
 // Route inserts to the appropriate collection
 fn insert_product(db: &Database, product: &Product, embedding: &[f32]) -> Result<()> {
     let collection_name = format!("products_{}", product.category);
     let collection = db.collection(&collection_name)?;
-    collection.insert(&product.id, embedding, json!({"name": product.name}))?;
+    collection.insert(&product.id, embedding, Some(json!({"name": product.name})))?;
     Ok(())
 }
 ```
@@ -210,8 +211,8 @@ fn get_tenant_collection(db: &Database, tenant_id: &str) -> Result<CollectionRef
     let name = format!("tenant_{}", tenant_id);
 
     // Create if doesn't exist
-    if !db.collection_exists(&name)? {
-        db.create_collection(&name, 384, DistanceFunction::Cosine)?;
+    if db.collection(&name).is_err() {
+        db.create_collection(&name, 384)?;
     }
 
     db.collection(&name)
@@ -236,12 +237,14 @@ The dimensionality affects memory usage and search performance:
 
 ```rust
 // For high recall (quality-critical applications)
-let config = CollectionConfig::new(384, DistanceFunction::Cosine)
+let config = CollectionConfig::new("collection", 384)
+    .with_distance(DistanceFunction::Cosine)
     .with_hnsw_m(32)
     .with_hnsw_ef_construction(400);
 
 // For lower memory (large-scale applications)
-let config = CollectionConfig::new(384, DistanceFunction::Cosine)
+let config = CollectionConfig::new("collection", 384)
+    .with_distance(DistanceFunction::Cosine)
     .with_hnsw_m(8)
     .with_hnsw_ef_construction(100);
 ```
@@ -253,7 +256,7 @@ Don't store unnecessary vectors:
 ```rust
 // Filter out low-quality content before indexing
 if document.word_count > 50 && document.quality_score > 0.7 {
-    collection.insert(&document.id, &embedding, metadata)?;
+    collection.insert(&document.id, &embedding, Some(metadata))?;
 }
 ```
 
@@ -262,13 +265,13 @@ if document.word_count > 50 && document.quality_score > 0.7 {
 Store queryable attributes in metadata:
 
 ```rust
-collection.insert("doc1", &embedding, json!({
+collection.insert("doc1", &embedding, Some(json!({
     "title": "Article Title",
     "author": "John Doe",
     "date": "2024-01-15",
     "tags": ["rust", "programming"],
     "word_count": 1500
-}))?;
+})))?;
 
 // Then filter efficiently
 let filter = Filter::parse(&json!({

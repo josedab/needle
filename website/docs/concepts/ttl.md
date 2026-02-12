@@ -119,7 +119,7 @@ use needle::CollectionConfig;
 let config = CollectionConfig::new("cache", 384)
     .with_default_ttl_seconds(Some(86400));
 
-db.create_collection_with_config("cache", config)?;
+db.create_collection_with_config(config)?;
 
 // This vector expires in 1 day (uses default)
 collection.insert("item1", &embedding, None)?;

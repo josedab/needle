@@ -11,13 +11,22 @@ Distance functions measure how similar two vectors are. Choosing the right dista
 Needle supports four distance functions:
 
 ```rust
-use needle::DistanceFunction;
+use needle::{DistanceFunction, CollectionConfig};
 
 // Choose when creating a collection
-db.create_collection("docs", 384, DistanceFunction::Cosine)?;
-db.create_collection("images", 512, DistanceFunction::Euclidean)?;
-db.create_collection("recommendations", 256, DistanceFunction::Dot)?;
-db.create_collection("locations", 2, DistanceFunction::Manhattan)?;
+db.create_collection("docs", 384)?;  // Cosine distance (default)
+
+let config = CollectionConfig::new("images", 512)
+    .with_distance(DistanceFunction::Euclidean);
+db.create_collection_with_config(config)?;
+
+let config = CollectionConfig::new("recommendations", 256)
+    .with_distance(DistanceFunction::DotProduct);
+db.create_collection_with_config(config)?;
+
+let config = CollectionConfig::new("locations", 2)
+    .with_distance(DistanceFunction::Manhattan);
+db.create_collection_with_config(config)?;
 ```
 
 ## Cosine Distance
@@ -39,10 +48,10 @@ Range: [0, 2]
 
 ```rust
 // Cosine is the most common choice for text
-db.create_collection("documents", 384, DistanceFunction::Cosine)?;
+db.create_collection("documents", 384)?;
 
 // Needle normalizes vectors automatically for cosine distance
-collection.insert("doc1", &embedding, json!({}))?;
+collection.insert("doc1", &embedding, Some(json!({})))?;
 ```
 
 ## Euclidean Distance
@@ -64,10 +73,14 @@ Range: [0, ∞)
 
 ```rust
 // Good for image search
-db.create_collection("images", 512, DistanceFunction::Euclidean)?;
+let config = CollectionConfig::new("images", 512)
+    .with_distance(DistanceFunction::Euclidean);
+db.create_collection_with_config(config)?;
 
 // Also good for geographic data
-db.create_collection("locations", 2, DistanceFunction::Euclidean)?;
+let config = CollectionConfig::new("locations", 2)
+    .with_distance(DistanceFunction::Euclidean);
+db.create_collection_with_config(config)?;
 ```
 
 ## Dot Product Distance
@@ -89,7 +102,9 @@ Range: (-∞, ∞)
 
 ```rust
 // Recommendation systems often use dot product
-db.create_collection("user_item", 128, DistanceFunction::Dot)?;
+let config = CollectionConfig::new("user_item", 128)
+    .with_distance(DistanceFunction::DotProduct);
+db.create_collection_with_config(config)?;
 
 // The vectors encode both preference direction and strength
 let user_vector = model.encode_user(&user)?;
@@ -105,8 +120,8 @@ For normalized vectors, cosine and dot product are equivalent:
 // Cosine Distance = 1 - Dot Product
 
 // So these produce the same ranking:
-let cosine_results = cosine_collection.search(&query, 10, None)?;
-let dot_results = dot_collection.search(&query, 10, None)?;
+let cosine_results = cosine_collection.search(&query, 10)?;
+let dot_results = dot_collection.search(&query, 10)?;
 ```
 
 ## Manhattan Distance
@@ -128,7 +143,9 @@ Range: [0, ∞)
 
 ```rust
 // Good for sparse feature vectors
-db.create_collection("features", 1000, DistanceFunction::Manhattan)?;
+let config = CollectionConfig::new("features", 1000)
+    .with_distance(DistanceFunction::Manhattan);
+db.create_collection_with_config(config)?;
 ```
 
 ## Choosing the Right Distance Function
@@ -194,13 +211,17 @@ Different collections can use different distance functions:
 
 ```rust
 // Text collection with cosine
-db.create_collection("text_docs", 384, DistanceFunction::Cosine)?;
+db.create_collection("text_docs", 384)?;
 
 // Image collection with euclidean
-db.create_collection("images", 512, DistanceFunction::Euclidean)?;
+let config = CollectionConfig::new("images", 512)
+    .with_distance(DistanceFunction::Euclidean);
+db.create_collection_with_config(config)?;
 
 // Recommendations with dot product
-db.create_collection("recommendations", 128, DistanceFunction::Dot)?;
+let config = CollectionConfig::new("recommendations", 128)
+    .with_distance(DistanceFunction::DotProduct);
+db.create_collection_with_config(config)?;
 ```
 
 ## Custom Distance Functions
