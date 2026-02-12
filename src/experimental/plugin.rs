@@ -883,6 +883,126 @@ impl WasmSandbox {
 }
 
 // ---------------------------------------------------------------------------
+// Local Plugin Registry (Marketplace)
+// ---------------------------------------------------------------------------
+
+/// A local plugin registry that manages installed plugins.
+pub struct LocalPluginRegistry {
+    /// Plugin directory on disk.
+    directory: PluginDirectory,
+    /// In-memory index of installed plugins.
+    installed: RwLock<HashMap<String, InstalledPlugin>>,
+}
+
+/// Metadata about an installed plugin in the local registry.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InstalledPlugin {
+    /// Plugin manifest.
+    pub manifest: PluginManifest,
+    /// Installation timestamp (Unix epoch).
+    pub installed_at: u64,
+    /// Whether the plugin is enabled.
+    pub enabled: bool,
+    /// File size in bytes.
+    pub size_bytes: u64,
+    /// SHA-256 hash of the WASM binary.
+    pub hash: Option<String>,
+    /// Sandbox configuration override.
+    pub sandbox_config: Option<WasmSandboxConfig>,
+}
+
+impl LocalPluginRegistry {
+    /// Create a new local registry with the default plugin directory.
+    pub fn new() -> Self {
+        Self {
+            directory: PluginDirectory::default_path(),
+            installed: RwLock::new(HashMap::new()),
+        }
+    }
+
+    /// Create a registry at a custom path.
+    pub fn with_directory(dir: PluginDirectory) -> Self {
+        Self {
+            directory: dir,
+            installed: RwLock::new(HashMap::new()),
+        }
+    }
+
+    /// Install a plugin from manifest data.
+    pub fn install(&self, manifest: PluginManifest) -> HookResult<()> {
+        self.directory.ensure_exists()?;
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+
+        let installed = InstalledPlugin {
+            manifest: manifest.clone(),
+            installed_at: now,
+            enabled: true,
+            size_bytes: 0,
+            hash: None,
+            sandbox_config: None,
+        };
+        self.installed.write().insert(manifest.name.clone(), installed);
+        Ok(())
+    }
+
+    /// Remove an installed plugin.
+    pub fn remove(&self, name: &str) -> HookResult<()> {
+        let removed = self.installed.write().remove(name);
+        if removed.is_none() {
+            return Err(PluginError::NotFound(name.to_string()));
+        }
+        Ok(())
+    }
+
+    /// List all installed plugins.
+    pub fn list(&self) -> Vec<InstalledPlugin> {
+        self.installed.read().values().cloned().collect()
+    }
+
+    /// Get an installed plugin by name.
+    pub fn get(&self, name: &str) -> Option<InstalledPlugin> {
+        self.installed.read().get(name).cloned()
+    }
+
+    /// Enable a plugin.
+    pub fn enable(&self, name: &str) -> HookResult<()> {
+        let mut installed = self.installed.write();
+        let plugin = installed.get_mut(name)
+            .ok_or_else(|| PluginError::NotFound(name.to_string()))?;
+        plugin.enabled = true;
+        Ok(())
+    }
+
+    /// Disable a plugin.
+    pub fn disable(&self, name: &str) -> HookResult<()> {
+        let mut installed = self.installed.write();
+        let plugin = installed.get_mut(name)
+            .ok_or_else(|| PluginError::NotFound(name.to_string()))?;
+        plugin.enabled = false;
+        Ok(())
+    }
+
+    /// Get count of installed plugins.
+    pub fn count(&self) -> usize {
+        self.installed.read().len()
+    }
+
+    /// Get count of enabled plugins.
+    pub fn enabled_count(&self) -> usize {
+        self.installed.read().values().filter(|p| p.enabled).count()
+    }
+}
+
+impl Default for LocalPluginRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -1508,5 +1628,64 @@ version = "0.1.0"
         assert_eq!(config.max_memory_bytes, 64 * 1024 * 1024);
         assert_eq!(config.max_execution_ms, 5000);
         assert!(config.fuel_limit.is_some());
+    }
+
+    #[test]
+    fn test_local_plugin_registry() {
+        let dir = tempfile::tempdir().unwrap();
+        let registry = LocalPluginRegistry::with_directory(
+            PluginDirectory::new(dir.path().to_path_buf()),
+        );
+
+        let manifest = PluginManifest::new(
+            "test-distance",
+            "1.0.0",
+            "test-author",
+            "A test distance plugin",
+            PluginType::Distance,
+        );
+
+        registry.install(manifest).unwrap();
+        assert_eq!(registry.count(), 1);
+        assert_eq!(registry.enabled_count(), 1);
+
+        let plugins = registry.list();
+        assert_eq!(plugins.len(), 1);
+        assert_eq!(plugins[0].manifest.name, "test-distance");
+        assert!(plugins[0].enabled);
+    }
+
+    #[test]
+    fn test_registry_enable_disable() {
+        let dir = tempfile::tempdir().unwrap();
+        let registry = LocalPluginRegistry::with_directory(
+            PluginDirectory::new(dir.path().to_path_buf()),
+        );
+
+        let manifest = PluginManifest::new("p1", "1.0", "", "test", PluginType::Custom);
+        registry.install(manifest).unwrap();
+
+        registry.disable("p1").unwrap();
+        assert_eq!(registry.enabled_count(), 0);
+
+        registry.enable("p1").unwrap();
+        assert_eq!(registry.enabled_count(), 1);
+    }
+
+    #[test]
+    fn test_registry_remove() {
+        let dir = tempfile::tempdir().unwrap();
+        let registry = LocalPluginRegistry::with_directory(
+            PluginDirectory::new(dir.path().to_path_buf()),
+        );
+
+        let manifest = PluginManifest::new("p1", "1.0", "", "test", PluginType::Custom);
+        registry.install(manifest).unwrap();
+        assert_eq!(registry.count(), 1);
+
+        registry.remove("p1").unwrap();
+        assert_eq!(registry.count(), 0);
+
+        assert!(registry.remove("nonexistent").is_err());
     }
 }
