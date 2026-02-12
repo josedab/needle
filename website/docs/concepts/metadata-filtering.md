@@ -40,7 +40,7 @@ let filter = Filter::parse(&json!({
     "author": "Jane Smith"
 }))?;
 
-let results = collection.search(&query, 10, Some(&filter))?;
+let results = collection.search_with_filter(&query, 10, &filter)?;
 ```
 
 ### Multiple Conditions (AND)
@@ -278,7 +278,7 @@ let filter = Filter::parse(&json!({
     "tenant_id": current_tenant_id
 }))?;
 
-let results = collection.search(&query, 10, Some(&filter))?;
+let results = collection.search_with_filter(&query, 10, &filter)?;
 ```
 
 ### Date Range Queries

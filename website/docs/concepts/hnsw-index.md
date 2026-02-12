@@ -40,7 +40,8 @@ The maximum number of connections per node in the graph.
 use needle::CollectionConfig;
 
 // Default: M = 16
-let config = CollectionConfig::new(384, DistanceFunction::Cosine)
+let config = CollectionConfig::new("collection", 384)
+    .with_distance(DistanceFunction::Cosine)
     .with_hnsw_m(32);  // Higher M for better recall
 ```
 
@@ -62,7 +63,8 @@ let config = CollectionConfig::new(384, DistanceFunction::Cosine)
 The search depth during index construction. Higher values create better indexes but take longer to build.
 
 ```rust
-let config = CollectionConfig::new(384, DistanceFunction::Cosine)
+let config = CollectionConfig::new("collection", 384)
+    .with_distance(DistanceFunction::Cosine)
     .with_hnsw_ef_construction(400);  // Higher for better index quality
 ```
 
@@ -143,7 +145,7 @@ Recall measures what fraction of true nearest neighbors are returned:
 let ground_truth = collection.brute_force_search(&query, k)?;
 
 // Compare with HNSW results
-let hnsw_results = collection.search(&query, k, None)?;
+let hnsw_results = collection.search(&query, k)?;
 
 let recall = compute_recall(&ground_truth, &hnsw_results);
 println!("Recall@{}: {:.2}%", k, recall * 100.0);
@@ -155,7 +157,7 @@ println!("Recall@{}: {:.2}%", k, recall * 100.0);
 use std::time::Instant;
 
 let start = Instant::now();
-let results = collection.search(&query, 10, None)?;
+let results = collection.search(&query, 10)?;
 let latency = start.elapsed();
 
 println!("Query latency: {:?}", latency);
@@ -191,7 +193,8 @@ println!("  Filtering: {:?}", explain.filter_time);
 
 2. If building new index, increase `M` and `ef_construction`:
    ```rust
-   let config = CollectionConfig::new(384, DistanceFunction::Cosine)
+   let config = CollectionConfig::new("collection", 384)
+       .with_distance(DistanceFunction::Cosine)
        .with_hnsw_m(32)
        .with_hnsw_ef_construction(400);
    ```
@@ -208,7 +211,8 @@ println!("  Filtering: {:?}", explain.filter_time);
 
 2. Use quantization:
    ```rust
-   let config = CollectionConfig::new(384, DistanceFunction::Cosine)
+   let config = CollectionConfig::new("collection", 384)
+       .with_distance(DistanceFunction::Cosine)
        .with_quantization(QuantizationType::Scalar);
    ```
 
@@ -222,13 +226,15 @@ println!("  Filtering: {:?}", explain.filter_time);
 1. Use quantization:
    ```rust
    // Binary quantization: 32x compression
-   let config = CollectionConfig::new(384, DistanceFunction::Cosine)
+   let config = CollectionConfig::new("collection", 384)
+       .with_distance(DistanceFunction::Cosine)
        .with_quantization(QuantizationType::Binary);
    ```
 
 2. Reduce `M`:
    ```rust
-   let config = CollectionConfig::new(384, DistanceFunction::Cosine)
+   let config = CollectionConfig::new("collection", 384)
+       .with_distance(DistanceFunction::Cosine)
        .with_hnsw_m(8);
    ```
 
@@ -241,7 +247,8 @@ println!("  Filtering: {:?}", explain.filter_time);
 **Solutions:**
 1. Reduce `ef_construction`:
    ```rust
-   let config = CollectionConfig::new(384, DistanceFunction::Cosine)
+   let config = CollectionConfig::new("collection", 384)
+       .with_distance(DistanceFunction::Cosine)
        .with_hnsw_ef_construction(100);
    ```
 
@@ -250,7 +257,7 @@ println!("  Filtering: {:?}", explain.filter_time);
    use rayon::prelude::*;
 
    vectors.par_iter().for_each(|(id, vec, meta)| {
-       collection.insert(id, vec, meta.clone()).unwrap();
+       collection.insert(id, vec, Some(meta.clone())).unwrap();
    });
    ```
 
