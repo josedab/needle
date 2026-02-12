@@ -360,6 +360,307 @@ impl PluginRuntime {
     }
 }
 
+// ── Event Bus & Serverless Function Runtime ─────────────────────────────────
+
+/// Events that can trigger serverless functions.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum CollectionEvent {
+    /// A vector was inserted.
+    VectorInserted {
+        collection: String,
+        id: String,
+        dimensions: usize,
+    },
+    /// A vector was updated.
+    VectorUpdated {
+        collection: String,
+        id: String,
+        dimensions: usize,
+    },
+    /// A vector was deleted.
+    VectorDeleted {
+        collection: String,
+        id: String,
+    },
+    /// A collection was created.
+    CollectionCreated {
+        name: String,
+        dimensions: usize,
+    },
+    /// A collection was dropped.
+    CollectionDropped {
+        name: String,
+    },
+}
+
+impl CollectionEvent {
+    /// Get the event type name.
+    pub fn event_type(&self) -> &'static str {
+        match self {
+            Self::VectorInserted { .. } => "vector.inserted",
+            Self::VectorUpdated { .. } => "vector.updated",
+            Self::VectorDeleted { .. } => "vector.deleted",
+            Self::CollectionCreated { .. } => "collection.created",
+            Self::CollectionDropped { .. } => "collection.dropped",
+        }
+    }
+
+    /// Get the collection name associated with the event.
+    pub fn collection(&self) -> &str {
+        match self {
+            Self::VectorInserted { collection, .. }
+            | Self::VectorUpdated { collection, .. }
+            | Self::VectorDeleted { collection, .. } => collection,
+            Self::CollectionCreated { name, .. }
+            | Self::CollectionDropped { name, .. } => name,
+        }
+    }
+}
+
+/// Type alias for event handler function.
+pub type EventHandlerFn = Box<dyn Fn(&CollectionEvent) -> Result<()> + Send + Sync>;
+
+/// A registered serverless function.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct ServerlessFunction {
+    /// Function name.
+    pub name: String,
+    /// Event types this function listens to.
+    pub event_filters: Vec<String>,
+    /// Optional collection filter (empty means all collections).
+    pub collection_filter: Option<String>,
+    /// Whether the function is enabled.
+    pub enabled: bool,
+    /// Maximum execution time in milliseconds.
+    pub timeout_ms: u64,
+    /// Number of times invoked.
+    pub invocations: u64,
+    /// Number of errors.
+    pub errors: u64,
+    /// Deployment timestamp.
+    pub deployed_at: u64,
+    /// Last invocation timestamp.
+    pub last_invoked_at: Option<u64>,
+}
+
+/// Configuration for the serverless function runtime.
+#[derive(Debug, Clone)]
+pub struct ServerlessFunctionConfig {
+    /// Maximum number of deployed functions.
+    pub max_functions: usize,
+    /// Default timeout for function execution (ms).
+    pub default_timeout_ms: u64,
+    /// Maximum timeout allowed (ms).
+    pub max_timeout_ms: u64,
+    /// Maximum log entries to retain per function.
+    pub max_log_entries: usize,
+}
+
+impl Default for ServerlessFunctionConfig {
+    fn default() -> Self {
+        Self {
+            max_functions: 100,
+            default_timeout_ms: 5000,
+            max_timeout_ms: 30000,
+            max_log_entries: 1000,
+        }
+    }
+}
+
+/// Log entry from a function invocation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FunctionLogEntry {
+    /// Function name.
+    pub function_name: String,
+    /// Event type that triggered the invocation.
+    pub event_type: String,
+    /// Whether the invocation succeeded.
+    pub success: bool,
+    /// Error message (if failed).
+    pub error: Option<String>,
+    /// Execution duration in microseconds.
+    pub duration_us: u64,
+    /// Timestamp.
+    pub timestamp: u64,
+}
+
+/// Serverless function runtime with event-driven execution.
+pub struct ServerlessFunctionRuntime {
+    config: ServerlessFunctionConfig,
+    functions: RwLock<HashMap<String, ServerlessFunction>>,
+    handlers: RwLock<HashMap<String, EventHandlerFn>>,
+    logs: RwLock<Vec<FunctionLogEntry>>,
+}
+
+impl ServerlessFunctionRuntime {
+    /// Create a new serverless function runtime.
+    pub fn new(config: ServerlessFunctionConfig) -> Self {
+        Self {
+            config,
+            functions: RwLock::new(HashMap::new()),
+            handlers: RwLock::new(HashMap::new()),
+            logs: RwLock::new(Vec::new()),
+        }
+    }
+
+    /// Deploy a new serverless function.
+    pub fn deploy(
+        &self,
+        name: &str,
+        event_filters: Vec<String>,
+        collection_filter: Option<String>,
+        handler: EventHandlerFn,
+    ) -> Result<()> {
+        let functions = self.functions.read();
+        if functions.len() >= self.config.max_functions {
+            return Err(NeedleError::CapacityExceeded(format!(
+                "Maximum functions ({}) reached",
+                self.config.max_functions
+            )));
+        }
+        if functions.contains_key(name) {
+            return Err(NeedleError::AlreadyExists(format!(
+                "Function '{}' already deployed",
+                name
+            )));
+        }
+        drop(functions);
+
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+
+        let func = ServerlessFunction {
+            name: name.to_string(),
+            event_filters,
+            collection_filter,
+            enabled: true,
+            timeout_ms: self.config.default_timeout_ms,
+            invocations: 0,
+            errors: 0,
+            deployed_at: now,
+            last_invoked_at: None,
+        };
+
+        self.functions.write().insert(name.to_string(), func);
+        self.handlers.write().insert(name.to_string(), handler);
+        Ok(())
+    }
+
+    /// Remove a deployed function.
+    pub fn remove(&self, name: &str) -> Result<()> {
+        self.functions
+            .write()
+            .remove(name)
+            .ok_or_else(|| NeedleError::NotFound(format!("Function '{name}' not found")))?;
+        self.handlers.write().remove(name);
+        Ok(())
+    }
+
+    /// Dispatch an event to all matching functions.
+    pub fn dispatch(&self, event: &CollectionEvent) -> Vec<FunctionLogEntry> {
+        let event_type = event.event_type().to_string();
+        let collection = event.collection().to_string();
+        let mut log_entries = Vec::new();
+
+        let functions = self.functions.read();
+        let handlers = self.handlers.read();
+
+        for (name, func) in functions.iter() {
+            if !func.enabled {
+                continue;
+            }
+
+            // Check event filter
+            let event_matches = func.event_filters.is_empty()
+                || func.event_filters.iter().any(|f| f == &event_type || f == "*");
+
+            // Check collection filter
+            let collection_matches = func
+                .collection_filter
+                .as_ref()
+                .is_none_or(|c| c == &collection);
+
+            if !event_matches || !collection_matches {
+                continue;
+            }
+
+            let start = Instant::now();
+            let result = handlers.get(name).map(|h| h(event));
+
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+
+            let entry = FunctionLogEntry {
+                function_name: name.clone(),
+                event_type: event_type.clone(),
+                success: result.as_ref().is_some_and(|r| r.is_ok()),
+                error: result
+                    .as_ref()
+                    .and_then(|r| r.as_ref().err().map(|e| e.to_string())),
+                duration_us: start.elapsed().as_micros() as u64,
+                timestamp: now,
+            };
+
+            log_entries.push(entry);
+        }
+
+        // Update stats (we need to drop reads first)
+        drop(functions);
+        drop(handlers);
+
+        let mut funcs = self.functions.write();
+        for entry in &log_entries {
+            if let Some(func) = funcs.get_mut(&entry.function_name) {
+                func.invocations += 1;
+                func.last_invoked_at = Some(entry.timestamp);
+                if !entry.success {
+                    func.errors += 1;
+                }
+            }
+        }
+        drop(funcs);
+
+        // Store logs
+        let mut logs = self.logs.write();
+        for entry in &log_entries {
+            logs.push(entry.clone());
+        }
+        while logs.len() > self.config.max_log_entries {
+            logs.remove(0);
+        }
+
+        log_entries
+    }
+
+    /// List all deployed functions.
+    pub fn list(&self) -> Vec<ServerlessFunction> {
+        self.functions.read().values().cloned().collect()
+    }
+
+    /// Get function logs, optionally filtered by function name.
+    pub fn logs(&self, function_name: Option<&str>) -> Vec<FunctionLogEntry> {
+        let logs = self.logs.read();
+        match function_name {
+            Some(name) => logs.iter().filter(|l| l.function_name == name).cloned().collect(),
+            None => logs.clone(),
+        }
+    }
+
+    /// Enable or disable a function.
+    pub fn set_enabled(&self, name: &str, enabled: bool) -> Result<()> {
+        self.functions
+            .write()
+            .get_mut(name)
+            .ok_or_else(|| NeedleError::NotFound(format!("Function '{name}' not found")))?
+            .enabled = enabled;
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -515,5 +816,117 @@ mod tests {
         let result = runtime.run_transform_hooks(&v);
         assert!((result[0] - 1.0).abs() < 0.01);
         assert!((result[1] - 2.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_serverless_deploy_and_dispatch() {
+        let runtime = ServerlessFunctionRuntime::new(ServerlessFunctionConfig::default());
+
+        let invoked = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let invoked_clone = invoked.clone();
+
+        runtime.deploy(
+            "on_insert",
+            vec!["vector.inserted".to_string()],
+            None,
+            Box::new(move |_event| {
+                invoked_clone.store(true, std::sync::atomic::Ordering::SeqCst);
+                Ok(())
+            }),
+        ).expect("deploy should succeed");
+
+        assert_eq!(runtime.list().len(), 1);
+
+        let event = CollectionEvent::VectorInserted {
+            collection: "docs".to_string(),
+            id: "doc1".to_string(),
+            dimensions: 4,
+        };
+
+        let logs = runtime.dispatch(&event);
+        assert_eq!(logs.len(), 1);
+        assert!(logs[0].success);
+        assert!(invoked.load(std::sync::atomic::Ordering::SeqCst));
+    }
+
+    #[test]
+    fn test_serverless_event_filter() {
+        let runtime = ServerlessFunctionRuntime::new(ServerlessFunctionConfig::default());
+
+        runtime.deploy(
+            "only_deletes",
+            vec!["vector.deleted".to_string()],
+            None,
+            Box::new(|_| Ok(())),
+        ).expect("deploy");
+
+        // Insert event should not trigger
+        let insert_event = CollectionEvent::VectorInserted {
+            collection: "docs".to_string(),
+            id: "doc1".to_string(),
+            dimensions: 4,
+        };
+        let logs = runtime.dispatch(&insert_event);
+        assert!(logs.is_empty());
+
+        // Delete event should trigger
+        let delete_event = CollectionEvent::VectorDeleted {
+            collection: "docs".to_string(),
+            id: "doc1".to_string(),
+        };
+        let logs = runtime.dispatch(&delete_event);
+        assert_eq!(logs.len(), 1);
+    }
+
+    #[test]
+    fn test_serverless_collection_filter() {
+        let runtime = ServerlessFunctionRuntime::new(ServerlessFunctionConfig::default());
+
+        runtime.deploy(
+            "only_docs",
+            vec!["*".to_string()],
+            Some("docs".to_string()),
+            Box::new(|_| Ok(())),
+        ).expect("deploy");
+
+        let docs_event = CollectionEvent::VectorInserted {
+            collection: "docs".to_string(),
+            id: "d1".to_string(),
+            dimensions: 4,
+        };
+        assert_eq!(runtime.dispatch(&docs_event).len(), 1);
+
+        let other_event = CollectionEvent::VectorInserted {
+            collection: "other".to_string(),
+            id: "o1".to_string(),
+            dimensions: 4,
+        };
+        assert!(runtime.dispatch(&other_event).is_empty());
+    }
+
+    #[test]
+    fn test_serverless_remove() {
+        let runtime = ServerlessFunctionRuntime::new(ServerlessFunctionConfig::default());
+        runtime.deploy("f1", vec![], None, Box::new(|_| Ok(()))).expect("deploy");
+        assert_eq!(runtime.list().len(), 1);
+
+        runtime.remove("f1").expect("remove");
+        assert!(runtime.list().is_empty());
+        assert!(runtime.remove("f1").is_err());
+    }
+
+    #[test]
+    fn test_serverless_disable() {
+        let runtime = ServerlessFunctionRuntime::new(ServerlessFunctionConfig::default());
+        runtime.deploy("f1", vec!["*".to_string()], None, Box::new(|_| Ok(()))).expect("deploy");
+
+        runtime.set_enabled("f1", false).expect("disable");
+
+        let event = CollectionEvent::VectorInserted {
+            collection: "docs".to_string(),
+            id: "d1".to_string(),
+            dimensions: 4,
+        };
+        assert!(runtime.dispatch(&event).is_empty());
     }
 }
