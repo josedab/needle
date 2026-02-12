@@ -489,11 +489,205 @@ impl ReplicaManager {
         *self.leader_lsn.read()
     }
 
+    /// Automatic failover: select the best replica (lowest lag, highest applied LSN).
+    /// Returns the failover action if a suitable replica was found.
+    pub fn auto_failover(&self, reason: &str) -> Result<FailoverAction> {
+        let replicas = self.replicas.read();
+        let candidate = replicas
+            .values()
+            .filter(|r| {
+                r.health == ReplicaHealth::Healthy || r.health == ReplicaHealth::Lagging
+            })
+            .max_by_key(|r| r.applied_lsn);
+
+        let candidate = candidate.ok_or_else(|| {
+            NeedleError::InvalidOperation(
+                "No healthy replica available for automatic failover".to_string(),
+            )
+        })?;
+
+        let new_leader_id = candidate.node_id.clone();
+        let leader_lsn = *self.leader_lsn.read();
+        let now = Self::now();
+
+        let action = FailoverAction {
+            previous_leader: self.leader_id.clone(),
+            new_leader: new_leader_id,
+            timestamp: now,
+            lsn: leader_lsn,
+            is_manual: false,
+            reason: reason.to_string(),
+        };
+
+        self.failover_history.write().push(action.clone());
+        Ok(action)
+    }
+
+    /// Get WAL entries that need to be shipped to a specific replica.
+    /// Returns entries between the replica's applied LSN and the leader LSN.
+    pub fn pending_wal_entries_for(&self, node_id: &str) -> Result<WalShipment> {
+        let replicas = self.replicas.read();
+        let replica = replicas
+            .get(node_id)
+            .ok_or_else(|| NeedleError::NotFound(format!("Replica '{node_id}' not found")))?;
+
+        let leader_lsn = *self.leader_lsn.read();
+        let from_lsn = replica.applied_lsn;
+
+        Ok(WalShipment {
+            target_node_id: node_id.to_string(),
+            from_lsn,
+            to_lsn: leader_lsn,
+            entries_pending: leader_lsn.saturating_sub(from_lsn),
+            lag_secs: replica.lag_secs,
+            max_entries: self.config.max_wal_entries_per_poll as u64,
+        })
+    }
+
+    /// Check if a replica's lag is within the configured tolerance.
+    pub fn is_within_lag_tolerance(&self, node_id: &str) -> bool {
+        let replicas = self.replicas.read();
+        replicas
+            .get(node_id)
+            .is_some_and(|r| r.lag_secs <= self.config.max_lag_secs as f64)
+    }
+
     fn now() -> u64 {
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs()
+    }
+}
+
+/// WAL shipment descriptor for a replica.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WalShipment {
+    /// Target replica node ID.
+    pub target_node_id: String,
+    /// Starting LSN (exclusive).
+    pub from_lsn: u64,
+    /// Ending LSN (inclusive).
+    pub to_lsn: u64,
+    /// Number of entries pending.
+    pub entries_pending: u64,
+    /// Current replica lag in seconds.
+    pub lag_secs: f64,
+    /// Maximum entries to ship in one batch.
+    pub max_entries: u64,
+}
+
+/// A read-only database view backed by replicated data.
+/// Accepts queries only if the replica lag is within the configured tolerance.
+pub struct ReplicaDatabase {
+    node_id: String,
+    applied_lsn: u64,
+    lag_tolerance_secs: f64,
+    current_lag_secs: f64,
+    read_only: bool,
+    collections: HashMap<String, ReplicaCollectionState>,
+}
+
+/// Replica-side state for a single collection.
+#[derive(Debug, Clone)]
+pub struct ReplicaCollectionState {
+    /// Collection name.
+    pub name: String,
+    /// Number of vectors replicated.
+    pub vector_count: usize,
+    /// Dimensions.
+    pub dimensions: usize,
+    /// Last applied LSN for this collection.
+    pub applied_lsn: u64,
+}
+
+impl ReplicaDatabase {
+    /// Create a new read-only replica database.
+    pub fn new(node_id: &str, lag_tolerance_secs: f64) -> Self {
+        Self {
+            node_id: node_id.to_string(),
+            applied_lsn: 0,
+            lag_tolerance_secs,
+            current_lag_secs: 0.0,
+            read_only: true,
+            collections: HashMap::new(),
+        }
+    }
+
+    /// Check if the replica is ready to serve queries.
+    pub fn is_query_ready(&self) -> bool {
+        self.current_lag_secs <= self.lag_tolerance_secs
+    }
+
+    /// Get the current replica lag.
+    pub fn lag_secs(&self) -> f64 {
+        self.current_lag_secs
+    }
+
+    /// Update the replica lag estimate.
+    pub fn update_lag(&mut self, lag_secs: f64) {
+        self.current_lag_secs = lag_secs;
+    }
+
+    /// Apply a WAL entry to the replica state.
+    pub fn apply_wal_entry(&mut self, lsn: u64, entry: &crate::wal::WalEntry) -> Result<()> {
+        if !self.read_only {
+            return Err(NeedleError::InvalidOperation(
+                "Cannot apply WAL to non-replica database".to_string(),
+            ));
+        }
+
+        match entry {
+            crate::wal::WalEntry::Insert { collection, .. }
+            | crate::wal::WalEntry::Update { collection, .. } => {
+                let state = self.collections.entry(collection.clone()).or_insert(
+                    ReplicaCollectionState {
+                        name: collection.clone(),
+                        vector_count: 0,
+                        dimensions: 0,
+                        applied_lsn: 0,
+                    },
+                );
+                state.vector_count += 1;
+                state.applied_lsn = lsn;
+            }
+            crate::wal::WalEntry::Delete { collection, .. } => {
+                if let Some(state) = self.collections.get_mut(collection) {
+                    state.vector_count = state.vector_count.saturating_sub(1);
+                    state.applied_lsn = lsn;
+                }
+            }
+            _ => {}
+        }
+
+        self.applied_lsn = lsn;
+        Ok(())
+    }
+
+    /// Validate that a read query is allowed on this replica.
+    pub fn validate_read(&self) -> Result<()> {
+        if !self.is_query_ready() {
+            return Err(NeedleError::InvalidOperation(format!(
+                "Replica '{}' lag ({:.1}s) exceeds tolerance ({:.1}s)",
+                self.node_id, self.current_lag_secs, self.lag_tolerance_secs
+            )));
+        }
+        Ok(())
+    }
+
+    /// Get the applied LSN.
+    pub fn applied_lsn(&self) -> u64 {
+        self.applied_lsn
+    }
+
+    /// List replicated collections.
+    pub fn collections(&self) -> Vec<&ReplicaCollectionState> {
+        self.collections.values().collect()
+    }
+
+    /// Get replica node ID.
+    pub fn node_id(&self) -> &str {
+        &self.node_id
     }
 }
 
@@ -597,5 +791,80 @@ mod tests {
         manager.remove_replica("r1").unwrap();
         assert_eq!(manager.list_replicas().len(), 0);
         assert!(manager.remove_replica("r1").is_err());
+    }
+
+    #[test]
+    fn test_auto_failover() {
+        let manager = ReplicaManager::new("leader-1", ReplicaManagerConfig::default());
+        manager.add_replica("r1", "http://r1:8080").unwrap();
+        manager.add_replica("r2", "http://r2:8080").unwrap();
+        manager.advance_leader_lsn(100);
+        manager.record_heartbeat("r1", 90);
+        manager.record_heartbeat("r2", 95);
+
+        let action = manager.auto_failover("leader unresponsive").unwrap();
+        // r2 has higher applied_lsn so should be selected
+        assert_eq!(action.new_leader, "r2");
+        assert!(!action.is_manual);
+    }
+
+    #[test]
+    fn test_auto_failover_no_healthy() {
+        let manager = ReplicaManager::new("leader-1", ReplicaManagerConfig::default());
+        // No replicas registered
+        assert!(manager.auto_failover("test").is_err());
+    }
+
+    #[test]
+    fn test_wal_shipment() {
+        let manager = ReplicaManager::new("leader-1", ReplicaManagerConfig::default());
+        manager.add_replica("r1", "http://r1:8080").unwrap();
+        manager.advance_leader_lsn(100);
+        manager.record_heartbeat("r1", 50);
+
+        let shipment = manager.pending_wal_entries_for("r1").unwrap();
+        assert_eq!(shipment.from_lsn, 50);
+        assert_eq!(shipment.to_lsn, 100);
+        assert_eq!(shipment.entries_pending, 50);
+    }
+
+    #[test]
+    fn test_lag_tolerance() {
+        let config = ReplicaManagerConfig {
+            max_lag_secs: 10,
+            ..Default::default()
+        };
+        let manager = ReplicaManager::new("leader-1", config);
+        manager.add_replica("r1", "http://r1:8080").unwrap();
+        manager.advance_leader_lsn(100);
+        manager.record_heartbeat("r1", 99);
+
+        assert!(manager.is_within_lag_tolerance("r1"));
+    }
+
+    #[test]
+    fn test_replica_database() {
+        let mut replica = ReplicaDatabase::new("r1", 5.0);
+        assert!(replica.is_query_ready());
+        assert!(replica.validate_read().is_ok());
+
+        replica.update_lag(10.0);
+        assert!(!replica.is_query_ready());
+        assert!(replica.validate_read().is_err());
+    }
+
+    #[test]
+    fn test_replica_database_wal_apply() {
+        let mut replica = ReplicaDatabase::new("r1", 5.0);
+
+        let entry = crate::wal::WalEntry::Insert {
+            collection: "docs".to_string(),
+            id: "doc1".to_string(),
+            vector: vec![0.1; 4],
+            metadata: None,
+        };
+        replica.apply_wal_entry(1, &entry).unwrap();
+        assert_eq!(replica.applied_lsn(), 1);
+        assert_eq!(replica.collections().len(), 1);
     }
 }
