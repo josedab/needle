@@ -1044,6 +1044,118 @@ impl IngestionPipeline {
             .map(|(name, source)| (name.clone(), source.is_healthy()))
             .collect()
     }
+
+    /// Get a comprehensive status report suitable for CLI display.
+    pub fn status(&self) -> IngestionStatus {
+        let elapsed_secs = self.stats.started_at.elapsed().as_secs_f64();
+        let total_ingested = self.stats.total_ingested.load(Ordering::Relaxed);
+        let total_failed = self.stats.total_failed.load(Ordering::Relaxed);
+        let total_skipped = self.stats.total_skipped.load(Ordering::Relaxed);
+        let total_batches = self.stats.total_batches.load(Ordering::Relaxed);
+        let total_bytes = self.stats.total_bytes.load(Ordering::Relaxed);
+
+        let throughput_vps = if elapsed_secs > 0.0 {
+            total_ingested as f64 / elapsed_secs
+        } else {
+            0.0
+        };
+
+        let source_statuses: Vec<SourceStatus> = self
+            .sources
+            .read()
+            .iter()
+            .map(|(name, source)| SourceStatus {
+                name: name.clone(),
+                healthy: source.is_healthy(),
+                last_offset: self.offset_tracker.committed_offset(name),
+            })
+            .collect();
+
+        IngestionStatus {
+            running: self.running.load(Ordering::Relaxed),
+            elapsed_secs,
+            total_ingested,
+            total_failed,
+            total_skipped,
+            total_batches,
+            total_bytes,
+            throughput_vps,
+            source_count: source_statuses.len(),
+            sources: source_statuses,
+            backpressure_events: self.metrics.backpressure_events_total.load(Ordering::Relaxed),
+            checkpoints: self.metrics.checkpoint_count.load(Ordering::Relaxed),
+        }
+    }
+}
+
+/// Comprehensive ingestion status for CLI/API reporting.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IngestionStatus {
+    /// Whether the pipeline is running.
+    pub running: bool,
+    /// Seconds since pipeline started.
+    pub elapsed_secs: f64,
+    /// Total vectors successfully ingested.
+    pub total_ingested: u64,
+    /// Total vectors that failed.
+    pub total_failed: u64,
+    /// Total vectors skipped (duplicates).
+    pub total_skipped: u64,
+    /// Total batches processed.
+    pub total_batches: u64,
+    /// Total bytes ingested.
+    pub total_bytes: u64,
+    /// Current throughput in vectors/second.
+    pub throughput_vps: f64,
+    /// Number of attached sources.
+    pub source_count: usize,
+    /// Per-source status details.
+    pub sources: Vec<SourceStatus>,
+    /// Total backpressure events.
+    pub backpressure_events: u64,
+    /// Total WAL checkpoints.
+    pub checkpoints: u64,
+}
+
+/// Status for a single ingestion source.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SourceStatus {
+    /// Source name.
+    pub name: String,
+    /// Whether the source is healthy.
+    pub healthy: bool,
+    /// Last committed offset.
+    pub last_offset: Option<SourceOffset>,
+}
+
+impl std::fmt::Display for IngestionStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "Ingestion Pipeline Status")?;
+        writeln!(f, "  Running:     {}", self.running)?;
+        writeln!(f, "  Elapsed:     {:.1}s", self.elapsed_secs)?;
+        writeln!(f, "  Ingested:    {} vectors", self.total_ingested)?;
+        writeln!(f, "  Failed:      {}", self.total_failed)?;
+        writeln!(f, "  Skipped:     {}", self.total_skipped)?;
+        writeln!(f, "  Batches:     {}", self.total_batches)?;
+        writeln!(f, "  Throughput:  {:.1} vectors/sec", self.throughput_vps)?;
+        writeln!(f, "  Bytes:       {}", self.total_bytes)?;
+        writeln!(f, "  Sources:     {}", self.source_count)?;
+        for src in &self.sources {
+            writeln!(
+                f,
+                "    {} - {}{}",
+                src.name,
+                if src.healthy { "healthy" } else { "unhealthy" },
+                src.last_offset
+                    .as_ref()
+                    .map(|o| format!(" (offset: {o})"))
+                    .unwrap_or_default()
+            )?;
+        }
+        writeln!(f, "  Backpressure events: {}", self.backpressure_events)?;
+        writeln!(f, "  Checkpoints: {}", self.checkpoints)?;
+        Ok(())
+    }
 }
 
 // ============================================================================
@@ -1344,5 +1456,28 @@ mod tests {
         assert_eq!(batch.len(), 2);
         source.close().expect("close");
         assert!(handle.push(make_record("v3", "test", 64)).is_err());
+    }
+
+    #[test]
+    fn test_pipeline_status() {
+        let config = IngestionConfig::default();
+        let pipeline = IngestionPipeline::new(config);
+        let (source, sender) = ChannelSource::new(100);
+        pipeline.attach_source("ch1", Box::new(source)).expect("attach");
+
+        sender.send(make_record("v1", "test", 128)).expect("send");
+        sender.send(make_record("v2", "test", 128)).expect("send");
+        pipeline.process_batch().expect("process");
+
+        let status = pipeline.status();
+        assert_eq!(status.total_ingested, 2);
+        assert_eq!(status.source_count, 1);
+        assert!(status.throughput_vps >= 0.0);
+        assert!(!status.sources.is_empty());
+        assert!(status.sources[0].healthy);
+
+        // Display trait should work
+        let display = format!("{status}");
+        assert!(display.contains("Ingestion Pipeline Status"));
     }
 }
