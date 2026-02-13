@@ -82,7 +82,7 @@ let n = collection.count()?;              // Avoid
 pub fn search(&self, query: &[f32], k: usize) -> Result<Vec<SearchResult>>
 
 // Handle errors properly
-collection.insert(id, &vector, metadata)?;  // Propagate errors
+collection.insert(id, &vector, Some(metadata))?;  // Propagate errors
 ```
 
 ### Formatting
@@ -152,15 +152,15 @@ mod tests {
     #[test]
     fn test_insert_and_search() {
         // Use in-memory database for tests
-        let db = Database::in_memory().unwrap();
-        db.create_collection("test", 4, DistanceFunction::Cosine).unwrap();
+        let db = Database::in_memory();
+        db.create_collection("test", 4).unwrap();
         let collection = db.collection("test").unwrap();
 
         // Insert test data
-        collection.insert("v1", &[1.0, 0.0, 0.0, 0.0], json!({})).unwrap();
+        collection.insert("v1", &[1.0, 0.0, 0.0, 0.0], Some(json!({}))).unwrap();
 
         // Verify behavior
-        let results = collection.search(&[1.0, 0.0, 0.0, 0.0], 1, None).unwrap();
+        let results = collection.search(&[1.0, 0.0, 0.0, 0.0], 1).unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].id, "v1");
     }

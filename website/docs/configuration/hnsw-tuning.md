@@ -21,7 +21,8 @@ This guide provides detailed recommendations for tuning HNSW parameters based on
 Controls how many connections each node has in the HNSW graph.
 
 ```rust
-let config = CollectionConfig::new(384, DistanceFunction::Cosine)
+let config = CollectionConfig::new("collection", 384)
+    .with_distance(DistanceFunction::Cosine)
     .with_hnsw_m(24);
 ```
 
@@ -46,7 +47,8 @@ let config = CollectionConfig::new(384, DistanceFunction::Cosine)
 Controls search depth during index building.
 
 ```rust
-let config = CollectionConfig::new(384, DistanceFunction::Cosine)
+let config = CollectionConfig::new("collection", 384)
+    .with_distance(DistanceFunction::Cosine)
     .with_hnsw_ef_construction(400);
 ```
 
@@ -90,7 +92,8 @@ let results = collection.search_with_params(&query, 10, None, 100)?;
 
 ```rust
 // Start with defaults
-let config = CollectionConfig::new(384, DistanceFunction::Cosine);
+let config = CollectionConfig::new("collection", 384)
+    .with_distance(DistanceFunction::Cosine);
 // M=16, ef_construction=200, ef_search=50
 ```
 
@@ -103,7 +106,7 @@ fn benchmark(collection: &Collection, queries: &[Vec<f32>]) -> (f32, Duration) {
 
     for query in queries {
         let start = Instant::now();
-        let results = collection.search(query, 10, None)?;
+        let results = collection.search(query, 10)?;
         total_time += start.elapsed();
 
         // Compare with ground truth
@@ -145,7 +148,8 @@ let constraints = TuningConstraints::new(1_000_000, 384)
 
 let result = auto_tune(&constraints);
 
-let config = CollectionConfig::new(384, DistanceFunction::Cosine)
+let config = CollectionConfig::new("collection", 384)
+    .with_distance(DistanceFunction::Cosine)
     .with_hnsw_m(result.config.hnsw_m)
     .with_hnsw_ef_construction(result.config.ef_construction);
 ```
@@ -186,7 +190,8 @@ Typical results for 1M vectors, 384 dimensions:
 High recall is critical; latency can be higher.
 
 ```rust
-let config = CollectionConfig::new(384, DistanceFunction::Cosine)
+let config = CollectionConfig::new("collection", 384)
+    .with_distance(DistanceFunction::Cosine)
     .with_hnsw_m(24)
     .with_hnsw_ef_construction(400);
 
@@ -199,7 +204,8 @@ let results = collection.search_with_params(&query, 10, None, 150)?;
 Low latency is critical; moderate recall acceptable.
 
 ```rust
-let config = CollectionConfig::new(256, DistanceFunction::Dot)
+let config = CollectionConfig::new("collection", 256)
+    .with_distance(DistanceFunction::DotProduct)
     .with_hnsw_m(12)
     .with_hnsw_ef_construction(150);
 
@@ -212,7 +218,8 @@ let results = collection.search_with_params(&query, 20, None, 30)?;
 Memory is critical; use quantization.
 
 ```rust
-let config = CollectionConfig::new(512, DistanceFunction::Euclidean)
+let config = CollectionConfig::new("collection", 512)
+    .with_distance(DistanceFunction::Euclidean)
     .with_hnsw_m(16)
     .with_hnsw_ef_construction(200)
     .with_quantization(QuantizationType::Scalar);
@@ -226,7 +233,8 @@ let results = collection.search_with_params(&query, 10, None, 100)?;
 Need to over-fetch due to post-filtering.
 
 ```rust
-let config = CollectionConfig::new(384, DistanceFunction::Cosine)
+let config = CollectionConfig::new("collection", 384)
+    .with_distance(DistanceFunction::Cosine)
     .with_hnsw_m(20)
     .with_hnsw_ef_construction(250);
 
