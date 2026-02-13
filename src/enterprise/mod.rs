@@ -5,6 +5,8 @@ pub mod autoscaling;
 #[cfg(feature = "encryption")]
 pub mod encryption;
 pub mod namespace;
+/// Differential privacy mechanisms for vector search results.
+pub mod privacy;
 pub mod raft;
 pub mod replicated_database;
 pub mod security;

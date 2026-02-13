@@ -153,7 +153,7 @@ pub use ml::inference_engine;
 pub mod enterprise;
 #[cfg(feature = "encryption")]
 pub use enterprise::encryption;
-pub use enterprise::{autoscaling, namespace, raft, security, tenant_isolation};
+pub use enterprise::{autoscaling, namespace, privacy, raft, security, tenant_isolation};
 
 // ── Observability ────────────────────────────────────────────────────────────
 // Telemetry, drift detection, anomaly detection, profiling.
