@@ -28,6 +28,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 - Enhanced landing page with architecture diagram and multi-language install tabs
 - Added Mermaid diagrams to RAG and Hybrid Search guides
 - Improved cross-linking between documentation pages
+- Added [Architecture Deep-Dive](/docs/architecture) with system overview, data flow, and storage format diagrams
+- Added [Index Selection Guide](/docs/guides/index-selection) with HNSW/IVF/DiskANN decision flowchart
+- Added [Docker & HTTP Quickstart](/docs/guides/docker-quickstart) with full REST API endpoint table
+- Added [Production Checklist](/docs/guides/production-checklist) for capacity, security, and monitoring
+- Added [Operations Guide](/docs/advanced/operations) with Prometheus metrics and troubleshooting runbooks
+- Added [Deployment Guide](/docs/advanced/deployment) for Docker, Kubernetes, and Helm
+- Added [Distributed Operations](/docs/advanced/distributed) covering Raft replication and sharding
+- Added [API Stability](/docs/api-stability) tiers (Stable, Beta, Experimental)
+- Audited all Rust code examples for API accuracy (`create_collection`, `search`, `insert` signatures)
+- Added Playground link to navbar
 
 ---
 
