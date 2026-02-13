@@ -36,6 +36,9 @@ const sidebars: SidebarsConfig = {
         'guides/hybrid-search',
         'guides/quantization',
         'guides/production',
+        'guides/index-selection',
+        'guides/docker-quickstart',
+        'guides/production-checklist',
       ],
     },
     {
@@ -59,6 +62,9 @@ const sidebars: SidebarsConfig = {
         'advanced/encryption',
         'advanced/sharding',
         'advanced/replication',
+        'advanced/operations',
+        'advanced/deployment',
+        'advanced/distributed',
       ],
     },
     {
@@ -77,6 +83,11 @@ const sidebars: SidebarsConfig = {
     },
     {
       type: 'doc',
+      id: 'architecture',
+      label: 'Architecture',
+    },
+    {
+      type: 'doc',
       id: 'benchmarks',
       label: 'Performance & Benchmarks',
     },
@@ -84,6 +95,11 @@ const sidebars: SidebarsConfig = {
       type: 'doc',
       id: 'comparison',
       label: 'Comparison',
+    },
+    {
+      type: 'doc',
+      id: 'api-stability',
+      label: 'API Stability',
     },
     {
       type: 'doc',

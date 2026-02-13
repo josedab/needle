@@ -21,6 +21,9 @@ const config: Config = {
 
   markdown: {
     mermaid: true,
+    hooks: {
+      onBrokenMarkdownLinks: 'warn',
+    },
   },
 
   i18n: {
@@ -102,6 +105,11 @@ const config: Config = {
           position: 'left',
         },
         {
+          href: 'pathname:///playground',
+          label: 'Playground',
+          position: 'left',
+        },
+        {
           href: 'https://docs.rs/needle',
           label: 'Rust Docs',
           position: 'right',
@@ -130,6 +138,10 @@ const config: Config = {
             {
               label: 'API Reference',
               to: '/docs/api-reference',
+            },
+            {
+              label: 'Architecture',
+              to: '/docs/architecture',
             },
           ],
         },
