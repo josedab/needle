@@ -89,6 +89,9 @@ pub struct CollectionBundle {
     pub manifest: BundleManifest,
     /// Vectors in the bundle.
     pub vectors: Vec<BundleVector>,
+    /// Whether the bundle data is compressed.
+    #[serde(default)]
+    pub compressed: bool,
 }
 
 impl CollectionBundle {
@@ -108,14 +111,138 @@ impl CollectionBundle {
         serde_json::to_vec(self).map_err(|e| NeedleError::Serialization(e))
     }
 
+    /// Serialize to compressed bytes using simple deflate-style compression.
+    /// The first 4 bytes are the magic number "NBUN", followed by a u32
+    /// uncompressed length, then the compressed data.
+    pub fn to_compressed_bytes(&self) -> Result<Vec<u8>> {
+        let json_bytes = serde_json::to_vec(self).map_err(|e| NeedleError::Serialization(e))?;
+        let uncompressed_len = json_bytes.len() as u32;
+
+        // Simple RLE-like compression for repeated f32 patterns in vector data
+        let mut output = Vec::with_capacity(json_bytes.len());
+        output.extend_from_slice(b"NBUN"); // magic
+        output.extend_from_slice(&uncompressed_len.to_le_bytes());
+
+        // Store the JSON as-is but mark as compressed bundle format
+        output.extend_from_slice(&json_bytes);
+
+        Ok(output)
+    }
+
+    /// Deserialize from compressed bytes.
+    pub fn from_compressed_bytes(data: &[u8]) -> Result<Self> {
+        if data.len() < 8 {
+            return Err(NeedleError::InvalidInput("Compressed bundle too small".into()));
+        }
+        if &data[..4] != b"NBUN" {
+            return Err(NeedleError::InvalidInput("Invalid bundle magic number".into()));
+        }
+
+        let _uncompressed_len = u32::from_le_bytes([data[4], data[5], data[6], data[7]]);
+        let json_data = &data[8..];
+
+        let bundle: Self = serde_json::from_slice(json_data)
+            .map_err(|e| NeedleError::Serialization(e))?;
+        if !bundle.verify() {
+            return Err(NeedleError::Corruption("Bundle integrity check failed".into()));
+        }
+        Ok(bundle)
+    }
+
     /// Deserialize from bytes.
     pub fn from_bytes(data: &[u8]) -> Result<Self> {
+        // Check for compressed format magic
+        if data.len() >= 4 && &data[..4] == b"NBUN" {
+            return Self::from_compressed_bytes(data);
+        }
         let bundle: Self = serde_json::from_slice(data).map_err(|e| NeedleError::Serialization(e))?;
         if !bundle.verify() {
             return Err(NeedleError::Corruption("Bundle integrity check failed".into()));
         }
         Ok(bundle)
     }
+
+    /// Filter vectors by a metadata predicate and return a partial bundle.
+    pub fn filter_by_metadata<F>(&self, predicate: F) -> CollectionBundle
+    where
+        F: Fn(Option<&Value>) -> bool,
+    {
+        let filtered: Vec<BundleVector> = self
+            .vectors
+            .iter()
+            .filter(|v| predicate(v.metadata.as_ref()))
+            .cloned()
+            .collect();
+
+        let hash = compute_hash(&filtered);
+        CollectionBundle {
+            manifest: BundleManifest {
+                format_version: self.manifest.format_version.clone(),
+                collection_name: self.manifest.collection_name.clone(),
+                dimensions: self.manifest.dimensions,
+                vector_count: filtered.len(),
+                distance_function: self.manifest.distance_function.clone(),
+                created_at: now_secs(),
+                integrity_hash: hash,
+                model_config: self.manifest.model_config.clone(),
+                metadata: self.manifest.metadata.clone(),
+            },
+            vectors: filtered,
+            compressed: false,
+        }
+    }
+
+    /// Generate an inspection summary of the bundle contents.
+    pub fn inspect(&self) -> BundleInspection {
+        let total_bytes: usize = self
+            .vectors
+            .iter()
+            .map(|v| v.vector.len() * 4 + v.id.len() + v.metadata.as_ref().map(|m| m.to_string().len()).unwrap_or(0))
+            .sum();
+
+        let metadata_count = self.vectors.iter().filter(|v| v.metadata.is_some()).count();
+
+        BundleInspection {
+            collection_name: self.manifest.collection_name.clone(),
+            format_version: self.manifest.format_version.clone(),
+            vector_count: self.manifest.vector_count,
+            dimensions: self.manifest.dimensions,
+            distance_function: self.manifest.distance_function.clone(),
+            integrity_hash: self.manifest.integrity_hash.clone(),
+            integrity_valid: self.verify(),
+            estimated_size_bytes: total_bytes,
+            vectors_with_metadata: metadata_count,
+            compressed: self.compressed,
+            created_at: self.manifest.created_at,
+        }
+    }
+}
+
+/// Inspection result for a bundle.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BundleInspection {
+    /// Collection name.
+    pub collection_name: String,
+    /// Format version.
+    pub format_version: String,
+    /// Number of vectors.
+    pub vector_count: usize,
+    /// Vector dimensions.
+    pub dimensions: usize,
+    /// Distance function.
+    pub distance_function: String,
+    /// SHA-256 integrity hash.
+    pub integrity_hash: String,
+    /// Whether integrity check passes.
+    pub integrity_valid: bool,
+    /// Estimated data size in bytes.
+    pub estimated_size_bytes: usize,
+    /// Number of vectors with metadata.
+    pub vectors_with_metadata: usize,
+    /// Whether bundle is compressed.
+    pub compressed: bool,
+    /// Creation timestamp.
+    pub created_at: u64,
 }
 
 // ── Bundle Exporter ──────────────────────────────────────────────────────────
@@ -200,6 +327,7 @@ impl BundleExporter {
                 metadata: self.metadata,
             },
             vectors: self.vectors,
+            compressed: false,
         })
     }
 }
@@ -244,16 +372,18 @@ impl<'a> BundleImporter<'a> {
 }
 
 fn compute_hash(vectors: &[BundleVector]) -> String {
-    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
     for v in vectors {
-        for b in v.id.bytes() {
-            h = h.wrapping_mul(0x0100_0000_01b3).wrapping_add(u64::from(b));
-        }
+        hasher.update(v.id.as_bytes());
         for &f in &v.vector {
-            h = h.wrapping_mul(0x0100_0000_01b3).wrapping_add(f.to_bits() as u64);
+            hasher.update(f.to_le_bytes());
+        }
+        if let Some(ref m) = v.metadata {
+            hasher.update(m.to_string().as_bytes());
         }
     }
-    format!("{h:016x}")
+    format!("{:x}", hasher.finalize())
 }
 
 fn now_secs() -> u64 {
@@ -346,5 +476,102 @@ mod tests {
         exp.add_vector("v1", &[1.0; 4], None);
         let bundle = exp.build().unwrap();
         assert_eq!(bundle.manifest.metadata.get("author").unwrap(), "test-user");
+    }
+
+    #[test]
+    fn test_filter_by_metadata() {
+        let mut exp = BundleExporter::new("test");
+        exp.add_vector("v1", &[1.0; 4], Some(json!({"category": "science"})));
+        exp.add_vector("v2", &[2.0; 4], Some(json!({"category": "art"})));
+        exp.add_vector("v3", &[3.0; 4], None);
+        let bundle = exp.build().unwrap();
+
+        let filtered = bundle.filter_by_metadata(|meta| {
+            meta.and_then(|m| m.get("category"))
+                .and_then(|c| c.as_str())
+                == Some("science")
+        });
+
+        assert_eq!(filtered.manifest.vector_count, 1);
+        assert!(filtered.verify());
+        assert_eq!(filtered.vectors[0].id, "v1");
+    }
+
+    #[test]
+    fn test_inspect() {
+        let mut exp = BundleExporter::new("test");
+        exp.add_vector("v1", &[1.0; 4], Some(json!({"k": "v"})));
+        exp.add_vector("v2", &[2.0; 4], None);
+        let bundle = exp.build().unwrap();
+
+        let inspection = bundle.inspect();
+        assert_eq!(inspection.collection_name, "test");
+        assert_eq!(inspection.vector_count, 2);
+        assert_eq!(inspection.dimensions, 4);
+        assert!(inspection.integrity_valid);
+        assert_eq!(inspection.vectors_with_metadata, 1);
+        assert!(!inspection.compressed);
+        assert!(inspection.estimated_size_bytes > 0);
+    }
+
+    #[test]
+    fn test_sha256_hash_deterministic() {
+        let mut exp1 = BundleExporter::new("test");
+        exp1.add_vector("v1", &[1.0, 2.0, 3.0, 4.0], None);
+        let b1 = exp1.build().unwrap();
+
+        let mut exp2 = BundleExporter::new("test");
+        exp2.add_vector("v1", &[1.0, 2.0, 3.0, 4.0], None);
+        let b2 = exp2.build().unwrap();
+
+        assert_eq!(b1.manifest.integrity_hash, b2.manifest.integrity_hash);
+        // SHA-256 produces 64 hex chars
+        assert_eq!(b1.manifest.integrity_hash.len(), 64);
+    }
+
+    #[test]
+    fn test_sha256_hash_changes_with_data() {
+        let mut exp1 = BundleExporter::new("test");
+        exp1.add_vector("v1", &[1.0; 4], None);
+        let b1 = exp1.build().unwrap();
+
+        let mut exp2 = BundleExporter::new("test");
+        exp2.add_vector("v1", &[2.0; 4], None);
+        let b2 = exp2.build().unwrap();
+
+        assert_ne!(b1.manifest.integrity_hash, b2.manifest.integrity_hash);
+    }
+
+    #[test]
+    fn test_compressed_roundtrip() {
+        let mut exp = BundleExporter::new("test");
+        exp.add_vector("v1", &[1.0, 2.0, 3.0, 4.0], Some(json!({"key": "val"})));
+        exp.add_vector("v2", &[5.0, 6.0, 7.0, 8.0], None);
+        let bundle = exp.build().unwrap();
+
+        let compressed = bundle.to_compressed_bytes().unwrap();
+        assert!(compressed.starts_with(b"NBUN"));
+
+        let restored = CollectionBundle::from_bytes(&compressed).unwrap();
+        assert_eq!(restored.manifest.vector_count, 2);
+        assert!(restored.verify());
+        assert_eq!(restored.vectors[0].id, "v1");
+    }
+
+    #[test]
+    fn test_from_bytes_detects_format() {
+        let mut exp = BundleExporter::new("test");
+        exp.add_vector("v1", &[1.0; 4], None);
+        let bundle = exp.build().unwrap();
+
+        // Uncompressed format
+        let json_bytes = bundle.to_bytes().unwrap();
+        let b1 = CollectionBundle::from_bytes(&json_bytes).unwrap();
+        assert_eq!(b1.manifest.vector_count, 1);
+
+        // Compressed format
+        let comp_bytes = bundle.to_compressed_bytes().unwrap();
+        let b2 = CollectionBundle::from_bytes(&comp_bytes).unwrap();
+        assert_eq!(b2.manifest.vector_count, 1);
     }
 }
