@@ -191,7 +191,7 @@ pub mod services;
 pub use services::{adaptive_service, ingestion_pipeline, plugin_runtime};
 pub use services::{
     ingestion_service, multimodal_service, pitr_service, text_collection, tiered_service,
-    live_migration_service,
+    live_migration_service, vector_namespace,
 };
 
 // ── Experimental Services ────────────────────────────────────────────────────

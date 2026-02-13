@@ -16,3 +16,4 @@ pub mod pitr_service;
 pub mod text_collection;
 #[cfg(feature = "experimental")]
 pub mod typed_schema;
+pub mod vector_namespace;
