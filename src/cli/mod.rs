@@ -135,8 +135,10 @@ pub fn run(cli: Cli) -> Result<()> {
         Commands::Doctor => doctor_command(),
         Commands::Snapshot(cmd) => snapshot_command(cmd),
         Commands::Memory(cmd) => memory_command(cmd),
-        Commands::Diff { database, source, target, limit } =>
-            diff_command(&database, &source, &target, limit),
+        Commands::Diff { database, source, target, limit, threshold } =>
+            diff_command(&database, &source, &target, limit, threshold),
+        Commands::Merge { database, source, target, base, strategy, dry_run } =>
+            merge_command(&database, &source, &target, base.as_deref(), &strategy, dry_run),
         Commands::Estimate { database, collection, k, with_filter } =>
             estimate_command(&database, &collection, k, with_filter),
         Commands::RecommendIndex { vectors, dimensions, memory_mb, profile } =>
@@ -151,5 +153,11 @@ pub fn run(cli: Cli) -> Result<()> {
             export_bundle_command(&database, &collection, &output),
         Commands::ImportBundle { database, bundle, name } =>
             import_bundle_command(&database, &bundle, name.as_deref()),
+        Commands::AdviseCompression { database, collection, test_queries, k, targets, apply } =>
+            advise_compression_command(&database, &collection, test_queries, k, &targets, apply),
+        Commands::Migrate { database, source, url, collection, dry_run, batch_size, resume, rollback } =>
+            migrate_command(&database, &source, &url, &collection, dry_run, batch_size, resume.as_deref(), rollback),
+        Commands::Function(cmd) => function_command(cmd),
+        Commands::Views(cmd) => views_command(cmd),
     }
 }

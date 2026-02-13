@@ -296,6 +296,14 @@ pub enum Commands {
     #[command(subcommand)]
     Memory(MemoryCommands),
 
+    /// Serverless function management (deploy/list/logs/remove)
+    #[command(subcommand)]
+    Function(FunctionCommands),
+
+    /// Materialized view management (create/list/drop/refresh)
+    #[command(subcommand)]
+    Views(ViewsCommands),
+
     /// Compare two collections and show differences
     Diff {
         /// Path to the database file
@@ -309,6 +317,30 @@ pub enum Commands {
         /// Maximum differences to show
         #[arg(short, long, default_value_t = 100)]
         limit: usize,
+        /// Similarity threshold for considering vectors "modified" (L2 distance)
+        #[arg(long, default_value_t = 1e-6)]
+        threshold: f32,
+    },
+
+    /// Merge vectors from source collection into target collection
+    Merge {
+        /// Path to the database file
+        database: String,
+        /// Source collection to merge from
+        #[arg(short = 'a', long)]
+        source: String,
+        /// Target collection to merge into
+        #[arg(short = 'b', long)]
+        target: String,
+        /// Base collection for 3-way merge (common ancestor)
+        #[arg(long)]
+        base: Option<String>,
+        /// Conflict strategy: source-wins, target-wins, skip
+        #[arg(long, default_value = "source-wins")]
+        strategy: String,
+        /// Dry run (show what would change without applying)
+        #[arg(long)]
+        dry_run: bool,
     },
 
     /// Estimate query cost before execution
@@ -419,6 +451,66 @@ pub enum Commands {
         /// Override collection name (optional)
         #[arg(short, long)]
         name: Option<String>,
+    },
+
+    /// Analyze collection and recommend optimal compression strategy
+    AdviseCompression {
+        /// Path to the database file
+        database: String,
+
+        /// Collection name
+        #[arg(short, long)]
+        collection: String,
+
+        /// Number of recall test queries
+        #[arg(long, default_value = "100")]
+        test_queries: usize,
+
+        /// Recall k for evaluation
+        #[arg(short, long, default_value = "10")]
+        k: usize,
+
+        /// Target recall levels (comma-separated, e.g. "0.99,0.95,0.90")
+        #[arg(long, default_value = "0.99,0.95,0.90")]
+        targets: String,
+
+        /// Apply the recommended compression strategy immediately
+        #[arg(long)]
+        apply: bool,
+    },
+
+    /// Migrate vectors from external vector database
+    Migrate {
+        /// Path to the target database file
+        database: String,
+
+        /// Source system (qdrant, chromadb, milvus, pinecone)
+        #[arg(short, long)]
+        source: String,
+
+        /// Source connection URL
+        #[arg(long)]
+        url: String,
+
+        /// Target collection name
+        #[arg(short, long)]
+        collection: String,
+
+        /// Dry run (validate without importing)
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Batch size for streaming transfer
+        #[arg(long, default_value = "1000")]
+        batch_size: usize,
+
+        /// Resume from a previous migration checkpoint
+        #[arg(long)]
+        resume: Option<String>,
+
+        /// Rollback a previously completed migration
+        #[arg(long)]
+        rollback: bool,
     },
 }
 
@@ -747,6 +839,21 @@ pub enum SnapshotCommands {
         #[arg(short, long)]
         name: String,
     },
+
+    /// Prune old snapshots beyond retention window
+    Prune {
+        /// Path to the database file
+        database: String,
+        /// Collection name
+        #[arg(short, long)]
+        collection: String,
+        /// Retention window in seconds (snapshots older than this are pruned)
+        #[arg(short, long)]
+        retention_secs: u64,
+        /// Dry run (show what would be pruned without actually pruning)
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 /// Memory subcommands for agentic memory management
@@ -801,5 +908,88 @@ pub enum MemoryCommands {
         /// Memory ID to forget
         #[arg(short, long)]
         id: String,
+    },
+}
+
+/// Serverless function management subcommands
+#[derive(Subcommand)]
+pub enum FunctionCommands {
+    /// Deploy a new serverless function
+    Deploy {
+        /// Path to the database file
+        database: String,
+        /// Function name
+        #[arg(short, long)]
+        name: String,
+        /// Event filters (comma-separated, e.g. "vector.inserted,vector.deleted")
+        #[arg(short, long, default_value = "*")]
+        events: String,
+        /// Collection filter (only trigger for this collection)
+        #[arg(short, long)]
+        collection: Option<String>,
+    },
+
+    /// List deployed functions
+    List {
+        /// Path to the database file
+        database: String,
+    },
+
+    /// Show function invocation logs
+    Logs {
+        /// Path to the database file
+        database: String,
+        /// Function name (optional, shows all if omitted)
+        #[arg(short, long)]
+        name: Option<String>,
+        /// Maximum number of log entries
+        #[arg(short, long, default_value_t = 50)]
+        limit: usize,
+    },
+
+    /// Remove a deployed function
+    Remove {
+        /// Path to the database file
+        database: String,
+        /// Function name
+        #[arg(short, long)]
+        name: String,
+    },
+}
+
+/// Materialized view management subcommands
+#[derive(Subcommand)]
+pub enum ViewsCommands {
+    /// Create a materialized view from a NeedleQL query
+    Create {
+        /// Path to the database file
+        database: String,
+        /// View definition (NeedleQL CREATE VIEW statement)
+        #[arg(short, long)]
+        query: String,
+    },
+
+    /// List all materialized views
+    List {
+        /// Path to the database file
+        database: String,
+    },
+
+    /// Drop a materialized view
+    Drop {
+        /// Path to the database file
+        database: String,
+        /// View name
+        #[arg(short, long)]
+        name: String,
+    },
+
+    /// Refresh a materialized view
+    Refresh {
+        /// Path to the database file
+        database: String,
+        /// View name (or "all" to refresh all stale views)
+        #[arg(short, long)]
+        name: String,
     },
 }
