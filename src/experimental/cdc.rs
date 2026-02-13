@@ -289,6 +289,89 @@ pub struct CdcStats {
     pub callback_count: usize,
 }
 
+/// A watch stream for observing collection changes with cursor-based resumption.
+///
+/// Created via `ChangeEventLog::watch()`. Tracks a cursor position so the caller
+/// can poll for new events and resume from the last acknowledged position.
+pub struct WatchStream {
+    subscriber_id: String,
+    collection: Option<String>,
+    cursor: AtomicU64,
+}
+
+impl WatchStream {
+    /// Create a new watch stream for all collections.
+    pub fn new(subscriber_id: impl Into<String>) -> Self {
+        Self {
+            subscriber_id: subscriber_id.into(),
+            collection: None,
+            cursor: AtomicU64::new(0),
+        }
+    }
+
+    /// Create a new watch stream filtered to a specific collection.
+    pub fn for_collection(subscriber_id: impl Into<String>, collection: impl Into<String>) -> Self {
+        Self {
+            subscriber_id: subscriber_id.into(),
+            collection: Some(collection.into()),
+            cursor: AtomicU64::new(0),
+        }
+    }
+
+    /// Resume from a specific LSN cursor position.
+    pub fn resume_from(mut self, lsn: Lsn) -> Self {
+        self.cursor = AtomicU64::new(lsn);
+        self
+    }
+
+    /// Poll for new events since the last cursor position.
+    pub fn poll(&self, log: &ChangeEventLog) -> Vec<VectorChangeEvent> {
+        let current_lsn = self.cursor.load(Ordering::SeqCst);
+        let events = if let Some(ref col) = self.collection {
+            log.collection_events_since(col, current_lsn)
+        } else {
+            log.events_since(current_lsn)
+        };
+
+        if let Some(last) = events.last() {
+            self.cursor.store(last.lsn, Ordering::SeqCst);
+        }
+        events
+    }
+
+    /// Acknowledge processing up to a specific LSN.
+    pub fn acknowledge(&self, log: &ChangeEventLog, lsn: Lsn) {
+        log.acknowledge(&self.subscriber_id, lsn);
+        self.cursor.store(lsn, Ordering::SeqCst);
+    }
+
+    /// Get the current cursor position.
+    pub fn cursor(&self) -> Lsn {
+        self.cursor.load(Ordering::SeqCst)
+    }
+
+    /// Get the subscriber ID.
+    pub fn subscriber_id(&self) -> &str {
+        &self.subscriber_id
+    }
+}
+
+impl ChangeEventLog {
+    /// Create a watch stream for observing changes to all collections.
+    pub fn watch(&self, subscriber_id: impl Into<String>) -> WatchStream {
+        WatchStream::new(subscriber_id)
+    }
+
+    /// Create a watch stream for observing changes to a specific collection.
+    pub fn watch_collection(
+        &self,
+        subscriber_id: impl Into<String>,
+        collection: impl Into<String>,
+    ) -> WatchStream {
+        WatchStream::for_collection(subscriber_id, collection)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
