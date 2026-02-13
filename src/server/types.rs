@@ -427,8 +427,15 @@ pub struct TimeTravelSearchRequest {
     /// Number of results
     #[serde(default = "default_k")]
     pub k: usize,
-    /// Snapshot name to search against
+    /// Snapshot name to search against (optional if timestamp provided)
+    #[serde(default)]
     pub snapshot: String,
+    /// Unix timestamp to search as-of (alternative to snapshot)
+    pub as_of_timestamp: Option<u64>,
+    /// Version number to search at (alternative to snapshot/timestamp)
+    pub as_of_version: Option<u64>,
+    /// Natural language time expression (e.g. "yesterday", "2 hours ago")
+    pub as_of_expression: Option<String>,
 }
 
 

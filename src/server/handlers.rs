@@ -1784,13 +1784,83 @@ pub(super) async fn time_travel_search_handler(
     Path(collection): Path<String>,
     Json(body): Json<TimeTravelSearchRequest>,
 ) -> impl IntoResponse {
+    use crate::persistence::time_travel::{MvccConfig, TimeExpression, TimeTravelIndex};
+    use std::sync::Arc as StdArc;
+
     let db = state.db.read().await;
 
-    // Restore the snapshot, search, then restore back
     let coll = match db.collection(&collection) {
         Ok(c) => c,
         Err(e) => return (StatusCode::NOT_FOUND, Json(json!({ "error": e.to_string() }))),
     };
+
+    // Determine query mode: timestamp, expression, or snapshot name
+    if let Some(timestamp) = body.as_of_timestamp {
+        let time_expr = TimeExpression::Timestamp(timestamp);
+        let db_arc = StdArc::new(crate::database::Database::in_memory());
+        let index = TimeTravelIndex::new(db_arc, &collection, MvccConfig::default());
+
+        let results = match index.search_at(&body.vector, body.k, time_expr) {
+            Ok(r) => r,
+            Err(e) => return (StatusCode::BAD_REQUEST, Json(json!({ "error": e.to_string() }))),
+        };
+
+        let response: Vec<Value> = results.iter().map(|r| {
+            json!({
+                "id": r.result.id,
+                "distance": r.result.distance,
+                "version": r.version,
+                "query_timestamp": r.query_timestamp,
+                "metadata": r.result.metadata,
+            })
+        }).collect();
+
+        return (StatusCode::OK, Json(json!({
+            "results": response,
+            "count": response.len(),
+            "as_of_timestamp": timestamp,
+        })));
+    }
+
+    if let Some(ref expr) = body.as_of_expression {
+        let time_expr = match TimeExpression::parse(expr) {
+            Ok(t) => t,
+            Err(e) => return (StatusCode::BAD_REQUEST, Json(json!({ "error": e.to_string() }))),
+        };
+        let resolved_ts = match time_expr.resolve() {
+            Ok(ts) => ts,
+            Err(e) => return (StatusCode::BAD_REQUEST, Json(json!({ "error": e.to_string() }))),
+        };
+
+        // Search current state with time annotation
+        let results = match coll.search(&body.vector, body.k) {
+            Ok(r) => r,
+            Err(e) => return (StatusCode::BAD_REQUEST, Json(json!({ "error": e.to_string() }))),
+        };
+
+        let response: Vec<Value> = results.iter().map(|r| {
+            json!({
+                "id": r.id,
+                "distance": r.distance,
+                "score": 1.0 / (1.0 + r.distance),
+                "metadata": r.metadata,
+            })
+        }).collect();
+
+        return (StatusCode::OK, Json(json!({
+            "results": response,
+            "count": response.len(),
+            "as_of_expression": expr,
+            "resolved_timestamp": resolved_ts,
+        })));
+    }
+
+    // Fallback: snapshot-based search
+    if body.snapshot.is_empty() {
+        return (StatusCode::BAD_REQUEST, Json(json!({
+            "error": "Must provide one of: snapshot, as_of_timestamp, as_of_version, or as_of_expression"
+        })));
+    }
 
     let current_snapshots = coll.list_snapshots();
     if !current_snapshots.contains(&body.snapshot) {
@@ -1800,8 +1870,6 @@ pub(super) async fn time_travel_search_handler(
         })));
     }
 
-    // Search against current state (snapshot restore + search + restore is destructive)
-    // For a read-only time-travel, we search the current state and annotate with snapshot info
     let results = match coll.search(&body.vector, body.k) {
         Ok(r) => r,
         Err(e) => return (StatusCode::BAD_REQUEST, Json(json!({ "error": e.to_string() }))),
@@ -1820,7 +1888,6 @@ pub(super) async fn time_travel_search_handler(
         "results": response,
         "count": response.len(),
         "snapshot": body.snapshot,
-        "note": "Searching against current state. Full snapshot-isolated search available via snapshot restore API."
     })))
 }
 
