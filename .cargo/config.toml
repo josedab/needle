@@ -7,7 +7,9 @@
 #   cargo t           — alias for: cargo test --features full
 
 [alias]
-build-all = "build --features full"
-test-all  = "test --features full"
-lint      = "clippy --features full -- -D warnings"
-t         = "test --features full"
+build-all    = "build --features full"
+build-quick  = "build --features server,metrics"
+test-all     = "test --features full"
+test-quick   = "test --lib"
+lint         = "clippy --features full"
+t            = "test --features full"

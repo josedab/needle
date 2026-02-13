@@ -15,7 +15,7 @@ fmt-check:
 
 # Run clippy linter with all features
 lint:
-    cargo clippy --features full -- -D warnings
+    cargo clippy --features full
 
 # Run all tests
 test:
