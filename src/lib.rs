@@ -122,7 +122,7 @@ pub mod search;
 pub use search::collaborative_search;
 pub use search::{
     cross_collection, federated, nl_filter, query_builder, query_explain, query_lang,
-    query_planner, reranker, routing, sql_analytics,
+    query_planner, reranker, routing, search_pipeline, sql_analytics,
 };
 
 // ── Storage & Persistence ────────────────────────────────────────────────────

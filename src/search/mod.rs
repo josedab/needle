@@ -22,6 +22,8 @@ pub mod collection_federation;
 pub mod graphql_api;
 pub mod graphrag;
 pub mod pipeline;
+/// Composable search pipeline DSL with built-in templates for common RAG patterns.
+pub mod search_pipeline;
 #[cfg(feature = "experimental")]
 pub mod semantic_cache;
 /// Embedded SQL analytics engine over vector metadata (COUNT, SUM, AVG, GROUP BY, HAVING).
