@@ -54,6 +54,11 @@ pub struct TimeTravelConfig {
     pub auto_snapshot: bool,
     /// Snapshot interval (every N operations).
     pub snapshot_interval: u64,
+    /// Retention window in seconds. Versions older than this are eligible for pruning.
+    /// None means no time-based pruning (only count-based limits apply).
+    pub retention_window_seconds: Option<u64>,
+    /// Automatically prune expired snapshots when creating new ones.
+    pub auto_prune: bool,
 }
 
 impl Default for TimeTravelConfig {
@@ -63,6 +68,8 @@ impl Default for TimeTravelConfig {
             max_snapshots: 1000,
             auto_snapshot: true,
             snapshot_interval: 100,
+            retention_window_seconds: None,
+            auto_prune: true,
         }
     }
 }
@@ -730,6 +737,72 @@ impl<'a> TimeTravelService<'a> {
         self.versions.get(id)
             .map(|h| h.iter().map(|v| v.version).collect())
             .unwrap_or_default()
+    }
+
+    /// Prune versions and snapshots older than the retention window.
+    /// Returns the total number of entries removed (versions + snapshots + audit entries).
+    pub fn prune_expired(&mut self) -> usize {
+        let retention = match self.config.retention_window_seconds {
+            Some(r) => r,
+            None => return 0,
+        };
+
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+
+        let cutoff = now.saturating_sub(retention);
+        let mut removed = 0;
+
+        // Find the latest version that's still before the cutoff
+        let cutoff_version = self.audit_log
+            .iter()
+            .filter(|e| e.timestamp <= cutoff)
+            .map(|e| e.version)
+            .max()
+            .unwrap_or(0);
+
+        if cutoff_version == 0 {
+            return 0;
+        }
+
+        // Prune old version entries (keep at least the latest per vector)
+        for history in self.versions.values_mut() {
+            let before = history.len();
+            if history.len() > 1 {
+                let latest = history.last().cloned();
+                history.retain(|v| v.version > cutoff_version);
+                if history.is_empty() {
+                    if let Some(latest) = latest {
+                        history.push(latest);
+                    }
+                }
+            }
+            removed += before - history.len();
+        }
+
+        // Prune old snapshots
+        let before_snap = self.snapshots.len();
+        self.snapshots.retain(|s| s.created_at > cutoff);
+        removed += before_snap - self.snapshots.len();
+
+        // Prune old audit entries
+        let before_audit = self.audit_log.len();
+        self.audit_log.retain(|e| e.timestamp > cutoff);
+        removed += before_audit - self.audit_log.len();
+
+        removed
+    }
+
+    /// Get the retention window configuration.
+    pub fn retention_window(&self) -> Option<u64> {
+        self.config.retention_window_seconds
+    }
+
+    /// Set the retention window (in seconds).
+    pub fn set_retention_window(&mut self, seconds: Option<u64>) {
+        self.config.retention_window_seconds = seconds;
     }
 }
 
