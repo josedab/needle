@@ -9,3 +9,5 @@ pub mod raft;
 pub mod replicated_database;
 pub mod security;
 pub mod tenant_isolation;
+/// Per-vector access control lists (ACLs) and row-level security policies.
+pub mod vector_acl;
