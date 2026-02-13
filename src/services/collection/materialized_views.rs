@@ -65,12 +65,18 @@ impl Default for ViewConfig {
 pub struct MaterializedView {
     /// View name.
     pub name: String,
+    /// Source collection name.
+    pub source_collection: Option<String>,
     /// Query embedding that defines this view.
     pub query: Vec<f32>,
     /// Number of results to cache.
     pub k: usize,
     /// Staleness threshold for drift-based refresh.
     pub staleness_threshold: f32,
+    /// Metadata filter in MongoDB-style JSON (applied during refresh).
+    pub metadata_filter: Option<serde_json::Value>,
+    /// NeedleQL view definition (the CREATE VIEW statement).
+    pub definition: Option<String>,
     /// Cached results (id, distance).
     results: Vec<(String, f32)>,
     /// Last refresh time.
@@ -79,6 +85,10 @@ pub struct MaterializedView {
     hit_count: u64,
     /// Whether the view needs refresh.
     stale: bool,
+    /// Number of mutations since last refresh.
+    mutations_since_refresh: u64,
+    /// Mutation threshold to trigger auto-refresh.
+    pub auto_refresh_threshold: u64,
 }
 
 impl MaterializedView {
@@ -86,13 +96,18 @@ impl MaterializedView {
     pub fn new(name: impl Into<String>, query: Vec<f32>, k: usize) -> Self {
         Self {
             name: name.into(),
+            source_collection: None,
             query,
             k,
             staleness_threshold: 0.1,
+            metadata_filter: None,
+            definition: None,
             results: Vec::new(),
             last_refresh: None,
             hit_count: 0,
             stale: true,
+            mutations_since_refresh: 0,
+            auto_refresh_threshold: 100,
         }
     }
 
@@ -101,6 +116,60 @@ impl MaterializedView {
     pub fn with_staleness_threshold(mut self, threshold: f32) -> Self {
         self.staleness_threshold = threshold;
         self
+    }
+
+    /// Set source collection name.
+    #[must_use]
+    pub fn with_source_collection(mut self, collection: impl Into<String>) -> Self {
+        self.source_collection = Some(collection.into());
+        self
+    }
+
+    /// Set metadata filter for the view.
+    #[must_use]
+    pub fn with_metadata_filter(mut self, filter: serde_json::Value) -> Self {
+        self.metadata_filter = Some(filter);
+        self
+    }
+
+    /// Set the NeedleQL view definition string.
+    #[must_use]
+    pub fn with_definition(mut self, def: impl Into<String>) -> Self {
+        self.definition = Some(def.into());
+        self
+    }
+
+    /// Set the mutation count threshold for auto-refresh.
+    #[must_use]
+    pub fn with_auto_refresh_threshold(mut self, threshold: u64) -> Self {
+        self.auto_refresh_threshold = threshold;
+        self
+    }
+
+    /// Record a mutation on the source collection.
+    pub fn record_mutation(&mut self) {
+        self.mutations_since_refresh += 1;
+        if self.mutations_since_refresh >= self.auto_refresh_threshold {
+            self.stale = true;
+        }
+    }
+
+    /// Check if auto-refresh should be triggered.
+    pub fn needs_refresh(&self) -> bool {
+        if self.stale {
+            return true;
+        }
+
+        // Check time-based staleness
+        if let Some(last) = self.last_refresh {
+            let now = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+            return now.saturating_sub(last) > 300; // 5 minute default staleness
+        }
+
+        true
     }
 }
 
@@ -236,6 +305,93 @@ impl ViewManager {
     pub fn total_hits(&self) -> u64 {
         self.views.values().map(|v| v.hit_count).sum()
     }
+
+    /// Parse and create a view from a NeedleQL CREATE VIEW statement.
+    /// Format: `CREATE VIEW <name> AS SELECT ... FROM <collection> NEAREST_TO([...]) LIMIT <k>`
+    pub fn create_view_from_ql(&mut self, statement: &str) -> Result<()> {
+        let upper = statement.to_uppercase();
+        if !upper.starts_with("CREATE VIEW ") && !upper.starts_with("CREATE MATERIALIZED VIEW ") {
+            return Err(NeedleError::InvalidArgument(
+                "Expected CREATE VIEW or CREATE MATERIALIZED VIEW".into(),
+            ));
+        }
+
+        // Extract view name
+        let after_view = if upper.starts_with("CREATE MATERIALIZED VIEW ") {
+            &statement[25..]
+        } else {
+            &statement[12..]
+        };
+
+        let as_pos = after_view.to_uppercase().find(" AS ").ok_or_else(|| {
+            NeedleError::InvalidArgument("Missing AS in CREATE VIEW".into())
+        })?;
+        let view_name = after_view[..as_pos].trim().to_string();
+
+        if view_name.is_empty() {
+            return Err(NeedleError::InvalidArgument("Missing view name".into()));
+        }
+
+        // Extract collection from FROM clause
+        let rest = &after_view[as_pos + 4..];
+        let from_pos = rest.to_uppercase().find("FROM ").unwrap_or(0);
+        let after_from = &rest[from_pos + 5..];
+        let collection_end = after_from
+            .find(|c: char| c.is_whitespace())
+            .unwrap_or(after_from.len());
+        let collection = after_from[..collection_end].trim().to_string();
+
+        // Extract LIMIT
+        let limit = if let Some(pos) = rest.to_uppercase().find("LIMIT ") {
+            let after_limit = &rest[pos + 6..];
+            let end = after_limit
+                .find(|c: char| !c.is_ascii_digit())
+                .unwrap_or(after_limit.len());
+            after_limit[..end].parse().unwrap_or(10)
+        } else {
+            10
+        };
+
+        let view = MaterializedView::new(view_name, Vec::new(), limit)
+            .with_source_collection(collection)
+            .with_definition(statement);
+
+        self.create_view(view)
+    }
+
+    /// Record a mutation on a source collection (for change tracking).
+    /// Marks matching views as potentially stale.
+    pub fn record_collection_mutation(&mut self, collection: &str) {
+        for view in self.views.values_mut() {
+            if view.source_collection.as_deref() == Some(collection) {
+                view.record_mutation();
+            }
+        }
+    }
+
+    /// Get views that need refresh.
+    pub fn views_needing_refresh(&self) -> Vec<&str> {
+        self.views
+            .values()
+            .filter(|v| v.needs_refresh())
+            .map(|v| v.name.as_str())
+            .collect()
+    }
+
+    /// List views for a specific source collection.
+    pub fn views_for_collection(&self, collection: &str) -> Vec<ViewStats> {
+        self.views
+            .values()
+            .filter(|v| v.source_collection.as_deref() == Some(collection))
+            .map(|v| ViewStats {
+                name: v.name.clone(),
+                cached_results: v.results.len(),
+                hit_count: v.hit_count,
+                is_stale: v.stale,
+                last_refresh: v.last_refresh,
+            })
+            .collect()
+    }
 }
 
 impl Default for ViewManager {
@@ -316,5 +472,86 @@ mod tests {
         let mut mgr = ViewManager::new();
         mgr.create_view(MaterializedView::new("v1", vec![1.0; 4], 10)).unwrap();
         assert!(mgr.create_view(MaterializedView::new("v1", vec![1.0; 4], 10)).is_err());
+    }
+
+    #[test]
+    fn test_create_view_from_ql() {
+        let mut mgr = ViewManager::new();
+        mgr.create_view_from_ql(
+            "CREATE VIEW trending AS SELECT * FROM docs NEAREST_TO([0.1, 0.2]) LIMIT 20"
+        ).unwrap();
+        assert_eq!(mgr.len(), 1);
+        let stats = mgr.stats();
+        assert_eq!(stats[0].name, "trending");
+    }
+
+    #[test]
+    fn test_create_materialized_view_from_ql() {
+        let mut mgr = ViewManager::new();
+        mgr.create_view_from_ql(
+            "CREATE MATERIALIZED VIEW hot_topics AS SELECT * FROM articles LIMIT 50"
+        ).unwrap();
+        assert_eq!(mgr.len(), 1);
+    }
+
+    #[test]
+    fn test_mutation_tracking() {
+        let mut mgr = ViewManager::new();
+        let view = MaterializedView::new("v1", vec![1.0; 4], 10)
+            .with_source_collection("docs")
+            .with_auto_refresh_threshold(3);
+        mgr.create_view(view).unwrap();
+        mgr.refresh("v1", &[("d1".into(), 0.1)]).unwrap();
+
+        // Not stale after refresh
+        assert!(mgr.query("v1").is_ok());
+
+        // Record mutations
+        mgr.record_collection_mutation("docs");
+        mgr.record_collection_mutation("docs");
+        assert!(mgr.query("v1").is_ok()); // Still fresh
+
+        mgr.record_collection_mutation("docs"); // 3rd mutation triggers staleness
+        assert!(mgr.query("v1").is_err()); // Now stale
+    }
+
+    #[test]
+    fn test_views_needing_refresh() {
+        let mut mgr = ViewManager::new();
+        mgr.create_view(MaterializedView::new("v1", vec![1.0; 4], 10)).unwrap();
+        mgr.create_view(MaterializedView::new("v2", vec![0.0; 4], 10)).unwrap();
+
+        // Both new views need refresh
+        assert_eq!(mgr.views_needing_refresh().len(), 2);
+
+        mgr.refresh("v1", &[("d1".into(), 0.1)]).unwrap();
+        assert_eq!(mgr.views_needing_refresh().len(), 1);
+    }
+
+    #[test]
+    fn test_views_for_collection() {
+        let mut mgr = ViewManager::new();
+        mgr.create_view(
+            MaterializedView::new("v1", vec![1.0; 4], 10).with_source_collection("docs")
+        ).unwrap();
+        mgr.create_view(
+            MaterializedView::new("v2", vec![1.0; 4], 10).with_source_collection("other")
+        ).unwrap();
+
+        let docs_views = mgr.views_for_collection("docs");
+        assert_eq!(docs_views.len(), 1);
+        assert_eq!(docs_views[0].name, "v1");
+    }
+
+    #[test]
+    fn test_metadata_filter_view() {
+        let mut mgr = ViewManager::new();
+        let view = MaterializedView::new("filtered", vec![1.0; 4], 10)
+            .with_metadata_filter(serde_json::json!({"category": "science"}))
+            .with_source_collection("docs");
+        mgr.create_view(view).unwrap();
+
+        let stats = mgr.stats();
+        assert_eq!(stats.len(), 1);
     }
 }
