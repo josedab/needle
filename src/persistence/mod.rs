@@ -16,3 +16,5 @@ pub mod versioning;
 pub mod vector_versioning;
 pub mod replica_manager;
 pub mod wal;
+/// Incremental backup with WAL-based point-in-time recovery (PITR).
+pub mod incremental_backup;
