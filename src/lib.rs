@@ -91,6 +91,8 @@ pub(crate) mod storage;
 pub mod tuning;
 /// Automated recall benchmarking: synthetic datasets, brute-force ground truth, recall@k, QPS, latency.
 pub mod recall_benchmark;
+/// Programmable pre/post-processing hooks for insert and search operations.
+pub mod hooks;
 /// Columnar storage for efficient batch vector operations.
 pub use indexing::columnar;
 /// Data processing pipelines for vector ingestion and transformation.
