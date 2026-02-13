@@ -1374,6 +1374,14 @@ async fn health_handler() -> impl IntoResponse {
     }))
 }
 
+/// Real-time monitoring API endpoint returning JSON snapshot.
+async fn api_monitoring_handler(State(state): State<Arc<WebUiState>>) -> Json<MonitoringSnapshot> {
+    let db = state.db.read().await;
+    let uptime = state.uptime();
+    let snapshot = compute_monitoring_snapshot(&db, uptime);
+    Json(snapshot)
+}
+
 // ============================================================================
 // Router and Server
 // ============================================================================
@@ -1389,6 +1397,7 @@ pub fn create_web_ui_router(state: Arc<WebUiState>) -> Router {
         .route("/monitoring", get(monitoring_handler))
         // API endpoints
         .route("/api/stats", get(api_stats_handler))
+        .route("/api/monitoring", get(api_monitoring_handler))
         .route("/health", get(health_handler))
         .with_state(state)
 }
@@ -2190,6 +2199,259 @@ pub fn check_alerts(
 }
 
 // ============================================================================
+// Real-Time Index Monitoring Dashboard
+// ============================================================================
+
+/// Health score for a single collection.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CollectionHealthScore {
+    /// Collection name.
+    pub name: String,
+    /// Overall health score (0.0-1.0, higher is better).
+    pub score: f64,
+    /// Index fragmentation (fraction of deleted vectors).
+    pub fragmentation: f64,
+    /// Estimated memory usage in bytes.
+    pub memory_bytes: usize,
+    /// Vector count.
+    pub vector_count: usize,
+    /// Whether compaction is recommended.
+    pub needs_compaction: bool,
+    /// Dimensional density (vectors per dimension).
+    pub density: f64,
+}
+
+/// Aggregated metrics snapshot for the monitoring dashboard.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MonitoringSnapshot {
+    /// Timestamp of this snapshot.
+    pub timestamp: u64,
+    /// Total collections.
+    pub total_collections: usize,
+    /// Total vectors across all collections.
+    pub total_vectors: usize,
+    /// Total estimated memory usage.
+    pub total_memory_bytes: usize,
+    /// Per-collection health scores.
+    pub health_scores: Vec<CollectionHealthScore>,
+    /// Overall system health (0.0-1.0).
+    pub system_health: f64,
+    /// Server uptime in seconds.
+    pub uptime_secs: u64,
+}
+
+/// Compute a monitoring snapshot from the database state.
+pub fn compute_monitoring_snapshot(db: &Database, uptime_secs: u64) -> MonitoringSnapshot {
+    let collections = db.list_collections();
+    let total_vectors = db.total_vectors();
+    let mut total_memory: usize = 0;
+    let mut health_scores = Vec::new();
+
+    for name in &collections {
+        if let Ok(coll) = db.collection(name) {
+            let dims = coll.dimensions().unwrap_or(0);
+            let count = coll.len();
+            let deleted = coll.deleted_count();
+            let vector_memory = count * dims * std::mem::size_of::<f32>();
+            total_memory += vector_memory;
+
+            let fragmentation = if count + deleted > 0 {
+                deleted as f64 / (count + deleted) as f64
+            } else {
+                0.0
+            };
+            let density = if dims > 0 { count as f64 / dims as f64 } else { 0.0 };
+
+            // Health: penalize fragmentation and emptiness
+            let frag_penalty = 1.0 - fragmentation;
+            let size_factor = if count > 0 { 1.0 } else { 0.5 };
+            let score = (frag_penalty * 0.7 + size_factor * 0.3).clamp(0.0, 1.0);
+
+            health_scores.push(CollectionHealthScore {
+                name: name.clone(),
+                score,
+                fragmentation,
+                memory_bytes: vector_memory,
+                vector_count: count,
+                needs_compaction: fragmentation > 0.2,
+                density,
+            });
+        }
+    }
+
+    let system_health = if health_scores.is_empty() {
+        1.0
+    } else {
+        health_scores.iter().map(|h| h.score).sum::<f64>() / health_scores.len() as f64
+    };
+
+    MonitoringSnapshot {
+        timestamp: SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs(),
+        total_collections: collections.len(),
+        total_vectors,
+        total_memory_bytes: total_memory,
+        health_scores,
+        system_health,
+        uptime_secs,
+    }
+}
+
+/// Latency histogram bucket for heatmap visualization.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LatencyBucket {
+    /// Bucket label (e.g., "0-1ms", "1-5ms").
+    pub label: String,
+    /// Upper bound in milliseconds.
+    pub upper_bound_ms: f64,
+    /// Number of operations in this bucket.
+    pub count: u64,
+}
+
+/// Latency heatmap data for dashboard visualization.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LatencyHeatmap {
+    /// Histogram buckets.
+    pub buckets: Vec<LatencyBucket>,
+    /// Total recorded operations.
+    pub total_ops: u64,
+    /// P50 latency estimate in ms.
+    pub p50_ms: f64,
+    /// P95 latency estimate in ms.
+    pub p95_ms: f64,
+    /// P99 latency estimate in ms.
+    pub p99_ms: f64,
+}
+
+impl LatencyHeatmap {
+    /// Create a new heatmap with default buckets.
+    pub fn new() -> Self {
+        let bucket_bounds = [0.1, 0.5, 1.0, 2.0, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0];
+        let buckets = bucket_bounds
+            .windows(2)
+            .map(|w| LatencyBucket {
+                label: format!("{}-{}ms", w[0], w[1]),
+                upper_bound_ms: w[1],
+                count: 0,
+            })
+            .collect();
+        Self {
+            buckets,
+            total_ops: 0,
+            p50_ms: 0.0,
+            p95_ms: 0.0,
+            p99_ms: 0.0,
+        }
+    }
+
+    /// Record a latency observation.
+    pub fn record(&mut self, latency_ms: f64) {
+        self.total_ops += 1;
+        for bucket in &mut self.buckets {
+            if latency_ms <= bucket.upper_bound_ms {
+                bucket.count += 1;
+                return;
+            }
+        }
+        // Overflow: add to last bucket
+        if let Some(last) = self.buckets.last_mut() {
+            last.count += 1;
+        }
+    }
+
+    /// Estimate percentile from histogram.
+    pub fn compute_percentiles(&mut self) {
+        if self.total_ops == 0 {
+            return;
+        }
+        let targets = [
+            (0.50, &mut self.p50_ms as *mut f64),
+            (0.95, &mut self.p95_ms as *mut f64),
+            (0.99, &mut self.p99_ms as *mut f64),
+        ];
+        for (pct, dest) in targets {
+            let target_count = (self.total_ops as f64 * pct).ceil() as u64;
+            let mut running = 0u64;
+            for bucket in &self.buckets {
+                running += bucket.count;
+                if running >= target_count {
+                    // Safety: we're writing to our own fields through raw pointers
+                    // to work around multiple mutable borrows in the loop
+                    #[allow(unsafe_code)]
+                    unsafe { *dest = bucket.upper_bound_ms; }
+                    break;
+                }
+            }
+        }
+    }
+}
+
+impl Default for LatencyHeatmap {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Generate the real-time monitoring dashboard HTML page.
+pub fn generate_monitoring_dashboard_html(snapshot: &MonitoringSnapshot) -> String {
+    let health_class = if snapshot.system_health >= 0.8 {
+        "success"
+    } else if snapshot.system_health >= 0.5 {
+        "warning"
+    } else {
+        "danger"
+    };
+
+    let collection_rows: String = snapshot
+        .health_scores
+        .iter()
+        .map(|h| {
+            let status = if h.score >= 0.8 { "&#x2705;" } else if h.score >= 0.5 { "&#x26A0;&#xFE0F;" } else { "&#x274C;" };
+            format!(
+                "<tr><td>{name}</td><td>{count}</td><td>{mem}</td><td>{frag:.1}%</td><td>{score:.0}%</td><td>{status}</td></tr>",
+                name = h.name,
+                count = format_number(h.vector_count),
+                mem = format_bytes(h.memory_bytes),
+                frag = h.fragmentation * 100.0,
+                score = h.score * 100.0,
+                status = status,
+            )
+        })
+        .collect();
+
+    format!(
+        r#"<!DOCTYPE html>
+<html><head><title>Needle — Real-Time Monitoring</title>
+<meta http-equiv="refresh" content="5">
+<style>{css}</style></head>
+<body>
+<nav><div class="container"><span class="logo">&#x1F50D; Needle Monitoring</span></div></nav>
+<div class="container" style="padding:2rem 1rem;">
+<div class="grid grid-4">
+  <div class="card"><div class="stat-value" style="color:var(--{health_class})">{health:.0}%</div><div class="stat-label">System Health</div></div>
+  <div class="card"><div class="stat-value">{collections}</div><div class="stat-label">Collections</div></div>
+  <div class="card"><div class="stat-value">{vectors}</div><div class="stat-label">Total Vectors</div></div>
+  <div class="card"><div class="stat-value">{memory}</div><div class="stat-label">Memory Usage</div></div>
+</div>
+<div class="card"><div class="card-header"><span class="card-title">Collection Health</span></div>
+<table class="data-table" style="width:100%;"><thead><tr><th>Collection</th><th>Vectors</th><th>Memory</th><th>Fragmentation</th><th>Health</th><th>Status</th></tr></thead>
+<tbody>{rows}</tbody></table></div>
+<div class="card"><div class="card-header"><span class="card-title">Uptime</span></div><p>{uptime}</p></div>
+</div></body></html>"#,
+        css = CSS_STYLES,
+        health_class = health_class,
+        health = snapshot.system_health * 100.0,
+        collections = format_number(snapshot.total_collections),
+        vectors = format_number(snapshot.total_vectors),
+        memory = format_bytes(snapshot.total_memory_bytes),
+        rows = collection_rows,
+        uptime = format_uptime(snapshot.uptime_secs),
+    )
+}
+
+// ============================================================================
 // Tests
 // ============================================================================
 
@@ -2264,5 +2526,55 @@ mod tests {
         let json = serde_json::to_string(&stats).unwrap();
         assert!(json.contains("\"healthy\":true"));
         assert!(json.contains("\"total_vectors\":1000"));
+    }
+
+    #[test]
+    fn test_latency_heatmap() {
+        let mut heatmap = LatencyHeatmap::new();
+        assert_eq!(heatmap.total_ops, 0);
+
+        heatmap.record(0.5);
+        heatmap.record(2.0);
+        heatmap.record(50.0);
+        assert_eq!(heatmap.total_ops, 3);
+
+        heatmap.compute_percentiles();
+        assert!(heatmap.p50_ms > 0.0);
+    }
+
+    #[test]
+    fn test_monitoring_snapshot() {
+        let db = Database::in_memory();
+        db.create_collection("test", 64).unwrap();
+        let snapshot = compute_monitoring_snapshot(&db, 100);
+        assert_eq!(snapshot.total_collections, 1);
+        assert_eq!(snapshot.uptime_secs, 100);
+        assert!(snapshot.system_health > 0.0);
+        assert_eq!(snapshot.health_scores.len(), 1);
+    }
+
+    #[test]
+    fn test_monitoring_dashboard_html() {
+        let snapshot = MonitoringSnapshot {
+            timestamp: 0,
+            total_collections: 1,
+            total_vectors: 100,
+            total_memory_bytes: 4096,
+            health_scores: vec![CollectionHealthScore {
+                name: "test".to_string(),
+                score: 0.9,
+                fragmentation: 0.05,
+                memory_bytes: 4096,
+                vector_count: 100,
+                needs_compaction: false,
+                density: 1.5,
+            }],
+            system_health: 0.9,
+            uptime_secs: 3600,
+        };
+        let html = generate_monitoring_dashboard_html(&snapshot);
+        assert!(html.contains("Needle"));
+        assert!(html.contains("System Health"));
+        assert!(html.contains("test"));
     }
 }
