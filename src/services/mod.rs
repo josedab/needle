@@ -43,6 +43,9 @@ pub mod sync;
 /// Live migration toolkit for importing from external vector databases.
 pub mod live_migration_service;
 
+/// Client-side vector caching with LRU eviction, TTL, and invalidation.
+pub mod client_cache;
+
 // ── Re-exports for backward compatibility ─────────────────────────────────
 // Modules are re-exported at the services:: level so existing code continues
 // to work with crate::services::module_name paths.
@@ -94,6 +97,7 @@ pub use collection::pitr_service;
 pub use collection::text_collection;
 #[cfg(feature = "experimental")]
 pub use collection::typed_schema;
+pub use collection::vector_namespace;
 #[cfg(feature = "experimental")]
 pub use compute::adaptive_optimizer;
 #[cfg(feature = "experimental")]
