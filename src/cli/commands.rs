@@ -512,6 +512,65 @@ pub enum Commands {
         #[arg(long)]
         rollback: bool,
     },
+
+    /// Visualize HNSW graph traversal for a search query (debug tool)
+    ExplainSearch {
+        /// Path to the database file
+        database: String,
+
+        /// Collection name
+        #[arg(short, long)]
+        collection: String,
+
+        /// Query vector (comma-separated floats)
+        #[arg(short, long)]
+        query: String,
+
+        /// Number of results
+        #[arg(short, long, default_value = "10")]
+        k: usize,
+
+        /// Output format (text, json)
+        #[arg(long, default_value = "text")]
+        format: String,
+    },
+
+    /// Recommend optimal index type with what-if analysis
+    Advise {
+        /// Path to the database file
+        database: String,
+
+        /// Collection name
+        #[arg(short, long)]
+        collection: String,
+
+        /// Number of sample queries for what-if analysis
+        #[arg(long, default_value = "50")]
+        sample_queries: usize,
+    },
+
+    /// Deduplicate near-duplicate vectors in a collection
+    Dedup {
+        /// Path to the database file
+        database: String,
+
+        /// Collection name
+        #[arg(short, long)]
+        collection: String,
+
+        /// Similarity threshold (0.0-1.0, default: 0.95)
+        #[arg(short, long, default_value = "0.95")]
+        threshold: f32,
+
+        /// Merge strategy: keep-first, keep-latest, merge-metadata
+        #[arg(long, default_value = "keep-first")]
+        strategy: String,
+
+        /// Dry run (show duplicates without removing)
+        #[arg(long)]
+        dry_run: bool,
+    },
+
 }
 
 /// Developer subcommands

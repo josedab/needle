@@ -159,5 +159,11 @@ pub fn run(cli: Cli) -> Result<()> {
             migrate_command(&database, &source, &url, &collection, dry_run, batch_size, resume.as_deref(), rollback),
         Commands::Function(cmd) => function_command(cmd),
         Commands::Views(cmd) => views_command(cmd),
+        Commands::ExplainSearch { database, collection, query, k, format } =>
+            explain_search_command(&database, &collection, &query, k, &format),
+        Commands::Advise { database, collection, sample_queries } =>
+            advise_command(&database, &collection, sample_queries),
+        Commands::Dedup { database, collection, threshold, strategy, dry_run } =>
+            dedup_command(&database, &collection, threshold, &strategy, dry_run),
     }
 }

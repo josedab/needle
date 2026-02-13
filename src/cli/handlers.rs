@@ -2647,3 +2647,259 @@ pub fn migrate_command(
 
     Ok(())
 }
+
+// ============================================================================
+// Feature: Vector Debugger & Explain Studio (explain-search)
+// ============================================================================
+
+pub fn explain_search_command(
+    path: &str,
+    collection_name: &str,
+    query_str: &str,
+    k: usize,
+    format: &str,
+) -> Result<()> {
+    let db = Database::open(path)?;
+    let coll = db.collection(collection_name)?;
+    let query = parse_query_vector(query_str)?;
+
+    let (results, trace) = coll.search_with_trace(&query, k)?;
+
+    if format == "json" {
+        let output = json!({
+            "entry_point": trace.entry_point,
+            "entry_layer": trace.entry_layer,
+            "nodes_visited": trace.nodes_visited,
+            "distance_computations": trace.distance_computations,
+            "layers_traversed": trace.layers_traversed,
+            "hops": trace.hops.iter().map(|h| json!({
+                "layer": h.layer,
+                "node_id": h.node_id,
+                "distance": h.distance,
+                "added_to_candidates": h.added_to_candidates,
+                "neighbors_explored": h.neighbors_explored,
+            })).collect::<Vec<_>>(),
+            "results": results.iter().map(|r| json!({
+                "id": r.id,
+                "distance": r.distance,
+            })).collect::<Vec<_>>(),
+        });
+        println!("{}", serde_json::to_string_pretty(&output).unwrap_or_default());
+    } else {
+        println!("═══ HNSW Search Trace ═══");
+        println!();
+        println!("Entry point: {:?} (layer {})", trace.entry_point, trace.entry_layer);
+        println!("Nodes visited: {}", trace.nodes_visited);
+        println!("Distance computations: {}", trace.distance_computations);
+        println!();
+
+        let mut current_layer = usize::MAX;
+        for hop in &trace.hops {
+            if hop.layer != current_layer {
+                current_layer = hop.layer;
+                println!("── Layer {} ──", current_layer);
+            }
+            let marker = if hop.added_to_candidates { "✓" } else { "·" };
+            println!(
+                "  {} Node {:>6}  dist={:.6}  neighbors={}",
+                marker, hop.node_id, hop.distance, hop.neighbors_explored
+            );
+        }
+
+        println!();
+        println!("── Results (top {}) ──", k);
+        for result in &results {
+            let meta = result
+                .metadata
+                .as_ref()
+                .map(|m| m.to_string())
+                .unwrap_or_else(|| "null".to_string());
+            println!(
+                "  ID: {}, Distance: {:.6}, Metadata: {}",
+                result.id, result.distance, meta
+            );
+        }
+    }
+
+    Ok(())
+}
+
+// ============================================================================
+// Feature: Automatic Index Advisor (advise)
+// ============================================================================
+
+pub fn advise_command(
+    path: &str,
+    collection_name: &str,
+    sample_queries: usize,
+) -> Result<()> {
+    use needle::tuning::{
+        IndexSelectionConstraints, recommend_index, auto_tune, TuningConstraints, PerformanceProfile,
+    };
+
+    let db = Database::open(path)?;
+    let coll = db.collection(collection_name)?;
+
+    let num_vectors = coll.len();
+    let dimensions = coll.dimensions().unwrap_or(0);
+
+    if num_vectors == 0 {
+        println!("Collection '{}' is empty. Insert vectors first.", collection_name);
+        return Ok(());
+    }
+
+    println!("═══ Index Advisor for '{}' ═══", collection_name);
+    println!();
+    println!("Collection profile:");
+    println!("  Vectors: {}", num_vectors);
+    println!("  Dimensions: {}", dimensions);
+    println!();
+
+    // Index type recommendation
+    let constraints = IndexSelectionConstraints::new(num_vectors, dimensions);
+    let recommendation = recommend_index(&constraints);
+    println!("Recommended index: {}", recommendation.recommended);
+    println!("Estimated memory: {} bytes", recommendation.estimated_memory_bytes);
+    for reason in &recommendation.explanation {
+        println!("  - {}", reason);
+    }
+    println!();
+
+    // HNSW parameter tuning
+    for profile in &[PerformanceProfile::LowLatency, PerformanceProfile::Balanced, PerformanceProfile::HighRecall] {
+        let tune_constraints = TuningConstraints::new(num_vectors, dimensions)
+            .with_profile(*profile);
+        let result = auto_tune(&tune_constraints);
+        println!("Profile {:?}:", profile);
+        println!("  M={}, ef_construction={}, ef_search={}",
+            result.config.m, result.config.ef_construction, result.config.ef_search);
+        println!("  Estimated memory: {} bytes", result.estimated_total_memory);
+        println!("  Estimated recall: {:.1}%", result.estimated_recall * 100.0);
+        println!();
+    }
+
+    // What-if analysis with sample queries
+    if sample_queries > 0 && num_vectors >= 10 {
+        println!("── What-If Analysis ({} sample queries) ──", sample_queries);
+        use std::time::Instant;
+        let mut total_time_us = 0u64;
+        let mut total_visited = 0usize;
+
+        let exported = coll.export_all()?;
+        let actual_queries = sample_queries.min(exported.len());
+
+        for i in 0..actual_queries {
+            let (_, ref vec, _) = exported[i % exported.len()];
+            let start = Instant::now();
+            let (_, explain) = coll.search_explain(vec, 10)?;
+            total_time_us += start.elapsed().as_micros() as u64;
+            total_visited += explain.hnsw_stats.visited_nodes;
+        }
+
+        if actual_queries > 0 {
+            println!("  Avg query time: {}μs", total_time_us / actual_queries as u64);
+            println!("  Avg nodes visited: {}", total_visited / actual_queries);
+            println!("  Estimated QPS: {:.0}", if total_time_us > 0 {
+                actual_queries as f64 / (total_time_us as f64 / 1_000_000.0)
+            } else { 0.0 });
+        }
+    }
+
+    Ok(())
+}
+
+// ============================================================================
+// Feature: Zero-Config Semantic Deduplication (dedup)
+// ============================================================================
+
+pub fn dedup_command(
+    path: &str,
+    collection_name: &str,
+    threshold: f32,
+    strategy: &str,
+    dry_run: bool,
+) -> Result<()> {
+    let mut db = Database::open(path)?;
+    let coll = db.collection(collection_name)?;
+
+    let num_vectors = coll.len();
+    if num_vectors == 0 {
+        println!("Collection '{}' is empty.", collection_name);
+        return Ok(());
+    }
+
+    if !(0.0..=1.0).contains(&threshold) {
+        return Err(NeedleError::InvalidVector(
+            "Threshold must be between 0.0 and 1.0".to_string(),
+        ));
+    }
+
+    println!("═══ Deduplication for '{}' ═══", collection_name);
+    println!("  Threshold: {:.2}", threshold);
+    println!("  Strategy: {}", strategy);
+    println!("  Vectors: {}", num_vectors);
+    if dry_run {
+        println!("  Mode: DRY RUN");
+    }
+    println!();
+
+    // Collect all vector IDs and vectors via export
+    let exported = coll.export_all()?;
+    let all_ids: Vec<String> = exported.iter().map(|(id, _, _)| id.clone()).collect();
+    let all_vectors: Vec<&Vec<f32>> = exported.iter().map(|(_, v, _)| v).collect();
+
+    // Sample-based dedup: search each vector against the collection
+    let sample_size = num_vectors.min(1000);
+    let mut duplicates_found = 0usize;
+    let mut ids_to_delete: Vec<String> = Vec::new();
+
+    for i in 0..sample_size {
+        let results = coll.search(all_vectors[i], 10)?;
+        for result in &results {
+            if result.distance < (1.0 - threshold) && result.id != all_ids[i] {
+                duplicates_found += 1;
+                match strategy {
+                    "keep-first" => {
+                        ids_to_delete.push(result.id.clone());
+                    }
+                    "keep-latest" => {
+                        ids_to_delete.push(all_ids[i].clone());
+                    }
+                    _ => {
+                        ids_to_delete.push(result.id.clone());
+                    }
+                }
+            }
+        }
+    }
+
+    // Deduplicate the delete list
+    ids_to_delete.sort();
+    ids_to_delete.dedup();
+
+    println!("Duplicate pairs found: {}", duplicates_found);
+    println!("Vectors to remove: {}", ids_to_delete.len());
+
+    if dry_run {
+        println!();
+        println!("Dry run — no changes made.");
+        if !ids_to_delete.is_empty() {
+            println!("Would remove:");
+            for id in ids_to_delete.iter().take(20) {
+                println!("  - {}", id);
+            }
+            if ids_to_delete.len() > 20 {
+                println!("  ... and {} more", ids_to_delete.len() - 20);
+            }
+        }
+    } else {
+        for id in &ids_to_delete {
+            let _ = coll.delete(id);
+        }
+        db.save()?;
+        println!("Removed {} duplicate vectors.", ids_to_delete.len());
+    }
+
+    Ok(())
+}
+
