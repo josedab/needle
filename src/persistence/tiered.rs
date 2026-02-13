@@ -30,7 +30,7 @@
 
 use crate::error::{NeedleError, Result};
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// Storage tier levels.
@@ -1142,6 +1142,361 @@ fn decode_varint(data: &[u8]) -> Option<(u32, usize)> {
     None
 }
 
+// ============================================================================
+// Access Tracker — per-vector access pattern instrumentation
+// ============================================================================
+
+/// Tracks per-vector access patterns for intelligent tier migration decisions.
+///
+/// Records timestamps, frequencies, and recency of access for each vector,
+/// enabling data-driven tiering decisions.
+pub struct AccessTracker {
+    /// Per-vector access records: vector_id -> list of access timestamps (epoch secs)
+    records: HashMap<String, AccessRecord>,
+    /// Sliding window size for frequency calculations
+    window_secs: u64,
+    /// Maximum records retained per vector
+    max_history_per_vector: usize,
+}
+
+/// Access record for a single vector.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AccessRecord {
+    /// Recent access timestamps (bounded by max_history_per_vector)
+    pub timestamps: VecDeque<u64>,
+    /// Total lifetime access count
+    pub total_accesses: u64,
+    /// Whether this vector was accessed since last migration check
+    pub dirty: bool,
+}
+
+/// Summary of access patterns for migration decisions.
+#[derive(Debug, Clone)]
+pub struct AccessSummary {
+    /// Vector ID
+    pub id: String,
+    /// Accesses within the recent window
+    pub recent_frequency: u64,
+    /// Total lifetime accesses
+    pub total_accesses: u64,
+    /// Seconds since last access
+    pub recency_secs: u64,
+    /// Computed hotness score (higher = hotter)
+    pub hotness_score: f64,
+}
+
+impl AccessTracker {
+    /// Create a new access tracker with given window and history depth.
+    pub fn new(window_secs: u64, max_history_per_vector: usize) -> Self {
+        Self {
+            records: HashMap::new(),
+            window_secs,
+            max_history_per_vector,
+        }
+    }
+
+    /// Record an access event for a vector.
+    pub fn record_access(&mut self, id: &str) {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let record = self.records.entry(id.to_string()).or_insert_with(|| AccessRecord {
+            timestamps: VecDeque::new(),
+            total_accesses: 0,
+            dirty: false,
+        });
+        record.timestamps.push_back(now);
+        if record.timestamps.len() > self.max_history_per_vector {
+            record.timestamps.pop_front();
+        }
+        record.total_accesses += 1;
+        record.dirty = true;
+    }
+
+    /// Remove tracking for a vector.
+    pub fn remove(&mut self, id: &str) {
+        self.records.remove(id);
+    }
+
+    /// Get access summary for a specific vector.
+    pub fn summary(&self, id: &str) -> Option<AccessSummary> {
+        let record = self.records.get(id)?;
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let cutoff = now.saturating_sub(self.window_secs);
+        let recent_frequency = record.timestamps.iter().filter(|&&t| t >= cutoff).count() as u64;
+        let recency_secs = record.timestamps.back().map_or(u64::MAX, |&t| now.saturating_sub(t));
+        // Hotness: weighted combination of recency and frequency
+        let recency_score = 1.0 / (1.0 + recency_secs as f64 / 3600.0);
+        let freq_score = (recent_frequency as f64).ln_1p();
+        let hotness_score = recency_score * 0.6 + freq_score * 0.4;
+
+        Some(AccessSummary {
+            id: id.to_string(),
+            recent_frequency,
+            total_accesses: record.total_accesses,
+            recency_secs,
+            hotness_score,
+        })
+    }
+
+    /// Return summaries for all tracked vectors, sorted by hotness (descending).
+    pub fn all_summaries(&self) -> Vec<AccessSummary> {
+        let mut summaries: Vec<AccessSummary> = self
+            .records
+            .keys()
+            .filter_map(|id| self.summary(id))
+            .collect();
+        summaries.sort_by(|a, b| b.hotness_score.partial_cmp(&a.hotness_score).unwrap_or(std::cmp::Ordering::Equal));
+        summaries
+    }
+
+    /// Mark all records as clean (after a migration pass).
+    pub fn clear_dirty_flags(&mut self) {
+        for record in self.records.values_mut() {
+            record.dirty = false;
+        }
+    }
+
+    /// Count tracked vectors.
+    pub fn len(&self) -> usize {
+        self.records.len()
+    }
+
+    /// Check if tracker is empty.
+    pub fn is_empty(&self) -> bool {
+        self.records.is_empty()
+    }
+}
+
+// ============================================================================
+// Migration Engine — automatic tier migration based on access patterns
+// ============================================================================
+
+/// Configuration for the migration engine.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MigrationConfig {
+    /// Hotness threshold above which vectors are promoted.
+    pub promote_threshold: f64,
+    /// Hotness threshold below which vectors are demoted.
+    pub demote_threshold: f64,
+    /// Maximum vectors to migrate per pass.
+    pub max_migrations_per_pass: usize,
+    /// Minimum time between migration passes (seconds).
+    pub min_pass_interval_secs: u64,
+}
+
+impl Default for MigrationConfig {
+    fn default() -> Self {
+        Self {
+            promote_threshold: 0.5,
+            demote_threshold: 0.1,
+            max_migrations_per_pass: 1000,
+            min_pass_interval_secs: 60,
+        }
+    }
+}
+
+/// Result of a migration pass.
+#[derive(Debug, Clone, Default)]
+pub struct MigrationResult {
+    /// Number of vectors promoted to a hotter tier.
+    pub promoted: usize,
+    /// Number of vectors demoted to a colder tier.
+    pub demoted: usize,
+    /// Number of vectors evaluated.
+    pub evaluated: usize,
+    /// Number of errors during migration.
+    pub errors: usize,
+}
+
+/// Engine that drives automatic migration between tiers based on access patterns.
+pub struct MigrationEngine {
+    config: MigrationConfig,
+    last_pass_time: u64,
+}
+
+impl MigrationEngine {
+    /// Create a new migration engine.
+    pub fn new(config: MigrationConfig) -> Self {
+        Self {
+            config,
+            last_pass_time: 0,
+        }
+    }
+
+    /// Run a migration pass: evaluate access patterns and migrate vectors.
+    ///
+    /// Returns the migration result with counts of promotions/demotions.
+    pub fn run_pass(
+        &mut self,
+        storage: &mut TieredStorage,
+        tracker: &mut AccessTracker,
+    ) -> Result<MigrationResult> {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        if now.saturating_sub(self.last_pass_time) < self.config.min_pass_interval_secs {
+            return Ok(MigrationResult::default());
+        }
+
+        let summaries = tracker.all_summaries();
+        let mut result = MigrationResult { evaluated: summaries.len(), ..Default::default() };
+        let mut migrations_done = 0;
+
+        for summary in &summaries {
+            if migrations_done >= self.config.max_migrations_per_pass {
+                break;
+            }
+            let current_tier = match storage.get_tier(&summary.id) {
+                Some(t) => t,
+                None => continue,
+            };
+
+            // Decide target tier based on hotness
+            let target_tier = if summary.hotness_score >= self.config.promote_threshold {
+                match current_tier {
+                    StorageTier::Archive => Some(StorageTier::Cold),
+                    StorageTier::Cold => Some(StorageTier::Warm),
+                    StorageTier::Warm => Some(StorageTier::Hot),
+                    StorageTier::Hot => None,
+                }
+            } else if summary.hotness_score <= self.config.demote_threshold {
+                match current_tier {
+                    StorageTier::Hot => Some(StorageTier::Warm),
+                    StorageTier::Warm => Some(StorageTier::Cold),
+                    StorageTier::Cold => Some(StorageTier::Archive),
+                    StorageTier::Archive => None,
+                }
+            } else {
+                None
+            };
+
+            if let Some(target) = target_tier {
+                match storage.move_to_tier(&summary.id, target) {
+                    Ok(()) => {
+                        if target.cost_factor() > current_tier.cost_factor() {
+                            result.promoted += 1;
+                        } else {
+                            result.demoted += 1;
+                        }
+                        migrations_done += 1;
+                    }
+                    Err(_) => {
+                        result.errors += 1;
+                    }
+                }
+            }
+        }
+
+        tracker.clear_dirty_flags();
+        self.last_pass_time = now;
+        Ok(result)
+    }
+}
+
+// ============================================================================
+// Tiered Query Router — transparent query routing across tiers
+// ============================================================================
+
+/// Routes queries transparently across all storage tiers.
+///
+/// When a search is performed, the router checks hot tier first (fastest),
+/// then warm, then cold/archive, aggregating results transparently.
+pub struct TieredQueryRouter {
+    /// Maximum results to gather from each tier before merging.
+    pub per_tier_limit: usize,
+    /// Whether to skip cold/archive tiers for latency-sensitive queries.
+    pub skip_cold_tiers: bool,
+}
+
+impl Default for TieredQueryRouter {
+    fn default() -> Self {
+        Self {
+            per_tier_limit: 100,
+            skip_cold_tiers: false,
+        }
+    }
+}
+
+/// Result from a tiered query, indicating which tier served each result.
+#[derive(Debug, Clone)]
+pub struct TieredQueryResult {
+    /// Vector ID.
+    pub id: String,
+    /// The tier this result was served from.
+    pub served_from: StorageTier,
+    /// The vector data.
+    pub vector: Vec<f32>,
+}
+
+impl TieredQueryRouter {
+    /// Create a new router with default settings.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Create a router that skips cold/archive tiers for low-latency queries.
+    pub fn low_latency() -> Self {
+        Self {
+            per_tier_limit: 50,
+            skip_cold_tiers: true,
+        }
+    }
+
+    /// Retrieve vectors by IDs, transparently routing across tiers.
+    ///
+    /// Returns results in the same order as the input IDs, with tier metadata.
+    pub fn batch_get(
+        &self,
+        storage: &mut TieredStorage,
+        ids: &[String],
+    ) -> Vec<std::result::Result<TieredQueryResult, String>> {
+        ids.iter()
+            .map(|id| {
+                let tier = storage
+                    .get_tier(id)
+                    .ok_or_else(|| format!("Vector '{}' not found", id))?;
+                if self.skip_cold_tiers
+                    && matches!(tier, StorageTier::Cold | StorageTier::Archive)
+                {
+                    return Err(format!(
+                        "Vector '{}' in {:?} tier, skipped (low-latency mode)",
+                        id, tier
+                    ));
+                }
+                let vector = storage
+                    .get(id)
+                    .map_err(|e| format!("Failed to get '{}': {}", id, e))?;
+                Ok(TieredQueryResult {
+                    id: id.clone(),
+                    served_from: tier,
+                    vector,
+                })
+            })
+            .collect()
+    }
+
+    /// Get all vector IDs across all accessible tiers.
+    pub fn list_accessible_ids(&self, storage: &TieredStorage) -> Vec<(String, StorageTier)> {
+        let mut ids: Vec<(String, StorageTier)> = Vec::new();
+        for (id, meta) in &storage.metadata {
+            if self.skip_cold_tiers
+                && matches!(meta.tier, StorageTier::Cold | StorageTier::Archive)
+            {
+                continue;
+            }
+            ids.push((id.clone(), meta.tier));
+        }
+        ids.sort_by(|a, b| a.1.cost_factor().partial_cmp(&b.1.cost_factor()).unwrap_or(std::cmp::Ordering::Equal).reverse());
+        ids
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1372,5 +1727,90 @@ mod tests {
 
         assert!(!storage.is_empty());
         assert_eq!(storage.len(), 1);
+    }
+
+    #[test]
+    fn test_access_tracker_basic() {
+        let mut tracker = AccessTracker::new(3600, 100);
+        assert!(tracker.is_empty());
+
+        tracker.record_access("v1");
+        tracker.record_access("v1");
+        tracker.record_access("v2");
+
+        assert_eq!(tracker.len(), 2);
+        let s = tracker.summary("v1").expect("should exist");
+        assert_eq!(s.total_accesses, 2);
+        assert!(s.hotness_score > 0.0);
+
+        tracker.remove("v1");
+        assert!(tracker.summary("v1").is_none());
+    }
+
+    #[test]
+    fn test_access_tracker_hotness_ordering() {
+        let mut tracker = AccessTracker::new(3600, 100);
+        tracker.record_access("cold_vec");
+        for _ in 0..10 {
+            tracker.record_access("hot_vec");
+        }
+
+        let summaries = tracker.all_summaries();
+        assert_eq!(summaries[0].id, "hot_vec");
+    }
+
+    #[test]
+    fn test_migration_engine() {
+        let mut storage = TieredStorage::new(TierPolicy::default());
+        let mut tracker = AccessTracker::new(3600, 100);
+        let config = MigrationConfig {
+            promote_threshold: 0.3,
+            demote_threshold: 0.05,
+            max_migrations_per_pass: 10,
+            min_pass_interval_secs: 0, // no delay for testing
+        };
+        let mut engine = MigrationEngine::new(config);
+
+        storage.put("v1", &[1.0, 2.0], HashMap::new()).unwrap();
+        storage.put("v2", &[3.0, 4.0], HashMap::new()).unwrap();
+
+        // v1 gets many accesses (hot), v2 gets none (cold candidate)
+        for _ in 0..20 {
+            tracker.record_access("v1");
+        }
+
+        // Move v1 to cold so it can be promoted
+        storage.move_to_tier("v1", StorageTier::Cold).unwrap();
+
+        let result = engine.run_pass(&mut storage, &mut tracker).unwrap();
+        assert!(result.evaluated > 0);
+    }
+
+    #[test]
+    fn test_tiered_query_router() {
+        let mut storage = TieredStorage::new(TierPolicy::default());
+        storage.put("v1", &[1.0, 2.0], HashMap::new()).unwrap();
+        storage.put("v2", &[3.0, 4.0], HashMap::new()).unwrap();
+        storage.move_to_tier("v2", StorageTier::Cold).unwrap();
+
+        let router = TieredQueryRouter::new();
+        let results = router.batch_get(
+            &mut storage,
+            &["v1".to_string(), "v2".to_string()],
+        );
+        assert_eq!(results.len(), 2);
+        assert!(results[0].is_ok());
+        assert!(results[1].is_ok());
+        assert_eq!(results[0].as_ref().unwrap().served_from, StorageTier::Hot);
+        assert_eq!(results[1].as_ref().unwrap().served_from, StorageTier::Cold);
+
+        // Low-latency mode skips cold tiers
+        let router_ll = TieredQueryRouter::low_latency();
+        let results_ll = router_ll.batch_get(
+            &mut storage,
+            &["v1".to_string(), "v2".to_string()],
+        );
+        assert!(results_ll[0].is_ok());
+        assert!(results_ll[1].is_err()); // cold tier skipped
     }
 }
