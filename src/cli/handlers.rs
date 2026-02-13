@@ -2903,3 +2903,412 @@ pub fn dedup_command(
     Ok(())
 }
 
+// ============================================================================
+// Feature: Vector Health Score & Anomaly Detection (health)
+// ============================================================================
+
+pub fn health_command(
+    path: &str,
+    collection_name: &str,
+    format: &str,
+) -> Result<()> {
+    let db = Database::open(path)?;
+    let coll = db.collection(collection_name)?;
+
+    let num_vectors = coll.len();
+    let dimensions = coll.dimensions().unwrap_or(0);
+
+    if num_vectors == 0 {
+        println!("Collection '{}' is empty.", collection_name);
+        return Ok(());
+    }
+
+    // Collect sample vectors for analysis
+    let exported = coll.export_all()?;
+    let sample_size = exported.len().min(1000);
+    let sample_vectors: Vec<&Vec<f32>> = exported.iter().take(sample_size).map(|(_, v, _)| v).collect();
+
+    // Compute health metrics
+    let mut health_score: f64 = 100.0;
+    let mut issues: Vec<String> = Vec::new();
+
+    // 1. Dimension utilization: check for near-zero dimensions
+    let mut dim_means = vec![0.0f64; dimensions];
+    let mut dim_vars = vec![0.0f64; dimensions];
+    for vec in &sample_vectors {
+        for (d, val) in vec.iter().enumerate() {
+            dim_means[d] += *val as f64;
+        }
+    }
+    let n = sample_vectors.len() as f64;
+    if n > 0.0 {
+        for mean in &mut dim_means {
+            *mean /= n;
+        }
+    }
+    for vec in &sample_vectors {
+        for (d, val) in vec.iter().enumerate() {
+            let diff = *val as f64 - dim_means[d];
+            dim_vars[d] += diff * diff;
+        }
+    }
+    if n > 0.0 {
+        for var in &mut dim_vars {
+            *var /= n;
+        }
+    }
+    let collapsed_dims = dim_vars.iter().filter(|&&v| v < 1e-10).count();
+    let dim_utilization = if dimensions > 0 {
+        1.0 - (collapsed_dims as f64 / dimensions as f64)
+    } else {
+        1.0
+    };
+    if dim_utilization < 0.9 {
+        let penalty = (0.9 - dim_utilization) * 30.0;
+        health_score -= penalty;
+        issues.push(format!(
+            "Dimension collapse: {}/{} dimensions have near-zero variance",
+            collapsed_dims, dimensions
+        ));
+    }
+
+    // 2. Outlier detection using z-score on vector norms
+    let norms: Vec<f64> = sample_vectors
+        .iter()
+        .map(|v| v.iter().map(|x| (*x as f64) * (*x as f64)).sum::<f64>().sqrt())
+        .collect();
+    let mean_norm: f64 = if n > 0.0 { norms.iter().sum::<f64>() / n } else { 0.0 };
+    let std_norm: f64 = if n > 0.0 {
+        (norms.iter().map(|x| (x - mean_norm).powi(2)).sum::<f64>() / n).sqrt()
+    } else {
+        0.0
+    };
+    let outlier_count = if std_norm > 1e-10 {
+        norms.iter().filter(|&&x| ((x - mean_norm) / std_norm).abs() > 3.0).count()
+    } else {
+        0
+    };
+    let outlier_ratio = if n > 0.0 { outlier_count as f64 / n } else { 0.0 };
+    if outlier_ratio > 0.05 {
+        health_score -= (outlier_ratio - 0.05) * 200.0;
+        issues.push(format!(
+            "High outlier ratio: {:.1}% of vectors are statistical outliers",
+            outlier_ratio * 100.0
+        ));
+    }
+
+    // 3. Zero vector check
+    let zero_count = sample_vectors.iter().filter(|v| v.iter().all(|&x| x == 0.0)).count();
+    if zero_count > 0 {
+        let zero_ratio = zero_count as f64 / n;
+        health_score -= zero_ratio * 50.0;
+        issues.push(format!(
+            "Zero vectors detected: {} ({:.1}%)",
+            zero_count, zero_ratio * 100.0
+        ));
+    }
+
+    // 4. NaN/Inf check
+    let invalid_count = sample_vectors
+        .iter()
+        .filter(|v| v.iter().any(|x| x.is_nan() || x.is_infinite()))
+        .count();
+    if invalid_count > 0 {
+        health_score -= 30.0;
+        issues.push(format!(
+            "Invalid vectors (NaN/Inf): {} detected",
+            invalid_count
+        ));
+    }
+
+    // 5. Index fragmentation via stats
+    if let Ok(stats) = coll.stats() {
+        let total_with_deleted = stats.index_stats.num_vectors + stats.index_stats.num_deleted;
+        if total_with_deleted > num_vectors {
+            let frag_ratio = (total_with_deleted - num_vectors) as f64 / total_with_deleted as f64;
+            if frag_ratio > 0.2 {
+                health_score -= (frag_ratio - 0.2) * 25.0;
+                issues.push(format!(
+                    "Index fragmentation: {:.1}% deleted vectors (consider compaction)",
+                    frag_ratio * 100.0
+                ));
+            }
+        }
+    }
+
+    health_score = health_score.clamp(0.0, 100.0);
+
+    if format == "json" {
+        let output = json!({
+            "collection": collection_name,
+            "health_score": health_score,
+            "num_vectors": num_vectors,
+            "dimensions": dimensions,
+            "dim_utilization": dim_utilization,
+            "outlier_ratio": outlier_ratio,
+            "zero_vectors": zero_count,
+            "invalid_vectors": invalid_count,
+            "collapsed_dimensions": collapsed_dims,
+            "issues": issues,
+        });
+        println!("{}", serde_json::to_string_pretty(&output).unwrap_or_default());
+    } else {
+        let score_color = if health_score >= 80.0 {
+            "🟢"
+        } else if health_score >= 50.0 {
+            "🟡"
+        } else {
+            "🔴"
+        };
+
+        println!("═══ Health Report for '{}' ═══", collection_name);
+        println!();
+        println!("  {} Health Score: {:.0}/100", score_color, health_score);
+        println!();
+        println!("  Vectors: {}", num_vectors);
+        println!("  Dimensions: {}", dimensions);
+        println!("  Dimension utilization: {:.1}%", dim_utilization * 100.0);
+        println!("  Outlier ratio: {:.2}%", outlier_ratio * 100.0);
+        println!("  Mean vector norm: {:.4}", mean_norm);
+        println!("  Std vector norm: {:.4}", std_norm);
+
+        if issues.is_empty() {
+            println!();
+            println!("  No issues detected.");
+        } else {
+            println!();
+            println!("  Issues:");
+            for issue in &issues {
+                println!("    ⚠ {}", issue);
+            }
+        }
+    }
+
+    Ok(())
+}
+
+// ============================================================================
+// Feature: Embedded Vector Playground (playground)
+// ============================================================================
+
+pub fn playground_command(database: Option<&str>) -> Result<()> {
+    let db = if let Some(path) = database {
+        Database::open(path)?
+    } else {
+        Database::in_memory()
+    };
+
+    println!("═══ Needle Playground ═══");
+    println!("Type 'help' for available commands, 'quit' to exit.");
+    if database.is_some() {
+        println!("Connected to: {}", database.unwrap_or("in-memory"));
+    } else {
+        println!("Running in-memory mode.");
+    }
+    println!();
+
+    let stdin = io::stdin();
+    let mut line_buf = String::new();
+
+    loop {
+        eprint!("needle> ");
+        line_buf.clear();
+        if stdin.lock().read_line(&mut line_buf).unwrap_or(0) == 0 {
+            break;
+        }
+        let line = line_buf.trim();
+        if line.is_empty() {
+            continue;
+        }
+
+        match line {
+            "quit" | "exit" | "\\q" => {
+                println!("Bye!");
+                break;
+            }
+            "help" | "\\h" => {
+                println!("Available commands:");
+                println!("  collections           - List all collections");
+                println!("  info <collection>     - Show collection info");
+                println!("  count <collection>    - Count vectors");
+                println!("  create <name> <dims>  - Create collection");
+                println!("  search <coll> <k> <v1,v2,...> - Search");
+                println!("  stats <collection>    - Show statistics");
+                println!("  help                  - Show this help");
+                println!("  quit                  - Exit playground");
+            }
+            "collections" | "\\l" => {
+                let colls = db.list_collections();
+                if colls.is_empty() {
+                    println!("No collections.");
+                } else {
+                    for name in colls {
+                        if let Ok(c) = db.collection(&name) {
+                            println!("  {} (dims={:?}, count={})", name, c.dimensions(), c.len());
+                        }
+                    }
+                }
+            }
+            _ => {
+                let parts: Vec<&str> = line.split_whitespace().collect();
+                match parts.first().copied() {
+                    Some("info") | Some("stats") => {
+                        if let Some(name) = parts.get(1) {
+                            match db.collection(name) {
+                                Ok(c) => {
+                                    println!("  Collection: {}", name);
+                                    println!("  Dimensions: {:?}", c.dimensions().unwrap_or(0));
+                                    println!("  Vectors: {}", c.len());
+                                }
+                                Err(e) => println!("Error: {}", e),
+                            }
+                        } else {
+                            println!("Usage: info <collection>");
+                        }
+                    }
+                    Some("count") => {
+                        if let Some(name) = parts.get(1) {
+                            match db.collection(name) {
+                                Ok(c) => println!("{}", c.len()),
+                                Err(e) => println!("Error: {}", e),
+                            }
+                        } else {
+                            println!("Usage: count <collection>");
+                        }
+                    }
+                    Some("create") => {
+                        if parts.len() >= 3 {
+                            let name = parts[1];
+                            if let Ok(dims) = parts[2].parse::<usize>() {
+                                match db.create_collection(name, dims) {
+                                    Ok(_) => println!("Created collection '{}' (dims={})", name, dims),
+                                    Err(e) => println!("Error: {}", e),
+                                }
+                            } else {
+                                println!("Invalid dimensions: {}", parts[2]);
+                            }
+                        } else {
+                            println!("Usage: create <name> <dimensions>");
+                        }
+                    }
+                    Some("search") => {
+                        if parts.len() >= 4 {
+                            let name = parts[1];
+                            if let (Ok(k), Ok(query)) = (
+                                parts[2].parse::<usize>(),
+                                parse_query_vector(parts[3]),
+                            ) {
+                                match db.collection(name) {
+                                    Ok(c) => match c.search(&query, k) {
+                                        Ok(results) => {
+                                            for r in &results {
+                                                println!(
+                                                    "  {} dist={:.6}",
+                                                    r.id, r.distance
+                                                );
+                                            }
+                                            if results.is_empty() {
+                                                println!("  (no results)");
+                                            }
+                                        }
+                                        Err(e) => println!("Error: {}", e),
+                                    },
+                                    Err(e) => println!("Error: {}", e),
+                                }
+                            } else {
+                                println!("Usage: search <collection> <k> <v1,v2,...>");
+                            }
+                        } else {
+                            println!("Usage: search <collection> <k> <v1,v2,...>");
+                        }
+                    }
+                    _ => {
+                        println!("Unknown command: '{}'. Type 'help' for usage.", line);
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+// ============================================================================
+// Feature: Smart Collection Auto-Partitioning (partition)
+// ============================================================================
+
+pub fn partition_command(
+    path: &str,
+    collection_name: &str,
+    analyze_only: bool,
+    target_size: usize,
+) -> Result<()> {
+    let db = Database::open(path)?;
+    let coll = db.collection(collection_name)?;
+
+    let num_vectors = coll.len();
+    let dimensions = coll.dimensions().unwrap_or(0);
+
+    if num_vectors == 0 {
+        println!("Collection '{}' is empty.", collection_name);
+        return Ok(());
+    }
+
+    let recommended_partitions = (num_vectors + target_size - 1) / target_size;
+
+    println!("═══ Partition Analysis for '{}' ═══", collection_name);
+    println!();
+    println!("  Vectors: {}", num_vectors);
+    println!("  Dimensions: {}", dimensions);
+    println!("  Target partition size: {}", target_size);
+    println!("  Recommended partitions: {}", recommended_partitions);
+    println!();
+
+    if recommended_partitions <= 1 {
+        println!("  ✓ Collection is small enough — no partitioning needed.");
+        return Ok(());
+    }
+
+    // Analyze metadata keys for partition key candidates
+    let mut metadata_keys: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    let exported = coll.export_all()?;
+    let sample_size = exported.len().min(500);
+    for (_, _, meta) in exported.iter().take(sample_size) {
+        if let Some(m) = meta {
+            if let Some(obj) = m.as_object() {
+                for key in obj.keys() {
+                    *metadata_keys.entry(key.clone()).or_insert(0) += 1;
+                }
+            }
+        }
+    }
+
+    if !metadata_keys.is_empty() {
+        println!("  Metadata key candidates for partition key:");
+        let mut sorted_keys: Vec<_> = metadata_keys.into_iter().collect();
+        sorted_keys.sort_by(|a, b| b.1.cmp(&a.1));
+        for (key, count) in sorted_keys.iter().take(5) {
+            let coverage = *count as f64 / sample_size as f64 * 100.0;
+            println!("    '{}' — present in {:.0}% of vectors", key, coverage);
+        }
+    } else {
+        println!("  No metadata keys found. Consider vector-based (k-means) partitioning.");
+    }
+
+    println!();
+    println!("  Strategy recommendation:");
+    if num_vectors > 1_000_000 {
+        println!("    → Large collection: use metadata-based partitioning for predictable routing.");
+    } else if num_vectors > 100_000 {
+        println!("    → Medium collection: k-means clustering may improve search locality.");
+    } else {
+        println!("    → Small collection: partitioning provides minimal benefit at this scale.");
+    }
+
+    if analyze_only {
+        println!();
+        println!("  (analyze mode — no changes applied)");
+    }
+
+    Ok(())
+}

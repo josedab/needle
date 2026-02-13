@@ -571,6 +571,44 @@ pub enum Commands {
         dry_run: bool,
     },
 
+    /// Show collection health score and anomaly detection
+    Health {
+        /// Path to the database file
+        database: String,
+
+        /// Collection name
+        #[arg(short, long)]
+        collection: String,
+
+        /// Output format (text, json)
+        #[arg(long, default_value = "text")]
+        format: String,
+    },
+
+    /// Interactive REPL/playground for vector exploration
+    Playground {
+        /// Path to the database file (optional, starts in-memory)
+        #[arg(short, long)]
+        database: Option<String>,
+    },
+
+    /// Analyze collection for auto-partitioning recommendations
+    Partition {
+        /// Path to the database file
+        database: String,
+
+        /// Collection name
+        #[arg(short, long)]
+        collection: String,
+
+        /// Analyze only (don't apply)
+        #[arg(long)]
+        analyze: bool,
+
+        /// Target partition size (number of vectors per partition)
+        #[arg(long, default_value = "100000")]
+        target_size: usize,
+    },
 }
 
 /// Developer subcommands

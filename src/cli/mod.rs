@@ -165,5 +165,11 @@ pub fn run(cli: Cli) -> Result<()> {
             advise_command(&database, &collection, sample_queries),
         Commands::Dedup { database, collection, threshold, strategy, dry_run } =>
             dedup_command(&database, &collection, threshold, &strategy, dry_run),
+        Commands::Health { database, collection, format } =>
+            health_command(&database, &collection, &format),
+        Commands::Playground { database } =>
+            playground_command(database.as_deref()),
+        Commands::Partition { database, collection, analyze, target_size } =>
+            partition_command(&database, &collection, analyze, target_size),
     }
 }
