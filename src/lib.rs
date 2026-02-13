@@ -89,6 +89,8 @@ pub mod metadata;
 pub(crate) mod storage;
 /// Auto-tuning for HNSW parameters based on workload profiling.
 pub mod tuning;
+/// Automated recall benchmarking: synthetic datasets, brute-force ground truth, recall@k, QPS, latency.
+pub mod recall_benchmark;
 /// Columnar storage for efficient batch vector operations.
 pub use indexing::columnar;
 /// Data processing pipelines for vector ingestion and transformation.
