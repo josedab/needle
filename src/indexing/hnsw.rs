@@ -124,6 +124,40 @@ pub struct SearchStats {
     pub traversal_time_us: u64,
 }
 
+/// A single hop in the HNSW graph traversal, recording which node was visited and the distance computed.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TraceHop {
+    /// Layer at which this hop occurred
+    pub layer: usize,
+    /// Node ID visited
+    pub node_id: VectorId,
+    /// Distance from the query vector to this node
+    pub distance: f32,
+    /// Whether this node was added to the result candidate set
+    pub added_to_candidates: bool,
+    /// Neighbors explored from this node
+    pub neighbors_explored: usize,
+}
+
+/// Detailed trace of an HNSW search, recording every hop for debugging and visualization.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SearchTrace {
+    /// Ordered list of hops during graph traversal
+    pub hops: Vec<TraceHop>,
+    /// Entry point node ID
+    pub entry_point: Option<VectorId>,
+    /// Entry point layer
+    pub entry_layer: usize,
+    /// Final result IDs with distances (top-k)
+    pub results: Vec<(VectorId, f32)>,
+    /// Total distance computations
+    pub distance_computations: usize,
+    /// Total nodes visited
+    pub nodes_visited: usize,
+    /// Layers traversed (from highest to 0)
+    pub layers_traversed: Vec<usize>,
+}
+
 /// HNSW configuration parameters
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HnswConfig {
@@ -623,6 +657,70 @@ impl HnswIndex {
 
         // Return top k
         Ok((candidates.into_iter().take(k).collect(), stats))
+    }
+
+    /// Search with full trace recording for debugging and visualization.
+    ///
+    /// Returns results along with a detailed `SearchTrace` showing every hop
+    /// in the graph traversal, useful for understanding search behavior.
+    pub fn search_with_trace(
+        &self,
+        query: &[f32],
+        k: usize,
+        vectors: &[Vec<f32>],
+    ) -> Result<(Vec<(VectorId, f32)>, SearchTrace)> {
+        let mut trace = SearchTrace {
+            entry_point: self.entry_point,
+            entry_layer: self.entry_level,
+            ..Default::default()
+        };
+
+        if self.entry_point.is_none() {
+            return Ok((vec![], trace));
+        }
+
+        let mut current = self.entry_point.ok_or_else(|| {
+            crate::error::NeedleError::Index("HNSW entry point missing".into())
+        })?;
+
+        // Traverse upper layers (greedy, ef=1)
+        for l in (1..=self.entry_level).rev() {
+            trace.layers_traversed.push(l);
+            let result = self.search_layer(query, current, 1, l, vectors)?;
+            for (node_id, dist) in &result {
+                trace.hops.push(TraceHop {
+                    layer: l,
+                    node_id: *node_id,
+                    distance: *dist,
+                    added_to_candidates: true,
+                    neighbors_explored: self.layers[l].connection_count(*node_id),
+                });
+                trace.nodes_visited += 1;
+                trace.distance_computations += 1;
+            }
+            if let Some((closest, _)) = result.first() {
+                current = *closest;
+            }
+        }
+
+        // Search layer 0 with full ef_search
+        trace.layers_traversed.push(0);
+        let candidates = self.search_layer(query, current, self.config.ef_search, 0, vectors)?;
+        for (node_id, dist) in &candidates {
+            trace.hops.push(TraceHop {
+                layer: 0,
+                node_id: *node_id,
+                distance: *dist,
+                added_to_candidates: true,
+                neighbors_explored: self.layers[0].connection_count(*node_id),
+            });
+            trace.nodes_visited += 1;
+            trace.distance_computations += 1;
+        }
+
+        let results: Vec<_> = candidates.into_iter().take(k).collect();
+        trace.results = results.clone();
+        Ok((results, trace))
     }
 
     /// Search for all vectors within a given distance radius.

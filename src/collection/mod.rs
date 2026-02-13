@@ -1140,6 +1140,29 @@ impl Collection {
         Ok((results, explain))
     }
 
+    /// Search with full HNSW graph traversal trace for debugging.
+    ///
+    /// Returns search results along with a detailed `SearchTrace` showing
+    /// every hop, distance computation, and layer traversal decision.
+    pub fn search_with_trace(
+        &self,
+        query: &[f32],
+        k: usize,
+    ) -> Result<(Vec<SearchResult>, crate::hnsw::SearchTrace)> {
+        self.validate_query(query)?;
+        let effective_k = self.clamp_k(k);
+        if effective_k == 0 {
+            return Ok((Vec::new(), crate::hnsw::SearchTrace::default()));
+        }
+
+        let (raw_results, trace) =
+            self.index
+                .search_with_trace(query, effective_k, self.vectors.as_slice())?;
+
+        let results = self.enrich_results(raw_results)?;
+        Ok((results, trace))
+    }
+
     /// Search with metadata filter and detailed profiling.
     ///
     /// Combines filtered search with query execution profiling.

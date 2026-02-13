@@ -1485,6 +1485,21 @@ impl Database {
         coll.search_with_filter_explain(query, k, filter)
     }
 
+    fn search_with_trace_internal(
+        &self,
+        collection: &str,
+        query: &[f32],
+        k: usize,
+    ) -> Result<(Vec<SearchResult>, crate::hnsw::SearchTrace)> {
+        let state = self.state.read();
+        let coll = state
+            .collections
+            .get(collection)
+            .ok_or_else(|| NeedleError::CollectionNotFound(collection.to_string()))?;
+
+        coll.search_with_trace(query, k)
+    }
+
     fn search_with_post_filter_internal(
         &self,
         collection: &str,

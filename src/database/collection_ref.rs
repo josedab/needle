@@ -404,6 +404,15 @@ impl<'a> CollectionRef<'a> {
         self.db.search_explain_internal(&self.name, query, k)
     }
 
+    /// Search with full HNSW graph traversal trace for debugging and visualization.
+    pub fn search_with_trace(
+        &self,
+        query: &[f32],
+        k: usize,
+    ) -> Result<(Vec<SearchResult>, crate::hnsw::SearchTrace)> {
+        self.db.search_with_trace_internal(&self.name, query, k)
+    }
+
     /// Search with metadata filter and detailed profiling.
     ///
     /// Combines filtered search with query execution profiling.

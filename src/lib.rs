@@ -465,7 +465,7 @@ pub use database::collection_ref::SearchParams;
 pub use database::{CollectionRef, Database, DatabaseConfig, ExportEntry};
 pub use distance::DistanceFunction;
 pub use error::{ErrorCode, NeedleError, Recoverable, RecoveryHint, Result};
-pub use hnsw::{HnswConfig, HnswIndex, HnswStats, SearchStats};
+pub use hnsw::{HnswConfig, HnswIndex, HnswStats, SearchStats, SearchTrace, TraceHop};
 pub use metadata::{Filter, MetadataStore};
 pub use multivec::{MultiVector, MultiVectorConfig, MultiVectorIndex, MultiVectorSearchResult};
 pub use quantization::{BinaryQuantizer, ProductQuantizer, ScalarQuantizer};
