@@ -24,3 +24,5 @@ pub mod graphrag;
 pub mod pipeline;
 #[cfg(feature = "experimental")]
 pub mod semantic_cache;
+/// Embedded SQL analytics engine over vector metadata (COUNT, SUM, AVG, GROUP BY, HAVING).
+pub mod sql_analytics;
