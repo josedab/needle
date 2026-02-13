@@ -1184,6 +1184,101 @@ impl Delta {
     }
 }
 
+// ── Bidirectional Delta Sync Engine ──────────────────────────────────────────
+
+/// Outcome of a bidirectional sync session.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SyncOutcome {
+    /// Operations sent to the remote peer.
+    pub sent: usize,
+    /// Operations received from the remote peer.
+    pub received: usize,
+    /// Conflicts resolved during merge.
+    pub conflicts: usize,
+    /// Whether the sync completed fully (no more batches).
+    pub complete: bool,
+}
+
+/// Bidirectional delta sync engine for two `VectorCRDT` instances.
+///
+/// Orchestrates a sync session: computes deltas from both sides,
+/// applies them, and returns a summary of changes.
+pub struct DeltaSyncEngine;
+
+impl DeltaSyncEngine {
+    /// Perform a full bidirectional sync between two CRDT replicas.
+    ///
+    /// Both replicas exchange deltas and merge them. After sync,
+    /// both replicas converge to the same state (eventually consistent).
+    pub fn sync(
+        local: &mut VectorCRDT,
+        remote: &mut VectorCRDT,
+    ) -> Result<SyncOutcome> {
+        let remote_id = remote.replica_id();
+        let local_id = local.replica_id();
+
+        // Compute deltas from each side
+        let local_last_sync = local.peer_sync_state.get(&remote_id).copied();
+        let remote_last_sync = remote.peer_sync_state.get(&local_id).copied();
+
+        let local_delta = local.delta_since(local_last_sync);
+        let remote_delta = remote.delta_since(remote_last_sync);
+
+        let sent = local_delta.len();
+        let received = remote_delta.len();
+
+        // Apply remote delta to local
+        let local_merge = local.merge(remote_delta)?;
+        // Apply local delta to remote
+        let remote_merge = remote.merge(local_delta)?;
+
+        Ok(SyncOutcome {
+            sent,
+            received,
+            conflicts: local_merge.conflicts + remote_merge.conflicts,
+            complete: true,
+        })
+    }
+
+    /// Perform a one-way sync: push local changes to remote.
+    pub fn push(
+        local: &VectorCRDT,
+        remote: &mut VectorCRDT,
+    ) -> Result<SyncOutcome> {
+        let remote_id = remote.replica_id();
+        let last_sync = local.peer_sync_state.get(&remote_id).copied();
+        let delta = local.delta_since(last_sync);
+        let sent = delta.len();
+        let merge_result = remote.merge(delta)?;
+
+        Ok(SyncOutcome {
+            sent,
+            received: 0,
+            conflicts: merge_result.conflicts,
+            complete: true,
+        })
+    }
+
+    /// Perform a one-way sync: pull remote changes to local.
+    pub fn pull(
+        local: &mut VectorCRDT,
+        remote: &VectorCRDT,
+    ) -> Result<SyncOutcome> {
+        let local_id = local.replica_id();
+        let last_sync = remote.peer_sync_state.get(&local_id).copied();
+        let delta = remote.delta_since(last_sync);
+        let received = delta.len();
+        let merge_result = local.merge(delta)?;
+
+        Ok(SyncOutcome {
+            sent: 0,
+            received,
+            conflicts: merge_result.conflicts,
+            complete: true,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
