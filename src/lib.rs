@@ -93,6 +93,8 @@ pub mod tuning;
 pub mod recall_benchmark;
 /// Programmable pre/post-processing hooks for insert and search operations.
 pub mod hooks;
+/// Git-like collection branching with copy-on-write pages and merge with conflict detection.
+pub mod collection_branch;
 /// Columnar storage for efficient batch vector operations.
 pub use indexing::columnar;
 /// Data processing pipelines for vector ingestion and transformation.
