@@ -62,14 +62,14 @@ Default HNSW parameters optimized for ~95% recall:
 ```rust
 // Warm-up: 1,000 queries (not measured)
 for _ in 0..1000 {
-    collection.search(&random_query(), 10, None)?;
+    collection.search(&random_query(), 10)?;
 }
 
 // Measurement: 10,000 queries
 let mut latencies = Vec::with_capacity(10000);
 for _ in 0..10000 {
     let start = Instant::now();
-    collection.search(&random_query(), 10, None)?;
+    collection.search(&random_query(), 10)?;
     latencies.push(start.elapsed());
 }
 
@@ -90,7 +90,7 @@ let vectors: Vec<_> = (0..100_000)
 // Measurement
 let start = Instant::now();
 for (id, vec, meta) in &vectors {
-    collection.insert(id, vec, meta.clone())?;
+    collection.insert(id, vec, Some(meta.clone()))?;
 }
 let total_time = start.elapsed();
 
@@ -106,7 +106,7 @@ Recall@k measures how many of the true k nearest neighbors are found:
 let true_neighbors = brute_force_search(&query, &all_vectors, k);
 
 // HNSW result
-let hnsw_neighbors = collection.search(&query, k, None)?;
+let hnsw_neighbors = collection.search(&query, k)?;
 
 // Calculate recall
 let found = hnsw_neighbors.iter()
@@ -226,20 +226,21 @@ use needle::{Database, CollectionConfig, DistanceFunction};
 use std::time::Instant;
 
 fn main() -> needle::Result<()> {
-    let db = Database::in_memory()?;
+    let db = Database::in_memory();
 
-    let config = CollectionConfig::new(384, DistanceFunction::Cosine)
+    let config = CollectionConfig::new("bench", 384)
+        .with_distance(DistanceFunction::Cosine)
         .with_hnsw_m(16)
         .with_hnsw_ef_construction(200);
 
-    db.create_collection_with_config("bench", config)?;
+    db.create_collection_with_config(config)?;
     let collection = db.collection("bench")?;
 
     // Insert vectors
     let insert_start = Instant::now();
     for i in 0..100_000 {
         let vec: Vec<f32> = (0..384).map(|_| rand::random::<f32>() * 2.0 - 1.0).collect();
-        collection.insert(&format!("v{}", i), &vec, serde_json::json!({}))?;
+        collection.insert(&format!("v{}", i), &vec, Some(serde_json::json!({})))?;
     }
     println!("Insert time: {:?}", insert_start.elapsed());
 
@@ -248,7 +249,7 @@ fn main() -> needle::Result<()> {
     for _ in 0..1000 {
         let query: Vec<f32> = (0..384).map(|_| rand::random()).collect();
         let start = Instant::now();
-        collection.search(&query, 10, None)?;
+        collection.search(&query, 10)?;
         latencies.push(start.elapsed());
     }
 
@@ -282,7 +283,7 @@ fn main() -> needle::Result<()> {
 4. **Pre-filter with metadata** to reduce candidates:
    ```rust
    let filter = Filter::parse(&json!({"active": true}))?;
-   collection.search(&query, 10, Some(&filter))?;
+   collection.search_with_filter(&query, 10, &filter)?;
    ```
 
 ### For Highest Recall
@@ -321,7 +322,7 @@ fn main() -> needle::Result<()> {
 4. **Store minimal metadata**:
    ```rust
    // Instead of storing full content
-   collection.insert(&id, &vec, json!({"ref": id}))?;
+   collection.insert(&id, &vec, Some(json!({"ref": id})))?;
    ```
 
 ## Limitations

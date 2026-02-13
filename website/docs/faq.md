@@ -94,7 +94,7 @@ let filter = Filter::parse(&json!({
     ]
 }))?;
 
-let results = collection.search(&query, 10, Some(&filter))?;
+let results = collection.search_with_filter(&query, 10, &filter)?;
 ```
 
 ### Does Needle support hybrid search?
@@ -207,7 +207,8 @@ Solutions:
 collection.compact()?; // Reclaim space from deletions
 
 // Use quantization for new collections
-let config = CollectionConfig::new(384, DistanceFunction::Cosine)
+let config = CollectionConfig::new("collection", 384)
+    .with_distance(DistanceFunction::Cosine)
     .with_quantization(QuantizationType::Scalar);
 ```
 
@@ -238,8 +239,9 @@ let config = CollectionConfig::new(384, DistanceFunction::Cosine)
 The collection doesn't exist. Create it first:
 
 ```rust
-if !db.collection_exists("my_collection")? {
-    db.create_collection("my_collection", 384, DistanceFunction::Cosine)?;
+// Try to get the collection; if it doesn't exist, create it
+if db.collection("my_collection").is_err() {
+    db.create_collection("my_collection", 384)?;
 }
 ```
 
@@ -249,10 +251,10 @@ The vector you're inserting has different dimensions than the collection:
 
 ```rust
 // Collection created with 384 dimensions
-db.create_collection("docs", 384, DistanceFunction::Cosine)?;
+db.create_collection("docs", 384)?;
 
 // This will fail - vector has 512 dimensions
-collection.insert("id", &vec![0.0; 512], json!({}))?; // Error!
+collection.insert("id", &vec![0.0; 512], None)?; // Error!
 ```
 
 ### Error: "Vector not found"
@@ -364,7 +366,7 @@ let db = Arc::new(Database::open("vectors.needle")?);
 let db_clone = db.clone();
 thread::spawn(move || {
     let collection = db_clone.collection("docs")?;
-    collection.insert("id", &vec, json!({}))?;
+    collection.insert("id", &vec, None)?;
 });
 ```
 

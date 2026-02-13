@@ -34,7 +34,7 @@ fn main() -> needle::Result<()> {
     let db = Database::open("vectors.needle")?;
 
     // Create a collection
-    db.create_collection("documents", 384, DistanceFunction::Cosine)?;
+    db.create_collection("documents", 384)?;
 
     // Get collection reference
     let collection = db.collection("documents")?;
@@ -43,11 +43,11 @@ fn main() -> needle::Result<()> {
     collection.insert(
         "doc1",
         &vec![0.1; 384],
-        json!({"title": "Hello World"})
+        Some(json!({"title": "Hello World"}))
     )?;
 
     // Search
-    let results = collection.search(&vec![0.1; 384], 10, None)?;
+    let results = collection.search(&vec![0.1; 384], 10)?;
 
     // Save to disk
     db.save()?;
@@ -67,33 +67,34 @@ use needle::{Database, DatabaseConfig};
 let db = Database::open("vectors.needle")?;
 
 // In-memory database (for testing)
-let db = Database::in_memory()?;
+let db = Database::in_memory();
 
 // With custom configuration
-let config = DatabaseConfig::new()
+let config = DatabaseConfig::new("vectors.needle")
     .with_mmap_threshold(10 * 1024 * 1024);
-let db = Database::open_with_config("vectors.needle", config)?;
+let db = Database::open_with_config(config)?;
 ```
 
 ### Collection Management
 
 ```rust
-// Create collection
-db.create_collection("docs", 384, DistanceFunction::Cosine)?;
+// Create collection (uses cosine distance by default)
+db.create_collection("docs", 384)?;
 
 // With custom config
 use needle::CollectionConfig;
-let config = CollectionConfig::new(384, DistanceFunction::Cosine)
+let config = CollectionConfig::new("high_quality", 384)
+    .with_distance(DistanceFunction::Cosine)
     .with_hnsw_m(32)
     .with_hnsw_ef_construction(400);
-db.create_collection_with_config("high_quality", config)?;
+db.create_collection_with_config(config)?;
 
 // List collections
 let names = db.list_collections()?;
 
-// Check if exists
-if db.collection_exists("docs")? {
-    // ...
+// Check if collection exists
+if db.collection("docs").is_ok() {
+    // collection exists
 }
 
 // Get collection reference
@@ -123,21 +124,20 @@ db.save_to("backup.needle")?;
 ```rust
 let collection = db.collection("documents")?;
 
-// Insert
-collection.insert("id1", &vector, json!({"key": "value"}))?;
+// Insert with metadata
+collection.insert("id1", &vector, Some(json!({"key": "value"})))?;
 
-// Get by ID
-let entry = collection.get("id1")?;
-println!("Vector: {:?}", entry.vector);
-println!("Metadata: {:?}", entry.metadata);
+// Insert without metadata
+collection.insert("id2", &vector, None)?;
 
-// Check if exists
-if collection.exists("id1")? {
-    // ...
+// Get by ID — returns Option, not Result
+if let Some((vector, metadata)) = collection.get("id1") {
+    println!("Vector: {:?}", vector);
+    println!("Metadata: {:?}", metadata);
 }
 
-// Delete
-collection.delete("id1")?;
+// Delete — returns Ok(true) if found, Ok(false) if not
+let was_deleted = collection.delete("id1")?;
 
 // Count vectors
 let count = collection.count()?;
@@ -152,7 +152,7 @@ collection.clear()?;
 use needle::Filter;
 
 // Basic search
-let results = collection.search(&query_vector, 10, None)?;
+let results = collection.search(&query_vector, 10)?;
 
 for result in results {
     println!("ID: {}, Distance: {}", result.id, result.distance);
@@ -164,14 +164,13 @@ let filter = Filter::parse(&json!({
     "category": "programming",
     "year": {"$gte": 2020}
 }))?;
-let results = collection.search(&query_vector, 10, Some(&filter))?;
+let results = collection.search_with_filter(&query_vector, 10, &filter)?;
 
-// Search with custom ef_search
-let results = collection.search_with_params(&query_vector, 10, None, 100)?;
-
-// Batch search (parallel)
-let queries: Vec<&[f32]> = vec![&query1, &query2, &query3];
-let all_results = collection.batch_search(&queries, 10, None)?;
+// Fluent query builder with filter and limit
+let results = collection.query(&query_vector)
+    .limit(10)
+    .filter(&filter)
+    .execute()?;
 // all_results is Vec<Vec<SearchResult>>
 ```
 
@@ -277,19 +276,25 @@ let filter = Filter::parse(&json!({
 ## Distance Functions
 
 ```rust
-use needle::DistanceFunction;
+use needle::{CollectionConfig, DistanceFunction};
 
-// Cosine distance (recommended for text embeddings)
-db.create_collection("text", 384, DistanceFunction::Cosine)?;
+// Cosine distance (recommended for text embeddings) — this is the default
+db.create_collection("text", 384)?;
 
 // Euclidean distance (L2)
-db.create_collection("images", 512, DistanceFunction::Euclidean)?;
+let config = CollectionConfig::new("images", 512)
+    .with_distance(DistanceFunction::Euclidean);
+db.create_collection_with_config(config)?;
 
 // Dot product (for recommendation systems)
-db.create_collection("recommendations", 128, DistanceFunction::Dot)?;
+let config = CollectionConfig::new("recommendations", 128)
+    .with_distance(DistanceFunction::DotProduct);
+db.create_collection_with_config(config)?;
 
 // Manhattan distance (L1)
-db.create_collection("sparse", 1000, DistanceFunction::Manhattan)?;
+let config = CollectionConfig::new("sparse", 1000)
+    .with_distance(DistanceFunction::Manhattan);
+db.create_collection_with_config(config)?;
 ```
 
 ## Quantization
@@ -298,21 +303,21 @@ db.create_collection("sparse", 1000, DistanceFunction::Manhattan)?;
 use needle::{CollectionConfig, QuantizationType};
 
 // Scalar quantization (4x compression)
-let config = CollectionConfig::new(384, DistanceFunction::Cosine)
+let config = CollectionConfig::new("quantized_sq", 384)
     .with_quantization(QuantizationType::Scalar);
 
 // Product quantization (8-32x compression)
-let config = CollectionConfig::new(384, DistanceFunction::Cosine)
+let config = CollectionConfig::new("quantized_pq", 384)
     .with_quantization(QuantizationType::Product {
         num_subvectors: 48,
         num_centroids: 256,
     });
 
 // Binary quantization (32x compression)
-let config = CollectionConfig::new(384, DistanceFunction::Cosine)
+let config = CollectionConfig::new("quantized_bq", 384)
     .with_quantization(QuantizationType::Binary);
 
-db.create_collection_with_config("quantized", config)?;
+db.create_collection_with_config(config)?;
 ```
 
 ## Hybrid Search
@@ -398,7 +403,7 @@ let collection = db.collection("documents")?;
 let handles: Vec<_> = (0..4).map(|i| {
     let coll = collection.clone();
     thread::spawn(move || {
-        let results = coll.search(&query, 10, None).unwrap();
+        let results = coll.search(&query, 10).unwrap();
         println!("Thread {}: {} results", i, results.len());
     })
 }).collect();

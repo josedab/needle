@@ -51,14 +51,14 @@ Let's create a simple vector search application step by step.
 ### 1. Create a Database
 
 ```rust
-use needle::{Database, DistanceFunction};
+use needle::Database;
 
 fn main() -> needle::Result<()> {
     // Create a new database (or open existing)
     let db = Database::open("quickstart.needle")?;
 
     // For testing, you can also use an in-memory database
-    // let db = Database::in_memory()?;
+    // let db = Database::in_memory();
 
     Ok(())
 }
@@ -71,7 +71,8 @@ Collections are containers for vectors with the same dimensionality. Each collec
 ```rust
 // Create a collection for 384-dimensional vectors
 // (common dimension for sentence-transformers/all-MiniLM-L6-v2)
-db.create_collection("documents", 384, DistanceFunction::Cosine)?;
+// Uses cosine distance by default
+db.create_collection("documents", 384)?;
 ```
 
 ### 3. Insert Vectors
@@ -87,21 +88,21 @@ let collection = db.collection("documents")?;
 collection.insert(
     "doc1",
     &embedding1,
-    json!({
+    Some(json!({
         "title": "Introduction to Rust",
         "category": "programming",
         "year": 2024
-    })
+    }))
 )?;
 
 collection.insert(
     "doc2",
     &embedding2,
-    json!({
+    Some(json!({
         "title": "Machine Learning Basics",
         "category": "ai",
         "year": 2023
-    })
+    }))
 )?;
 ```
 
@@ -109,7 +110,7 @@ collection.insert(
 
 ```rust
 // Search for the 5 most similar vectors
-let results = collection.search(&query_vector, 5, None)?;
+let results = collection.search(&query_vector, 5)?;
 
 for result in results {
     println!(
@@ -131,7 +132,7 @@ let filter = Filter::parse(&json!({
     "category": "programming"
 }))?;
 
-let results = collection.search(&query_vector, 5, Some(&filter))?;
+let results = collection.search_with_filter(&query_vector, 5, &filter)?;
 
 // Complex filter with operators
 let filter = Filter::parse(&json!({
@@ -154,20 +155,20 @@ db.save()?;
 Here's a complete example putting it all together:
 
 ```rust
-use needle::{Database, DistanceFunction, Filter};
+use needle::{Database, Filter};
 use serde_json::json;
 
 fn main() -> needle::Result<()> {
     // Create database and collection
     let db = Database::open("semantic_search.needle")?;
-    db.create_collection("articles", 384, DistanceFunction::Cosine)?;
+    db.create_collection("articles", 384)?;
     let collection = db.collection("articles")?;
 
     // Sample embeddings (in practice, use an embedding model)
     let articles = vec![
-        ("rust-intro", vec![0.1; 384], json!({"title": "Intro to Rust", "tags": ["rust", "programming"]})),
-        ("ml-basics", vec![0.2; 384], json!({"title": "ML Basics", "tags": ["ai", "ml"]})),
-        ("vector-db", vec![0.15; 384], json!({"title": "Vector Databases", "tags": ["database", "ai"]})),
+        ("rust-intro", vec![0.1; 384], Some(json!({"title": "Intro to Rust", "tags": ["rust", "programming"]}))),
+        ("ml-basics", vec![0.2; 384], Some(json!({"title": "ML Basics", "tags": ["ai", "ml"]}))),
+        ("vector-db", vec![0.15; 384], Some(json!({"title": "Vector Databases", "tags": ["database", "ai"]}))),
     ];
 
     // Insert all articles
@@ -177,7 +178,7 @@ fn main() -> needle::Result<()> {
 
     // Search for similar articles
     let query = vec![0.12; 384];
-    let results = collection.search(&query, 3, None)?;
+    let results = collection.search(&query, 3)?;
 
     println!("Top 3 similar articles:");
     for result in results {
@@ -188,7 +189,7 @@ fn main() -> needle::Result<()> {
     let filter = Filter::parse(&json!({
         "tags": { "$in": ["rust", "database"] }
     }))?;
-    let filtered = collection.search(&query, 3, Some(&filter))?;
+    let filtered = collection.search_with_filter(&query, 3, &filter)?;
 
     println!("\nFiltered results (rust or database tags):");
     for result in filtered {

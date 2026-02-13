@@ -97,20 +97,20 @@ Common issues and their solutions when working with Needle.
 
 **Solution**:
 ```rust
-// Check if collection exists before accessing
-if db.collection_exists("my_collection")? {
-    let collection = db.collection("my_collection")?;
-} else {
-    // Create it first
-    db.create_collection("my_collection", 384)?;
+// Try to get collection; create if it doesn't exist
+match db.collection("my_collection") {
+    Ok(collection) => { /* use collection */ },
+    Err(_) => {
+        db.create_collection("my_collection", 384)?;
+    }
 }
 ```
 
 **Python**:
 ```python
-if db.collection_exists("my_collection"):
+try:
     collection = db.collection("my_collection")
-else:
+except:
     db.create_collection("my_collection", 384)
 ```
 
@@ -124,7 +124,7 @@ else:
 db.create_collection("docs", 384)?;
 
 // This will fail - vector has 512 dimensions
-collection.insert("id", &vec![0.0; 512], json!({}))?; // Error!
+collection.insert("id", &vec![0.0; 512], None)?; // Error!
 ```
 
 **Solution**: Ensure all vectors match the collection's dimension:
@@ -240,11 +240,11 @@ db.delete_collection("my_collection")?;
 2. **Filter is too restrictive**:
    ```rust
    // Try without filter first
-   let results = collection.search(&query, 10, None)?;
+   let results = collection.search(&query, 10)?;
 
    // If that works, debug your filter
    let filter = Filter::parse(&json!({"category": "books"}))?;
-   let filtered = collection.search(&query, 10, Some(&filter))?;
+   let filtered = collection.search_with_filter(&query, 10, &filter)?;
    ```
 
 3. **Query vector dimensions don't match**:
@@ -301,7 +301,8 @@ db.delete_collection("my_collection")?;
 
 2. **Use quantization** to reduce memory and computation:
    ```rust
-   let config = CollectionConfig::new(384, DistanceFunction::Cosine)
+   let config = CollectionConfig::new("collection", 384)
+    .with_distance(DistanceFunction::Cosine)
        .with_quantization(QuantizationType::Scalar);
    ```
 
@@ -320,7 +321,7 @@ db.delete_collection("my_collection")?;
 5. **Add metadata filters** to reduce candidates:
    ```rust
    let filter = Filter::parse(&json!({"category": "active"}))?;
-   let results = collection.search(&query, 10, Some(&filter))?;
+   let results = collection.search_with_filter(&query, 10, &filter)?;
    ```
 
 ---
@@ -340,7 +341,8 @@ db.delete_collection("my_collection")?;
    | Binary | 32x | Higher |
 
    ```rust
-   let config = CollectionConfig::new(384, DistanceFunction::Cosine)
+   let config = CollectionConfig::new("collection", 384)
+    .with_distance(DistanceFunction::Cosine)
        .with_quantization(QuantizationType::Scalar);
    ```
 
@@ -395,7 +397,8 @@ db.delete_collection("my_collection")?;
 
 2. **Use lower M and ef_construction** for faster building:
    ```rust
-   let config = CollectionConfig::new(384, DistanceFunction::Cosine)
+   let config = CollectionConfig::new("collection", 384)
+    .with_distance(DistanceFunction::Cosine)
        .with_hnsw_m(12)  // Lower M
        .with_hnsw_ef_construction(100);  // Lower ef_construction
    ```

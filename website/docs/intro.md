@@ -91,7 +91,7 @@ Needle's embedded architecture means your application links directly to the data
 ## Quick Example
 
 ```rust
-use needle::{Database, DistanceFunction};
+use needle::Database;
 use serde_json::json;
 
 fn main() -> needle::Result<()> {
@@ -99,7 +99,7 @@ fn main() -> needle::Result<()> {
     let db = Database::open("my_vectors.needle")?;
 
     // Create a collection with 384 dimensions (e.g., for all-MiniLM-L6-v2 embeddings)
-    db.create_collection("documents", 384, DistanceFunction::Cosine)?;
+    db.create_collection("documents", 384)?;
 
     // Get a reference to the collection
     let collection = db.collection("documents")?;
@@ -109,15 +109,15 @@ fn main() -> needle::Result<()> {
     collection.insert(
         "doc1",
         &embedding,
-        json!({
+        Some(json!({
             "title": "Hello World",
             "category": "greeting"
-        })
+        }))
     )?;
 
     // Search for similar vectors
     let query = get_embedding("Hi there!");
-    let results = collection.search(&query, 10, None)?;
+    let results = collection.search(&query, 10)?;
 
     for result in results {
         println!("ID: {}, Distance: {}", result.id, result.distance);

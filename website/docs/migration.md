@@ -496,8 +496,8 @@ fn migrate(
 ) -> needle::Result<()> {
     let db = Database::open(output_path)?;
 
-    let config = CollectionConfig::new(dimension, DistanceFunction::Cosine);
-    db.create_collection_with_config("migrated", config)?;
+    let config = CollectionConfig::new("migrated", dimension);
+    db.create_collection_with_config(config)?;
 
     let collection = db.collection("migrated")?;
 

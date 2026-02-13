@@ -73,7 +73,7 @@ let new_shard = Database::open("shard_4.needle")?;
 manager.add_shard(4, new_shard);
 
 // Shard must have the same collections
-new_shard.create_collection("documents", 384, DistanceFunction::Cosine)?;
+new_shard.create_collection("documents", 384)?;
 ```
 
 ### Rebalancing
@@ -253,7 +253,7 @@ let shards: Vec<Database> = (0..4)
 
 // Create collections on each shard
 for shard in &shards {
-    shard.create_collection("documents", 384, DistanceFunction::Cosine)?;
+    shard.create_collection("documents", 384)?;
 }
 
 // Migrate data
