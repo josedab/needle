@@ -221,7 +221,8 @@ impl<'a> CollectionRef<'a> {
         vector: Vec<f32>,
         metadata: Option<Value>,
     ) -> Result<()> {
-        self.db.insert_vec_internal(&self.name, id, vector, metadata)
+        self.db
+            .insert_vec_internal(&self.name, id, vector, metadata)
     }
 
     /// Insert a vector with explicit TTL (time-to-live).
@@ -241,7 +242,8 @@ impl<'a> CollectionRef<'a> {
         metadata: Option<Value>,
         ttl_seconds: Option<u64>,
     ) -> Result<()> {
-        self.db.insert_with_ttl_internal(&self.name, id, vector, metadata, ttl_seconds)
+        self.db
+            .insert_with_ttl_internal(&self.name, id, vector, metadata, ttl_seconds)
     }
 
     /// Insert a vector with TTL, taking ownership (more efficient).
@@ -252,7 +254,8 @@ impl<'a> CollectionRef<'a> {
         metadata: Option<Value>,
         ttl_seconds: Option<u64>,
     ) -> Result<()> {
-        self.db.insert_vec_with_ttl_internal(&self.name, id, vector, metadata, ttl_seconds)
+        self.db
+            .insert_vec_with_ttl_internal(&self.name, id, vector, metadata, ttl_seconds)
     }
 
     /// Search for the k most similar vectors to the query.
@@ -670,7 +673,8 @@ impl<'a> CollectionRef<'a> {
     /// Returns true if the ratio of expired vectors to total vectors
     /// exceeds the given threshold (0.0-1.0).
     pub fn needs_expiration_sweep(&self, threshold: f64) -> bool {
-        self.db.needs_expiration_sweep_internal(&self.name, threshold)
+        self.db
+            .needs_expiration_sweep_internal(&self.name, threshold)
     }
 
     /// Get TTL statistics for the collection.
@@ -839,12 +843,7 @@ impl<'a> CollectionRef<'a> {
     /// assert_eq!(vec, vec![0.0, 1.0, 0.0, 0.0]);
     /// # Ok::<(), needle::NeedleError>(())
     /// ```
-    pub fn update(
-        &self,
-        id: &str,
-        vector: &[f32],
-        metadata: Option<Value>,
-    ) -> Result<()> {
+    pub fn update(&self, id: &str, vector: &[f32], metadata: Option<Value>) -> Result<()> {
         self.db.update_internal(&self.name, id, vector, metadata)
     }
 
