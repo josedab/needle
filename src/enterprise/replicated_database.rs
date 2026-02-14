@@ -13,8 +13,7 @@ use crate::collection::CollectionConfig;
 use crate::database::{CollectionRef, Database};
 use crate::error::{NeedleError, Result};
 use crate::raft::{
-    Command as RaftCommand, NodeId, RaftConfig, RaftError, RaftMessage,
-    RaftNode, RaftState,
+    Command as RaftCommand, NodeId, RaftConfig, RaftError, RaftMessage, RaftNode, RaftState,
 };
 
 /// A database command that can be replicated across the cluster.
@@ -80,10 +79,9 @@ impl ReplicatedCommand {
     /// Parse a replicated command from a Raft command.
     fn from_raft_command(cmd: &RaftCommand) -> Option<Self> {
         match cmd {
-            RaftCommand::Insert { metadata, .. } => {
-                metadata.get("cmd")
-                    .and_then(|s| serde_json::from_str(s).ok())
-            }
+            RaftCommand::Insert { metadata, .. } => metadata
+                .get("cmd")
+                .and_then(|s| serde_json::from_str(s).ok()),
             RaftCommand::Noop => Some(ReplicatedCommand::Noop),
             _ => None,
         }
@@ -265,21 +263,33 @@ impl ReplicatedDatabase {
     /// Apply a single command to the database.
     fn apply_command(&self, cmd: &ReplicatedCommand) -> Result<()> {
         match cmd {
-            ReplicatedCommand::CreateCollection { name, dimensions, config } => {
+            ReplicatedCommand::CreateCollection {
+                name,
+                dimensions,
+                config,
+            } => {
                 if let Some(cfg) = config {
                     self.db.create_collection_with_config(cfg.clone())
                 } else {
                     self.db.create_collection(name, *dimensions)
                 }
             }
-            ReplicatedCommand::DropCollection { name } => {
-                self.db.drop_collection(name).map(|_| ())
-            }
-            ReplicatedCommand::Insert { collection, id, vector, metadata } => {
+            ReplicatedCommand::DropCollection { name } => self.db.drop_collection(name).map(|_| ()),
+            ReplicatedCommand::Insert {
+                collection,
+                id,
+                vector,
+                metadata,
+            } => {
                 let coll = self.db.collection(collection)?;
                 coll.insert(id, vector, metadata.clone())
             }
-            ReplicatedCommand::Update { collection, id, vector, metadata } => {
+            ReplicatedCommand::Update {
+                collection,
+                id,
+                vector,
+                metadata,
+            } => {
                 let coll = self.db.collection(collection)?;
                 coll.update(id, vector, metadata.clone())
             }
@@ -404,12 +414,17 @@ impl ReplicatedDatabase {
     ///
     /// If `allow_follower_reads` is false and this node is not the leader,
     /// this will return an error.
-    pub fn read_collection(&self, name: &str) -> std::result::Result<CollectionRef<'_>, ReplicatedDatabaseError> {
+    pub fn read_collection(
+        &self,
+        name: &str,
+    ) -> std::result::Result<CollectionRef<'_>, ReplicatedDatabaseError> {
         if !self.config.allow_follower_reads && !self.is_leader() {
             return Err(ReplicatedDatabaseError::NotLeader(self.leader()));
         }
 
-        self.db.collection(name).map_err(ReplicatedDatabaseError::Database)
+        self.db
+            .collection(name)
+            .map_err(ReplicatedDatabaseError::Database)
     }
 
     /// List all collections (local read).
