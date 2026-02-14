@@ -30,7 +30,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock, OnceLock};
+use std::sync::{Arc, OnceLock, RwLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 /// Global telemetry instance for easy access
@@ -194,8 +194,14 @@ impl ResourceAttributes {
         let mut map = HashMap::new();
         map.insert("service.name".to_string(), self.service_name.clone());
         map.insert("service.version".to_string(), self.service_version.clone());
-        map.insert("deployment.environment".to_string(), self.deployment_environment.clone());
-        map.insert("process.runtime.name".to_string(), self.process_runtime.clone());
+        map.insert(
+            "deployment.environment".to_string(),
+            self.deployment_environment.clone(),
+        );
+        map.insert(
+            "process.runtime.name".to_string(),
+            self.process_runtime.clone(),
+        );
 
         if let Some(ref ns) = self.service_namespace {
             map.insert("service.namespace".to_string(), ns.clone());
@@ -396,8 +402,8 @@ pub struct TraceContext {
 impl TraceContext {
     /// Generate new trace context.
     pub fn new() -> Self {
-        use std::hash::{Hash, Hasher};
         use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
 
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -423,8 +429,8 @@ impl TraceContext {
 
     /// Create child context.
     pub fn child(&self) -> Self {
-        use std::hash::{Hash, Hasher};
         use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
 
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -462,7 +468,10 @@ impl TraceContext {
 
     /// Convert to W3C traceparent header.
     pub fn to_traceparent(&self) -> String {
-        format!("00-{}-{}-{:02x}", self.trace_id, self.span_id, self.trace_flags)
+        format!(
+            "00-{}-{}-{:02x}",
+            self.trace_id, self.span_id, self.trace_flags
+        )
     }
 }
 
@@ -544,7 +553,11 @@ impl Span {
     }
 
     /// Add an event with attributes.
-    pub fn add_event_with_attributes(&mut self, name: &str, attrs: HashMap<String, AttributeValue>) {
+    pub fn add_event_with_attributes(
+        &mut self,
+        name: &str,
+        attrs: HashMap<String, AttributeValue>,
+    ) {
         self.events.push(SpanEvent {
             name: name.to_string(),
             timestamp: Self::now_nanos(),
@@ -570,7 +583,8 @@ impl Span {
 
     /// Get duration in milliseconds.
     pub fn duration_ms(&self) -> Option<f64> {
-        self.end_time.map(|end| (end - self.start_time) as f64 / 1_000_000.0)
+        self.end_time
+            .map(|end| (end - self.start_time) as f64 / 1_000_000.0)
     }
 }
 
@@ -818,14 +832,16 @@ impl Telemetry {
 
     /// Get counter value.
     pub fn get_counter(&self, name: &str) -> u64 {
-        self.counters.read()
+        self.counters
+            .read()
             .map(|c| *c.get(name).unwrap_or(&0))
             .unwrap_or(0)
     }
 
     /// Get histogram values.
     pub fn get_histogram(&self, name: &str) -> Vec<f64> {
-        self.histograms.read()
+        self.histograms
+            .read()
             .map(|h| h.get(name).cloned().unwrap_or_default())
             .unwrap_or_default()
     }
@@ -1177,21 +1193,19 @@ impl TraceContext {
         format: PropagationFormat,
     ) -> Option<Self> {
         match format {
-            PropagationFormat::W3C => {
-                headers.get("traceparent").and_then(|h| Self::from_traceparent(h))
-            }
+            PropagationFormat::W3C => headers
+                .get("traceparent")
+                .and_then(|h| Self::from_traceparent(h)),
             PropagationFormat::B3 => Self::from_b3_headers(
                 headers.get("X-B3-TraceId").map(|s| s.as_str()),
                 headers.get("X-B3-SpanId").map(|s| s.as_str()),
                 headers.get("X-B3-ParentSpanId").map(|s| s.as_str()),
                 headers.get("X-B3-Sampled").map(|s| s.as_str()),
             ),
-            PropagationFormat::B3Single => {
-                headers.get("b3").and_then(|h| Self::from_b3_single(h))
-            }
-            PropagationFormat::Jaeger => {
-                headers.get("uber-trace-id").and_then(|h| Self::from_jaeger_header(h))
-            }
+            PropagationFormat::B3Single => headers.get("b3").and_then(|h| Self::from_b3_single(h)),
+            PropagationFormat::Jaeger => headers
+                .get("uber-trace-id")
+                .and_then(|h| Self::from_jaeger_header(h)),
         }
     }
 
@@ -1337,7 +1351,11 @@ impl From<&AttributeValue> for OtlpAnyValue {
                 string_value: arr.join(","),
             },
             AttributeValue::IntArray(arr) => OtlpAnyValue::String {
-                string_value: arr.iter().map(|i| i.to_string()).collect::<Vec<_>>().join(","),
+                string_value: arr
+                    .iter()
+                    .map(|i| i.to_string())
+                    .collect::<Vec<_>>()
+                    .join(","),
             },
         }
     }
@@ -1451,7 +1469,10 @@ impl Telemetry {
 
         JaegerExport {
             data: vec![JaegerTrace {
-                trace_id: spans.first().map(|s| s.context.trace_id.clone()).unwrap_or_default(),
+                trace_id: spans
+                    .first()
+                    .map(|s| s.context.trace_id.clone())
+                    .unwrap_or_default(),
                 spans: jaeger_spans,
                 processes: {
                     let mut map = HashMap::new();
@@ -1463,7 +1484,9 @@ impl Telemetry {
                                 JaegerTag {
                                     key: "service.version".to_string(),
                                     tag_type: "string".to_string(),
-                                    value: JaegerTagValue::String(self.config.service_version.clone()),
+                                    value: JaegerTagValue::String(
+                                        self.config.service_version.clone(),
+                                    ),
                                 },
                                 JaegerTag {
                                     key: "deployment.environment".to_string(),
@@ -1488,7 +1511,10 @@ impl Telemetry {
     /// Export spans in Zipkin format.
     pub fn export_zipkin(&self) -> Vec<ZipkinSpan> {
         let spans = self.get_spans();
-        spans.iter().map(|s| ZipkinSpan::from_span(s, &self.config)).collect()
+        spans
+            .iter()
+            .map(|s| ZipkinSpan::from_span(s, &self.config))
+            .collect()
     }
 
     /// Export spans in Zipkin JSON string format.
@@ -1523,8 +1549,11 @@ impl Telemetry {
 
             output.push_str(&format!(
                 "{} {} [{:.2}ms] trace={} span={}\n",
-                status_icon, span.name, duration_ms,
-                &span.context.trace_id[..8], &span.context.span_id[..8]
+                status_icon,
+                span.name,
+                duration_ms,
+                &span.context.trace_id[..8],
+                &span.context.span_id[..8]
             ));
 
             for (key, value) in &span.attributes {
@@ -1534,7 +1563,11 @@ impl Telemetry {
                     AttributeValue::Float(f) => f.to_string(),
                     AttributeValue::Bool(b) => b.to_string(),
                     AttributeValue::StringArray(arr) => arr.join(", "),
-                    AttributeValue::IntArray(arr) => arr.iter().map(|i| i.to_string()).collect::<Vec<_>>().join(", "),
+                    AttributeValue::IntArray(arr) => arr
+                        .iter()
+                        .map(|i| i.to_string())
+                        .collect::<Vec<_>>()
+                        .join(", "),
                 };
                 output.push_str(&format!("    {}: {}\n", key, value_str));
             }
@@ -1684,9 +1717,12 @@ impl From<&Span> for JaegerSpan {
                     AttributeValue::Float(f) => JaegerTagValue::Float(*f),
                     AttributeValue::Bool(b) => JaegerTagValue::Bool(*b),
                     AttributeValue::StringArray(arr) => JaegerTagValue::String(arr.join(",")),
-                    AttributeValue::IntArray(arr) => {
-                        JaegerTagValue::String(arr.iter().map(|i| i.to_string()).collect::<Vec<_>>().join(","))
-                    }
+                    AttributeValue::IntArray(arr) => JaegerTagValue::String(
+                        arr.iter()
+                            .map(|i| i.to_string())
+                            .collect::<Vec<_>>()
+                            .join(","),
+                    ),
                 },
             })
             .collect();
@@ -1807,9 +1843,11 @@ impl ZipkinSpan {
                     AttributeValue::Float(f) => f.to_string(),
                     AttributeValue::Bool(b) => b.to_string(),
                     AttributeValue::StringArray(arr) => arr.join(","),
-                    AttributeValue::IntArray(arr) => {
-                        arr.iter().map(|i| i.to_string()).collect::<Vec<_>>().join(",")
-                    }
+                    AttributeValue::IntArray(arr) => arr
+                        .iter()
+                        .map(|i| i.to_string())
+                        .collect::<Vec<_>>()
+                        .join(","),
                 };
                 (k.clone(), value_str)
             })
@@ -1872,7 +1910,8 @@ impl<'a> OperationTimer<'a> {
     /// Record and return elapsed time.
     pub fn stop(self) -> Duration {
         let duration = self.start.elapsed();
-        self.telemetry.record_latency(&self.operation, duration, self.success);
+        self.telemetry
+            .record_latency(&self.operation, duration, self.success);
         duration
     }
 }
@@ -1913,7 +1952,8 @@ mod tests {
     fn test_span_creation() {
         let telemetry = Telemetry::default();
 
-        let span = telemetry.span("test_op")
+        let span = telemetry
+            .span("test_op")
             .attribute("key", "value")
             .attribute("count", 42i64)
             .start();
@@ -1949,7 +1989,10 @@ mod tests {
 
         let spans = telemetry.get_spans();
         assert_eq!(spans[0].status, SpanStatus::Error);
-        assert_eq!(spans[0].status_message, Some("Something went wrong".to_string()));
+        assert_eq!(
+            spans[0].status_message,
+            Some("Something went wrong".to_string())
+        );
     }
 
     #[test]
@@ -2054,9 +2097,7 @@ mod tests {
     fn test_span_kind() {
         let telemetry = Telemetry::default();
 
-        let span = telemetry.span("server")
-            .kind(SpanKind::Server)
-            .start();
+        let span = telemetry.span("server").kind(SpanKind::Server).start();
         span.end();
 
         let spans = telemetry.get_spans();
@@ -2081,7 +2122,8 @@ mod tests {
     fn test_export_json() {
         let telemetry = Telemetry::default();
 
-        telemetry.span("test")
+        telemetry
+            .span("test")
             .attribute("key", "value")
             .start()
             .end();
@@ -2122,7 +2164,8 @@ mod tests {
             headers.get("X-B3-SpanId").map(|s| s.as_str()),
             headers.get("X-B3-ParentSpanId").map(|s| s.as_str()),
             headers.get("X-B3-Sampled").map(|s| s.as_str()),
-        ).unwrap();
+        )
+        .unwrap();
 
         assert_eq!(parsed.trace_id, ctx.trace_id);
         assert_eq!(parsed.span_id, ctx.span_id);
@@ -2158,12 +2201,14 @@ mod tests {
 
         // Test B3 Single format
         let b3s_headers = ctx.to_headers(PropagationFormat::B3Single);
-        let parsed_b3s = TraceContext::from_headers(&b3s_headers, PropagationFormat::B3Single).unwrap();
+        let parsed_b3s =
+            TraceContext::from_headers(&b3s_headers, PropagationFormat::B3Single).unwrap();
         assert_eq!(parsed_b3s.trace_id, ctx.trace_id);
 
         // Test Jaeger format
         let jaeger_headers = ctx.to_headers(PropagationFormat::Jaeger);
-        let parsed_jaeger = TraceContext::from_headers(&jaeger_headers, PropagationFormat::Jaeger).unwrap();
+        let parsed_jaeger =
+            TraceContext::from_headers(&jaeger_headers, PropagationFormat::Jaeger).unwrap();
         assert_eq!(parsed_jaeger.trace_id, ctx.trace_id);
     }
 
@@ -2207,7 +2252,10 @@ mod tests {
 
         let child = ctx.child();
         // Baggage should be propagated to child
-        assert_eq!(child.baggage.get("request_id"), Some(&"abc-123".to_string()));
+        assert_eq!(
+            child.baggage.get("request_id"),
+            Some(&"abc-123".to_string())
+        );
         assert_eq!(child.baggage.get("user"), Some(&"john".to_string()));
     }
 
@@ -2219,7 +2267,8 @@ mod tests {
     fn test_export_otlp() {
         let telemetry = Telemetry::default();
 
-        telemetry.span("test_operation")
+        telemetry
+            .span("test_operation")
             .attribute("db.system", "needle")
             .attribute("db.operation", "search")
             .kind(SpanKind::Server)
@@ -2237,10 +2286,7 @@ mod tests {
     fn test_export_otlp_json() {
         let telemetry = Telemetry::default();
 
-        telemetry.span("search")
-            .attribute("k", 10i64)
-            .start()
-            .end();
+        telemetry.span("search").attribute("k", 10i64).start().end();
 
         let json = telemetry.export_otlp_json();
         assert!(json.contains("search"));
@@ -2252,7 +2298,8 @@ mod tests {
     fn test_export_jaeger() {
         let telemetry = Telemetry::default();
 
-        let mut span = telemetry.span("jaeger_test")
+        let mut span = telemetry
+            .span("jaeger_test")
             .attribute("service", "needle")
             .start();
         span.add_event("processing");
@@ -2269,7 +2316,8 @@ mod tests {
     fn test_export_zipkin() {
         let telemetry = Telemetry::default();
 
-        telemetry.span("zipkin_test")
+        telemetry
+            .span("zipkin_test")
             .attribute("http.method", "GET")
             .kind(SpanKind::Client)
             .start()
@@ -2285,7 +2333,8 @@ mod tests {
     fn test_export_console() {
         let telemetry = Telemetry::default();
 
-        let mut span = telemetry.span("console_test")
+        let mut span = telemetry
+            .span("console_test")
             .attribute("key", "value")
             .start();
         span.set_ok();
@@ -2299,8 +2348,7 @@ mod tests {
 
     #[test]
     fn test_export_by_format() {
-        let config = TelemetryConfig::new("test")
-            .with_format(ExportFormat::Zipkin);
+        let config = TelemetryConfig::new("test").with_format(ExportFormat::Zipkin);
         let telemetry = Telemetry::new(config);
 
         telemetry.span("format_test").start().end();
@@ -2327,9 +2375,15 @@ mod tests {
         let map = resource.to_map();
         assert_eq!(map.get("service.name"), Some(&"my-service".to_string()));
         assert_eq!(map.get("service.version"), Some(&"1.2.3".to_string()));
-        assert_eq!(map.get("deployment.environment"), Some(&"production".to_string()));
+        assert_eq!(
+            map.get("deployment.environment"),
+            Some(&"production".to_string())
+        );
         assert_eq!(map.get("service.namespace"), Some(&"backend".to_string()));
-        assert_eq!(map.get("service.instance.id"), Some(&"instance-1".to_string()));
+        assert_eq!(
+            map.get("service.instance.id"),
+            Some(&"instance-1".to_string())
+        );
         assert_eq!(map.get("custom.key"), Some(&"custom.value".to_string()));
     }
 
@@ -2344,7 +2398,10 @@ mod tests {
 
         assert_eq!(config.service_name, "my-app");
         assert_eq!(config.environment, "staging");
-        assert_eq!(config.exporter_endpoint, Some("http://localhost:4317".to_string()));
+        assert_eq!(
+            config.exporter_endpoint,
+            Some("http://localhost:4317".to_string())
+        );
         assert_eq!(config.export_format, ExportFormat::Otlp);
         assert_eq!(config.sample_rate, 0.5);
         assert!(!config.metrics_enabled);
