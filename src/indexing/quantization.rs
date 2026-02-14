@@ -149,7 +149,12 @@ impl ScalarQuantizer {
         // Find min/max per dimension
         for vec in vectors {
             for (i, &v) in vec.iter().enumerate() {
-                assert!(v.is_finite(), "Training vector contains non-finite value at index {}: {}", i, v);
+                assert!(
+                    v.is_finite(),
+                    "Training vector contains non-finite value at index {}: {}",
+                    i,
+                    v
+                );
                 min_vals[i] = min_vals[i].min(v);
                 max_vals[i] = max_vals[i].max(v);
             }
@@ -363,10 +368,7 @@ impl ProductQuantizer {
     /// # Panics
     /// Panics if `out.len() < self.num_subvectors()`.
     pub fn encode_into(&self, vector: &[f32], out: &mut [u8]) {
-        assert!(
-            out.len() >= self.num_subvectors,
-            "output buffer too small"
-        );
+        assert!(out.len() >= self.num_subvectors, "output buffer too small");
         for (i, out_byte) in out.iter_mut().take(self.num_subvectors).enumerate() {
             let start = i * self.subvector_dim;
             let end = start + self.subvector_dim;

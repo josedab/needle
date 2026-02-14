@@ -475,7 +475,11 @@ mod tests {
             let f16 = F16::from_f32(v);
             let back = f16.to_f32();
             // Allow some error due to precision loss
-            assert!((v - back).abs() < v.abs() * 0.01 + 0.001, "Failed for {}", v);
+            assert!(
+                (v - back).abs() < v.abs() * 0.01 + 0.001,
+                "Failed for {}",
+                v
+            );
         }
     }
 

@@ -226,7 +226,8 @@ impl TieredIndex {
 
         // Create cold tier (DiskANN)
         let cold_path = base_path.join("cold_tier");
-        let cold_tier = DiskAnnIndex::create(&cold_path, config.dimensions, config.diskann_config.clone())?;
+        let cold_tier =
+            DiskAnnIndex::create(&cold_path, config.dimensions, config.diskann_config.clone())?;
 
         Ok(Self {
             config,
@@ -430,14 +431,14 @@ impl TieredIndex {
             if hot_count > 0 {
                 stats.hot_queries += 1;
                 let n = stats.hot_queries as f32;
-                stats.avg_hot_latency_ms =
-                    stats.avg_hot_latency_ms * (n - 1.0) / n + hot_duration.as_secs_f32() * 1000.0 / n;
+                stats.avg_hot_latency_ms = stats.avg_hot_latency_ms * (n - 1.0) / n
+                    + hot_duration.as_secs_f32() * 1000.0 / n;
             }
             if cold_count > 0 {
                 stats.cold_queries += 1;
                 let n = stats.cold_queries as f32;
-                stats.avg_cold_latency_ms =
-                    stats.avg_cold_latency_ms * (n - 1.0) / n + cold_duration.as_secs_f32() * 1000.0 / n;
+                stats.avg_cold_latency_ms = stats.avg_cold_latency_ms * (n - 1.0) / n
+                    + cold_duration.as_secs_f32() * 1000.0 / n;
             }
         }
 
@@ -513,7 +514,9 @@ impl TieredIndex {
                     }
                 }
                 Tier::Hot => {
-                    if now.duration_since(loc.access_stats.last_access) > self.config.demotion_timeout {
+                    if now.duration_since(loc.access_stats.last_access)
+                        > self.config.demotion_timeout
+                    {
                         demote_candidates.push(id.clone());
                     }
                 }
@@ -621,7 +624,8 @@ impl TieredIndex {
         match loc.tier {
             Tier::Hot => {
                 let hot = self.hot_tier.read();
-                hot.get(id).map(|(v, m)| (v.to_vec(), m.cloned(), Tier::Hot))
+                hot.get(id)
+                    .map(|(v, m)| (v.to_vec(), m.cloned(), Tier::Hot))
             }
             Tier::Cold => {
                 // DiskANN doesn't have direct get, return None for now
@@ -813,7 +817,8 @@ impl<'a> TieredQueryBuilder<'a> {
             });
         }
 
-        self.index.search_with_filter(&self.query, self.k, self.filter.as_ref())
+        self.index
+            .search_with_filter(&self.query, self.k, self.filter.as_ref())
     }
 }
 
@@ -873,7 +878,9 @@ mod tests {
         // Insert into hot tier
         for i in 0..10 {
             let vector = random_vector(32);
-            index.insert_hot(&format!("vec_{}", i), &vector, None).unwrap();
+            index
+                .insert_hot(&format!("vec_{}", i), &vector, None)
+                .unwrap();
         }
 
         let query = random_vector(32);
@@ -942,7 +949,9 @@ mod tests {
 
         for i in 0..5 {
             let vector = random_vector(32);
-            index.insert_hot(&format!("hot_{}", i), &vector, None).unwrap();
+            index
+                .insert_hot(&format!("hot_{}", i), &vector, None)
+                .unwrap();
         }
 
         for i in 0..3 {
@@ -963,7 +972,9 @@ mod tests {
 
         for i in 0..10 {
             let vector = random_vector(32);
-            index.insert_hot(&format!("vec_{}", i), &vector, None).unwrap();
+            index
+                .insert_hot(&format!("vec_{}", i), &vector, None)
+                .unwrap();
         }
 
         let query = random_vector(32);

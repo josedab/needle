@@ -174,10 +174,7 @@ impl DeltaBuffer {
 
     fn add(&mut self, id: String, vector: Vec<f32>, metadata: Option<Value>) {
         let vec_size = vector.len() * 4;
-        let meta_size = metadata
-            .as_ref()
-            .map(|m| m.to_string().len())
-            .unwrap_or(0);
+        let meta_size = metadata.as_ref().map(|m| m.to_string().len()).unwrap_or(0);
         self.size_bytes += vec_size + meta_size + id.len();
         self.vectors.push((id, vector, metadata));
     }
@@ -705,9 +702,7 @@ impl IncrementalIndex {
 
         info!(
             duration_ms = duration.as_millis(),
-            compacted,
-            rebalanced,
-            "Optimization completed"
+            compacted, rebalanced, "Optimization completed"
         );
 
         Ok(OptimizationResult {
@@ -892,12 +887,7 @@ impl IncrementalIndex {
     }
 
     /// Update a vector (delete + insert)
-    pub fn update(
-        &self,
-        id: &str,
-        vector: &[f32],
-        metadata: Option<Value>,
-    ) -> Result<bool> {
+    pub fn update(&self, id: &str, vector: &[f32], metadata: Option<Value>) -> Result<bool> {
         let existed = self.delete(id)?;
         self.insert(id, vector, metadata)?;
         Ok(existed)
@@ -997,17 +987,13 @@ mod tests {
 
     #[test]
     fn test_incremental_insert_and_search() {
-        let config = IncrementalConfig::builder()
-            .delta_threshold(10)
-            .build();
+        let config = IncrementalConfig::builder().delta_threshold(10).build();
         let index = IncrementalIndex::new(32, config);
 
         // Insert vectors
         for i in 0..50 {
             let vector = random_vector(32);
-            index
-                .insert(format!("vec_{}", i), &vector, None)
-                .unwrap();
+            index.insert(format!("vec_{}", i), &vector, None).unwrap();
         }
 
         // Should have triggered merges
@@ -1023,9 +1009,7 @@ mod tests {
 
     #[test]
     fn test_incremental_delete() {
-        let config = IncrementalConfig::builder()
-            .delta_threshold(100)
-            .build();
+        let config = IncrementalConfig::builder().delta_threshold(100).build();
         let index = IncrementalIndex::new(16, config);
 
         // Insert
@@ -1093,7 +1077,9 @@ mod tests {
         let index = IncrementalIndex::new(4, config);
 
         let v1 = vec![1.0, 2.0, 3.0, 4.0];
-        index.insert("test", &v1, Some(serde_json::json!({"key": "value"}))).unwrap();
+        index
+            .insert("test", &v1, Some(serde_json::json!({"key": "value"})))
+            .unwrap();
 
         // Get
         let (retrieved, meta) = index.get("test").unwrap();
