@@ -198,14 +198,18 @@ impl DuplicateDetector {
 
                 if similarity >= self.config.threshold
                     && (best_match.is_none()
-                        || similarity > best_match.as_ref().expect("checked is_none above").similarity)
-                    {
-                        best_match = Some(DuplicateResult {
-                            id,
-                            similarity,
-                            exact: false,
-                        });
-                    }
+                        || similarity
+                            > best_match
+                                .as_ref()
+                                .expect("checked is_none above")
+                                .similarity)
+                {
+                    best_match = Some(DuplicateResult {
+                        id,
+                        similarity,
+                        exact: false,
+                    });
+                }
             }
         }
 
@@ -294,8 +298,7 @@ impl DuplicateDetector {
                 let avg_similarity: f32 = if duplicates.is_empty() {
                     1.0
                 } else {
-                    duplicates.iter().map(|r| r.similarity).sum::<f32>()
-                        / duplicates.len() as f32
+                    duplicates.iter().map(|r| r.similarity).sum::<f32>() / duplicates.len() as f32
                 };
 
                 for member in &all_members {
@@ -423,10 +426,7 @@ impl Lsh {
         for i in 0..self.tables.len() {
             let hash = self.hash_vector(vector, i);
             hashes.push(hash);
-            self.tables[i]
-                .entry(hash)
-                .or_default()
-                .insert(id.clone());
+            self.tables[i].entry(hash).or_default().insert(id.clone());
         }
 
         self.id_hashes.insert(id, hashes);
@@ -536,12 +536,7 @@ pub fn get_ids_to_remove(
             DeduplicationStrategy::KeepLatest => {
                 // Keep last, remove rest
                 if group.members.len() > 1 {
-                    to_remove.extend(
-                        group.members
-                            .iter()
-                            .take(group.members.len() - 1)
-                            .cloned(),
-                    );
+                    to_remove.extend(group.members.iter().take(group.members.len() - 1).cloned());
                 }
             }
             DeduplicationStrategy::KeepRichest => {
@@ -682,10 +677,7 @@ mod tests {
             ("d", vec![0.0, 1.0, 0.0, 0.0]), // Duplicate of c
         ];
 
-        let refs: Vec<(&str, &[f32])> = vectors
-            .iter()
-            .map(|(id, v)| (*id, v.as_slice()))
-            .collect();
+        let refs: Vec<(&str, &[f32])> = vectors.iter().map(|(id, v)| (*id, v.as_slice())).collect();
 
         let report = generate_dedup_report(&refs, DeduplicationConfig::default());
 
@@ -695,13 +687,11 @@ mod tests {
 
     #[test]
     fn test_get_ids_to_remove() {
-        let groups = vec![
-            DuplicateGroup {
-                canonical: "a".to_string(),
-                members: vec!["a".to_string(), "b".to_string(), "c".to_string()],
-                avg_similarity: 0.98,
-            },
-        ];
+        let groups = vec![DuplicateGroup {
+            canonical: "a".to_string(),
+            members: vec!["a".to_string(), "b".to_string(), "c".to_string()],
+            avg_similarity: 0.98,
+        }];
 
         // KeepFirst: remove b and c
         let to_remove = get_ids_to_remove(&groups, DeduplicationStrategy::KeepFirst);

@@ -241,9 +241,7 @@ impl PluginRuntimeManager {
 
     /// Register a custom distance function.
     pub fn register_distance(&self, id: &str, plugin: Box<dyn DistanceFn>) {
-        self.distance_plugins
-            .write()
-            .insert(id.to_string(), plugin);
+        self.distance_plugins.write().insert(id.to_string(), plugin);
     }
 
     /// Register a pre-search hook.
@@ -376,9 +374,7 @@ impl PluginRegistry {
     pub fn publish(&self, manifest: PluginManifest) -> Result<()> {
         let plugins = self.plugins.read();
         if plugins.len() >= self.config.max_plugins {
-            return Err(NeedleError::CapacityExceeded(
-                "Registry at capacity".into(),
-            ));
+            return Err(NeedleError::CapacityExceeded("Registry at capacity".into()));
         }
         if manifest.size_bytes > self.config.max_plugin_size {
             return Err(NeedleError::InvalidInput(format!(

@@ -138,11 +138,7 @@ impl WorkloadClassifier {
         if self.window.is_empty() {
             return 0.0;
         }
-        let filtered = self
-            .window
-            .iter()
-            .filter(|s| s.used_filter)
-            .count() as f64;
+        let filtered = self.window.iter().filter(|s| s.used_filter).count() as f64;
         filtered / self.window.len() as f64
     }
 
@@ -151,7 +147,14 @@ impl WorkloadClassifier {
         let searches: Vec<_> = self
             .window
             .iter()
-            .filter(|s| matches!(s.operation, OperationType::Search | OperationType::FilteredSearch | OperationType::BatchSearch))
+            .filter(|s| {
+                matches!(
+                    s.operation,
+                    OperationType::Search
+                        | OperationType::FilteredSearch
+                        | OperationType::BatchSearch
+                )
+            })
             .collect();
         if searches.is_empty() {
             return Duration::ZERO;
@@ -215,10 +218,7 @@ impl WorkloadClassifier {
         }
 
         if n >= size_threshold_ivf {
-            factors.push(format!(
-                "Medium dataset ({} vectors) suitable for IVF",
-                n
-            ));
+            factors.push(format!("Medium dataset ({} vectors) suitable for IVF", n));
             return SelectionReason {
                 chosen: ActiveIndexType::Ivf,
                 factors,
@@ -250,9 +250,7 @@ pub enum MigrationPhase {
         started_at_secs: u64,
     },
     /// New index built, validating quality.
-    Validating {
-        target: ActiveIndexType,
-    },
+    Validating { target: ActiveIndexType },
     /// Swapping active index.
     Swapping,
     /// Migration complete, old index marked for cleanup.
@@ -362,11 +360,8 @@ impl AdaptiveRuntime {
     /// Create a new adaptive runtime with the specified dimension.
     pub fn new(dimension: usize, config: AdaptiveRuntimeConfig) -> Self {
         let hnsw = HnswIndex::new(config.hnsw_config.clone(), config.distance);
-        let classifier = WorkloadClassifier::new(
-            dimension,
-            config.classifier_window,
-            config.memory_budget,
-        );
+        let classifier =
+            WorkloadClassifier::new(dimension, config.classifier_window, config.memory_budget);
 
         Self {
             dimension,
@@ -415,9 +410,10 @@ impl AdaptiveRuntime {
         let vectors = self.vectors.read();
         let all_vecs: Vec<Vec<f32>> = vectors.iter().map(|(_, v, _)| v.clone()).collect();
 
-        self.hnsw_index.write().insert(idx, vector, &all_vecs).map_err(|_| {
-            NeedleError::Index("HNSW insert failed".into())
-        })?;
+        self.hnsw_index
+            .write()
+            .insert(idx, vector, &all_vecs)
+            .map_err(|_| NeedleError::Index("HNSW insert failed".into()))?;
 
         let latency = start.elapsed();
         self.classifier.write().observe(WorkloadSample {
@@ -447,11 +443,7 @@ impl AdaptiveRuntime {
         let vectors = self.vectors.read();
         let all_vecs: Vec<Vec<f32>> = vectors.iter().map(|(_, v, _)| v.clone()).collect();
 
-        let raw_results = self.hnsw_index.read().search(
-            query,
-            k,
-            &all_vecs,
-        );
+        let raw_results = self.hnsw_index.read().search(query, k, &all_vecs);
 
         let results: Vec<SearchResult> = raw_results
             .into_iter()
@@ -582,7 +574,10 @@ impl AdaptiveRuntime {
         }
 
         // Check if currently migrating
-        if !matches!(*self.migration_phase.read(), MigrationPhase::Idle | MigrationPhase::Complete { .. }) {
+        if !matches!(
+            *self.migration_phase.read(),
+            MigrationPhase::Idle | MigrationPhase::Complete { .. }
+        ) {
             return;
         }
 

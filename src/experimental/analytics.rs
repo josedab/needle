@@ -236,11 +236,12 @@ impl QueryPattern {
     fn update(&mut self, event: &QueryEvent, latencies: &[f64]) {
         self.count += 1;
         self.last_seen = event.timestamp;
-        
+
         // Update running average
         let n = self.count as f64;
         self.avg_latency_ms = self.avg_latency_ms * (n - 1.0) / n + event.latency_ms / n;
-        self.avg_result_count = self.avg_result_count * (n - 1.0) / n + event.result_count as f64 / n;
+        self.avg_result_count =
+            self.avg_result_count * (n - 1.0) / n + event.result_count as f64 / n;
 
         // Update percentiles from sampled latencies
         if !latencies.is_empty() {
@@ -339,7 +340,9 @@ impl AnalyticsDashboard {
             "search" | "query" => {
                 self.counters.total_queries.fetch_add(1, Ordering::Relaxed);
                 if event.has_filter {
-                    self.counters.filtered_queries.fetch_add(1, Ordering::Relaxed);
+                    self.counters
+                        .filtered_queries
+                        .fetch_add(1, Ordering::Relaxed);
                 }
             }
             "insert" | "upsert" => {
@@ -361,7 +364,7 @@ impl AnalyticsDashboard {
         {
             let mut recent = self.recent_events.write();
             recent.push_back((Instant::now(), event.clone()));
-            
+
             // Trim old events
             let cutoff = Instant::now() - Duration::from_secs(self.config.rate_window_seconds);
             while recent.front().map(|(t, _)| *t < cutoff).unwrap_or(false) {
@@ -384,28 +387,37 @@ impl AnalyticsDashboard {
 
         // Generate suggestions based on the query
         if event.has_filter && event.filter_complexity.unwrap_or(0) > 5 {
-            suggestions.push("Consider simplifying the filter or creating a specialized index".to_string());
+            suggestions.push(
+                "Consider simplifying the filter or creating a specialized index".to_string(),
+            );
         }
         if event.k.unwrap_or(0) > 100 {
-            suggestions.push("High k value increases search time - consider pagination".to_string());
+            suggestions
+                .push("High k value increases search time - consider pagination".to_string());
         }
         if event.nodes_visited.unwrap_or(0) > 1000 {
-            suggestions.push("Many nodes visited - consider increasing ef_construction or M parameter".to_string());
+            suggestions.push(
+                "Many nodes visited - consider increasing ef_construction or M parameter"
+                    .to_string(),
+            );
         }
         if event.result_count == 0 {
-            suggestions.push("No results returned - check if filter is too restrictive".to_string());
+            suggestions
+                .push("No results returned - check if filter is too restrictive".to_string());
         }
 
         let slow = SlowQuery {
             event: event.clone(),
-            reason: format!("Latency {}ms exceeds threshold {}ms", 
-                event.latency_ms, self.config.slow_query_threshold_ms),
+            reason: format!(
+                "Latency {}ms exceeds threshold {}ms",
+                event.latency_ms, self.config.slow_query_threshold_ms
+            ),
             suggestions,
         };
 
         let mut slow_queries = self.slow_queries.write();
         slow_queries.push_back(slow);
-        
+
         // Trim to max size
         while slow_queries.len() > self.config.max_slow_queries {
             slow_queries.pop_front();
@@ -415,24 +427,24 @@ impl AnalyticsDashboard {
     /// Update collection statistics
     fn update_collection_stats(&self, event: &QueryEvent) {
         let mut stats = self.collection_stats.write();
-        let entry = stats.entry(event.collection.clone()).or_insert_with(|| {
-            CollectionAnalytics {
+        let entry = stats
+            .entry(event.collection.clone())
+            .or_insert_with(|| CollectionAnalytics {
                 name: event.collection.clone(),
                 ..Default::default()
-            }
-        });
+            });
 
         match event.operation.as_str() {
             "search" | "query" => {
                 entry.total_queries += 1;
                 let n = entry.total_queries as f64;
-                entry.avg_search_latency_ms = 
+                entry.avg_search_latency_ms =
                     entry.avg_search_latency_ms * (n - 1.0) / n + event.latency_ms / n;
             }
             "insert" | "upsert" => {
                 entry.total_inserts += 1;
                 let n = entry.total_inserts as f64;
-                entry.avg_insert_latency_ms = 
+                entry.avg_insert_latency_ms =
                     entry.avg_insert_latency_ms * (n - 1.0) / n + event.latency_ms / n;
             }
             "delete" => {
@@ -475,7 +487,7 @@ impl AnalyticsDashboard {
     /// Track an error
     pub fn track_error(&self, collection: &str, operation: &str, _error: &str) {
         self.counters.total_errors.fetch_add(1, Ordering::Relaxed);
-        
+
         // Also track as a query event with high latency marker
         self.track_query(QueryEvent {
             collection: collection.to_string(),
@@ -526,8 +538,10 @@ impl AnalyticsDashboard {
 
         DashboardInsights {
             current_qps,
-            avg_latency_ms: if latencies.is_empty() { 0.0 } else { 
-                latencies.iter().sum::<f64>() / latencies.len() as f64 
+            avg_latency_ms: if latencies.is_empty() {
+                0.0
+            } else {
+                latencies.iter().sum::<f64>() / latencies.len() as f64
             },
             p50_latency_ms: p50,
             p95_latency_ms: p95,
@@ -540,15 +554,23 @@ impl AnalyticsDashboard {
             filtered_query_ratio: {
                 let total = self.counters.total_queries.load(Ordering::Relaxed);
                 let filtered = self.counters.filtered_queries.load(Ordering::Relaxed);
-                if total > 0 { filtered as f64 / total as f64 } else { 0.0 }
+                if total > 0 {
+                    filtered as f64 / total as f64
+                } else {
+                    0.0
+                }
             },
             uptime_seconds: uptime.as_secs(),
             error_rate: {
-                let total = self.counters.total_queries.load(Ordering::Relaxed) 
+                let total = self.counters.total_queries.load(Ordering::Relaxed)
                     + self.counters.total_inserts.load(Ordering::Relaxed)
                     + self.counters.total_deletes.load(Ordering::Relaxed);
                 let errors = self.counters.total_errors.load(Ordering::Relaxed);
-                if total > 0 { errors as f64 / total as f64 } else { 0.0 }
+                if total > 0 {
+                    errors as f64 / total as f64
+                } else {
+                    0.0
+                }
             },
         }
     }
@@ -578,7 +600,8 @@ impl AnalyticsDashboard {
         let patterns = self.patterns.read();
         let mut sorted: Vec<_> = patterns.values().map(|(p, _)| p.clone()).collect();
         sorted.sort_by(|a, b| {
-            b.p99_latency_ms.partial_cmp(&a.p99_latency_ms)
+            b.p99_latency_ms
+                .partial_cmp(&a.p99_latency_ms)
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
         sorted.truncate(limit);
@@ -721,7 +744,7 @@ impl QueryTracker {
 impl Drop for QueryTracker {
     fn drop(&mut self) {
         let latency = self.start.elapsed();
-        
+
         self.dashboard.track_query(QueryEvent {
             collection: self.collection.clone(),
             operation: self.operation.clone(),
@@ -861,10 +884,19 @@ impl AlertManager {
 
         for rule in rules.iter() {
             let (is_firing, current_value) = match rule.condition {
-                AlertCondition::QpsAbove => (insights.current_qps > rule.threshold, insights.current_qps),
-                AlertCondition::QpsBelow => (insights.current_qps < rule.threshold, insights.current_qps),
-                AlertCondition::LatencyP99Above => (insights.p99_latency_ms > rule.threshold, insights.p99_latency_ms),
-                AlertCondition::ErrorRateAbove => (insights.error_rate > rule.threshold, insights.error_rate),
+                AlertCondition::QpsAbove => {
+                    (insights.current_qps > rule.threshold, insights.current_qps)
+                }
+                AlertCondition::QpsBelow => {
+                    (insights.current_qps < rule.threshold, insights.current_qps)
+                }
+                AlertCondition::LatencyP99Above => (
+                    insights.p99_latency_ms > rule.threshold,
+                    insights.p99_latency_ms,
+                ),
+                AlertCondition::ErrorRateAbove => {
+                    (insights.error_rate > rule.threshold, insights.error_rate)
+                }
                 AlertCondition::SlowQueryRateAbove => {
                     let total = insights.total_queries.max(1);
                     let rate = insights.slow_query_count as f64 / total as f64;
@@ -873,7 +905,8 @@ impl AlertManager {
             };
 
             if is_firing {
-                active.entry(rule.name.clone())
+                active
+                    .entry(rule.name.clone())
                     .and_modify(|a| {
                         a.current_value = current_value;
                         a.is_firing = true;
@@ -1025,10 +1058,7 @@ impl MetricsStore {
 }
 
 /// Generates an HTML dashboard page from the metrics store.
-pub fn generate_dashboard_html(
-    insights: &DashboardInsights,
-    metrics: &MetricsStore,
-) -> String {
+pub fn generate_dashboard_html(insights: &DashboardInsights, metrics: &MetricsStore) -> String {
     let snapshot = metrics.snapshot();
     let insights_json = serde_json::to_string_pretty(insights).unwrap_or_default();
     let metrics_json = serde_json::to_string_pretty(&snapshot).unwrap_or_default();
@@ -1093,7 +1123,7 @@ mod tests {
     fn test_dashboard_creation() {
         let config = AnalyticsConfig::default();
         let dashboard = AnalyticsDashboard::new(config);
-        
+
         let insights = dashboard.get_insights();
         assert_eq!(insights.total_queries, 0);
         assert_eq!(insights.current_qps, 0.0);

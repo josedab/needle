@@ -11,7 +11,7 @@ use crate::hnsw::{HnswConfig, HnswIndex};
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 /// Target edge platform for deployment.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]

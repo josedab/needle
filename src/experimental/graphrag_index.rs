@@ -125,14 +125,17 @@ impl KnowledgeGraphStore {
 
     /// Add or update a node.
     pub fn upsert_node(&mut self, id: &str, category: EntityCategory, doc_id: &str) {
-        let node = self.nodes.entry(id.to_string()).or_insert_with(|| GraphNode {
-            id: id.to_string(),
-            category,
-            embedding: None,
-            properties: HashMap::new(),
-            document_ids: HashSet::new(),
-            community_id: None,
-        });
+        let node = self
+            .nodes
+            .entry(id.to_string())
+            .or_insert_with(|| GraphNode {
+                id: id.to_string(),
+                category,
+                embedding: None,
+                properties: HashMap::new(),
+                document_ids: HashSet::new(),
+                community_id: None,
+            });
         node.document_ids.insert(doc_id.to_string());
     }
 
@@ -353,19 +356,52 @@ pub struct EntityExtractor {
 impl EntityExtractor {
     pub fn new(config: ExtractionConfig) -> Self {
         let concepts: HashSet<String> = [
-            "algorithm", "model", "network", "learning", "data", "training",
-            "inference", "optimization", "search", "retrieval", "embedding",
-            "classification", "clustering", "regression", "attention",
-            "transformer", "vector", "index", "query", "database",
+            "algorithm",
+            "model",
+            "network",
+            "learning",
+            "data",
+            "training",
+            "inference",
+            "optimization",
+            "search",
+            "retrieval",
+            "embedding",
+            "classification",
+            "clustering",
+            "regression",
+            "attention",
+            "transformer",
+            "vector",
+            "index",
+            "query",
+            "database",
         ]
         .iter()
         .map(|s| s.to_string())
         .collect();
 
         let tech: HashSet<String> = [
-            "python", "rust", "javascript", "pytorch", "tensorflow", "numpy",
-            "cuda", "gpu", "cpu", "onnx", "docker", "kubernetes", "aws",
-            "gcp", "azure", "linux", "macos", "windows", "sql", "nosql",
+            "python",
+            "rust",
+            "javascript",
+            "pytorch",
+            "tensorflow",
+            "numpy",
+            "cuda",
+            "gpu",
+            "cpu",
+            "onnx",
+            "docker",
+            "kubernetes",
+            "aws",
+            "gcp",
+            "azure",
+            "linux",
+            "macos",
+            "windows",
+            "sql",
+            "nosql",
         ]
         .iter()
         .map(|s| s.to_string())
@@ -415,7 +451,11 @@ impl EntityExtractor {
 
             // Capitalised words might be proper nouns (names/orgs)
             if word.len() > 1
-                && word.chars().next().map(|c| c.is_uppercase()).unwrap_or(false)
+                && word
+                    .chars()
+                    .next()
+                    .map(|c| c.is_uppercase())
+                    .unwrap_or(false)
                 && !word.chars().all(|c| c.is_uppercase())
                 && i > 0
             {
@@ -615,9 +655,10 @@ impl GraphRagIndex {
         {
             let vecs = self.vectors.read();
             let all_vecs: Vec<Vec<f32>> = vecs.iter().map(|(_, v, _)| v.clone()).collect();
-            self.hnsw.write().insert(idx, vector, &all_vecs).map_err(|_| {
-                NeedleError::Index("HNSW insert failed".into())
-            })?;
+            self.hnsw
+                .write()
+                .insert(idx, vector, &all_vecs)
+                .map_err(|_| NeedleError::Index("HNSW insert failed".into()))?;
         }
 
         // Extract entities and relations
@@ -692,10 +733,7 @@ impl GraphRagIndex {
         let mut scored_results = Vec::new();
 
         for vr in &vector_results {
-            let entities = doc_entities
-                .get(&vr.id)
-                .cloned()
-                .unwrap_or_default();
+            let entities = doc_entities.get(&vr.id).cloned().unwrap_or_default();
 
             // Compute graph score: how connected is this document to other results?
             let mut graph_score = 0.0f32;
@@ -722,8 +760,8 @@ impl GraphRagIndex {
 
             // Combine scores
             let vector_score = 1.0 - vr.distance.min(1.0);
-            let combined = self.config.vector_weight * vector_score
-                + self.config.graph_weight * graph_score;
+            let combined =
+                self.config.vector_weight * vector_score + self.config.graph_weight * graph_score;
 
             scored_results.push(GraphRagResult {
                 id: vr.id.clone(),
@@ -737,9 +775,8 @@ impl GraphRagIndex {
         }
 
         // Sort by combined score (descending)
-        scored_results.sort_by(|a, b| {
-            OrderedFloat(b.combined_score).cmp(&OrderedFloat(a.combined_score))
-        });
+        scored_results
+            .sort_by(|a, b| OrderedFloat(b.combined_score).cmp(&OrderedFloat(a.combined_score)));
         scored_results.truncate(k);
 
         Ok(scored_results)
@@ -924,7 +961,11 @@ mod tests {
             .insert_document("d1", &[1.0, 0.0, 0.0, 0.0], "learning algorithm model")
             .unwrap();
         index
-            .insert_document("d2", &[0.9, 0.1, 0.0, 0.0], "learning optimization training")
+            .insert_document(
+                "d2",
+                &[0.9, 0.1, 0.0, 0.0],
+                "learning optimization training",
+            )
             .unwrap();
         index
             .insert_document("d3", &[0.0, 0.0, 1.0, 0.0], "python pytorch cuda")

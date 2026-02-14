@@ -158,12 +158,7 @@ impl MigrationTask {
             .as_millis() as u64;
 
         Self {
-            id: format!(
-                "migration_{}_{}_{}",
-                source_shard.0,
-                target_shard.0,
-                now
-            ),
+            id: format!("migration_{}_{}_{}", source_shard.0, target_shard.0, now),
             source_shard,
             target_shard,
             collection,
@@ -583,10 +578,7 @@ where
             }
         }
 
-        let description = format!(
-            "Full rebalance across {} shards",
-            shards.len()
-        );
+        let description = format!("Full rebalance across {} shards", shards.len());
 
         Ok(RebalancePlan::new(description, tasks))
     }
@@ -639,7 +631,10 @@ where
 
         // Check for existing checkpoint
         let start_index = {
-            let checkpoints = self.checkpoints.read().map_err(|_| NeedleError::LockError)?;
+            let checkpoints = self
+                .checkpoints
+                .read()
+                .map_err(|_| NeedleError::LockError)?;
             if let Some(checkpoint) = checkpoints.get(&task.id) {
                 checkpoint.migrated_count
             } else {
@@ -731,10 +726,9 @@ where
                 MigrationState::Completed => {
                     stats.migrations_completed += 1;
                     let elapsed = start_time.elapsed().as_millis() as f64;
-                    stats.avg_migration_time_ms = (stats.avg_migration_time_ms
-                        * stats.migrations_completed as f64
-                        + elapsed)
-                        / (stats.migrations_completed + 1) as f64;
+                    stats.avg_migration_time_ms =
+                        (stats.avg_migration_time_ms * stats.migrations_completed as f64 + elapsed)
+                            / (stats.migrations_completed + 1) as f64;
                 }
                 MigrationState::Failed => {
                     stats.migrations_failed += 1;
@@ -745,7 +739,10 @@ where
 
         // Clear checkpoint on completion
         if task.state == MigrationState::Completed {
-            let mut checkpoints = self.checkpoints.write().map_err(|_| NeedleError::LockError)?;
+            let mut checkpoints = self
+                .checkpoints
+                .write()
+                .map_err(|_| NeedleError::LockError)?;
             checkpoints.remove(&task.id);
         }
 
@@ -753,24 +750,18 @@ where
     }
 
     /// Transfer a batch of vectors.
-    fn transfer_batch(
-        &self,
-        task: &MigrationTask,
-        ids: &[String],
-        batch_id: u64,
-    ) -> Result<u64> {
+    fn transfer_batch(&self, task: &MigrationTask, ids: &[String], batch_id: u64) -> Result<u64> {
         // Get vectors from source
-        let vectors = self.source.get_vectors(
-            task.source_shard,
-            &task.collection,
-            ids,
-        )?;
+        let vectors = self
+            .source
+            .get_vectors(task.source_shard, &task.collection, ids)?;
 
         // Calculate bytes transferred (approximate)
         let bytes: u64 = vectors
             .iter()
             .map(|v| {
-                (v.id.len() + v.vector.len() * 4
+                (v.id.len()
+                    + v.vector.len() * 4
                     + v.metadata
                         .as_ref()
                         .map(|m| m.to_string().len())
@@ -788,19 +779,14 @@ where
         );
 
         // Insert into target
-        self.target.insert_vectors(
-            task.target_shard,
-            &task.collection,
-            &batch.vectors,
-        )?;
+        self.target
+            .insert_vectors(task.target_shard, &task.collection, &batch.vectors)?;
 
         // Verify if configured
         if self.config.verify_transfers {
-            let verified = self.target.verify_vectors(
-                task.target_shard,
-                &task.collection,
-                ids,
-            )?;
+            let verified = self
+                .target
+                .verify_vectors(task.target_shard, &task.collection, ids)?;
 
             if !verified {
                 return Err(NeedleError::Corruption(
@@ -810,11 +796,8 @@ where
         }
 
         // Delete from source
-        self.source.delete_vectors(
-            task.source_shard,
-            &task.collection,
-            ids,
-        )?;
+        self.source
+            .delete_vectors(task.source_shard, &task.collection, ids)?;
 
         Ok(bytes)
     }
@@ -836,7 +819,10 @@ where
                 .as_millis() as u64,
         };
 
-        let mut checkpoints = self.checkpoints.write().map_err(|_| NeedleError::LockError)?;
+        let mut checkpoints = self
+            .checkpoints
+            .write()
+            .map_err(|_| NeedleError::LockError)?;
         checkpoints.insert(task.id.clone(), checkpoint);
 
         Ok(())
@@ -912,9 +898,7 @@ where
 
         let to_remove: Vec<String> = plans
             .iter()
-            .filter(|(_, plan)| {
-                plan.is_complete() && plan.created_at < cutoff
-            })
+            .filter(|(_, plan)| plan.is_complete() && plan.created_at < cutoff)
             .map(|(id, _)| id.clone())
             .collect();
 
@@ -956,7 +940,11 @@ impl DryRunMigration {
     }
 
     pub fn get_operations(&self) -> Vec<DryRunOperation> {
-        self.operations.read().ok().map(|o| o.clone()).unwrap_or_default()
+        self.operations
+            .read()
+            .ok()
+            .map(|o| o.clone())
+            .unwrap_or_default()
     }
 }
 
@@ -967,7 +955,10 @@ impl MigrationSource for DryRunMigration {
         collection: &str,
         ids: &[String],
     ) -> Result<Vec<VectorTransfer>> {
-        let mut ops = self.operations.write().map_err(|_| NeedleError::LockError)?;
+        let mut ops = self
+            .operations
+            .write()
+            .map_err(|_| NeedleError::LockError)?;
         ops.push(DryRunOperation {
             operation_type: "get_vectors".to_string(),
             source_shard: Some(shard),
@@ -987,7 +978,10 @@ impl MigrationSource for DryRunMigration {
     }
 
     fn delete_vectors(&self, shard: ShardId, collection: &str, ids: &[String]) -> Result<()> {
-        let mut ops = self.operations.write().map_err(|_| NeedleError::LockError)?;
+        let mut ops = self
+            .operations
+            .write()
+            .map_err(|_| NeedleError::LockError)?;
         ops.push(DryRunOperation {
             operation_type: "delete_vectors".to_string(),
             source_shard: Some(shard),
@@ -999,7 +993,10 @@ impl MigrationSource for DryRunMigration {
     }
 
     fn list_vectors(&self, shard: ShardId, collection: &str) -> Result<Vec<String>> {
-        let mut ops = self.operations.write().map_err(|_| NeedleError::LockError)?;
+        let mut ops = self
+            .operations
+            .write()
+            .map_err(|_| NeedleError::LockError)?;
         ops.push(DryRunOperation {
             operation_type: "list_vectors".to_string(),
             source_shard: Some(shard),
@@ -1018,7 +1015,10 @@ impl MigrationTarget for DryRunMigration {
         collection: &str,
         vectors: &[VectorTransfer],
     ) -> Result<()> {
-        let mut ops = self.operations.write().map_err(|_| NeedleError::LockError)?;
+        let mut ops = self
+            .operations
+            .write()
+            .map_err(|_| NeedleError::LockError)?;
         ops.push(DryRunOperation {
             operation_type: "insert_vectors".to_string(),
             source_shard: None,
@@ -1030,7 +1030,10 @@ impl MigrationTarget for DryRunMigration {
     }
 
     fn verify_vectors(&self, shard: ShardId, collection: &str, ids: &[String]) -> Result<bool> {
-        let mut ops = self.operations.write().map_err(|_| NeedleError::LockError)?;
+        let mut ops = self
+            .operations
+            .write()
+            .map_err(|_| NeedleError::LockError)?;
         ops.push(DryRunOperation {
             operation_type: "verify_vectors".to_string(),
             source_shard: None,
@@ -1068,7 +1071,12 @@ mod tests {
             ShardId(1),
             ShardId(2),
             "test".to_string(),
-            vec!["v1".to_string(), "v2".to_string(), "v3".to_string(), "v4".to_string()],
+            vec![
+                "v1".to_string(),
+                "v2".to_string(),
+                "v3".to_string(),
+                "v4".to_string(),
+            ],
         );
 
         task.migrated_count = 2;
@@ -1117,13 +1125,7 @@ mod tests {
             },
         ];
 
-        let batch = TransferBatch::new(
-            1,
-            ShardId(1),
-            ShardId(2),
-            "test".to_string(),
-            vectors,
-        );
+        let batch = TransferBatch::new(1, ShardId(1), ShardId(2), "test".to_string(), vectors);
 
         assert!(batch.verify());
     }
@@ -1147,18 +1149,20 @@ mod tests {
         let dry_run = DryRunMigration::new();
 
         // Simulate operations
-        dry_run
-            .list_vectors(ShardId(1), "test")
-            .unwrap();
+        dry_run.list_vectors(ShardId(1), "test").unwrap();
         dry_run
             .get_vectors(ShardId(1), "test", &["v1".to_string()])
             .unwrap();
         dry_run
-            .insert_vectors(ShardId(2), "test", &[VectorTransfer {
-                id: "v1".to_string(),
-                vector: vec![0.1],
-                metadata: None,
-            }])
+            .insert_vectors(
+                ShardId(2),
+                "test",
+                &[VectorTransfer {
+                    id: "v1".to_string(),
+                    vector: vec![0.1],
+                    metadata: None,
+                }],
+            )
             .unwrap();
 
         let ops = dry_run.get_operations();

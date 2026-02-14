@@ -103,9 +103,9 @@ impl ResourceTier {
     pub fn price_cents(&self) -> u64 {
         match self {
             ResourceTier::Free => 0,
-            ResourceTier::Developer => 2900,     // $29/month
-            ResourceTier::Professional => 9900,  // $99/month
-            ResourceTier::Enterprise => 0,       // Custom pricing
+            ResourceTier::Developer => 2900,    // $29/month
+            ResourceTier::Professional => 9900, // $99/month
+            ResourceTier::Enterprise => 0,      // Custom pricing
         }
     }
 }
@@ -366,7 +366,9 @@ impl ControlPlane {
     /// Create a new tenant
     pub fn create_tenant(&self, config: TenantConfig) -> Result<Tenant> {
         if config.name.is_empty() {
-            return Err(NeedleError::InvalidInput("Tenant name required".to_string()));
+            return Err(NeedleError::InvalidInput(
+                "Tenant name required".to_string(),
+            ));
         }
 
         // Check for duplicate name
@@ -379,7 +381,10 @@ impl ControlPlane {
         }
         drop(tenants);
 
-        let id = format!("tenant_{}", self.next_tenant_id.fetch_add(1, Ordering::SeqCst));
+        let id = format!(
+            "tenant_{}",
+            self.next_tenant_id.fetch_add(1, Ordering::SeqCst)
+        );
         let now = current_timestamp();
 
         let tenant = Tenant {
@@ -501,7 +506,9 @@ impl ControlPlane {
             active: true,
         };
 
-        self.api_keys.write().insert(key_id.clone(), api_key.clone());
+        self.api_keys
+            .write()
+            .insert(key_id.clone(), api_key.clone());
 
         // Return the raw key (only time it's available)
         Ok((raw_key, api_key))
@@ -512,7 +519,9 @@ impl ControlPlane {
         let key_hash = hash_api_key(raw_key);
 
         let api_keys = self.api_keys.read();
-        let api_key = api_keys.values().find(|k| k.key_hash == key_hash && k.active)?;
+        let api_key = api_keys
+            .values()
+            .find(|k| k.key_hash == key_hash && k.active)?;
 
         // Update last used
         let tenant_id = api_key.tenant_id.clone();
@@ -559,11 +568,7 @@ impl ControlPlane {
     /// Record a usage event
     pub fn record_usage(&self, tenant_id: &str, event_type: UsageEventType, quantity: u64) {
         let event = UsageEvent {
-            id: format!(
-                "evt_{}_{}",
-                tenant_id,
-                current_timestamp()
-            ),
+            id: format!("evt_{}_{}", tenant_id, current_timestamp()),
             tenant_id: tenant_id.to_string(),
             event_type,
             quantity,
@@ -585,14 +590,16 @@ impl ControlPlane {
                     tenant.usage.total_inserts += quantity;
                 }
                 UsageEventType::Delete => {
-                    tenant.usage.vectors_count = tenant.usage.vectors_count.saturating_sub(quantity);
+                    tenant.usage.vectors_count =
+                        tenant.usage.vectors_count.saturating_sub(quantity);
                     tenant.usage.total_deletes += quantity;
                 }
                 UsageEventType::StorageIncrease => {
                     tenant.usage.storage_bytes += quantity;
                 }
                 UsageEventType::StorageDecrease => {
-                    tenant.usage.storage_bytes = tenant.usage.storage_bytes.saturating_sub(quantity);
+                    tenant.usage.storage_bytes =
+                        tenant.usage.storage_bytes.saturating_sub(quantity);
                 }
                 UsageEventType::ApiCall => {
                     tenant.usage.requests_today += quantity;
@@ -955,7 +962,11 @@ impl RegionRouter {
         match self.strategy {
             RoutingStrategy::LatencyBased => healthy
                 .iter()
-                .min_by(|a, b| a.latency_ms.partial_cmp(&b.latency_ms).unwrap_or(std::cmp::Ordering::Equal))
+                .min_by(|a, b| {
+                    a.latency_ms
+                        .partial_cmp(&b.latency_ms)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
                 .map(|e| (*e).clone()),
 
             RoutingStrategy::RoundRobin => {
@@ -965,7 +976,11 @@ impl RegionRouter {
 
             RoutingStrategy::CapacityBased => healthy
                 .iter()
-                .min_by(|a, b| a.capacity_pct.partial_cmp(&b.capacity_pct).unwrap_or(std::cmp::Ordering::Equal))
+                .min_by(|a, b| {
+                    a.capacity_pct
+                        .partial_cmp(&b.capacity_pct)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
                 .map(|e| (*e).clone()),
 
             RoutingStrategy::PrimaryWithFailover => {
@@ -1263,9 +1278,9 @@ impl ServiceOrchestrator {
     /// Mark an instance as running after provisioning completes.
     pub fn mark_running(&self, instance_id: &str) -> Result<()> {
         let mut instances = self.instances.write();
-        let inst = instances.get_mut(instance_id).ok_or_else(|| {
-            NeedleError::NotFound(format!("Instance {} not found", instance_id))
-        })?;
+        let inst = instances
+            .get_mut(instance_id)
+            .ok_or_else(|| NeedleError::NotFound(format!("Instance {} not found", instance_id)))?;
         inst.status = InstanceStatus::Running;
         inst.last_heartbeat = current_timestamp();
         Ok(())
@@ -1274,9 +1289,9 @@ impl ServiceOrchestrator {
     /// Record a heartbeat from a running instance.
     pub fn heartbeat(&self, instance_id: &str) -> Result<()> {
         let mut instances = self.instances.write();
-        let inst = instances.get_mut(instance_id).ok_or_else(|| {
-            NeedleError::NotFound(format!("Instance {} not found", instance_id))
-        })?;
+        let inst = instances
+            .get_mut(instance_id)
+            .ok_or_else(|| NeedleError::NotFound(format!("Instance {} not found", instance_id)))?;
         inst.last_heartbeat = current_timestamp();
         Ok(())
     }
@@ -1284,9 +1299,9 @@ impl ServiceOrchestrator {
     /// Stop an instance.
     pub fn stop(&self, instance_id: &str) -> Result<()> {
         let mut instances = self.instances.write();
-        let inst = instances.get_mut(instance_id).ok_or_else(|| {
-            NeedleError::NotFound(format!("Instance {} not found", instance_id))
-        })?;
+        let inst = instances
+            .get_mut(instance_id)
+            .ok_or_else(|| NeedleError::NotFound(format!("Instance {} not found", instance_id)))?;
         inst.status = InstanceStatus::Stopped;
         Ok(())
     }
@@ -1435,12 +1450,7 @@ impl BillingEngine {
     }
 
     /// Record usage for a tenant.
-    pub fn record_usage(
-        &self,
-        tenant_id: &str,
-        queries: u64,
-        storage_bytes: u64,
-    ) -> Result<()> {
+    pub fn record_usage(&self, tenant_id: &str, queries: u64, storage_bytes: u64) -> Result<()> {
         let mut tracker = self.usage_tracker.write();
         let usage = tracker
             .entry(tenant_id.to_string())
@@ -1464,14 +1474,11 @@ impl BillingEngine {
     }
 
     /// Generate an invoice for a tenant based on their tier and usage.
-    pub fn generate_invoice(
-        &self,
-        tenant_id: &str,
-        tier: ResourceTier,
-    ) -> Result<Invoice> {
-        let pricing = self.plans.get(&tier).ok_or_else(|| {
-            NeedleError::InvalidInput(format!("No pricing for tier {:?}", tier))
-        })?;
+    pub fn generate_invoice(&self, tenant_id: &str, tier: ResourceTier) -> Result<Invoice> {
+        let pricing = self
+            .plans
+            .get(&tier)
+            .ok_or_else(|| NeedleError::InvalidInput(format!("No pricing for tier {:?}", tier)))?;
 
         let usage = self
             .usage_tracker
@@ -1636,9 +1643,7 @@ impl HealthDashboard {
 
     /// Update or insert a region's health status.
     pub fn update_region(&self, status: RegionHealthStatus) {
-        self.regions
-            .write()
-            .insert(status.region.clone(), status);
+        self.regions.write().insert(status.region.clone(), status);
     }
 
     /// Get a single region's health status.
@@ -1710,7 +1715,11 @@ fn worse_indicator(a: HealthIndicator, b: HealthIndicator) -> HealthIndicator {
             HealthIndicator::Unknown => 3,
         }
     }
-    if severity(b) > severity(a) { b } else { a }
+    if severity(b) > severity(a) {
+        b
+    } else {
+        a
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1735,7 +1744,9 @@ impl WebConsole {
         html.push_str("body{font-family:sans-serif;margin:20px;background:#f5f5f5}");
         html.push_str("h1{color:#333}.card{background:#fff;border-radius:8px;padding:16px;margin:8px;box-shadow:0 1px 3px rgba(0,0,0,0.1);display:inline-block;min-width:200px;vertical-align:top}");
         html.push_str(".healthy{border-left:4px solid #4caf50}.degraded{border-left:4px solid #ff9800}.unhealthy{border-left:4px solid #f44336}.unknown{border-left:4px solid #9e9e9e}");
-        html.push_str(".alert-critical{color:#f44336}.alert-warning{color:#ff9800}.alert-info{color:#2196f3}");
+        html.push_str(
+            ".alert-critical{color:#f44336}.alert-warning{color:#ff9800}.alert-info{color:#2196f3}",
+        );
         html.push_str("table{border-collapse:collapse;width:100%}th,td{text-align:left;padding:8px;border-bottom:1px solid #ddd}");
         html.push_str("</style></head><body>");
 
@@ -1804,10 +1815,7 @@ impl WebConsole {
         html.push_str("table{border-collapse:collapse;width:100%}th,td{text-align:left;padding:8px;border-bottom:1px solid #ddd}");
         html.push_str("</style></head><body>");
 
-        html.push_str(&format!(
-            "<h1>Tenant: {}</h1>",
-            tenant.config.name
-        ));
+        html.push_str(&format!("<h1>Tenant: {}</h1>", tenant.config.name));
         html.push_str(&format!(
             "<div class=\"card\"><p>ID: {}</p><p>Tier: {:?}</p><p>Status: {:?}</p><p>Email: {}</p></div>",
             tenant.id, tenant.config.tier, tenant.status, tenant.config.email
@@ -1886,10 +1894,7 @@ impl ApiKeyManager {
         name: &str,
         permissions: Vec<Permission>,
     ) -> (String, ApiKeyEntry) {
-        let key_id = format!(
-            "akey_{}",
-            self.next_id.fetch_add(1, Ordering::SeqCst)
-        );
+        let key_id = format!("akey_{}", self.next_id.fetch_add(1, Ordering::SeqCst));
         let raw_key = generate_api_key();
         let key_hash = hash_api_key(&raw_key);
 
@@ -2040,13 +2045,19 @@ impl NeedleCloudClient {
 
     /// Record a successful request.
     pub fn record_request(&self) {
-        self.request_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.request_count
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// Record a failed request. Transitions to fallback if too many errors.
     pub fn record_error(&self) {
-        let errors = self.error_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
-        let requests = self.request_count.load(std::sync::atomic::Ordering::Relaxed);
+        let errors = self
+            .error_count
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            + 1;
+        let requests = self
+            .request_count
+            .load(std::sync::atomic::Ordering::Relaxed);
 
         // If error rate exceeds 50% over recent requests, switch to fallback.
         if requests > 10 && errors as f64 / requests as f64 > 0.5 && self.config.local_fallback {
@@ -2063,7 +2074,9 @@ impl NeedleCloudClient {
     pub fn stats(&self) -> SdkStats {
         SdkStats {
             state: *self.state.read(),
-            total_requests: self.request_count.load(std::sync::atomic::Ordering::Relaxed),
+            total_requests: self
+                .request_count
+                .load(std::sync::atomic::Ordering::Relaxed),
             total_errors: self.error_count.load(std::sync::atomic::Ordering::Relaxed),
             endpoint: self.config.endpoint.clone(),
         }
@@ -2181,10 +2194,7 @@ impl InstanceRecoveryManager {
             health.status = RecoveryStatus::Exhausted;
             return Some(RecoveryAction::Escalate {
                 instance_id: instance_id.to_string(),
-                reason: format!(
-                    "Exhausted {} restart attempts",
-                    self.config.max_restarts
-                ),
+                reason: format!("Exhausted {} restart attempts", self.config.max_restarts),
             });
         }
 
@@ -2221,14 +2231,8 @@ impl InstanceRecoveryManager {
 /// Action to take when an instance needs recovery.
 #[derive(Debug, Clone)]
 pub enum RecoveryAction {
-    Restart {
-        instance_id: String,
-        attempt: u32,
-    },
-    Escalate {
-        instance_id: String,
-        reason: String,
-    },
+    Restart { instance_id: String, attempt: u32 },
+    Escalate { instance_id: String, reason: String },
 }
 
 #[cfg(test)]
@@ -2264,7 +2268,11 @@ mod tests {
             .unwrap();
 
         let (raw_key, api_key) = cp
-            .create_api_key(&tenant.id, "prod-key", vec![Permission::Read, Permission::Write])
+            .create_api_key(
+                &tenant.id,
+                "prod-key",
+                vec![Permission::Read, Permission::Write],
+            )
             .unwrap();
 
         assert!(raw_key.starts_with("ndk_"));
@@ -2425,7 +2433,12 @@ mod tests {
     fn test_service_orchestrator_provision() {
         let orch = ServiceOrchestrator::new(OrchestratorConfig::default());
         let inst = orch
-            .provision("tenant_001", Some(Region::UsEast1), 1024 * 1024 * 512, 1024 * 1024 * 1024)
+            .provision(
+                "tenant_001",
+                Some(Region::UsEast1),
+                1024 * 1024 * 512,
+                1024 * 1024 * 1024,
+            )
             .unwrap();
         assert_eq!(inst.status, InstanceStatus::Provisioning);
         assert_eq!(inst.tenant_id, "tenant_001");
@@ -2471,7 +2484,9 @@ mod tests {
     fn test_billing_engine_generate_invoice_no_overage() {
         let engine = BillingEngine::new();
         engine.record_usage("t1", 1000, 0).unwrap();
-        let invoice = engine.generate_invoice("t1", ResourceTier::Developer).unwrap();
+        let invoice = engine
+            .generate_invoice("t1", ResourceTier::Developer)
+            .unwrap();
         assert_eq!(invoice.base_charge_cents, 2900);
         assert!(invoice.overage_charges.is_empty());
         assert_eq!(invoice.total_cents, 2900);
@@ -2483,7 +2498,9 @@ mod tests {
         let engine = BillingEngine::new();
         // Developer tier includes 100_000 queries; exceed by 50_000
         engine.record_usage("t1", 150_000, 0).unwrap();
-        let invoice = engine.generate_invoice("t1", ResourceTier::Developer).unwrap();
+        let invoice = engine
+            .generate_invoice("t1", ResourceTier::Developer)
+            .unwrap();
         // overage = 50_000 queries, charge = (50_000/1000) * 10 = 500 cents
         assert_eq!(invoice.overage_charges.len(), 1);
         assert_eq!(invoice.overage_charges[0].charge_cents, 500);
@@ -2494,7 +2511,9 @@ mod tests {
     fn test_billing_engine_mark_paid() {
         let engine = BillingEngine::new();
         engine.record_usage("t1", 10, 0).unwrap();
-        let invoice = engine.generate_invoice("t1", ResourceTier::Developer).unwrap();
+        let invoice = engine
+            .generate_invoice("t1", ResourceTier::Developer)
+            .unwrap();
         assert_eq!(invoice.status, InvoiceStatus::Pending);
 
         engine.mark_paid(&invoice.invoice_id).unwrap();

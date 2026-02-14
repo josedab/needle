@@ -139,8 +139,10 @@ impl Frame {
 
         let _version = buf[2];
         let frame_type = FrameType::try_from(buf[3])?;
-        let sequence_id = u64::from_le_bytes(buf[4..12].try_into().expect("slice is exactly 8 bytes"));
-        let payload_len = u32::from_le_bytes(buf[12..16].try_into().expect("slice is exactly 4 bytes")) as usize;
+        let sequence_id =
+            u64::from_le_bytes(buf[4..12].try_into().expect("slice is exactly 8 bytes"));
+        let payload_len =
+            u32::from_le_bytes(buf[12..16].try_into().expect("slice is exactly 4 bytes")) as usize;
 
         if buf.len() < HEADER_SIZE + payload_len {
             return Err(NeedleError::InvalidInput(
@@ -228,17 +230,25 @@ impl VectorBatch {
             return Err(NeedleError::InvalidInput("Batch data too small".into()));
         }
 
-        let dimension = u32::from_le_bytes(data[0..4].try_into().expect("slice is exactly 4 bytes")) as usize;
-        let count = u32::from_le_bytes(data[4..8].try_into().expect("slice is exactly 4 bytes")) as usize;
+        let dimension =
+            u32::from_le_bytes(data[0..4].try_into().expect("slice is exactly 4 bytes")) as usize;
+        let count =
+            u32::from_le_bytes(data[4..8].try_into().expect("slice is exactly 4 bytes")) as usize;
 
         let mut records = Vec::with_capacity(count);
         let mut offset = 8;
 
         for _ in 0..count {
             if offset + 2 > data.len() {
-                return Err(NeedleError::InvalidInput("Truncated record id length".into()));
+                return Err(NeedleError::InvalidInput(
+                    "Truncated record id length".into(),
+                ));
             }
-            let id_len = u16::from_le_bytes(data[offset..offset + 2].try_into().expect("slice is exactly 2 bytes")) as usize;
+            let id_len = u16::from_le_bytes(
+                data[offset..offset + 2]
+                    .try_into()
+                    .expect("slice is exactly 2 bytes"),
+            ) as usize;
             offset += 2;
 
             if offset + id_len > data.len() {
@@ -255,16 +265,23 @@ impl VectorBatch {
             for i in 0..dimension {
                 let start = offset + i * 4;
                 vector.push(f32::from_le_bytes(
-                    data[start..start + 4].try_into().expect("slice is exactly 4 bytes"),
+                    data[start..start + 4]
+                        .try_into()
+                        .expect("slice is exactly 4 bytes"),
                 ));
             }
             offset += vec_bytes;
 
             if offset + 4 > data.len() {
-                return Err(NeedleError::InvalidInput("Truncated metadata length".into()));
+                return Err(NeedleError::InvalidInput(
+                    "Truncated metadata length".into(),
+                ));
             }
-            let meta_len =
-                u32::from_le_bytes(data[offset..offset + 4].try_into().expect("slice is exactly 4 bytes")) as usize;
+            let meta_len = u32::from_le_bytes(
+                data[offset..offset + 4]
+                    .try_into()
+                    .expect("slice is exactly 4 bytes"),
+            ) as usize;
             offset += 4;
 
             let metadata = if meta_len > 0 {
@@ -313,12 +330,7 @@ impl VectorBatchBuilder {
     }
 
     /// Add a vector record to the batch.
-    pub fn add(
-        mut self,
-        id: impl Into<String>,
-        vector: &[f32],
-        metadata: Option<Value>,
-    ) -> Self {
+    pub fn add(mut self, id: impl Into<String>, vector: &[f32], metadata: Option<Value>) -> Self {
         self.records.push(VectorRecord {
             id: id.into(),
             vector: vector.to_vec(),
@@ -328,12 +340,7 @@ impl VectorBatchBuilder {
     }
 
     /// Add a vector record by mutable reference (for loops).
-    pub fn push(
-        &mut self,
-        id: impl Into<String>,
-        vector: &[f32],
-        metadata: Option<Value>,
-    ) {
+    pub fn push(&mut self, id: impl Into<String>, vector: &[f32], metadata: Option<Value>) {
         self.records.push(VectorRecord {
             id: id.into(),
             vector: vector.to_vec(),
@@ -688,10 +695,10 @@ impl UpsertPipeline {
             stats.duplicates_skipped += dup_count as u64;
             stats.bytes_processed += (count * std::mem::size_of::<f32>()) as u64;
 
-            let total_us = self.total_latency_us.fetch_add(
-                latency.as_micros() as u64,
-                Ordering::Relaxed,
-            ) + latency.as_micros() as u64;
+            let total_us = self
+                .total_latency_us
+                .fetch_add(latency.as_micros() as u64, Ordering::Relaxed)
+                + latency.as_micros() as u64;
 
             stats.avg_batch_latency_us = total_us / stats.batches_processed.max(1);
             self.backpressure.drain(count as u64 + dup_count as u64);
@@ -904,7 +911,10 @@ impl ThroughputTracker {
             return 0.0;
         }
 
-        let oldest = window.front().map(|(t, _)| *t).expect("window is non-empty");
+        let oldest = window
+            .front()
+            .map(|(t, _)| *t)
+            .expect("window is non-empty");
         let elapsed = oldest.elapsed().as_secs_f64();
         if elapsed < 0.001 {
             return 0.0;
@@ -979,7 +989,11 @@ impl IngestionEngine {
         }
 
         let count = batch.records.len() as u64;
-        let byte_est = batch.records.iter().map(|r| r.vector.len() * 4).sum::<usize>() as u64;
+        let byte_est = batch
+            .records
+            .iter()
+            .map(|r| r.vector.len() * 4)
+            .sum::<usize>() as u64;
 
         {
             let mut ring = self.ring.write();
@@ -1210,9 +1224,21 @@ mod tests {
     #[test]
     fn test_dedup_within_batch() {
         let records = vec![
-            VectorRecord { id: "a".into(), vector: vec![1.0], metadata: None },
-            VectorRecord { id: "b".into(), vector: vec![2.0], metadata: None },
-            VectorRecord { id: "a".into(), vector: vec![3.0], metadata: None },
+            VectorRecord {
+                id: "a".into(),
+                vector: vec![1.0],
+                metadata: None,
+            },
+            VectorRecord {
+                id: "b".into(),
+                vector: vec![2.0],
+                metadata: None,
+            },
+            VectorRecord {
+                id: "a".into(),
+                vector: vec![3.0],
+                metadata: None,
+            },
         ];
         let (deduped, dups) = UpsertPipeline::dedup_records(records);
         assert_eq!(deduped.len(), 2);

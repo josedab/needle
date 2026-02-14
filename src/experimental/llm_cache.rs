@@ -362,7 +362,8 @@ impl LlmCache {
             let similarity = self.compute_similarity(query_embedding, &entry.embedding);
 
             if similarity >= self.config.similarity_threshold {
-                if best_match.is_none() || similarity > best_match.expect("checked is_none above").1 {
+                if best_match.is_none() || similarity > best_match.expect("checked is_none above").1
+                {
                     best_match = Some((idx, similarity));
                 }
             }
@@ -491,7 +492,9 @@ impl LlmCache {
             self.remove_entry(&query);
         }
 
-        self.stats.expirations.fetch_add(count as u64, Ordering::Relaxed);
+        self.stats
+            .expirations
+            .fetch_add(count as u64, Ordering::Relaxed);
         count
     }
 
@@ -553,7 +556,11 @@ impl LlmCache {
 
     /// Get all cached queries (for debugging)
     pub fn cached_queries(&self) -> Vec<String> {
-        self.entries.read().iter().map(|e| e.query.clone()).collect()
+        self.entries
+            .read()
+            .iter()
+            .map(|e| e.query.clone())
+            .collect()
     }
 
     /// Get similar queries above threshold
@@ -835,7 +842,8 @@ impl EnhancedLlmCache {
 
             let similarity = self.inner.compute_similarity(embedding, &entry.embedding);
             if similarity >= threshold {
-                if best_match.is_none() || similarity > best_match.expect("checked is_none above").1 {
+                if best_match.is_none() || similarity > best_match.expect("checked is_none above").1
+                {
                     best_match = Some((idx, similarity));
                 }
             }
@@ -1028,7 +1036,10 @@ impl OpenAIProxy {
     }
 
     /// Process a chat completion request
-    pub fn chat_completion(&self, request: &ChatCompletionRequest) -> Result<ChatCompletionResponse> {
+    pub fn chat_completion(
+        &self,
+        request: &ChatCompletionRequest,
+    ) -> Result<ChatCompletionResponse> {
         // Don't cache streaming requests
         if request.stream.unwrap_or(false) {
             return (self.llm_fn)(request);
@@ -1054,7 +1065,8 @@ impl OpenAIProxy {
 
         // Cache the response
         let response_json = serde_json::to_string(&response)?;
-        self.cache.put(&cache_key, &embedding, &response_json, None)?;
+        self.cache
+            .put(&cache_key, &embedding, &response_json, None)?;
 
         Ok(response)
     }
@@ -1177,9 +1189,21 @@ impl MultiTierCache {
             l1_hits: l1,
             l2_hits: l2,
             misses,
-            l1_hit_rate: if total > 0 { l1 as f64 / total as f64 } else { 0.0 },
-            l2_hit_rate: if total > 0 { l2 as f64 / total as f64 } else { 0.0 },
-            total_hit_rate: if total > 0 { (l1 + l2) as f64 / total as f64 } else { 0.0 },
+            l1_hit_rate: if total > 0 {
+                l1 as f64 / total as f64
+            } else {
+                0.0
+            },
+            l2_hit_rate: if total > 0 {
+                l2 as f64 / total as f64
+            } else {
+                0.0
+            },
+            total_hit_rate: if total > 0 {
+                (l1 + l2) as f64 / total as f64
+            } else {
+                0.0
+            },
         }
     }
 
@@ -1247,25 +1271,34 @@ impl CostAnalytics {
 
     /// Record a cache hit (query served from cache).
     pub fn record_hit(&self) {
-        self.total_queries.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        self.cache_hits.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.total_queries
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.cache_hits
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// Record a cache miss (query forwarded to LLM).
     pub fn record_miss(&self) {
-        self.total_queries.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.total_queries
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// Generate a cost savings report.
     pub fn report(&self) -> CostSavingsReport {
-        let total = self.total_queries.load(std::sync::atomic::Ordering::Relaxed);
+        let total = self
+            .total_queries
+            .load(std::sync::atomic::Ordering::Relaxed);
         let hits = self.cache_hits.load(std::sync::atomic::Ordering::Relaxed);
         let misses = total - hits;
 
         let cost_without = total as f64 * self.cost_per_call_cents;
         let cost_with = misses as f64 * self.cost_per_call_cents;
         let savings = cost_without - cost_with;
-        let pct = if total > 0 { savings / cost_without * 100.0 } else { 0.0 };
+        let pct = if total > 0 {
+            savings / cost_without * 100.0
+        } else {
+            0.0
+        };
 
         CostSavingsReport {
             total_queries: total,
@@ -1281,8 +1314,10 @@ impl CostAnalytics {
 
     /// Reset all counters.
     pub fn reset(&self) {
-        self.total_queries.store(0, std::sync::atomic::Ordering::Relaxed);
-        self.cache_hits.store(0, std::sync::atomic::Ordering::Relaxed);
+        self.total_queries
+            .store(0, std::sync::atomic::Ordering::Relaxed);
+        self.cache_hits
+            .store(0, std::sync::atomic::Ordering::Relaxed);
     }
 }
 
@@ -1314,7 +1349,12 @@ mod tests {
 
         let embedding = test_embedding(64, 1.0);
         cache
-            .put("What is AI?", &embedding, "AI is artificial intelligence.", None)
+            .put(
+                "What is AI?",
+                &embedding,
+                "AI is artificial intelligence.",
+                None,
+            )
             .unwrap();
 
         let hit = cache.get_exact("What is AI?").unwrap();
@@ -1331,7 +1371,12 @@ mod tests {
 
         let embedding1 = test_embedding(64, 1.0);
         cache
-            .put("What is machine learning?", &embedding1, "ML is a subset of AI.", None)
+            .put(
+                "What is machine learning?",
+                &embedding1,
+                "ML is a subset of AI.",
+                None,
+            )
             .unwrap();
 
         // Similar embedding should hit
@@ -1351,7 +1396,9 @@ mod tests {
         let cache = LlmCache::new(config);
 
         let embedding = test_embedding(64, 1.0);
-        cache.put("  What is AI?  ", &embedding, "Response", None).unwrap();
+        cache
+            .put("  What is AI?  ", &embedding, "Response", None)
+            .unwrap();
 
         // Should match with different spacing/case
         assert!(cache.get_exact("what is ai?").is_some());
@@ -1365,7 +1412,9 @@ mod tests {
 
         for i in 0..5 {
             let embedding = test_embedding(64, i as f32);
-            cache.put(&format!("query{}", i), &embedding, "response", None).unwrap();
+            cache
+                .put(&format!("query{}", i), &embedding, "response", None)
+                .unwrap();
         }
 
         assert_eq!(cache.len(), 3);
@@ -1404,7 +1453,9 @@ mod tests {
 
         for i in 0..5 {
             let embedding = test_embedding(64, i as f32 + 0.1); // Avoid zero embedding
-            cache.put(&format!("query{}", i), &embedding, "response", None).unwrap();
+            cache
+                .put(&format!("query{}", i), &embedding, "response", None)
+                .unwrap();
         }
 
         let search_embedding = test_embedding(64, 2.5);
@@ -1423,7 +1474,9 @@ mod tests {
         let cache = LlmCache::new(config);
 
         let embedding = test_embedding(64, 1.0);
-        cache.put("test query", &embedding, "test response", None).unwrap();
+        cache
+            .put("test query", &embedding, "test response", None)
+            .unwrap();
 
         // Exact only
         let hit = LlmCacheQueryBuilder::new(&cache, "test query")
@@ -1485,8 +1538,12 @@ mod tests {
         let analytics = CostAnalytics::new(0.50); // $0.005 per call
 
         // 10 queries: 7 hits, 3 misses
-        for _ in 0..7 { analytics.record_hit(); }
-        for _ in 0..3 { analytics.record_miss(); }
+        for _ in 0..7 {
+            analytics.record_hit();
+        }
+        for _ in 0..3 {
+            analytics.record_miss();
+        }
 
         let report = analytics.report();
         assert_eq!(report.total_queries, 10);
