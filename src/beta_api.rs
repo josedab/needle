@@ -13,11 +13,11 @@ pub use crate::backup::{
     RestorePoint, RestorePointType, SnapshotSegment, WalEntry, WalOperation,
 };
 pub use crate::clustering::{
-    ClusteringConfig, HierarchicalClustering, KMeans, Linkage, MiniBatchKMeans, elbow_method,
-    silhouette_score,
+    elbow_method, silhouette_score, ClusteringConfig, HierarchicalClustering, KMeans, Linkage,
+    MiniBatchKMeans,
 };
 pub use crate::dedup::{DeduplicationConfig, DuplicateDetector, DuplicateGroup, DuplicateResult};
-pub use crate::dimreduce::{NeighborEmbedding, PCA, RandomProjection};
+pub use crate::dimreduce::{NeighborEmbedding, RandomProjection, PCA};
 pub use crate::graph::{Community, GraphConfig, GraphPath, NeighborhoodResult, SemanticGraph};
 pub use crate::namespace::{
     AccessControl, AccessLevel, Namespace, NamespaceCollection, NamespaceManager, TenantConfig,

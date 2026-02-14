@@ -295,7 +295,11 @@ impl AsyncDatabase {
     /// ```rust,ignore
     /// db.create_collection("documents", 384).await?;
     /// ```
-    pub async fn create_collection(&self, name: impl Into<String>, dimensions: usize) -> Result<()> {
+    pub async fn create_collection(
+        &self,
+        name: impl Into<String>,
+        dimensions: usize,
+    ) -> Result<()> {
         let name = name.into();
         db_op!(self, |db| db.create_collection(name, dimensions))
     }
@@ -520,10 +524,8 @@ impl AsyncDatabase {
         db_op!(self, |db| {
             let coll = db.collection(&collection)?;
             // Use rayon's parallel search internally
-            let results: Result<Vec<Vec<SearchResult>>> = queries
-                .iter()
-                .map(|query| coll.search(query, k))
-                .collect();
+            let results: Result<Vec<Vec<SearchResult>>> =
+                queries.iter().map(|query| coll.search(query, k)).collect();
             results
         })
     }
@@ -655,11 +657,7 @@ impl AsyncDatabase {
     ///     println!("Got {} entries", entries.len());
     /// }
     /// ```
-    pub async fn stream_export(
-        &self,
-        collection: &str,
-        batch_size: usize,
-    ) -> Result<ExportStream> {
+    pub async fn stream_export(&self, collection: &str, batch_size: usize) -> Result<ExportStream> {
         // First get all IDs
         let inner = self.inner.clone();
         let collection_name = collection.to_string();
@@ -714,7 +712,11 @@ impl AsyncDatabase {
     ///
     /// * `collection` - Collection name
     /// * `filter` - Optional metadata filter
-    pub async fn count_with_filter(&self, collection: &str, filter: Option<Filter>) -> Result<usize> {
+    pub async fn count_with_filter(
+        &self,
+        collection: &str,
+        filter: Option<Filter>,
+    ) -> Result<usize> {
         let collection = collection.to_string();
         db_op!(self, |db| {
             let coll = db.collection(&collection)?;
@@ -1065,7 +1067,12 @@ impl BatchOperationBuilder {
     }
 
     /// Add an insert operation
-    pub fn insert(mut self, id: impl Into<String>, vector: Vec<f32>, metadata: Option<Value>) -> Self {
+    pub fn insert(
+        mut self,
+        id: impl Into<String>,
+        vector: Vec<f32>,
+        metadata: Option<Value>,
+    ) -> Self {
         self.inserts.push((id.into(), vector, metadata));
         self
     }
@@ -1217,7 +1224,10 @@ mod tests {
         // Search with filter
         let query = random_vector(32);
         let filter = Filter::eq("category", "even");
-        let results = db.search_with_filter("test", query, 10, filter).await.unwrap();
+        let results = db
+            .search_with_filter("test", query, 10, filter)
+            .await
+            .unwrap();
 
         // All results should have category "even"
         for result in &results {

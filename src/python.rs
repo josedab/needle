@@ -200,7 +200,9 @@ impl PyCollection {
         metadata: Option<Vec<PyObject>>,
     ) -> PyResult<()> {
         if ids.len() != vectors.len() {
-            return Err(PyValueError::new_err("ids and vectors must have the same length"));
+            return Err(PyValueError::new_err(
+                "ids and vectors must have the same length",
+            ));
         }
 
         let meta_values: Vec<Option<Value>> = if let Some(meta_list) = metadata {
@@ -226,7 +228,8 @@ impl PyCollection {
             .write()
             .map_err(|_| PyValueError::new_err("Lock poisoned"))?;
 
-        coll.insert_batch(ids, vectors, meta_values).map_err(to_pyerr)
+        coll.insert_batch(ids, vectors, meta_values)
+            .map_err(to_pyerr)
     }
 
     /// Search for k nearest neighbors
@@ -417,11 +420,7 @@ impl PyCollection {
 
     fn __repr__(&self) -> String {
         let (name, dims, len) = match self.inner.read() {
-            Ok(coll) => (
-                coll.name().to_string(),
-                coll.dimensions(),
-                coll.len(),
-            ),
+            Ok(coll) => (coll.name().to_string(), coll.dimensions(), coll.len()),
             Err(_) => return "PyCollection(<lock poisoned>)".to_string(),
         };
         format!(
@@ -600,9 +599,9 @@ impl PyDatabase {
             .read()
             .map_err(|_| PyValueError::new_err("Lock poisoned"))?;
         // Verify the collection exists
-        let coll_ref = db.collection(name).map_err(|_| {
-            PyKeyError::new_err(format!("Collection '{}' not found", name))
-        })?;
+        let coll_ref = db
+            .collection(name)
+            .map_err(|_| PyKeyError::new_err(format!("Collection '{}' not found", name)))?;
         let dims = coll_ref.dimensions().ok_or_else(|| {
             PyValueError::new_err(format!("Collection '{}' has no dimensions", name))
         })?;
