@@ -19,9 +19,9 @@
 use ndarray::Array2;
 use ort::session::{builder::GraphOptimizationLevel, Session};
 use ort::value::Value;
-use std::sync::Mutex;
 use std::path::Path;
 use std::sync::Arc;
+use std::sync::Mutex;
 use tokenizers::Tokenizer;
 
 /// Error type for embedding operations
@@ -207,16 +207,16 @@ impl TextEmbedder {
                 EmbeddingError::InvalidInput(format!("Failed to create input_ids array: {}", e))
             })?;
 
-        let attention_mask_array =
-            Array2::from_shape_vec((batch_size, seq_len), attention_mask).map_err(|e| {
+        let attention_mask_array = Array2::from_shape_vec((batch_size, seq_len), attention_mask)
+            .map_err(|e| {
                 EmbeddingError::InvalidInput(format!(
                     "Failed to create attention_mask array: {}",
                     e
                 ))
             })?;
 
-        let token_type_ids_array =
-            Array2::from_shape_vec((batch_size, seq_len), token_type_ids).map_err(|e| {
+        let token_type_ids_array = Array2::from_shape_vec((batch_size, seq_len), token_type_ids)
+            .map_err(|e| {
                 EmbeddingError::InvalidInput(format!(
                     "Failed to create token_type_ids array: {}",
                     e
@@ -224,7 +224,10 @@ impl TextEmbedder {
             })?;
 
         // Run inference
-        let mut session = self.session.lock().map_err(|_| EmbeddingError::OrtError("Session lock poisoned".into()))?;
+        let mut session = self
+            .session
+            .lock()
+            .map_err(|_| EmbeddingError::OrtError("Session lock poisoned".into()))?;
         let outputs = session.run(ort::inputs![
             "input_ids" => Value::from_array(input_ids_array)?,
             "attention_mask" => Value::from_array(attention_mask_array.clone())?,
@@ -248,7 +251,12 @@ impl TextEmbedder {
         let embeddings = if output_shape_dims.len() == 3 {
             // Token-level output: (batch_size, seq_len, hidden_size)
             // Apply pooling
-            self.pool_embeddings_raw(output_data, &output_shape_dims, &attention_mask_array, batch_size)?
+            self.pool_embeddings_raw(
+                output_data,
+                &output_shape_dims,
+                &attention_mask_array,
+                batch_size,
+            )?
         } else if output_shape_dims.len() == 2 {
             // Sentence-level output: (batch_size, hidden_size)
             (0..batch_size)
