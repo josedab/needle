@@ -109,7 +109,11 @@ pub struct Relation {
 
 impl Relation {
     /// Create a new relation with default weight.
-    pub fn new(source: impl Into<String>, target: impl Into<String>, rel_type: impl Into<String>) -> Self {
+    pub fn new(
+        source: impl Into<String>,
+        target: impl Into<String>,
+        rel_type: impl Into<String>,
+    ) -> Self {
         Self {
             source: source.into(),
             target: target.into(),
@@ -183,15 +187,17 @@ struct AdjacencyList {
 
 impl AdjacencyList {
     fn add_edge(&mut self, source: &str, target: &str, rel_type: &str, weight: f32) {
-        self.outgoing
-            .entry(source.to_string())
-            .or_default()
-            .push((target.to_string(), rel_type.to_string(), weight));
+        self.outgoing.entry(source.to_string()).or_default().push((
+            target.to_string(),
+            rel_type.to_string(),
+            weight,
+        ));
 
-        self.incoming
-            .entry(target.to_string())
-            .or_default()
-            .push((source.to_string(), rel_type.to_string(), weight));
+        self.incoming.entry(target.to_string()).or_default().push((
+            source.to_string(),
+            rel_type.to_string(),
+            weight,
+        ));
     }
 
     fn neighbors(&self, node: &str, bidirectional: bool) -> Vec<(String, String, f32)> {
@@ -262,9 +268,10 @@ impl<'a> GraphRagService<'a> {
         }
 
         let coll = self.db.collection(&self.collection_name)?;
-        let meta = entity.metadata.clone().unwrap_or_else(|| {
-            serde_json::json!({ "label": entity.label })
-        });
+        let meta = entity
+            .metadata
+            .clone()
+            .unwrap_or_else(|| serde_json::json!({ "label": entity.label }));
         coll.insert(&entity.id, &entity.vector, Some(meta))?;
 
         self.entities.insert(entity.id.clone(), entity);
@@ -286,7 +293,9 @@ impl<'a> GraphRagService<'a> {
             )));
         }
 
-        let degree = self.adjacency.degree(&relation.source, self.config.bidirectional);
+        let degree = self
+            .adjacency
+            .degree(&relation.source, self.config.bidirectional);
         if degree >= self.config.max_edges_per_node {
             return Err(NeedleError::InvalidArgument(format!(
                 "node '{}' has reached max edges ({})",
@@ -344,7 +353,11 @@ impl<'a> GraphRagService<'a> {
 
         // Step 2: BFS graph traversal from seed nodes
         let mut graph_scores: HashMap<String, (f32, usize, Vec<String>)> = HashMap::new();
-        let seeds: Vec<String> = vector_results.iter().take(k).map(|r| r.id.clone()).collect();
+        let seeds: Vec<String> = vector_results
+            .iter()
+            .take(k)
+            .map(|r| r.id.clone())
+            .collect();
 
         for seed in &seeds {
             let mut visited: HashSet<String> = HashSet::new();
@@ -396,7 +409,10 @@ impl<'a> GraphRagService<'a> {
 
             let vs = vector_scores.get(&id).copied().unwrap_or(0.0);
             let (gs, hops_from_seed, path) =
-                graph_scores.get(&id).cloned().unwrap_or((0.0, 0, vec![id.clone()]));
+                graph_scores
+                    .get(&id)
+                    .cloned()
+                    .unwrap_or((0.0, 0, vec![id.clone()]));
 
             let combined = (1.0 - graph_weight) * vs + graph_weight * gs;
 
@@ -413,7 +429,11 @@ impl<'a> GraphRagService<'a> {
         }
 
         // Sort by combined score descending
-        results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        results.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         results.truncate(k);
 
         Ok(results)
@@ -566,11 +586,10 @@ mod tests {
         svc.add_entity(make_entity("c", "Lib", vec![0.0, 0.0, 1.0, 0.0]))
             .unwrap();
         svc.add_relation(Relation::new("a", "b", "uses")).unwrap();
-        svc.add_relation(Relation::new("b", "c", "depends_on")).unwrap();
-
-        let results = svc
-            .graph_search(&[1.0, 0.0, 0.0, 0.0], 5, 2, 0.3)
+        svc.add_relation(Relation::new("b", "c", "depends_on"))
             .unwrap();
+
+        let results = svc.graph_search(&[1.0, 0.0, 0.0, 0.0], 5, 2, 0.3).unwrap();
         assert!(!results.is_empty());
         // "a" should be most relevant (closest vector + seed)
         assert_eq!(results[0].id, "a");
@@ -617,9 +636,13 @@ mod tests {
         svc.add_entity(make_entity("a", "X", vec![1.0; 4])).unwrap();
 
         // Target doesn't exist
-        assert!(svc.add_relation(Relation::new("a", "nonexistent", "r")).is_err());
+        assert!(svc
+            .add_relation(Relation::new("a", "nonexistent", "r"))
+            .is_err());
         // Source doesn't exist
-        assert!(svc.add_relation(Relation::new("nonexistent", "a", "r")).is_err());
+        assert!(svc
+            .add_relation(Relation::new("nonexistent", "a", "r"))
+            .is_err());
     }
 
     #[test]
@@ -627,9 +650,12 @@ mod tests {
         let db = test_db();
         let mut svc = GraphRagService::new(&db, "entities", GraphRagConfig::default()).unwrap();
 
-        svc.add_entity(make_entity("a", "Person", vec![1.0; 4])).unwrap();
-        svc.add_entity(make_entity("b", "Person", vec![1.0; 4])).unwrap();
-        svc.add_entity(make_entity("c", "Place", vec![1.0; 4])).unwrap();
+        svc.add_entity(make_entity("a", "Person", vec![1.0; 4]))
+            .unwrap();
+        svc.add_entity(make_entity("b", "Person", vec![1.0; 4]))
+            .unwrap();
+        svc.add_entity(make_entity("c", "Place", vec![1.0; 4]))
+            .unwrap();
 
         assert_eq!(svc.entities_by_label("Person").len(), 2);
         assert_eq!(svc.entities_by_label("Place").len(), 1);

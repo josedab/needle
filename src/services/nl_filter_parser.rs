@@ -127,48 +127,25 @@ fn default_rules() -> Vec<PatternRule> {
         },
         // Greater than
         PatternRule {
-            keywords: vec![
-                "greater than",
-                "more than",
-                "above",
-                "over",
-                "exceeds",
-                ">",
-            ],
+            keywords: vec!["greater than", "more than", "above", "over", "exceeds", ">"],
             operator: FilterOp::Gt,
             value_before: false,
         },
         // Greater than or equal
         PatternRule {
-            keywords: vec![
-                "at least",
-                "greater than or equal to",
-                "no less than",
-                ">=",
-            ],
+            keywords: vec!["at least", "greater than or equal to", "no less than", ">="],
             operator: FilterOp::Gte,
             value_before: false,
         },
         // Less than
         PatternRule {
-            keywords: vec![
-                "less than",
-                "fewer than",
-                "below",
-                "under",
-                "<",
-            ],
+            keywords: vec!["less than", "fewer than", "below", "under", "<"],
             operator: FilterOp::Lt,
             value_before: false,
         },
         // Less than or equal
         PatternRule {
-            keywords: vec![
-                "at most",
-                "less than or equal to",
-                "no more than",
-                "<=",
-            ],
+            keywords: vec!["at most", "less than or equal to", "no more than", "<="],
             operator: FilterOp::Lte,
             value_before: false,
         },
@@ -338,7 +315,10 @@ impl NLFilterParser {
                     };
 
                     let match_quality = keyword.len();
-                    if best_match.as_ref().map_or(true, |(_, q)| match_quality > *q) {
+                    if best_match
+                        .as_ref()
+                        .map_or(true, |(_, q)| match_quality > *q)
+                    {
                         best_match = Some((clause, match_quality));
                     }
                 }
@@ -354,16 +334,11 @@ impl NLFilterParser {
             .trim_matches(|c: char| c == '\'' || c == '"')
             .to_string();
 
-        self.aliases
-            .get(&cleaned)
-            .cloned()
-            .unwrap_or(cleaned)
+        self.aliases.get(&cleaned).cloned().unwrap_or(cleaned)
     }
 
     fn parse_value(&self, raw: &str, field: &str) -> Value {
-        let cleaned = raw
-            .trim()
-            .trim_matches(|c: char| c == '\'' || c == '"');
+        let cleaned = raw.trim().trim_matches(|c: char| c == '\'' || c == '"');
 
         // Check field hints for type guidance
         if let Some(hint) = self.field_hints.get(field) {

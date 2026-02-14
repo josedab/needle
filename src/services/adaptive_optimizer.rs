@@ -159,7 +159,11 @@ impl fmt::Display for QueryPlan {
         writeln!(f, "Strategy:          {}", self.strategy)?;
         writeln!(f, "Filter:            {}", self.filter_strategy)?;
         writeln!(f, "Est. Latency:      {}μs", self.estimated_latency_us)?;
-        writeln!(f, "Est. Recall:       {:.1}%", self.estimated_recall * 100.0)?;
+        writeln!(
+            f,
+            "Est. Recall:       {:.1}%",
+            self.estimated_recall * 100.0
+        )?;
         writeln!(f, "Confidence:        {:.1}%", self.confidence * 100.0)?;
         if let Some(ef) = self.recommended_ef_search {
             writeln!(f, "Rec. ef_search:    {ef}")?;
@@ -324,11 +328,8 @@ impl CostModel {
         let alpha = 1.0 / n.min(50.0); // Exponential moving average
 
         // Update base latency
-        let predicted = self.estimate_latency(
-            strategy,
-            profile.collection_size,
-            profile.dimensions,
-        );
+        let predicted =
+            self.estimate_latency(strategy, profile.collection_size, profile.dimensions);
         let actual = profile.actual_latency_us as f64;
         let error = actual - predicted;
 
@@ -407,10 +408,7 @@ impl AdaptiveOptimizer {
 
         explain.push(ExplainStep {
             phase: OptPhase::CostEstimation,
-            detail: format!(
-                "Evaluating {} candidate strategies",
-                candidates.len()
-            ),
+            detail: format!("Evaluating {} candidate strategies", candidates.len()),
         });
 
         for strategy in &candidates {
@@ -584,11 +582,7 @@ impl AdaptiveOptimizer {
         candidates
     }
 
-    fn plan_filter(
-        &self,
-        selectivity: Option<f64>,
-        strategy: &Strategy,
-    ) -> FilterStrategy {
+    fn plan_filter(&self, selectivity: Option<f64>, strategy: &Strategy) -> FilterStrategy {
         match selectivity {
             None => FilterStrategy::None,
             Some(sel) if sel < self.config.prefilter_selectivity_threshold => {
@@ -708,8 +702,7 @@ mod tests {
         let small_plan = optimizer.plan(10_000, 128, 10, None);
         let large_plan = optimizer.plan(5_000_000, 128, 10, None);
         assert!(
-            large_plan.recommended_ef_search.unwrap()
-                >= small_plan.recommended_ef_search.unwrap()
+            large_plan.recommended_ef_search.unwrap() >= small_plan.recommended_ef_search.unwrap()
         );
     }
 

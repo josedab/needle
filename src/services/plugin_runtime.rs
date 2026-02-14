@@ -434,10 +434,7 @@ mod tests {
         let runtime = PluginRuntime::new(PluginRuntimeConfig::default());
 
         runtime
-            .register_hook(
-                "dummy",
-                PluginHook::PreSearch(Box::new(|q| q.to_vec())),
-            )
+            .register_hook("dummy", PluginHook::PreSearch(Box::new(|q| q.to_vec())))
             .unwrap();
         assert_eq!(runtime.total_hooks(), 1);
 

@@ -247,9 +247,7 @@ mod tests {
     #[test]
     fn test_adaptive_service_status() {
         let db = make_db();
-        let config = AdaptiveServiceConfig::builder()
-            .collection("test")
-            .build();
+        let config = AdaptiveServiceConfig::builder().collection("test").build();
         let svc = AdaptiveIndexService::new(&db, config).unwrap();
 
         let report = svc.status_report();
