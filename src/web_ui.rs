@@ -541,10 +541,22 @@ fn base_layout(title: &str, content: &str, active_page: &str) -> String {
         title = title,
         content = content,
         version = env!("CARGO_PKG_VERSION"),
-        dashboard_active = if active_page == "dashboard" { "active" } else { "" },
-        collections_active = if active_page == "collections" { "active" } else { "" },
+        dashboard_active = if active_page == "dashboard" {
+            "active"
+        } else {
+            ""
+        },
+        collections_active = if active_page == "collections" {
+            "active"
+        } else {
+            ""
+        },
         query_active = if active_page == "query" { "active" } else { "" },
-        monitoring_active = if active_page == "monitoring" { "active" } else { "" },
+        monitoring_active = if active_page == "monitoring" {
+            "active"
+        } else {
+            ""
+        },
     )
 }
 
@@ -554,7 +566,7 @@ fn format_number(n: usize) -> String {
     let mut result = String::new();
     let chars: Vec<char> = s.chars().collect();
     for (i, c) in chars.iter().enumerate() {
-        if i > 0 && (chars.len() - i).is_multiple_of(3) {
+        if i > 0 && (chars.len() - i) % 3 == 0 {
             result.push(',');
         }
         result.push(*c);
@@ -893,7 +905,9 @@ async fn collection_detail_handler(
     let needs_compact = coll.needs_compaction(0.2);
 
     // Get sample vector IDs
-    let sample_ids: Vec<String> = coll.ids().ok()
+    let sample_ids: Vec<String> = coll
+        .ids()
+        .ok()
         .map(|ids| ids.into_iter().take(10).collect())
         .unwrap_or_default();
 
@@ -981,7 +995,11 @@ async fn collection_detail_handler(
         stat_deleted = stat_card("Deleted", &deleted.to_string(), ""),
         stat_status = stat_card(
             "Status",
-            if needs_compact { "Needs Compaction" } else { "OK" },
+            if needs_compact {
+                "Needs Compaction"
+            } else {
+                "OK"
+            },
             ""
         ),
         dims = dims,
@@ -1000,7 +1018,11 @@ async fn collection_detail_handler(
         },
     );
 
-    Ok(Html(base_layout(&format!("Collection: {}", name), &content, "collections")))
+    Ok(Html(base_layout(
+        &format!("Collection: {}", name),
+        &content,
+        "collections",
+    )))
 }
 
 /// GET /query - Query playground
@@ -1399,7 +1421,10 @@ pub fn create_web_ui_router(state: Arc<WebUiState>) -> Router {
 ///     Ok(())
 /// }
 /// ```
-pub async fn serve_web_ui(db: Database, config: WebUiConfig) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn serve_web_ui(
+    db: Database,
+    config: WebUiConfig,
+) -> Result<(), Box<dyn std::error::Error>> {
     let addr = config.addr;
     let state = Arc::new(WebUiState::new(db, config));
     let app = create_web_ui_router(state);
@@ -1482,10 +1507,7 @@ impl FilterCondition {
             "lte" => crate::metadata::Filter::lte(self.field.clone(), self.value.clone()),
             "in" => {
                 if let serde_json::Value::Array(arr) = &self.value {
-                    crate::metadata::Filter::In {
-                        field: self.field.clone(),
-                        values: arr.clone(),
-                    }
+                    crate::metadata::Filter::is_in(self.field.clone(), arr.clone())
                 } else {
                     return None;
                 }
@@ -1584,15 +1606,13 @@ pub fn get_admin_sections() -> Vec<AdminSection> {
                     description: "Delete a collection and all its data".to_string(),
                     method: "DELETE".to_string(),
                     endpoint: "/api/collections/{name}".to_string(),
-                    params: vec![
-                        ActionParam {
-                            name: "name".to_string(),
-                            param_type: "string".to_string(),
-                            required: true,
-                            default: None,
-                            description: "Collection to delete".to_string(),
-                        },
-                    ],
+                    params: vec![ActionParam {
+                        name: "name".to_string(),
+                        param_type: "string".to_string(),
+                        required: true,
+                        default: None,
+                        description: "Collection to delete".to_string(),
+                    }],
                     dangerous: true,
                 },
                 AdminAction {
@@ -1601,15 +1621,13 @@ pub fn get_admin_sections() -> Vec<AdminSection> {
                     description: "Remove deleted vectors and reclaim space".to_string(),
                     method: "POST".to_string(),
                     endpoint: "/api/collections/{name}/compact".to_string(),
-                    params: vec![
-                        ActionParam {
-                            name: "name".to_string(),
-                            param_type: "string".to_string(),
-                            required: true,
-                            default: None,
-                            description: "Collection to compact".to_string(),
-                        },
-                    ],
+                    params: vec![ActionParam {
+                        name: "name".to_string(),
+                        param_type: "string".to_string(),
+                        required: true,
+                        default: None,
+                        description: "Collection to compact".to_string(),
+                    }],
                     dangerous: false,
                 },
             ],
@@ -1624,15 +1642,13 @@ pub fn get_admin_sections() -> Vec<AdminSection> {
                     description: "Export collection data to JSON".to_string(),
                     method: "GET".to_string(),
                     endpoint: "/api/collections/{name}/export".to_string(),
-                    params: vec![
-                        ActionParam {
-                            name: "name".to_string(),
-                            param_type: "string".to_string(),
-                            required: true,
-                            default: None,
-                            description: "Collection to export".to_string(),
-                        },
-                    ],
+                    params: vec![ActionParam {
+                        name: "name".to_string(),
+                        param_type: "string".to_string(),
+                        required: true,
+                        default: None,
+                        description: "Collection to export".to_string(),
+                    }],
                     dangerous: false,
                 },
                 AdminAction {
@@ -1855,13 +1871,33 @@ pub fn generate_query_builder_html(state: &VisualQueryState, collections: &[Stri
         </script>
         "#,
         collection_options,
-        state.query_vector.as_ref().map(|v| serde_json::to_string(v).unwrap_or_default()).unwrap_or_default(),
+        state
+            .query_vector
+            .as_ref()
+            .map(|v| serde_json::to_string(v).unwrap_or_default())
+            .unwrap_or_default(),
         filters_html,
         state.limit,
-        if state.distance == "cosine" { "selected" } else { "" },
-        if state.distance == "euclidean" { "selected" } else { "" },
-        if state.distance == "dot" { "selected" } else { "" },
-        if state.include_metadata { "checked" } else { "" },
+        if state.distance == "cosine" {
+            "selected"
+        } else {
+            ""
+        },
+        if state.distance == "euclidean" {
+            "selected"
+        } else {
+            ""
+        },
+        if state.distance == "dot" {
+            "selected"
+        } else {
+            ""
+        },
+        if state.include_metadata {
+            "checked"
+        } else {
+            ""
+        },
         if state.use_index { "checked" } else { "" },
         state.filters.len()
     )
@@ -1898,7 +1934,10 @@ pub fn generate_admin_dashboard_html() -> String {
                                 if p.required { " *" } else { "" },
                                 input_type,
                                 p.name,
-                                p.default.as_ref().map(|v| v.to_string()).unwrap_or_default(),
+                                p.default
+                                    .as_ref()
+                                    .map(|v| v.to_string())
+                                    .unwrap_or_default(),
                                 p.description
                             )
                         })
@@ -1931,7 +1970,11 @@ pub fn generate_admin_dashboard_html() -> String {
                         action.method,
                         params_html,
                         danger_class,
-                        if action.dangerous { "⚠ Execute" } else { "Execute" }
+                        if action.dangerous {
+                            "⚠ Execute"
+                        } else {
+                            "Execute"
+                        }
                     )
                 })
                 .collect();
@@ -2004,7 +2047,7 @@ pub fn generate_admin_dashboard_html() -> String {
 
                 // Replace path params
                 formData.forEach((value, key) => {{
-                    if (url.includes(`{{${{key}}}`)) {{
+                    if (url.includes(`{{${{key}}}}`)) {{
                         url = url.replace(`{{${{key}}}}`, value);
                     }}
                 }});
@@ -2012,7 +2055,7 @@ pub fn generate_admin_dashboard_html() -> String {
                 if (method !== 'GET') {{
                     const data = {{}};
                     formData.forEach((value, key) => {{
-                        if (!endpoint.includes(`{{${{key}}}`)) {{
+                        if (!endpoint.includes(`{{${{key}}}}`)) {{
                             data[key] = value;
                         }}
                     }});
@@ -2100,15 +2143,13 @@ mod tests {
             uptime_seconds: 3600,
             total_collections: 2,
             total_vectors: 1000,
-            collections: vec![
-                CollectionStatsResponse {
-                    name: "test".to_string(),
-                    vector_count: 500,
-                    dimensions: 384,
-                    deleted_count: 10,
-                    needs_compaction: false,
-                },
-            ],
+            collections: vec![CollectionStatsResponse {
+                name: "test".to_string(),
+                vector_count: 500,
+                dimensions: 384,
+                deleted_count: 10,
+                needs_compaction: false,
+            }],
             version: "0.1.0".to_string(),
         };
 
