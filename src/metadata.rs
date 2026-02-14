@@ -148,7 +148,9 @@ impl MetadataStore {
 
     /// Update the metadata data for an entry
     pub fn update_data(&mut self, internal_id: usize, data: Option<Value>) -> Result<()> {
-        let entry = self.entries.get_mut(&internal_id)
+        let entry = self
+            .entries
+            .get_mut(&internal_id)
             .ok_or_else(|| NeedleError::VectorNotFound(internal_id.to_string()))?;
         entry.data = data;
         Ok(())
@@ -158,16 +160,22 @@ impl MetadataStore {
     pub fn estimated_memory(&self) -> usize {
         // HashMap overhead + entries
         let base_overhead = std::mem::size_of::<Self>();
-        let entry_overhead = self.entries.len() * (
-            std::mem::size_of::<usize>() +  // Key
-            std::mem::size_of::<MetadataEntry>()  // Value struct
-        );
-        let id_map_overhead = self.id_map.len() * (
-            32 +  // Average string size estimate
-            std::mem::size_of::<usize>()  // Value
-        );
+        let entry_overhead = self.entries.len()
+            * (
+                std::mem::size_of::<usize>() +  // Key
+            std::mem::size_of::<MetadataEntry>()
+                // Value struct
+            );
+        let id_map_overhead = self.id_map.len()
+            * (
+                32 +  // Average string size estimate
+            std::mem::size_of::<usize>()
+                // Value
+            );
         // Estimate JSON data size
-        let json_size: usize = self.entries.values()
+        let json_size: usize = self
+            .entries
+            .values()
             .filter_map(|e| e.data.as_ref())
             .map(|v| v.to_string().len())
             .sum();
@@ -386,29 +394,42 @@ impl Filter {
         }
     }
 
-    fn parse_logical_and_with_depth(value: &Value, depth: usize) -> std::result::Result<Self, String> {
+    fn parse_logical_and_with_depth(
+        value: &Value,
+        depth: usize,
+    ) -> std::result::Result<Self, String> {
         match value {
             Value::Array(arr) => {
-                let filters: std::result::Result<Vec<Filter>, String> =
-                    arr.iter().map(|v| Self::parse_with_depth(v, depth)).collect();
+                let filters: std::result::Result<Vec<Filter>, String> = arr
+                    .iter()
+                    .map(|v| Self::parse_with_depth(v, depth))
+                    .collect();
                 Ok(Filter::And(filters?))
             }
             _ => Err("$and must be an array".to_string()),
         }
     }
 
-    fn parse_logical_or_with_depth(value: &Value, depth: usize) -> std::result::Result<Self, String> {
+    fn parse_logical_or_with_depth(
+        value: &Value,
+        depth: usize,
+    ) -> std::result::Result<Self, String> {
         match value {
             Value::Array(arr) => {
-                let filters: std::result::Result<Vec<Filter>, String> =
-                    arr.iter().map(|v| Self::parse_with_depth(v, depth)).collect();
+                let filters: std::result::Result<Vec<Filter>, String> = arr
+                    .iter()
+                    .map(|v| Self::parse_with_depth(v, depth))
+                    .collect();
                 Ok(Filter::Or(filters?))
             }
             _ => Err("$or must be an array".to_string()),
         }
     }
 
-    fn parse_logical_not_with_depth(value: &Value, depth: usize) -> std::result::Result<Self, String> {
+    fn parse_logical_not_with_depth(
+        value: &Value,
+        depth: usize,
+    ) -> std::result::Result<Self, String> {
         let inner = Self::parse_with_depth(value, depth)?;
         Ok(Filter::Not(Box::new(inner)))
     }

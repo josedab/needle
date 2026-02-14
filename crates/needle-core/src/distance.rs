@@ -77,7 +77,11 @@ impl DistanceFunction {
 /// Panics if `a` and `b` have different lengths.
 #[inline]
 pub fn cosine_distance(a: &[f32], b: &[f32]) -> f32 {
-    assert_eq!(a.len(), b.len(), "vectors must have equal length for cosine distance");
+    assert_eq!(
+        a.len(),
+        b.len(),
+        "vectors must have equal length for cosine distance"
+    );
     let dot = dot_product(a, b);
     let norm_a = dot_product(a, a).sqrt();
     let norm_b = dot_product(b, b).sqrt();
@@ -117,7 +121,11 @@ pub fn cosine_distance(a: &[f32], b: &[f32]) -> f32 {
 /// ```
 #[inline]
 pub fn cosine_distance_normalized(a: &[f32], b: &[f32]) -> f32 {
-    assert_eq!(a.len(), b.len(), "vectors must have equal length for cosine distance");
+    assert_eq!(
+        a.len(),
+        b.len(),
+        "vectors must have equal length for cosine distance"
+    );
     1.0 - dot_product(a, b)
 }
 
@@ -136,7 +144,11 @@ pub fn euclidean_distance(a: &[f32], b: &[f32]) -> f32 {
 /// Panics if `a` and `b` have different lengths.
 #[inline]
 pub fn euclidean_distance_squared(a: &[f32], b: &[f32]) -> f32 {
-    assert_eq!(a.len(), b.len(), "vectors must have equal length for euclidean distance");
+    assert_eq!(
+        a.len(),
+        b.len(),
+        "vectors must have equal length for euclidean distance"
+    );
     #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
     {
         if is_x86_feature_detected!("avx2") {
@@ -183,7 +195,11 @@ pub fn dot_product_distance(a: &[f32], b: &[f32]) -> f32 {
 /// Panics if `a` and `b` have different lengths.
 #[inline]
 pub fn dot_product(a: &[f32], b: &[f32]) -> f32 {
-    assert_eq!(a.len(), b.len(), "vectors must have equal length for dot product");
+    assert_eq!(
+        a.len(),
+        b.len(),
+        "vectors must have equal length for dot product"
+    );
     #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
     {
         if is_x86_feature_detected!("avx2") {
@@ -215,7 +231,11 @@ fn dot_product_scalar(a: &[f32], b: &[f32]) -> f32 {
 /// Panics if `a` and `b` have different lengths.
 #[inline]
 pub fn manhattan_distance(a: &[f32], b: &[f32]) -> f32 {
-    assert_eq!(a.len(), b.len(), "vectors must have equal length for manhattan distance");
+    assert_eq!(
+        a.len(),
+        b.len(),
+        "vectors must have equal length for manhattan distance"
+    );
     #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
     {
         if is_x86_feature_detected!("avx2") {
@@ -588,7 +608,10 @@ mod tests {
         let v2 = normalized(&[4.0, 5.0, 6.0]);
         let regular = cosine_distance(&v1, &v2);
         let fast = cosine_distance_normalized(&v1, &v2);
-        assert!((regular - fast).abs() < 1e-5, "Normalized cosine should match regular for unit vectors");
+        assert!(
+            (regular - fast).abs() < 1e-5,
+            "Normalized cosine should match regular for unit vectors"
+        );
     }
 
     #[test]

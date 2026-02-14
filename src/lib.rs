@@ -76,43 +76,55 @@ pub mod collection;
 pub mod database;
 pub mod distance;
 pub mod error;
-pub mod metadata;
-pub mod tuning;
-pub(crate) mod storage;
 pub(crate) mod lineage;
+pub mod metadata;
+pub(crate) mod storage;
+pub mod tuning;
 
 // ── Indexing ──────────────────────────────────────────────────────────────────
 // Vector index implementations: HNSW, DiskANN, IVF, sparse, multi-vector.
 pub mod indexing;
-pub use indexing::{hnsw, ivf, sparse, multivec, incremental, graph_vector_index, hybrid_ann, quantization, float16, multimodal_index};
 #[cfg(feature = "diskann")]
 pub use indexing::{diskann, tiered_ann};
+pub use indexing::{
+    float16, graph_vector_index, hnsw, hybrid_ann, incremental, ivf, multimodal_index, multivec,
+    quantization, sparse,
+};
 
 // ── Search & Query ───────────────────────────────────────────────────────────
 pub mod search;
-pub use search::{query_builder, query_lang, query_explain, query_planner, nl_filter, cross_collection, federated, routing, reranker};
 #[cfg(feature = "experimental")]
 pub use search::collaborative_search;
+pub use search::{
+    cross_collection, federated, nl_filter, query_builder, query_explain, query_lang,
+    query_planner, reranker, routing,
+};
 
 // ── Storage & Persistence ────────────────────────────────────────────────────
 pub mod persistence;
-pub use persistence::{wal, transaction, time_travel, backup, managed_backup, cloud_storage, versioning, migrations, snapshot_replication, tiered, shard, sync_protocol};
+pub use persistence::{
+    backup, cloud_storage, managed_backup, migrations, shard, snapshot_replication, sync_protocol,
+    tiered, time_travel, transaction, versioning, wal,
+};
 
 // ── Embeddings & ML ──────────────────────────────────────────────────────────
 pub mod ml;
-pub use ml::{auto_embed, embeddings_gateway, local_inference, model_registry, finetuning, matryoshka, rag, dimreduce, multimodal};
+pub use ml::{
+    auto_embed, dimreduce, embeddings_gateway, finetuning, local_inference, matryoshka,
+    model_registry, multimodal, rag,
+};
 
 // ── Enterprise Features ──────────────────────────────────────────────────────
 // Security, encryption, multi-tenancy, RBAC, Raft consensus.
 pub mod enterprise;
-pub use enterprise::{security, raft, tenant_isolation, namespace, autoscaling};
 #[cfg(feature = "encryption")]
 pub use enterprise::encryption;
+pub use enterprise::{autoscaling, namespace, raft, security, tenant_isolation};
 
 // ── Observability ────────────────────────────────────────────────────────────
 // Telemetry, drift detection, anomaly detection, profiling.
 pub mod observe;
-pub use observe::{telemetry, observability, anomaly, drift, profiler, otel_service};
+pub use observe::{anomaly, drift, observability, otel_service, profiler, telemetry};
 
 // ── Framework Integrations ───────────────────────────────────────────────────
 // Adapters for LangChain, LlamaIndex, Haystack, Semantic Kernel.
@@ -125,15 +137,16 @@ pub use integrations::{langchain, llamaindex};
 // ── High-Level Services ──────────────────────────────────────────────────────
 // Database-level service wrappers with builders and lifecycle management.
 pub mod services;
-pub use services::{ingestion_service, text_collection, pitr_service, multimodal_service, tiered_service};
 #[cfg(feature = "experimental")]
-pub use services::{adaptive_service, plugin_runtime, ingestion_pipeline};
+pub use services::{adaptive_service, ingestion_pipeline, plugin_runtime};
+pub use services::{
+    ingestion_service, multimodal_service, pitr_service, text_collection, tiered_service,
+};
 
 // ── Next-Gen Services ────────────────────────────────────────────────────────
 pub use services::{
-    streaming_ingest, adaptive_optimizer, wasm_sdk, managed_embeddings,
-    time_travel_query, graphrag_service, edge_runtime, nl_filter_parser,
-    incremental_sync, visual_explorer,
+    adaptive_optimizer, edge_runtime, graphrag_service, incremental_sync, managed_embeddings,
+    nl_filter_parser, streaming_ingest, time_travel_query, visual_explorer, wasm_sdk,
 };
 
 // ── Experimental / Advanced ──────────────────────────────────────────────────
@@ -142,12 +155,6 @@ pub use services::{
 pub mod experimental;
 
 // Backward-compatible re-exports so `crate::module_name` still works
-pub use experimental::clustering;
-pub use experimental::dedup;
-pub use experimental::gpu;
-pub use experimental::graph;
-pub use experimental::plugin;
-pub use experimental::temporal;
 #[cfg(feature = "experimental")]
 pub use experimental::adaptive_index;
 #[cfg(feature = "experimental")]
@@ -158,16 +165,22 @@ pub use experimental::agentic_memory;
 pub use experimental::analytics;
 #[cfg(feature = "experimental")]
 pub use experimental::cloud_control;
+pub use experimental::clustering;
 #[cfg(feature = "experimental")]
 pub use experimental::crdt;
+pub use experimental::dedup;
 #[cfg(feature = "experimental")]
 pub use experimental::distributed_hnsw;
 #[cfg(feature = "experimental")]
 pub use experimental::edge_optimized;
 #[cfg(feature = "experimental")]
 pub use experimental::edge_partitioning;
-#[cfg(feature = "experimental")]
-pub use experimental::edge_runtime;
+pub use experimental::gpu;
+pub use experimental::graph;
+pub use experimental::plugin;
+pub use experimental::temporal;
+// NOTE: experimental::edge_runtime is accessed via crate::experimental::edge_runtime
+// to avoid conflict with the services::edge_runtime re-export above.
 #[cfg(feature = "experimental")]
 pub use experimental::graphrag_index;
 #[cfg(feature = "experimental")]
@@ -243,9 +256,12 @@ uniffi::setup_scaffolding!();
 
 // ── Stable API ───────────────────────────────────────────────────────────────
 // These types form the core stable API surface. Breaking changes follow semver.
-pub use collection::{Collection, CollectionConfig, CollectionIter, CollectionStats, QueryCacheConfig, QueryCacheStats, SearchExplain, SearchResult};
-pub use database::{CollectionRef, Database, DatabaseConfig, ExportEntry};
+pub use collection::{
+    Collection, CollectionConfig, CollectionIter, CollectionStats, QueryCacheConfig,
+    QueryCacheStats, SearchExplain, SearchResult,
+};
 pub use database::collection_ref::SearchParams;
+pub use database::{CollectionRef, Database, DatabaseConfig, ExportEntry};
 pub use distance::DistanceFunction;
 pub use error::{ErrorCode, NeedleError, Recoverable, RecoveryHint, Result};
 pub use hnsw::{HnswConfig, HnswIndex, HnswStats, SearchStats};
@@ -254,18 +270,17 @@ pub use multivec::{MultiVector, MultiVectorConfig, MultiVectorIndex, MultiVector
 pub use quantization::{BinaryQuantizer, ProductQuantizer, ScalarQuantizer};
 pub use sparse::{SparseDistance, SparseIndex, SparseVector};
 pub use tuning::{
-    auto_tune, IndexRecommendation, IndexSelectionConstraints, PerformanceProfile,
-    RecommendedIndex, TuningConstraints, TuningResult, quick_recommend_index, recommend_index,
-    DataProfile, DataProfiler, SmartIndexSelection, SmartIndexSelector,
-    AdaptiveRecommendation, AdaptiveTuner, MigrationState, MigrationStatus,
-    OnlineMigrationManager, WorkloadObservation,
+    auto_tune, quick_recommend_index, recommend_index, AdaptiveRecommendation, AdaptiveTuner,
+    DataProfile, DataProfiler, IndexRecommendation, IndexSelectionConstraints, MigrationState,
+    MigrationStatus, OnlineMigrationManager, PerformanceProfile, RecommendedIndex,
+    SmartIndexSelection, SmartIndexSelector, TuningConstraints, TuningResult, WorkloadObservation,
 };
 
 // Automatic embedding generation
 pub use auto_embed::{
-    AutoEmbedConfig, AutoEmbedCollectionBuilder, AutoEmbedStats, AutoEmbedder,
-    EmbeddingBackend, EmbeddingModelManager, ModelEntry, ModelHub, ModelType,
-    TextFirstCollection, TextInsertable, TextSearchResult,
+    AutoEmbedCollectionBuilder, AutoEmbedConfig, AutoEmbedStats, AutoEmbedder, EmbeddingBackend,
+    EmbeddingModelManager, ModelEntry, ModelHub, ModelType, TextFirstCollection, TextInsertable,
+    TextSearchResult,
 };
 
 // ── Beta & Experimental API ──────────────────────────────────────────────────
@@ -277,36 +292,40 @@ pub mod experimental_api;
 
 #[cfg(feature = "hybrid")]
 pub use hybrid::{
-    AdaptiveFusion, AdaptiveFusionStats, Bm25Index, HybridConfig, HybridSearchResult,
-    LearnedWeightStats, QueryFeatures, QueryType, RrfConfig, SearchFeedback,
-    reciprocal_rank_fusion,
+    reciprocal_rank_fusion, AdaptiveFusion, AdaptiveFusionStats, Bm25Index, HybridConfig,
+    HybridSearchResult, LearnedWeightStats, QueryFeatures, QueryType, RrfConfig, SearchFeedback,
 };
 
 #[cfg(feature = "server")]
-pub use server::{ServerConfig, serve};
+pub use server::{serve, ServerConfig};
 
 #[cfg(feature = "async")]
-pub use async_api::{AsyncDatabase, AsyncDatabaseConfig, BatchOperationBuilder, BatchResult, ExportStream, SearchStream};
+pub use async_api::{
+    AsyncDatabase, AsyncDatabaseConfig, BatchOperationBuilder, BatchResult, ExportStream,
+    SearchStream,
+};
 
 #[cfg(feature = "metrics")]
 pub use metrics::{
-    metrics, NeedleMetrics, 
-    generate_grafana_dashboard, generate_alerting_rules,
-    GrafanaDashboardConfig, AlertingConfig,
-    AnomalyDetector, AnomalyResult,
+    generate_alerting_rules, generate_grafana_dashboard, metrics, AlertingConfig, AnomalyDetector,
+    AnomalyResult, GrafanaDashboardConfig, NeedleMetrics,
 };
 
 #[cfg(feature = "embeddings")]
-pub use embeddings::{EmbedderBuilder, EmbedderConfig, EmbeddingError, PoolingStrategy, TextEmbedder};
+pub use embeddings::{
+    EmbedderBuilder, EmbedderConfig, EmbeddingError, PoolingStrategy, TextEmbedder,
+};
 
 #[cfg(feature = "web-ui")]
-pub use web_ui::{WebUiConfig, WebUiState, serve_web_ui, serve_web_ui_default, create_web_ui_router};
+pub use web_ui::{
+    create_web_ui_router, serve_web_ui, serve_web_ui_default, WebUiConfig, WebUiState,
+};
 
 #[cfg(feature = "embedding-providers")]
 pub use embeddings_provider::{
     BatchConfig, CachedProvider, CohereConfig, CohereInputType, EmbeddingProvider,
-    EmbeddingProviderError, MockConfig, MockProvider, OllamaConfig, OllamaProvider,
-    OpenAIConfig, OpenAIProvider, RateLimiter,
+    EmbeddingProviderError, MockConfig, MockProvider, OllamaConfig, OllamaProvider, OpenAIConfig,
+    OpenAIProvider, RateLimiter,
 };
 
 /// Prelude module for convenient imports.
@@ -316,8 +335,8 @@ pub use embeddings_provider::{
 /// ```
 pub mod prelude {
     pub use crate::collection::{Collection, CollectionConfig, SearchResult};
-    pub use crate::database::{CollectionRef, Database, DatabaseConfig};
     pub use crate::database::collection_ref::SearchParams;
+    pub use crate::database::{CollectionRef, Database, DatabaseConfig};
     pub use crate::distance::DistanceFunction;
     pub use crate::error::{NeedleError, Result};
     pub use crate::hnsw::HnswConfig;

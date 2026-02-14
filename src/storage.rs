@@ -187,26 +187,21 @@ impl Header {
                 .try_into()
                 .map_err(|_| NeedleError::Corruption("Invalid header: dimensions bytes".into()))?,
         );
-        let vector_count = u64::from_le_bytes(
-            bytes[16..24]
-                .try_into()
-                .map_err(|_| NeedleError::Corruption("Invalid header: vector_count bytes".into()))?,
-        );
-        let index_offset = u64::from_le_bytes(
-            bytes[24..32]
-                .try_into()
-                .map_err(|_| NeedleError::Corruption("Invalid header: index_offset bytes".into()))?,
-        );
-        let vector_offset = u64::from_le_bytes(
-            bytes[32..40]
-                .try_into()
-                .map_err(|_| NeedleError::Corruption("Invalid header: vector_offset bytes".into()))?,
-        );
-        let metadata_offset = u64::from_le_bytes(
-            bytes[40..48]
-                .try_into()
-                .map_err(|_| NeedleError::Corruption("Invalid header: metadata_offset bytes".into()))?,
-        );
+        let vector_count =
+            u64::from_le_bytes(bytes[16..24].try_into().map_err(|_| {
+                NeedleError::Corruption("Invalid header: vector_count bytes".into())
+            })?);
+        let index_offset =
+            u64::from_le_bytes(bytes[24..32].try_into().map_err(|_| {
+                NeedleError::Corruption("Invalid header: index_offset bytes".into())
+            })?);
+        let vector_offset =
+            u64::from_le_bytes(bytes[32..40].try_into().map_err(|_| {
+                NeedleError::Corruption("Invalid header: vector_offset bytes".into())
+            })?);
+        let metadata_offset = u64::from_le_bytes(bytes[40..48].try_into().map_err(|_| {
+            NeedleError::Corruption("Invalid header: metadata_offset bytes".into())
+        })?);
         let stored_checksum = u32::from_le_bytes(
             bytes[48..52]
                 .try_into()
@@ -226,11 +221,10 @@ impl Header {
                 .try_into()
                 .map_err(|_| NeedleError::Corruption("Invalid header: state_size bytes".into()))?,
         );
-        let state_checksum = u32::from_le_bytes(
-            bytes[60..64]
-                .try_into()
-                .map_err(|_| NeedleError::Corruption("Invalid header: state_checksum bytes".into()))?,
-        );
+        let state_checksum =
+            u32::from_le_bytes(bytes[60..64].try_into().map_err(|_| {
+                NeedleError::Corruption("Invalid header: state_checksum bytes".into())
+            })?);
 
         Ok(Self {
             version,
@@ -314,10 +308,7 @@ impl StorageEngine {
         if must_exist {
             // For existing files, canonicalize the full path (resolves symlinks)
             path.canonicalize().map_err(|e| {
-                NeedleError::InvalidDatabase(format!(
-                    "Failed to resolve path {:?}: {}",
-                    path, e
-                ))
+                NeedleError::InvalidDatabase(format!("Failed to resolve path {:?}: {}", path, e))
             })
         } else {
             // For new files, canonicalize the parent directory and join with filename
@@ -325,16 +316,14 @@ impl StorageEngine {
                 NeedleError::InvalidDatabase("Path has no parent directory".into())
             })?;
 
-            let filename = path.file_name().ok_or_else(|| {
-                NeedleError::InvalidDatabase("Path has no filename".into())
-            })?;
+            let filename = path
+                .file_name()
+                .ok_or_else(|| NeedleError::InvalidDatabase("Path has no filename".into()))?;
 
             // Canonicalize parent (must exist)
             let canonical_parent = if parent.as_os_str().is_empty() {
                 // Empty parent means current directory
-                std::env::current_dir().map_err(|e| {
-                    NeedleError::Io(e)
-                })?
+                std::env::current_dir().map_err(|e| NeedleError::Io(e))?
             } else {
                 parent.canonicalize().map_err(|e| {
                     NeedleError::InvalidDatabase(format!(
@@ -401,7 +390,10 @@ impl StorageEngine {
         let canonical_path = Self::validate_path(path, true)?;
         debug!(path = ?canonical_path, "Opening existing database file");
 
-        let mut file = OpenOptions::new().read(true).write(true).open(&canonical_path)?;
+        let mut file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&canonical_path)?;
 
         // Read header (use stack allocation to avoid 4KB heap allocation)
         let mut header_bytes = [0u8; HEADER_SIZE];
@@ -510,7 +502,12 @@ impl StorageEngine {
             }
             return Err(NeedleError::Io(std::io::Error::new(
                 std::io::ErrorKind::UnexpectedEof,
-                format!("read range [{}, {}) exceeds mmap size {}", start, end, mmap.len()),
+                format!(
+                    "read range [{}, {}) exceeds mmap size {}",
+                    start,
+                    end,
+                    mmap.len()
+                ),
             )));
         }
         Err(NeedleError::Io(std::io::Error::other(
@@ -723,11 +720,9 @@ impl VectorStore {
                 .try_into()
                 .map_err(|_| NeedleError::Corruption("Invalid vector store: count bytes".into()))?,
         ) as usize;
-        let dimensions = u32::from_le_bytes(
-            bytes[8..12]
-                .try_into()
-                .map_err(|_| NeedleError::Corruption("Invalid vector store: dimensions bytes".into()))?,
-        ) as usize;
+        let dimensions = u32::from_le_bytes(bytes[8..12].try_into().map_err(|_| {
+            NeedleError::Corruption("Invalid vector store: dimensions bytes".into())
+        })?) as usize;
 
         let expected_size = 12 + count * dimensions * 4;
         if bytes.len() < expected_size {
@@ -740,11 +735,10 @@ impl VectorStore {
         for _ in 0..count {
             let mut vec = Vec::with_capacity(dimensions);
             for _ in 0..dimensions {
-                let val = f32::from_le_bytes(
-                    bytes[offset..offset + 4]
-                        .try_into()
-                        .map_err(|_| NeedleError::Corruption("Invalid vector store: float bytes".into()))?,
-                );
+                let val =
+                    f32::from_le_bytes(bytes[offset..offset + 4].try_into().map_err(|_| {
+                        NeedleError::Corruption("Invalid vector store: float bytes".into())
+                    })?);
                 vec.push(val);
                 offset += 4;
             }
