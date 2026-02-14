@@ -178,12 +178,10 @@ impl PartitionMetadata {
     /// Check if query might be in partition bounds
     pub fn might_contain(&self, query: &[f32]) -> bool {
         match (&self.bounds_min, &self.bounds_max) {
-            (Some(min), Some(max)) => {
-                query.iter().enumerate().all(|(i, &v)| {
-                    v >= min.get(i).copied().unwrap_or(f32::NEG_INFINITY)
-                        && v <= max.get(i).copied().unwrap_or(f32::INFINITY)
-                })
-            }
+            (Some(min), Some(max)) => query.iter().enumerate().all(|(i, &v)| {
+                v >= min.get(i).copied().unwrap_or(f32::NEG_INFINITY)
+                    && v <= max.get(i).copied().unwrap_or(f32::INFINITY)
+            }),
             _ => true, // No bounds, assume might contain
         }
     }
@@ -241,14 +239,16 @@ impl PartitionManifest {
 
     /// Find closest partitions to a query
     pub fn find_closest_partitions(&self, query: &[f32], count: usize) -> Vec<PartitionId> {
-        let mut distances: Vec<(PartitionId, f32)> = self.partitions
+        let mut distances: Vec<(PartitionId, f32)> = self
+            .partitions
             .iter()
             .map(|p| (p.id, p.distance_to_query(query)))
             .collect();
 
         distances.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
 
-        distances.into_iter()
+        distances
+            .into_iter()
             .take(count)
             .map(|(id, _)| id)
             .collect()
@@ -346,7 +346,8 @@ impl ClusterPartitioner {
         }
 
         // Create partition metadata
-        self.partitions = self.centroids
+        self.partitions = self
+            .centroids
             .iter()
             .enumerate()
             .map(|(i, centroid)| {
@@ -455,7 +456,8 @@ impl ClusterPartitioner {
     fn compute_related_partitions(&mut self) {
         for i in 0..self.partitions.len() {
             let centroid = &self.centroids[i];
-            let mut distances: Vec<(usize, f32)> = self.centroids
+            let mut distances: Vec<(usize, f32)> = self
+                .centroids
                 .iter()
                 .enumerate()
                 .filter(|(j, _)| *j != i)
@@ -475,7 +477,8 @@ impl ClusterPartitioner {
 
 impl PartitionRouter for ClusterPartitioner {
     fn route(&self, query: &[f32], max_partitions: usize) -> Vec<PartitionId> {
-        let mut distances: Vec<(usize, f32)> = self.centroids
+        let mut distances: Vec<(usize, f32)> = self
+            .centroids
             .iter()
             .enumerate()
             .map(|(i, c)| (i, euclidean_distance(query, c)))
@@ -491,7 +494,8 @@ impl PartitionRouter for ClusterPartitioner {
     }
 
     fn assign(&self, vector: &[f32]) -> PartitionId {
-        let best = self.centroids
+        let best = self
+            .centroids
             .iter()
             .enumerate()
             .min_by(|(_, a), (_, b)| {
@@ -547,7 +551,8 @@ impl HashPartitioner {
     fn initialize_partitions(&mut self) {
         // Create partitions
         for i in 0..self.config.target_partitions {
-            self.partitions.push(PartitionMetadata::new(PartitionId::new(i as u32)));
+            self.partitions
+                .push(PartitionMetadata::new(PartitionId::new(i as u32)));
         }
 
         // Build hash ring with virtual nodes
@@ -596,7 +601,11 @@ impl PartitionRouter for HashPartitioner {
 
         // For hash-based, probe neighbors in ring
         let mut result = vec![primary];
-        let pos = self.ring.iter().position(|(_, id)| *id == primary).unwrap_or(0);
+        let pos = self
+            .ring
+            .iter()
+            .position(|(_, id)| *id == primary)
+            .unwrap_or(0);
 
         for i in 1..max_partitions {
             let next_pos = (pos + i * 100) % self.ring.len();
@@ -697,11 +706,14 @@ impl HierarchicalPartitioner {
         self.build_tree(vectors, &indices, root_centroid, 0);
 
         // Create partition metadata from leaf nodes
-        self.partitions = self.nodes
+        self.partitions = self
+            .nodes
             .iter()
             .filter(|n| n.partition_id.is_some())
             .map(|n| {
-                let mut meta = PartitionMetadata::new(n.partition_id.expect("partition_id is Some after filter"));
+                let mut meta = PartitionMetadata::new(
+                    n.partition_id.expect("partition_id is Some after filter"),
+                );
                 meta.centroid = Some(n.centroid.clone());
                 meta
             })
@@ -770,7 +782,8 @@ impl HierarchicalPartitioner {
         for (d, _) in vectors[0].iter().enumerate() {
             let values: Vec<f32> = indices.iter().map(|&i| vectors[i][d]).collect();
             let mean: f32 = values.iter().sum::<f32>() / values.len() as f32;
-            let variance: f32 = values.iter().map(|v| (v - mean).powi(2)).sum::<f32>() / values.len() as f32;
+            let variance: f32 =
+                values.iter().map(|v| (v - mean).powi(2)).sum::<f32>() / values.len() as f32;
 
             if variance > max_variance {
                 max_variance = variance;
@@ -789,7 +802,9 @@ impl HierarchicalPartitioner {
     ) -> (Vec<usize>, Vec<usize>) {
         let mut sorted: Vec<usize> = indices.to_vec();
         sorted.sort_by(|&a, &b| {
-            vectors[a][dim].partial_cmp(&vectors[b][dim]).unwrap_or(std::cmp::Ordering::Equal)
+            vectors[a][dim]
+                .partial_cmp(&vectors[b][dim])
+                .unwrap_or(std::cmp::Ordering::Equal)
         });
 
         let mid = sorted.len() / 2;
@@ -831,7 +846,8 @@ impl HierarchicalPartitioner {
         }
 
         // Sort children by distance to query
-        let mut child_distances: Vec<(u32, f32)> = node.children
+        let mut child_distances: Vec<(u32, f32)> = node
+            .children
             .iter()
             .map(|&child_id| {
                 let child = &self.nodes[child_id as usize];
@@ -866,12 +882,15 @@ impl PartitionRouter for HierarchicalPartitioner {
             }
 
             // Find closest child
-            current = node.children
+            current = node
+                .children
                 .iter()
                 .min_by(|&&a, &&b| {
                     let dist_a = euclidean_distance(vector, &self.nodes[a as usize].centroid);
                     let dist_b = euclidean_distance(vector, &self.nodes[b as usize].centroid);
-                    dist_a.partial_cmp(&dist_b).unwrap_or(std::cmp::Ordering::Equal)
+                    dist_a
+                        .partial_cmp(&dist_b)
+                        .unwrap_or(std::cmp::Ordering::Equal)
                 })
                 .copied()
                 .unwrap_or(current);
@@ -879,10 +898,7 @@ impl PartitionRouter for HierarchicalPartitioner {
     }
 
     fn all_partitions(&self) -> Vec<PartitionId> {
-        self.nodes
-            .iter()
-            .filter_map(|n| n.partition_id)
-            .collect()
+        self.nodes.iter().filter_map(|n| n.partition_id).collect()
     }
 
     fn get_metadata(&self, id: PartitionId) -> Option<&PartitionMetadata> {
@@ -1021,8 +1037,7 @@ mod tests {
 
     #[test]
     fn test_cluster_partitioner() {
-        let config = PartitionConfig::default()
-            .with_target_partitions(4);
+        let config = PartitionConfig::default().with_target_partitions(4);
 
         let mut partitioner = ClusterPartitioner::new(config);
 
@@ -1042,8 +1057,7 @@ mod tests {
 
     #[test]
     fn test_hash_partitioner() {
-        let config = PartitionConfig::default()
-            .with_target_partitions(8);
+        let config = PartitionConfig::default().with_target_partitions(8);
 
         let partitioner = HashPartitioner::new(config);
 
@@ -1064,8 +1078,7 @@ mod tests {
 
     #[test]
     fn test_hierarchical_partitioner() {
-        let config = PartitionConfig::default()
-            .with_max_vectors(20);
+        let config = PartitionConfig::default().with_max_vectors(20);
 
         let mut partitioner = HierarchicalPartitioner::new(config, 3);
 

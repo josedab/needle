@@ -49,11 +49,11 @@
 //! playground.execute("collection.search([0.1, 0.2, ...], 5)")?;
 //! ```
 
+use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
-use parking_lot::RwLock;
 
 /// Available sample datasets
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -84,7 +84,11 @@ impl Dataset {
                 count: 1000,
                 dimensions: 384,
                 size_bytes: 1_500_000,
-                categories: vec!["Science".to_string(), "History".to_string(), "Technology".to_string()],
+                categories: vec![
+                    "Science".to_string(),
+                    "History".to_string(),
+                    "Technology".to_string(),
+                ],
             },
             Dataset::ProductCatalog => DatasetInfo {
                 name: "Product Catalog".to_string(),
@@ -92,7 +96,11 @@ impl Dataset {
                 count: 5000,
                 dimensions: 256,
                 size_bytes: 5_200_000,
-                categories: vec!["Electronics".to_string(), "Clothing".to_string(), "Home".to_string()],
+                categories: vec![
+                    "Electronics".to_string(),
+                    "Clothing".to_string(),
+                    "Home".to_string(),
+                ],
             },
             Dataset::CodeSnippets => DatasetInfo {
                 name: "Code Snippets".to_string(),
@@ -100,7 +108,11 @@ impl Dataset {
                 count: 2000,
                 dimensions: 768,
                 size_bytes: 6_200_000,
-                categories: vec!["Python".to_string(), "JavaScript".to_string(), "Rust".to_string()],
+                categories: vec![
+                    "Python".to_string(),
+                    "JavaScript".to_string(),
+                    "Rust".to_string(),
+                ],
             },
             Dataset::MovieDescriptions => DatasetInfo {
                 name: "Movie Descriptions".to_string(),
@@ -108,7 +120,11 @@ impl Dataset {
                 count: 10000,
                 dimensions: 384,
                 size_bytes: 15_600_000,
-                categories: vec!["Action".to_string(), "Comedy".to_string(), "Drama".to_string()],
+                categories: vec![
+                    "Action".to_string(),
+                    "Comedy".to_string(),
+                    "Drama".to_string(),
+                ],
             },
             Dataset::ScientificPapers => DatasetInfo {
                 name: "Scientific Papers".to_string(),
@@ -124,7 +140,11 @@ impl Dataset {
                 count: 5000,
                 dimensions: 384,
                 size_bytes: 7_800_000,
-                categories: vec!["Politics".to_string(), "Business".to_string(), "Sports".to_string()],
+                categories: vec![
+                    "Politics".to_string(),
+                    "Business".to_string(),
+                    "Sports".to_string(),
+                ],
             },
             Dataset::Empty => DatasetInfo {
                 name: "Empty".to_string(),
@@ -587,7 +607,15 @@ impl Playground {
         *current += 1;
 
         drop(state);
-        self.get_tutorial_step(tutorial, *self.state.read().tutorial_progress.get(&tutorial).unwrap_or(&0))
+        self.get_tutorial_step(
+            tutorial,
+            *self
+                .state
+                .read()
+                .tutorial_progress
+                .get(&tutorial)
+                .unwrap_or(&0),
+        )
     }
 
     /// Get tutorial progress
@@ -622,8 +650,8 @@ impl Playground {
 
     /// Import state from JSON
     pub fn import_json(&self, json: &str) -> Result<(), String> {
-        let state: PlaygroundState = serde_json::from_str(json)
-            .map_err(|e| format!("Failed to parse state: {}", e))?;
+        let state: PlaygroundState =
+            serde_json::from_str(json).map_err(|e| format!("Failed to parse state: {}", e))?;
         self.load_state(state);
         Ok(())
     }
@@ -661,7 +689,7 @@ impl Playground {
 
     fn execute_internal(&self, code: &str) -> ExecutionResult {
         // Simplified execution - in real WASM, this calls Needle bindings
-        
+
         // Check for basic commands
         if code.trim().starts_with("help") {
             return ExecutionResult {
@@ -755,17 +783,21 @@ impl Playground {
         ]);
 
         // Load Semantic Search tutorial
-        self.tutorials.insert(Tutorial::SemanticSearch, vec![
-            TutorialStep {
-                number: 1,
-                title: "What is Semantic Search?".to_string(),
-                description: "Semantic search finds documents by meaning, not just keywords.".to_string(),
-                code: "// Semantic search uses vector similarity".to_string(),
-                expected_output: None,
-                hints: vec![],
-            },
-            // ... more steps
-        ]);
+        self.tutorials.insert(
+            Tutorial::SemanticSearch,
+            vec![
+                TutorialStep {
+                    number: 1,
+                    title: "What is Semantic Search?".to_string(),
+                    description: "Semantic search finds documents by meaning, not just keywords."
+                        .to_string(),
+                    code: "// Semantic search uses vector similarity".to_string(),
+                    expected_output: None,
+                    hints: vec![],
+                },
+                // ... more steps
+            ],
+        );
     }
 }
 
@@ -817,8 +849,8 @@ pub struct ClusterInfo {
 }
 
 const CLUSTER_COLORS: &[&str] = &[
-    "#e6194B", "#3cb44b", "#ffe119", "#4363d8", "#f58231",
-    "#911eb4", "#42d4f4", "#f032e6", "#bfef45", "#fabed4",
+    "#e6194B", "#3cb44b", "#ffe119", "#4363d8", "#f58231", "#911eb4", "#42d4f4", "#f032e6",
+    "#bfef45", "#fabed4",
 ];
 
 /// Projects high-dimensional vectors into 2D for visualization.
@@ -826,16 +858,16 @@ pub struct ProjectionEngine;
 
 impl ProjectionEngine {
     /// Project vectors using the specified method.
-    pub fn project(
-        inputs: &[ProjectionInput],
-        config: &VisualizationConfig,
-    ) -> ProjectionScene {
+    pub fn project(inputs: &[ProjectionInput], config: &VisualizationConfig) -> ProjectionScene {
         if inputs.is_empty() {
             return ProjectionScene {
                 points: Vec::new(),
                 clusters: Vec::new(),
                 bounds: SceneBounds {
-                    min_x: 0.0, max_x: 1.0, min_y: 0.0, max_y: 1.0,
+                    min_x: 0.0,
+                    max_x: 1.0,
+                    min_y: 0.0,
+                    max_y: 1.0,
                 },
             };
         }
@@ -941,7 +973,9 @@ impl ProjectionEngine {
     fn power_iteration(data: &[Vec<f32>], dim: usize, deflect: Option<&[f32]>) -> Vec<f32> {
         let mut v: Vec<f32> = (0..dim).map(|i| ((i + 1) as f32).sin()).collect();
         let norm = v.iter().map(|x| x * x).sum::<f32>().sqrt();
-        for x in v.iter_mut() { *x /= norm; }
+        for x in v.iter_mut() {
+            *x /= norm;
+        }
 
         for _ in 0..50 {
             // Multiply: Av = Σ (data_i · v) * data_i
@@ -965,7 +999,9 @@ impl ProjectionEngine {
             if norm < 1e-10 {
                 break;
             }
-            for x in new_v.iter_mut() { *x /= norm; }
+            for x in new_v.iter_mut() {
+                *x /= norm;
+            }
             v = new_v;
         }
         v
@@ -1041,7 +1077,9 @@ impl ProjectionEngine {
             for i in 0..n {
                 for s in 0..sample {
                     let j = (i * 7 + s * 13 + iteration) % n;
-                    if j == i { continue; }
+                    if j == i {
+                        continue;
+                    }
                     let fx = positions[i].0 - positions[j].0;
                     let fy = positions[i].1 - positions[j].1;
                     let dist_sq = fx * fx + fy * fy + 1e-4;
@@ -1143,18 +1181,32 @@ impl ProjectionEngine {
         let mut min_y = f32::MAX;
         let mut max_y = f32::MIN;
         for (x, y) in points {
-            if *x < min_x { min_x = *x; }
-            if *x > max_x { max_x = *x; }
-            if *y < min_y { min_y = *y; }
-            if *y > max_y { max_y = *y; }
+            if *x < min_x {
+                min_x = *x;
+            }
+            if *x > max_x {
+                max_x = *x;
+            }
+            if *y < min_y {
+                min_y = *y;
+            }
+            if *y > max_y {
+                max_y = *y;
+            }
         }
-        SceneBounds { min_x, max_x, min_y, max_y }
+        SceneBounds {
+            min_x,
+            max_x,
+            min_y,
+            max_y,
+        }
     }
 }
 
 /// Generate HTML for playground embedding
 pub fn generate_playground_html(config: &PlaygroundConfig) -> String {
-    format!(r#"<!DOCTYPE html>
+    format!(
+        r#"<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
@@ -1332,8 +1384,12 @@ mod tests {
     #[test]
     fn test_bookmarks() {
         let playground = Playground::default();
-        playground.add_bookmark("test", "collection.search()", Some("Test bookmark".to_string()));
-        
+        playground.add_bookmark(
+            "test",
+            "collection.search()",
+            Some("Test bookmark".to_string()),
+        );
+
         let bookmarks = playground.get_bookmarks();
         assert_eq!(bookmarks.len(), 1);
         assert_eq!(bookmarks[0].name, "test");
@@ -1343,13 +1399,13 @@ mod tests {
     fn test_state_export_import() {
         let playground = Playground::default();
         playground.add_bookmark("export_test", "code", None);
-        
+
         let json = playground.export_json();
         assert!(json.contains("export_test"));
-        
+
         let new_playground = Playground::default();
         new_playground.import_json(&json).unwrap();
-        
+
         let bookmarks = new_playground.get_bookmarks();
         assert_eq!(bookmarks.len(), 1);
     }
@@ -1361,7 +1417,7 @@ mod tests {
             .with_tutorial(Tutorial::SemanticSearch)
             .with_theme(Theme::Light)
             .without_visualizations();
-        
+
         assert_eq!(config.initial_dataset, Some(Dataset::CodeSnippets));
         assert_eq!(config.active_tutorial, Some(Tutorial::SemanticSearch));
         assert_eq!(config.theme, Theme::Light);
@@ -1469,11 +1525,7 @@ mod tests {
                 let cluster = i % 3;
                 ProjectionInput {
                     id: format!("v{}", i),
-                    vector: vec![
-                        cluster as f32 * 10.0 + (i as f32 * 0.01),
-                        0.0,
-                        0.0,
-                    ],
+                    vector: vec![cluster as f32 * 10.0 + (i as f32 * 0.01), 0.0, 0.0],
                     label: None,
                     is_query: false,
                     is_result: false,

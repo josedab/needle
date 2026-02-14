@@ -208,9 +208,7 @@ impl CostModel {
             let ef = 50.0_f64; // default ef_search
             let log_n = n.ln().max(1.0);
             let visited = log_n * ef;
-            let lat = self.base_cost
-                + visited * self.hnsw_hop_cost
-                + visited * self.distance_cost;
+            let lat = self.base_cost + visited * self.hnsw_hop_cost + visited * self.distance_cost;
             let lat_ms = lat * 0.001;
             let recall = (0.95_f64).min(1.0 - 1.0 / (ef + 1.0));
             let mem = (visited as usize) * stats.dimensions * 4;
@@ -246,9 +244,7 @@ impl CostModel {
         if stats.index_type == IndexType::DiskAnn {
             let log_n = n.ln().max(1.0);
             let hops = log_n * 1.5;
-            let lat = self.base_cost
-                + hops * self.disk_read_cost
-                + hops * self.distance_cost;
+            let lat = self.base_cost + hops * self.disk_read_cost + hops * self.distance_cost;
             let lat_ms = lat * 0.001;
             let recall = 0.93;
             let mem = (hops as usize) * stats.dimensions * 4;
@@ -264,9 +260,7 @@ impl CostModel {
         // --- FilterFirst ---
         if has_filter {
             let filtered_count = (n * sel).max(1.0);
-            let lat = self.base_cost
-                + n * self.filter_cost
-                + filtered_count * self.distance_cost;
+            let lat = self.base_cost + n * self.filter_cost + filtered_count * self.distance_cost;
             let lat_ms = lat * 0.001;
             let recall = 1.0; // exact on filtered set
             let mem = (filtered_count as usize) * stats.dimensions * 4;
@@ -280,7 +274,8 @@ impl CostModel {
         }
 
         // --- SearchFirst ---
-        if has_filter && (stats.index_type == IndexType::Hnsw || stats.index_type == IndexType::Ivf) {
+        if has_filter && (stats.index_type == IndexType::Hnsw || stats.index_type == IndexType::Ivf)
+        {
             let over_fetch = (k as f64 / sel.max(0.01)).min(n).max(k as f64);
             let ef = 50.0_f64;
             let log_n = n.ln().max(1.0);
@@ -499,12 +494,7 @@ impl QueryOptimizer {
     }
 
     /// Optimize a query and return execution plan (backward-compatible signature).
-    pub fn optimize(
-        &self,
-        _query_vector: &[f32],
-        filter: Option<&Filter>,
-        k: usize,
-    ) -> QueryPlan {
+    pub fn optimize(&self, _query_vector: &[f32], filter: Option<&Filter>, k: usize) -> QueryPlan {
         let selectivity = filter.map(|f| self.estimate_selectivity(f));
 
         let cs = self.collection_stats.to_collection_statistics();
@@ -592,7 +582,10 @@ impl QueryOptimizer {
                 }
                 FilterOperator::Contains => 0.3,
             },
-            Filter::And(filters) => filters.iter().map(|f| self.estimate_selectivity(f)).product(),
+            Filter::And(filters) => filters
+                .iter()
+                .map(|f| self.estimate_selectivity(f))
+                .product(),
             Filter::Or(filters) => {
                 let product: f64 = filters
                     .iter()
@@ -715,10 +708,7 @@ impl QueryOptimizer {
                 .map(|s| s.distance_computations)
                 .sum::<usize>()
                 / count,
-            hnsw_nodes_visited: matching
-                .iter()
-                .map(|s| s.hnsw_nodes_visited)
-                .sum::<usize>()
+            hnsw_nodes_visited: matching.iter().map(|s| s.hnsw_nodes_visited).sum::<usize>()
                 / count,
             cache_hits: matching.iter().map(|s| s.cache_hits).sum::<usize>() / count,
             strategy_used: strategy.clone(),
@@ -791,9 +781,8 @@ impl QueryExplainer {
 
         let time_accuracy = if plan.estimated_latency_ms > 0.0 {
             let actual_ms = stats.execution_time.as_secs_f64() * 1000.0;
-            (1.0
-                - (actual_ms - plan.estimated_latency_ms).abs()
-                    / actual_ms.max(plan.estimated_latency_ms))
+            (1.0 - (actual_ms - plan.estimated_latency_ms).abs()
+                / actual_ms.max(plan.estimated_latency_ms))
                 * 100.0
         } else {
             0.0
@@ -882,8 +871,7 @@ impl FeedbackCollector {
 
         let mut map = self.feedback.write();
         let entry = map.entry(plan.strategy.clone()).or_default();
-        entry.adjustment_factor =
-            self.alpha * ratio + (1.0 - self.alpha) * entry.adjustment_factor;
+        entry.adjustment_factor = self.alpha * ratio + (1.0 - self.alpha) * entry.adjustment_factor;
         if let Some(recall) = actual_recall {
             let prev = entry.recall_ema.unwrap_or(recall);
             entry.recall_ema = Some(self.alpha * recall + (1.0 - self.alpha) * prev);
@@ -903,10 +891,7 @@ impl FeedbackCollector {
 
     /// Return the number of observations for a strategy.
     pub fn observation_count(&self, strategy: &QueryStrategy) -> usize {
-        self.feedback
-            .read()
-            .get(strategy)
-            .map_or(0, |f| f.count)
+        self.feedback.read().get(strategy).map_or(0, |f| f.count)
     }
 }
 
@@ -995,18 +980,12 @@ impl AdaptiveOptimizer {
         let best = if acceptable.is_empty() {
             within_budget
                 .iter()
-                .min_by(|a, b| {
-                    a.1.partial_cmp(&b.1)
-                        .unwrap_or(std::cmp::Ordering::Equal)
-                })
+                .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
                 .expect("within_budget is non-empty")
         } else {
             acceptable
                 .iter()
-                .min_by(|a, b| {
-                    a.1.partial_cmp(&b.1)
-                        .unwrap_or(std::cmp::Ordering::Equal)
-                })
+                .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
                 .expect("acceptable is non-empty")
         };
 
@@ -1198,7 +1177,9 @@ mod tests {
 
         assert!(!estimates.is_empty());
         // FullScan should be present
-        assert!(estimates.iter().any(|e| e.strategy == QueryStrategy::FullScan));
+        assert!(estimates
+            .iter()
+            .any(|e| e.strategy == QueryStrategy::FullScan));
         // All latencies should be positive
         for e in &estimates {
             assert!(e.estimated_latency_ms > 0.0);
@@ -1211,8 +1192,14 @@ mod tests {
         let stats = make_collection_statistics(1_000_000, IndexType::Hnsw);
         let estimates = model.estimate_cost(&stats, 10, None);
 
-        let scan = estimates.iter().find(|e| e.strategy == QueryStrategy::FullScan).unwrap();
-        let hnsw = estimates.iter().find(|e| e.strategy == QueryStrategy::HnswSearch).unwrap();
+        let scan = estimates
+            .iter()
+            .find(|e| e.strategy == QueryStrategy::FullScan)
+            .unwrap();
+        let hnsw = estimates
+            .iter()
+            .find(|e| e.strategy == QueryStrategy::HnswSearch)
+            .unwrap();
         assert!(hnsw.estimated_latency_ms < scan.estimated_latency_ms);
     }
 
@@ -1227,7 +1214,9 @@ mod tests {
 
         assert!(with_filter.len() > without_filter.len());
         // FilterFirst should appear with filter
-        assert!(with_filter.iter().any(|e| e.strategy == QueryStrategy::FilterFirst));
+        assert!(with_filter
+            .iter()
+            .any(|e| e.strategy == QueryStrategy::FilterFirst));
     }
 
     #[test]
@@ -1235,7 +1224,9 @@ mod tests {
         let model = CostModel::default();
         let stats = make_collection_statistics(500_000, IndexType::Ivf);
         let estimates = model.estimate_cost(&stats, 10, None);
-        assert!(estimates.iter().any(|e| e.strategy == QueryStrategy::IvfSearch));
+        assert!(estimates
+            .iter()
+            .any(|e| e.strategy == QueryStrategy::IvfSearch));
     }
 
     #[test]
@@ -1243,7 +1234,9 @@ mod tests {
         let model = CostModel::default();
         let stats = make_collection_statistics(500_000, IndexType::DiskAnn);
         let estimates = model.estimate_cost(&stats, 10, None);
-        assert!(estimates.iter().any(|e| e.strategy == QueryStrategy::DiskAnnSearch));
+        assert!(estimates
+            .iter()
+            .any(|e| e.strategy == QueryStrategy::DiskAnnSearch));
     }
 
     #[test]
@@ -1458,7 +1451,8 @@ mod tests {
         // The optimizer should now prefer a different strategy
         let plan2 = opt.plan_query(&stats, 10, Some(0.05), None);
         assert!(
-            plan2.strategy != plan1.strategy || plan2.estimated_latency_ms > plan1.estimated_latency_ms,
+            plan2.strategy != plan1.strategy
+                || plan2.estimated_latency_ms > plan1.estimated_latency_ms,
             "Feedback should alter strategy selection or cost"
         );
     }
@@ -1513,7 +1507,9 @@ mod tests {
         stats.has_metadata_index = true;
 
         let estimates = CostModel::default().estimate_cost(&stats, 10, Some(0.01));
-        assert!(estimates.iter().any(|e| e.strategy == QueryStrategy::MetadataOnly));
+        assert!(estimates
+            .iter()
+            .any(|e| e.strategy == QueryStrategy::MetadataOnly));
     }
 
     #[test]
@@ -1531,10 +1527,20 @@ mod tests {
         let model = CostModel::default();
 
         let small = model.estimate_cost(&make_collection_statistics(100, IndexType::Hnsw), 5, None);
-        let large = model.estimate_cost(&make_collection_statistics(10_000_000, IndexType::Hnsw), 5, None);
+        let large = model.estimate_cost(
+            &make_collection_statistics(10_000_000, IndexType::Hnsw),
+            5,
+            None,
+        );
 
-        let small_scan = small.iter().find(|e| e.strategy == QueryStrategy::FullScan).unwrap();
-        let large_scan = large.iter().find(|e| e.strategy == QueryStrategy::FullScan).unwrap();
+        let small_scan = small
+            .iter()
+            .find(|e| e.strategy == QueryStrategy::FullScan)
+            .unwrap();
+        let large_scan = large
+            .iter()
+            .find(|e| e.strategy == QueryStrategy::FullScan)
+            .unwrap();
 
         // Full scan cost should scale with collection size
         assert!(large_scan.estimated_latency_ms > small_scan.estimated_latency_ms * 10.0);

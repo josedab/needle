@@ -222,19 +222,16 @@ impl KnowledgeGraph {
 
     /// Update entity embedding.
     pub fn update_embedding(&mut self, id: &str, embedding: &[f32]) -> Result<()> {
-        let entity = self.entities.get_mut(id)
+        let entity = self
+            .entities
+            .get_mut(id)
             .ok_or_else(|| NeedleError::NotFound(format!("Entity '{}' not found", id)))?;
         entity.embedding = embedding.to_vec();
         Ok(())
     }
 
     /// Add a relation.
-    pub fn add_relation(
-        &mut self,
-        source: &str,
-        target: &str,
-        relation_type: &str,
-    ) -> Result<()> {
+    pub fn add_relation(&mut self, source: &str, target: &str, relation_type: &str) -> Result<()> {
         self.add_weighted_relation(source, target, relation_type, 1.0, HashMap::new())
     }
 
@@ -248,10 +245,16 @@ impl KnowledgeGraph {
         properties: HashMap<String, String>,
     ) -> Result<()> {
         if !self.entities.contains_key(source) {
-            return Err(NeedleError::NotFound(format!("Source entity '{}' not found", source)));
+            return Err(NeedleError::NotFound(format!(
+                "Source entity '{}' not found",
+                source
+            )));
         }
         if !self.entities.contains_key(target) {
-            return Err(NeedleError::NotFound(format!("Target entity '{}' not found", target)));
+            return Err(NeedleError::NotFound(format!(
+                "Target entity '{}' not found",
+                target
+            )));
         }
 
         let relation = Relation {
@@ -371,7 +374,11 @@ impl KnowledgeGraph {
             })
             .collect();
 
-        results.sort_by(|a, b| b.combined_score.partial_cmp(&a.combined_score).unwrap_or(std::cmp::Ordering::Equal));
+        results.sort_by(|a, b| {
+            b.combined_score
+                .partial_cmp(&a.combined_score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         results.truncate(k);
         results
     }
@@ -387,7 +394,9 @@ impl KnowledgeGraph {
         let reachable = self.get_reachable(anchors, self.config.max_context_hops);
 
         // Boost scores for entities near anchors
-        let mut results: Vec<GraphSearchResult> = self.entities.values()
+        let mut results: Vec<GraphSearchResult> = self
+            .entities
+            .values()
             .map(|entity| {
                 let similarity = self.cosine_similarity(query, &entity.embedding);
                 let graph_score = if reachable.contains(&entity.id) {
@@ -402,11 +411,9 @@ impl KnowledgeGraph {
                 let related = self.get_neighbors(&entity.id);
 
                 // Find path to nearest anchor
-                let path = anchors.iter()
-                    .filter_map(|anchor| {
-                        self.find_path(&entity.id, anchor)
-                            .map(|p| p.entities)
-                    })
+                let path = anchors
+                    .iter()
+                    .filter_map(|anchor| self.find_path(&entity.id, anchor).map(|p| p.entities))
                     .min_by_key(|p| p.len());
 
                 GraphSearchResult {
@@ -420,7 +427,11 @@ impl KnowledgeGraph {
             })
             .collect();
 
-        results.sort_by(|a, b| b.combined_score.partial_cmp(&a.combined_score).unwrap_or(std::cmp::Ordering::Equal));
+        results.sort_by(|a, b| {
+            b.combined_score
+                .partial_cmp(&a.combined_score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         results.truncate(k);
         results
     }
@@ -428,9 +439,7 @@ impl KnowledgeGraph {
     /// Get entities reachable within n hops.
     fn get_reachable(&self, start: &[String], max_hops: usize) -> HashSet<String> {
         let mut visited = HashSet::new();
-        let mut queue: VecDeque<(String, usize)> = start.iter()
-            .map(|s| (s.clone(), 0))
-            .collect();
+        let mut queue: VecDeque<(String, usize)> = start.iter().map(|s| (s.clone(), 0)).collect();
 
         while let Some((entity_id, depth)) = queue.pop_front() {
             if visited.contains(&entity_id) || depth > max_hops {
@@ -517,7 +526,10 @@ impl KnowledgeGraph {
                     for (source, rel) in rels {
                         if !visited.contains(source) {
                             visited.insert(source.clone());
-                            parent.insert(source.clone(), (current.clone(), rel.relation_type.clone()));
+                            parent.insert(
+                                source.clone(),
+                                (current.clone(), rel.relation_type.clone()),
+                            );
                             queue.push_back(source.clone());
                         }
                     }
@@ -537,7 +549,8 @@ impl KnowledgeGraph {
     pub fn extract_subgraph(&self, center_ids: &[String], hops: usize) -> SubGraph {
         let reachable = self.get_reachable(center_ids, hops);
 
-        let entities: Vec<Entity> = reachable.iter()
+        let entities: Vec<Entity> = reachable
+            .iter()
             .filter_map(|id| self.entities.get(id).cloned())
             .collect();
 
@@ -608,7 +621,9 @@ impl KnowledgeGraph {
         let mut relation_counts: HashMap<String, usize> = HashMap::new();
         for rels in self.relation_index.values() {
             for rel in rels {
-                *relation_counts.entry(rel.relation_type.clone()).or_default() += 1;
+                *relation_counts
+                    .entry(rel.relation_type.clone())
+                    .or_default() += 1;
             }
         }
 
@@ -836,7 +851,12 @@ impl<'a> GraphRAGRetriever<'a> {
     }
 
     /// Build a chunk context from an entity
-    fn build_chunk_context(&self, entity: &Entity, score: f32, hop_distance: usize) -> ChunkContext {
+    fn build_chunk_context(
+        &self,
+        entity: &Entity,
+        score: f32,
+        hop_distance: usize,
+    ) -> ChunkContext {
         let mut content = format!("{} ({})", entity.label, entity.entity_type);
 
         // Add properties if configured
@@ -953,7 +973,9 @@ impl<'a> EntityLinker<'a> {
     /// Link a query embedding to the most relevant entity
     pub fn link(&self, query: &[f32]) -> Option<(String, f32)> {
         let results = self.kg.search(query, 1);
-        results.first().map(|r| (r.entity.id.clone(), r.combined_score))
+        results
+            .first()
+            .map(|r| (r.entity.id.clone(), r.combined_score))
     }
 
     /// Link a query embedding to multiple entities
@@ -1122,12 +1144,7 @@ impl<'a> MultiHopReasoner<'a> {
         visited.insert(start.to_string());
 
         let mut queue: VecDeque<(String, Vec<String>, Vec<String>, usize)> = VecDeque::new();
-        queue.push_back((
-            start.to_string(),
-            vec![start.to_string()],
-            vec![],
-            0,
-        ));
+        queue.push_back((start.to_string(), vec![start.to_string()], vec![], 0));
 
         while let Some((current, path, relations, current_depth)) = queue.pop_front() {
             if current_depth >= depth {
@@ -1252,10 +1269,32 @@ mod tests {
     fn create_test_graph() -> KnowledgeGraph {
         let mut kg = KnowledgeGraph::new();
 
-        kg.add_entity("rust", "language", "Rust", &[1.0, 0.0, 0.0], HashMap::new()).unwrap();
-        kg.add_entity("python", "language", "Python", &[0.9, 0.1, 0.0], HashMap::new()).unwrap();
-        kg.add_entity("programming", "concept", "Programming", &[0.5, 0.5, 0.0], HashMap::new()).unwrap();
-        kg.add_entity("systems", "concept", "Systems", &[0.3, 0.0, 0.7], HashMap::new()).unwrap();
+        kg.add_entity("rust", "language", "Rust", &[1.0, 0.0, 0.0], HashMap::new())
+            .unwrap();
+        kg.add_entity(
+            "python",
+            "language",
+            "Python",
+            &[0.9, 0.1, 0.0],
+            HashMap::new(),
+        )
+        .unwrap();
+        kg.add_entity(
+            "programming",
+            "concept",
+            "Programming",
+            &[0.5, 0.5, 0.0],
+            HashMap::new(),
+        )
+        .unwrap();
+        kg.add_entity(
+            "systems",
+            "concept",
+            "Systems",
+            &[0.3, 0.0, 0.7],
+            HashMap::new(),
+        )
+        .unwrap();
 
         kg.add_relation("rust", "programming", "is_a").unwrap();
         kg.add_relation("python", "programming", "is_a").unwrap();
@@ -1273,7 +1312,8 @@ mod tests {
     #[test]
     fn test_add_entity() {
         let mut kg = KnowledgeGraph::new();
-        kg.add_entity("e1", "type1", "Entity 1", &[1.0, 0.0], HashMap::new()).unwrap();
+        kg.add_entity("e1", "type1", "Entity 1", &[1.0, 0.0], HashMap::new())
+            .unwrap();
 
         assert_eq!(kg.entity_count(), 1);
         assert!(kg.get_entity("e1").is_some());
@@ -1332,8 +1372,10 @@ mod tests {
     #[test]
     fn test_no_path() {
         let mut kg = KnowledgeGraph::new();
-        kg.add_entity("a", "type", "A", &[1.0], HashMap::new()).unwrap();
-        kg.add_entity("b", "type", "B", &[0.0], HashMap::new()).unwrap();
+        kg.add_entity("a", "type", "A", &[1.0], HashMap::new())
+            .unwrap();
+        kg.add_entity("b", "type", "B", &[0.0], HashMap::new())
+            .unwrap();
 
         let path = kg.find_path("a", "b");
         assert!(path.is_none());
@@ -1391,7 +1433,8 @@ mod tests {
     #[test]
     fn test_update_embedding() {
         let mut kg = KnowledgeGraph::new();
-        kg.add_entity("e1", "type", "E1", &[1.0, 0.0], HashMap::new()).unwrap();
+        kg.add_entity("e1", "type", "E1", &[1.0, 0.0], HashMap::new())
+            .unwrap();
 
         kg.update_embedding("e1", &[0.0, 1.0]).unwrap();
 
@@ -1402,10 +1445,13 @@ mod tests {
     #[test]
     fn test_weighted_relation() {
         let mut kg = KnowledgeGraph::new();
-        kg.add_entity("a", "type", "A", &[1.0], HashMap::new()).unwrap();
-        kg.add_entity("b", "type", "B", &[0.0], HashMap::new()).unwrap();
+        kg.add_entity("a", "type", "A", &[1.0], HashMap::new())
+            .unwrap();
+        kg.add_entity("b", "type", "B", &[0.0], HashMap::new())
+            .unwrap();
 
-        kg.add_weighted_relation("a", "b", "strong", 0.9, HashMap::new()).unwrap();
+        kg.add_weighted_relation("a", "b", "strong", 0.9, HashMap::new())
+            .unwrap();
 
         let rels = kg.get_outgoing("a");
         assert_eq!(rels[0].weight, 0.9);
@@ -1595,9 +1641,7 @@ mod tests {
         let kg = create_test_graph();
         let query = vec![1.0, 0.0, 0.0];
 
-        let results = GraphRAGQueryBuilder::new(&kg, query)
-            .k(5)
-            .execute();
+        let results = GraphRAGQueryBuilder::new(&kg, query).k(5).execute();
 
         assert!(!results.is_empty());
     }
@@ -1623,9 +1667,7 @@ mod tests {
         let kg = create_test_graph();
         let query = vec![1.0, 0.0, 0.0];
 
-        let text = GraphRAGQueryBuilder::new(&kg, query)
-            .k(3)
-            .execute_text();
+        let text = GraphRAGQueryBuilder::new(&kg, query).k(3).execute_text();
 
         assert!(!text.is_empty());
     }
@@ -1649,10 +1691,14 @@ mod tests {
         let mut kg = KnowledgeGraph::new();
 
         // Create a chain: a -> b -> c -> d
-        kg.add_entity("a", "type", "A", &[1.0, 0.0, 0.0], HashMap::new()).unwrap();
-        kg.add_entity("b", "type", "B", &[0.8, 0.2, 0.0], HashMap::new()).unwrap();
-        kg.add_entity("c", "type", "C", &[0.6, 0.4, 0.0], HashMap::new()).unwrap();
-        kg.add_entity("d", "type", "D", &[0.4, 0.6, 0.0], HashMap::new()).unwrap();
+        kg.add_entity("a", "type", "A", &[1.0, 0.0, 0.0], HashMap::new())
+            .unwrap();
+        kg.add_entity("b", "type", "B", &[0.8, 0.2, 0.0], HashMap::new())
+            .unwrap();
+        kg.add_entity("c", "type", "C", &[0.6, 0.4, 0.0], HashMap::new())
+            .unwrap();
+        kg.add_entity("d", "type", "D", &[0.4, 0.6, 0.0], HashMap::new())
+            .unwrap();
 
         kg.add_relation("a", "b", "link").unwrap();
         kg.add_relation("b", "c", "link").unwrap();

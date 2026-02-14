@@ -56,8 +56,7 @@ const PARALLEL_THRESHOLD: usize = 100;
 const PARALLEL_CHUNK_SIZE: usize = 256;
 
 /// GPU backend type
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 pub enum GpuBackend {
     /// Automatically select best available backend
     #[default]
@@ -73,7 +72,6 @@ pub enum GpuBackend {
     /// CPU fallback with SIMD
     CpuSimd,
 }
-
 
 /// GPU device information
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -594,7 +592,10 @@ impl GpuAccelerator {
         dtype: DataType,
     ) -> Result<GpuBuffer, String> {
         let size = element_count * dtype.size_bytes();
-        let mut pool = self.memory_pool.write().expect("memory_pool lock should not be poisoned");
+        let mut pool = self
+            .memory_pool
+            .write()
+            .expect("memory_pool lock should not be poisoned");
 
         let buffer_id = pool
             .allocate(size)
@@ -608,15 +609,24 @@ impl GpuAccelerator {
             on_device: true,
         };
 
-        self.buffers.write().expect("buffers lock should not be poisoned").insert(buffer_id, buffer.clone());
+        self.buffers
+            .write()
+            .expect("buffers lock should not be poisoned")
+            .insert(buffer_id, buffer.clone());
         Ok(buffer)
     }
 
     /// Free a buffer
     pub fn free_buffer(&self, buffer: &GpuBuffer) -> bool {
-        let mut pool = self.memory_pool.write().expect("memory_pool lock should not be poisoned");
+        let mut pool = self
+            .memory_pool
+            .write()
+            .expect("memory_pool lock should not be poisoned");
         if pool.deallocate(buffer.id) {
-            self.buffers.write().expect("buffers lock should not be poisoned").remove(&buffer.id);
+            self.buffers
+                .write()
+                .expect("buffers lock should not be poisoned")
+                .remove(&buffer.id);
             true
         } else {
             false
@@ -823,11 +833,7 @@ impl GpuAccelerator {
     }
 
     /// Matrix multiplication (for projections, etc.) with parallelization
-    pub fn matmul(
-        &self,
-        a: &[Vec<f32>],
-        b: &[Vec<f32>],
-    ) -> Result<Vec<Vec<f32>>, String> {
+    pub fn matmul(&self, a: &[Vec<f32>], b: &[Vec<f32>]) -> Result<Vec<Vec<f32>>, String> {
         let start = Instant::now();
 
         if a.is_empty() || b.is_empty() {
@@ -850,9 +856,8 @@ impl GpuAccelerator {
         }
 
         // Transpose B for better cache locality
-        let b_transposed: Vec<Vec<f32>> = (0..n)
-            .map(|j| (0..k).map(|i| b[i][j]).collect())
-            .collect();
+        let b_transposed: Vec<Vec<f32>> =
+            (0..n).map(|j| (0..k).map(|i| b[i][j]).collect()).collect();
 
         // Parallel matrix multiplication with cache-friendly access
         let result: Vec<Vec<f32>> = if m >= PARALLEL_THRESHOLD {
@@ -886,11 +891,7 @@ impl GpuAccelerator {
     }
 
     /// Top-K selection across batch
-    pub fn batch_top_k(
-        &self,
-        distances: &[f32],
-        k: usize,
-    ) -> Result<Vec<(usize, f32)>, String> {
+    pub fn batch_top_k(&self, distances: &[f32], k: usize) -> Result<Vec<(usize, f32)>, String> {
         let start = Instant::now();
 
         let mut indexed: Vec<(usize, f32)> = distances.iter().copied().enumerate().collect();
@@ -918,11 +919,9 @@ impl GpuAccelerator {
         let mut params = Vec::with_capacity(vectors.len());
 
         for vector in vectors {
-            let (min_val, max_val) = vector
-                .iter()
-                .fold((f32::MAX, f32::MIN), |(min, max), &v| {
-                    (min.min(v), max.max(v))
-                });
+            let (min_val, max_val) = vector.iter().fold((f32::MAX, f32::MIN), |(min, max), &v| {
+                (min.min(v), max.max(v))
+            });
 
             let scale = (max_val - min_val) / 255.0;
             let zero_point = (-min_val / scale).round() as i32;
@@ -1192,7 +1191,10 @@ impl GpuAccelerator {
         memory: u64,
         gflops: Option<f64>,
     ) {
-        let mut metrics = self.metrics.write().expect("metrics lock should not be poisoned");
+        let mut metrics = self
+            .metrics
+            .write()
+            .expect("metrics lock should not be poisoned");
         metrics.total_operations += 1;
         metrics.total_execution_time += duration;
         metrics.total_memory_transferred += memory;
@@ -1228,9 +1230,8 @@ impl GpuAccelerator {
         }
 
         // Determine optimal chunk size
-        let effective_chunk_size = chunk_size.unwrap_or_else(|| {
-            self.calculate_optimal_chunk_size(query.len(), vectors.len())
-        });
+        let effective_chunk_size = chunk_size
+            .unwrap_or_else(|| self.calculate_optimal_chunk_size(query.len(), vectors.len()));
 
         let n_vectors = vectors.len();
         let mut all_results: Vec<(usize, f32)> = Vec::new();
@@ -1370,7 +1371,8 @@ impl GpuAccelerator {
             // Large dataset: streaming search
             let chunk_size = self.calculate_optimal_chunk_size(dim, n_vectors);
             let num_chunks = (n_vectors + chunk_size - 1) / chunk_size;
-            let results = self.streaming_batch_search(query, vectors, k, distance_type, Some(chunk_size))?;
+            let results =
+                self.streaming_batch_search(query, vectors, k, distance_type, Some(chunk_size))?;
             (results, chunk_size, num_chunks)
         };
 
@@ -1493,7 +1495,13 @@ impl GpuAccelerator {
                         block_dim: (block_size as u32, 1, 1),
                         shared_mem_bytes: 0,
                     },
-                    (&query_gpu, &vectors_gpu, &mut results_gpu, dim as i32, n_vectors as i32),
+                    (
+                        &query_gpu,
+                        &vectors_gpu,
+                        &mut results_gpu,
+                        dim as i32,
+                        n_vectors as i32,
+                    ),
                 )
                 .map_err(|e| format!("CUDA launch error: {}", e))?;
         }
@@ -1548,7 +1556,13 @@ impl GpuAccelerator {
                         block_dim: (block_size as u32, 1, 1),
                         shared_mem_bytes: 0,
                     },
-                    (&query_gpu, &vectors_gpu, &mut results_gpu, dim as i32, n_vectors as i32),
+                    (
+                        &query_gpu,
+                        &vectors_gpu,
+                        &mut results_gpu,
+                        dim as i32,
+                        n_vectors as i32,
+                    ),
                 )
                 .map_err(|e| format!("CUDA launch error: {}", e))?;
         }
@@ -1602,7 +1616,13 @@ impl GpuAccelerator {
                         block_dim: (block_size as u32, 1, 1),
                         shared_mem_bytes: 0,
                     },
-                    (&query_gpu, &vectors_gpu, &mut results_gpu, dim as i32, n_vectors as i32),
+                    (
+                        &query_gpu,
+                        &vectors_gpu,
+                        &mut results_gpu,
+                        dim as i32,
+                        n_vectors as i32,
+                    ),
                 )
                 .map_err(|e| format!("CUDA launch error: {}", e))?;
         }
@@ -1868,8 +1888,8 @@ impl GpuAccelerator {
         query: &[f32],
         vectors: &[Vec<f32>],
     ) -> Result<Vec<f32>, String> {
-        let device = MetalDevice::system_default()
-            .ok_or_else(|| "No Metal device found".to_string())?;
+        let device =
+            MetalDevice::system_default().ok_or_else(|| "No Metal device found".to_string())?;
 
         let dim = query.len();
         let n_vectors = vectors.len();
@@ -1929,7 +1949,8 @@ impl GpuAccelerator {
 
         // Read results
         let results_ptr = results_buffer.contents() as *const f32;
-        let results: Vec<f32> = unsafe { std::slice::from_raw_parts(results_ptr, n_vectors).to_vec() };
+        let results: Vec<f32> =
+            unsafe { std::slice::from_raw_parts(results_ptr, n_vectors).to_vec() };
 
         Ok(results)
     }
@@ -1941,8 +1962,8 @@ impl GpuAccelerator {
         vectors: &[Vec<f32>],
     ) -> Result<Vec<f32>, String> {
         // Similar implementation to cosine, using euclidean shader
-        let device = MetalDevice::system_default()
-            .ok_or_else(|| "No Metal device found".to_string())?;
+        let device =
+            MetalDevice::system_default().ok_or_else(|| "No Metal device found".to_string())?;
 
         let dim = query.len();
         let n_vectors = vectors.len();
@@ -1998,7 +2019,8 @@ impl GpuAccelerator {
         command_buffer.wait_until_completed();
 
         let results_ptr = results_buffer.contents() as *const f32;
-        let results: Vec<f32> = unsafe { std::slice::from_raw_parts(results_ptr, n_vectors).to_vec() };
+        let results: Vec<f32> =
+            unsafe { std::slice::from_raw_parts(results_ptr, n_vectors).to_vec() };
 
         Ok(results)
     }
@@ -2009,8 +2031,8 @@ impl GpuAccelerator {
         query: &[f32],
         vectors: &[Vec<f32>],
     ) -> Result<Vec<f32>, String> {
-        let device = MetalDevice::system_default()
-            .ok_or_else(|| "No Metal device found".to_string())?;
+        let device =
+            MetalDevice::system_default().ok_or_else(|| "No Metal device found".to_string())?;
 
         let dim = query.len();
         let n_vectors = vectors.len();
@@ -2032,7 +2054,10 @@ impl GpuAccelerator {
         );
 
         let library = device
-            .new_library_with_source(Self::METAL_DOT_PRODUCT_SHADER, &metal::CompileOptions::new())
+            .new_library_with_source(
+                Self::METAL_DOT_PRODUCT_SHADER,
+                &metal::CompileOptions::new(),
+            )
             .map_err(|e| format!("Metal compile error: {}", e))?;
         let kernel = library
             .get_function("dot_product_kernel", None)
@@ -2066,7 +2091,8 @@ impl GpuAccelerator {
         command_buffer.wait_until_completed();
 
         let results_ptr = results_buffer.contents() as *const f32;
-        let results: Vec<f32> = unsafe { std::slice::from_raw_parts(results_ptr, n_vectors).to_vec() };
+        let results: Vec<f32> =
+            unsafe { std::slice::from_raw_parts(results_ptr, n_vectors).to_vec() };
 
         Ok(results)
     }
@@ -2165,7 +2191,10 @@ impl GpuAccelerator {
 
     /// Reset metrics
     pub fn reset_metrics(&self) {
-        *self.metrics.write().expect("metrics lock should not be poisoned") = GpuMetrics::default();
+        *self
+            .metrics
+            .write()
+            .expect("metrics lock should not be poisoned") = GpuMetrics::default();
     }
 
     /// Check if using real GPU (not CPU fallback)
@@ -2522,18 +2551,15 @@ impl GpuResidentIndex {
         }
 
         let distances = match distance {
-            DistanceType::Cosine => {
-                self.accelerator
-                    .batch_cosine_distance(&query.to_vec(), &self.vectors)?
-            }
-            DistanceType::Euclidean => {
-                self.accelerator
-                    .batch_euclidean_distance(&query.to_vec(), &self.vectors)?
-            }
-            DistanceType::DotProduct => {
-                self.accelerator
-                    .batch_dot_product(&query.to_vec(), &self.vectors)?
-            }
+            DistanceType::Cosine => self
+                .accelerator
+                .batch_cosine_distance(&query.to_vec(), &self.vectors)?,
+            DistanceType::Euclidean => self
+                .accelerator
+                .batch_euclidean_distance(&query.to_vec(), &self.vectors)?,
+            DistanceType::DotProduct => self
+                .accelerator
+                .batch_dot_product(&query.to_vec(), &self.vectors)?,
         };
 
         let mut indexed: Vec<(usize, f32)> = distances.into_iter().enumerate().collect();
@@ -2696,7 +2722,11 @@ impl MultiGpuShardManager {
                     nb += b[i] * b[i];
                 }
                 let denom = na.sqrt() * nb.sqrt();
-                if denom == 0.0 { 1.0 } else { 1.0 - dot / denom }
+                if denom == 0.0 {
+                    1.0
+                } else {
+                    1.0 - dot / denom
+                }
             },
             DistanceType::Euclidean => |a: &[f32], b: &[f32]| {
                 a.iter()
@@ -2705,9 +2735,9 @@ impl MultiGpuShardManager {
                     .sum::<f32>()
                     .sqrt()
             },
-            DistanceType::DotProduct => |a: &[f32], b: &[f32]| {
-                -(a.iter().zip(b.iter()).map(|(x, y)| x * y).sum::<f32>())
-            },
+            DistanceType::DotProduct => {
+                |a: &[f32], b: &[f32]| -(a.iter().zip(b.iter()).map(|(x, y)| x * y).sum::<f32>())
+            }
         };
 
         let mut all_results: Vec<(String, f32)> = Vec::new();
@@ -2839,18 +2869,15 @@ impl TransparentFallbackManager {
         distance: DistanceType,
     ) -> Result<Vec<(usize, f32)>, String> {
         let distances = match distance {
-            DistanceType::Cosine => {
-                self.accelerator
-                    .batch_cosine_distance(&query.to_vec(), vectors)?
-            }
-            DistanceType::Euclidean => {
-                self.accelerator
-                    .batch_euclidean_distance(&query.to_vec(), vectors)?
-            }
-            DistanceType::DotProduct => {
-                self.accelerator
-                    .batch_dot_product(&query.to_vec(), vectors)?
-            }
+            DistanceType::Cosine => self
+                .accelerator
+                .batch_cosine_distance(&query.to_vec(), vectors)?,
+            DistanceType::Euclidean => self
+                .accelerator
+                .batch_euclidean_distance(&query.to_vec(), vectors)?,
+            DistanceType::DotProduct => self
+                .accelerator
+                .batch_dot_product(&query.to_vec(), vectors)?,
         };
         let mut indexed: Vec<(usize, f32)> = distances.into_iter().enumerate().collect();
         indexed.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
@@ -2874,14 +2901,22 @@ impl TransparentFallbackManager {
                     nb += b[i] * b[i];
                 }
                 let denom = na.sqrt() * nb.sqrt();
-                if denom == 0.0 { 1.0 } else { 1.0 - dot / denom }
+                if denom == 0.0 {
+                    1.0
+                } else {
+                    1.0 - dot / denom
+                }
             },
             DistanceType::Euclidean => |a: &[f32], b: &[f32]| {
-                a.iter().zip(b).map(|(x, y)| (x - y).powi(2)).sum::<f32>().sqrt()
+                a.iter()
+                    .zip(b)
+                    .map(|(x, y)| (x - y).powi(2))
+                    .sum::<f32>()
+                    .sqrt()
             },
-            DistanceType::DotProduct => |a: &[f32], b: &[f32]| {
-                -(a.iter().zip(b).map(|(x, y)| x * y).sum::<f32>())
-            },
+            DistanceType::DotProduct => {
+                |a: &[f32], b: &[f32]| -(a.iter().zip(b).map(|(x, y)| x * y).sum::<f32>())
+            }
         };
 
         let mut indexed: Vec<(usize, f32)> = vectors
@@ -2952,8 +2987,8 @@ mod tests {
 
         let query = vec![1.0, 0.0, 0.0];
         let vectors = vec![
-            vec![1.0, 0.0, 0.0], // Same direction
-            vec![0.0, 1.0, 0.0], // Orthogonal
+            vec![1.0, 0.0, 0.0],  // Same direction
+            vec![0.0, 1.0, 0.0],  // Orthogonal
             vec![-1.0, 0.0, 0.0], // Opposite
         ];
 
@@ -3007,10 +3042,7 @@ mod tests {
     fn test_batch_normalize() {
         let gpu = GpuAccelerator::with_cpu_fallback(GpuConfig::default());
 
-        let mut vectors = vec![
-            vec![3.0, 4.0, 0.0],
-            vec![1.0, 1.0, 1.0],
-        ];
+        let mut vectors = vec![vec![3.0, 4.0, 0.0], vec![1.0, 1.0, 1.0]];
 
         gpu.batch_normalize(&mut vectors).unwrap();
 
@@ -3038,10 +3070,7 @@ mod tests {
     fn test_quantization_roundtrip() {
         let gpu = GpuAccelerator::with_cpu_fallback(GpuConfig::default());
 
-        let vectors = vec![
-            vec![0.1, 0.5, -0.3, 0.8],
-            vec![-0.2, 0.7, 0.4, -0.1],
-        ];
+        let vectors = vec![vec![0.1, 0.5, -0.3, 0.8], vec![-0.2, 0.7, 0.4, -0.1]];
 
         let (quantized, params) = gpu.quantize_to_int8(&vectors).unwrap();
         let dequantized = gpu.dequantize_from_int8(&quantized, &params).unwrap();
@@ -3050,7 +3079,12 @@ mod tests {
         // INT8 quantization has limited precision (256 values over the range)
         for (orig, deq) in vectors.iter().zip(dequantized.iter()) {
             for (o, d) in orig.iter().zip(deq.iter()) {
-                assert!((o - d).abs() < 0.1, "Quantization error too high: orig={}, deq={}", o, d);
+                assert!(
+                    (o - d).abs() < 0.1,
+                    "Quantization error too high: orig={}, deq={}",
+                    o,
+                    d
+                );
             }
         }
     }
@@ -3059,14 +3093,8 @@ mod tests {
     fn test_matmul() {
         let gpu = GpuAccelerator::with_cpu_fallback(GpuConfig::default());
 
-        let a = vec![
-            vec![1.0, 2.0],
-            vec![3.0, 4.0],
-        ];
-        let b = vec![
-            vec![5.0, 6.0],
-            vec![7.0, 8.0],
-        ];
+        let a = vec![vec![1.0, 2.0], vec![3.0, 4.0]];
+        let b = vec![vec![5.0, 6.0], vec![7.0, 8.0]];
 
         let c = gpu.matmul(&a, &b).unwrap();
 
@@ -3089,10 +3117,7 @@ mod tests {
             vec![10.1, 10.1],
         ];
 
-        let centroids = vec![
-            vec![0.0, 0.0],
-            vec![10.0, 10.0],
-        ];
+        let centroids = vec![vec![0.0, 0.0], vec![10.0, 10.0]];
 
         let assignments = gpu.kmeans_assign(&vectors, &centroids).unwrap();
 
@@ -3111,7 +3136,9 @@ mod tests {
             vec![-1.0, 0.0, 0.0],
         ];
 
-        let results = gpu.fused_search(&query, &vectors, 2, DistanceType::Cosine).unwrap();
+        let results = gpu
+            .fused_search(&query, &vectors, 2, DistanceType::Cosine)
+            .unwrap();
 
         assert_eq!(results.len(), 2);
         assert_eq!(results[0].0, 0); // Exact match
@@ -3120,9 +3147,8 @@ mod tests {
 
     #[test]
     fn test_memory_pool() {
-        let gpu = GpuAccelerator::with_cpu_fallback(
-            GpuConfig::builder().memory_limit_mb(1).build(),
-        );
+        let gpu =
+            GpuAccelerator::with_cpu_fallback(GpuConfig::builder().memory_limit_mb(1).build());
 
         let initial_memory = gpu.available_memory();
 
@@ -3160,16 +3186,10 @@ mod tests {
     fn test_pca_project() {
         let gpu = GpuAccelerator::with_cpu_fallback(GpuConfig::default());
 
-        let vectors = vec![
-            vec![1.0, 2.0, 3.0, 4.0],
-            vec![5.0, 6.0, 7.0, 8.0],
-        ];
+        let vectors = vec![vec![1.0, 2.0, 3.0, 4.0], vec![5.0, 6.0, 7.0, 8.0]];
 
         // Projection matrix (4D -> 2D)
-        let projection = vec![
-            vec![1.0, 0.0, 0.0, 0.0],
-            vec![0.0, 1.0, 0.0, 0.0],
-        ];
+        let projection = vec![vec![1.0, 0.0, 0.0, 0.0], vec![0.0, 1.0, 0.0, 0.0]];
 
         let projected = gpu.pca_project(&vectors, &projection).unwrap();
 
@@ -3390,10 +3410,7 @@ mod tests {
     fn test_streaming_multi_query_search() {
         let gpu = GpuAccelerator::with_cpu_fallback(GpuConfig::default());
 
-        let queries = vec![
-            vec![1.0, 0.0, 0.0],
-            vec![0.0, 1.0, 0.0],
-        ];
+        let queries = vec![vec![1.0, 0.0, 0.0], vec![0.0, 1.0, 0.0]];
         let vectors = vec![
             vec![1.0, 0.0, 0.0],
             vec![0.0, 1.0, 0.0],
@@ -3440,16 +3457,18 @@ mod tests {
 
         let query = vec![1.0, 0.0, 0.0];
         let vectors: Vec<(usize, Vec<f32>)> = vec![
-            (0, vec![1.0, 0.0, 0.0]),  // Match, passes filter
-            (1, vec![0.0, 1.0, 0.0]),  // No match, filtered out
-            (2, vec![0.9, 0.1, 0.0]),  // Close match, passes filter
-            (3, vec![0.0, 0.0, 1.0]),  // No match, filtered out
-            (4, vec![0.8, 0.2, 0.0]),  // Close match, passes filter
+            (0, vec![1.0, 0.0, 0.0]), // Match, passes filter
+            (1, vec![0.0, 1.0, 0.0]), // No match, filtered out
+            (2, vec![0.9, 0.1, 0.0]), // Close match, passes filter
+            (3, vec![0.0, 0.0, 1.0]), // No match, filtered out
+            (4, vec![0.8, 0.2, 0.0]), // Close match, passes filter
         ];
 
         // Filter to only even indices
         let results = gpu
-            .prefiltered_batch_search(&query, &vectors, 3, DistanceType::Cosine, |idx| idx % 2 == 0)
+            .prefiltered_batch_search(&query, &vectors, 3, DistanceType::Cosine, |idx| {
+                idx % 2 == 0
+            })
             .unwrap();
 
         // Should only have results from indices 0, 2, 4
@@ -3510,7 +3529,9 @@ mod tests {
         index.add("c", vec![0.9, 0.1, 0.0]).unwrap();
         assert_eq!(index.len(), 3);
 
-        let results = index.search(&[1.0, 0.0, 0.0], 2, DistanceType::Cosine).unwrap();
+        let results = index
+            .search(&[1.0, 0.0, 0.0], 2, DistanceType::Cosine)
+            .unwrap();
         assert_eq!(results.len(), 2);
         assert_eq!(results[0].0, "a");
     }
@@ -3539,10 +3560,7 @@ mod tests {
     fn test_gpu_resident_batch_add() {
         let accel = GpuAccelerator::with_cpu_fallback(GpuConfig::default());
         let mut index = GpuResidentIndex::new(accel, 2);
-        let entries = vec![
-            ("x".into(), vec![1.0, 0.0]),
-            ("y".into(), vec![0.0, 1.0]),
-        ];
+        let entries = vec![("x".into(), vec![1.0, 0.0]), ("y".into(), vec![0.0, 1.0])];
         assert_eq!(index.add_batch(entries).unwrap(), 2);
         assert_eq!(index.len(), 2);
     }
@@ -3579,7 +3597,9 @@ mod tests {
         mgr.insert("c", vec![0.9, 0.1, 0.0]).unwrap();
         mgr.insert("d", vec![0.0, 0.0, 1.0]).unwrap();
 
-        let results = mgr.search(&[1.0, 0.0, 0.0], 2, DistanceType::Cosine).unwrap();
+        let results = mgr
+            .search(&[1.0, 0.0, 0.0], 2, DistanceType::Cosine)
+            .unwrap();
         assert_eq!(results.len(), 2);
         assert_eq!(results[0].0, "a");
     }
@@ -3623,9 +3643,9 @@ mod tests {
         assert_eq!(mgr.gpu_reliability(), 1.0); // no ops yet
 
         // After reset, reliability should be 1.0 again
-        let mut mgr2 = TransparentFallbackManager::new(
-            GpuAccelerator::with_cpu_fallback(GpuConfig::default()),
-        );
+        let mut mgr2 = TransparentFallbackManager::new(GpuAccelerator::with_cpu_fallback(
+            GpuConfig::default(),
+        ));
         mgr2.reset();
         assert_eq!(mgr2.gpu_reliability(), 1.0);
     }

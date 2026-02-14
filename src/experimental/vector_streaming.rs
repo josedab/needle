@@ -39,13 +39,13 @@
 //! ```
 
 use crate::error::{NeedleError, Result};
+use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
-use parking_lot::RwLock;
 use tracing::{debug, info};
 
 /// Message source type
@@ -392,9 +392,13 @@ impl VectorConsumer {
         // Update stats
         {
             let stats = self.stats.read();
-            stats.messages_consumed.fetch_add(messages.len() as u64, Ordering::Relaxed);
+            stats
+                .messages_consumed
+                .fetch_add(messages.len() as u64, Ordering::Relaxed);
             let bytes: usize = messages.iter().map(|m| m.vector.len() * 4).sum();
-            stats.bytes_consumed.fetch_add(bytes as u64, Ordering::Relaxed);
+            stats
+                .bytes_consumed
+                .fetch_add(bytes as u64, Ordering::Relaxed);
         }
 
         if messages.is_empty() {
@@ -609,7 +613,10 @@ impl VectorConsumer {
         let messages = stats.messages_consumed.load(Ordering::Relaxed);
         let bytes = stats.bytes_consumed.load(Ordering::Relaxed);
         let (mps, bps) = if uptime > 0 {
-            (messages as f64 / uptime as f64, bytes as f64 / uptime as f64)
+            (
+                messages as f64 / uptime as f64,
+                bytes as f64 / uptime as f64,
+            )
         } else {
             (0.0, 0.0)
         };
@@ -762,10 +769,7 @@ impl VectorProducer {
     }
 
     /// Send a batch of vectors
-    pub fn send_batch(
-        &self,
-        vectors: &[(String, Vec<f32>, Option<Value>)],
-    ) -> Result<usize> {
+    pub fn send_batch(&self, vectors: &[(String, Vec<f32>, Option<Value>)]) -> Result<usize> {
         let mut sent = 0;
         for (id, vector, metadata) in vectors {
             self.send(id, vector, metadata.clone())?;
@@ -854,11 +858,7 @@ impl StreamProcessor {
         for msg in batch {
             if let Some(transformed) = (self.processor)(msg) {
                 if let Some(ref producer) = self.producer {
-                    producer.send(
-                        &transformed.id,
-                        &transformed.vector,
-                        transformed.metadata,
-                    )?;
+                    producer.send(&transformed.id, &transformed.vector, transformed.metadata)?;
                 }
                 processed += 1;
             }
@@ -893,16 +893,14 @@ fn base64_decode(data: &[u8]) -> Result<Vec<u8>> {
         }
         let values: Vec<u8> = chunk
             .iter()
-            .map(|&c| {
-                match c {
-                    b'A'..=b'Z' => c - b'A',
-                    b'a'..=b'z' => c - b'a' + 26,
-                    b'0'..=b'9' => c - b'0' + 52,
-                    b'+' => 62,
-                    b'/' => 63,
-                    b'=' => 0,
-                    _ => 0,
-                }
+            .map(|&c| match c {
+                b'A'..=b'Z' => c - b'A',
+                b'a'..=b'z' => c - b'a' + 26,
+                b'0'..=b'9' => c - b'0' + 52,
+                b'+' => 62,
+                b'/' => 63,
+                b'=' => 0,
+                _ => 0,
             })
             .collect();
 
@@ -1272,7 +1270,9 @@ impl TransactionalProcessor {
 
                     // Update offset
                     if let Some(partition) = msg.partition {
-                        self.checkpoint.write().update_offset(partition as u32, msg.offset);
+                        self.checkpoint
+                            .write()
+                            .update_offset(partition as u32, msg.offset);
                     }
 
                     // Update watermark
@@ -1289,7 +1289,9 @@ impl TransactionalProcessor {
         }
 
         // Maybe checkpoint
-        let count = self.messages_since_checkpoint.fetch_add(processed as u64, Ordering::Relaxed);
+        let count = self
+            .messages_since_checkpoint
+            .fetch_add(processed as u64, Ordering::Relaxed);
         if count + processed as u64 >= self.checkpoint_interval as u64 {
             self.save_checkpoint()?;
             self.messages_since_checkpoint.store(0, Ordering::Relaxed);
@@ -1368,7 +1370,8 @@ impl TransactionalProcessor {
                     retried += 1;
                 }
                 Err(e) => {
-                    self.dlq.push(failed.message, &e.to_string(), failed.retry_count + 1);
+                    self.dlq
+                        .push(failed.message, &e.to_string(), failed.retry_count + 1);
                 }
             }
         }
@@ -1461,7 +1464,7 @@ impl WatermarkTracker {
 pub mod kafka_cdc {
     use super::*;
     use rdkafka::config::ClientConfig;
-    use rdkafka::consumer::{Consumer, StreamConsumer, CommitMode};
+    use rdkafka::consumer::{CommitMode, Consumer, StreamConsumer};
     use rdkafka::message::Message;
     use std::time::Duration;
 
@@ -1483,8 +1486,9 @@ pub mod kafka_cdc {
                 .create()
                 .map_err(|e| NeedleError::InvalidOperation(format!("Kafka config error: {}", e)))?;
 
-            consumer.subscribe(&[&config.topic])
-                .map_err(|e| NeedleError::InvalidOperation(format!("Kafka subscribe error: {}", e)))?;
+            consumer.subscribe(&[&config.topic]).map_err(|e| {
+                NeedleError::InvalidOperation(format!("Kafka subscribe error: {}", e))
+            })?;
 
             Ok(Self { consumer, config })
         }
@@ -1514,25 +1518,37 @@ pub mod kafka_cdc {
         }
 
         /// Parse a Kafka message into VectorMessage
-        fn parse_message(&self, payload: &[u8], msg: &rdkafka::message::BorrowedMessage) -> Result<VectorMessage> {
+        fn parse_message(
+            &self,
+            payload: &[u8],
+            msg: &rdkafka::message::BorrowedMessage,
+        ) -> Result<VectorMessage> {
             match self.config.vector_format {
                 VectorFormat::Json => {
-                    let json: serde_json::Value = serde_json::from_slice(payload)
-                        .map_err(|e| NeedleError::InvalidFormat(format!("JSON parse error: {}", e)))?;
+                    let json: serde_json::Value = serde_json::from_slice(payload).map_err(|e| {
+                        NeedleError::InvalidFormat(format!("JSON parse error: {}", e))
+                    })?;
 
-                    let id = json.get(&self.config.id_field)
+                    let id = json
+                        .get(&self.config.id_field)
                         .and_then(|v| v.as_str())
                         .ok_or_else(|| NeedleError::InvalidFormat("Missing id field".to_string()))?
                         .to_string();
 
-                    let vector: Vec<f32> = json.get(&self.config.vector_field)
+                    let vector: Vec<f32> = json
+                        .get(&self.config.vector_field)
                         .and_then(|v| v.as_array())
-                        .ok_or_else(|| NeedleError::InvalidFormat("Missing vector field".to_string()))?
+                        .ok_or_else(|| {
+                            NeedleError::InvalidFormat("Missing vector field".to_string())
+                        })?
                         .iter()
                         .filter_map(|v| v.as_f64().map(|f| f as f32))
                         .collect();
 
-                    let metadata = self.config.metadata_field.as_ref()
+                    let metadata = self
+                        .config
+                        .metadata_field
+                        .as_ref()
                         .and_then(|field| json.get(field).cloned());
 
                     Ok(VectorMessage {
@@ -1550,7 +1566,9 @@ pub mod kafka_cdc {
                     if payload.len() < 8 {
                         return Err(NeedleError::InvalidFormat("Payload too short".to_string()));
                     }
-                    let id_len = u64::from_le_bytes(payload[..8].try_into().expect("slice is exactly 8 bytes")) as usize;
+                    let id_len = u64::from_le_bytes(
+                        payload[..8].try_into().expect("slice is exactly 8 bytes"),
+                    ) as usize;
                     if payload.len() < 8 + id_len {
                         return Err(NeedleError::InvalidFormat("Invalid id length".to_string()));
                     }
@@ -1558,7 +1576,9 @@ pub mod kafka_cdc {
                     let vector_bytes = &payload[8 + id_len..];
                     let vector: Vec<f32> = vector_bytes
                         .chunks_exact(4)
-                        .map(|b| f32::from_le_bytes(b.try_into().expect("chunk is exactly 4 bytes")))
+                        .map(|b| {
+                            f32::from_le_bytes(b.try_into().expect("chunk is exactly 4 bytes"))
+                        })
                         .collect();
 
                     Ok(VectorMessage {
@@ -1580,7 +1600,8 @@ pub mod kafka_cdc {
 
         /// Commit offsets
         pub fn commit(&self) -> Result<()> {
-            self.consumer.commit_consumer_state(CommitMode::Sync)
+            self.consumer
+                .commit_consumer_state(CommitMode::Sync)
                 .map_err(|e| NeedleError::InvalidOperation(format!("Kafka commit error: {}", e)))
         }
     }
@@ -1590,7 +1611,9 @@ pub mod kafka_cdc {
 #[cfg(feature = "cdc-pulsar")]
 pub mod pulsar_cdc {
     use super::*;
-    use pulsar::{Pulsar, TokioExecutor, Consumer as PulsarConsumer, SubType, consumer::InitialPosition};
+    use pulsar::{
+        consumer::InitialPosition, Consumer as PulsarConsumer, Pulsar, SubType, TokioExecutor,
+    };
     use std::sync::Arc;
     use tokio::sync::Mutex;
 
@@ -1606,7 +1629,9 @@ pub mod pulsar_cdc {
             let pulsar: Pulsar<TokioExecutor> = Pulsar::builder(&config.brokers, TokioExecutor)
                 .build()
                 .await
-                .map_err(|e| NeedleError::InvalidOperation(format!("Pulsar connection error: {}", e)))?;
+                .map_err(|e| {
+                    NeedleError::InvalidOperation(format!("Pulsar connection error: {}", e))
+                })?;
 
             let consumer: PulsarConsumer<String, TokioExecutor> = pulsar
                 .consumer()
@@ -1619,7 +1644,9 @@ pub mod pulsar_cdc {
                 })
                 .build()
                 .await
-                .map_err(|e| NeedleError::InvalidOperation(format!("Pulsar consumer error: {}", e)))?;
+                .map_err(|e| {
+                    NeedleError::InvalidOperation(format!("Pulsar consumer error: {}", e))
+                })?;
 
             Ok(Self {
                 consumer: Arc::new(Mutex::new(consumer)),
@@ -1635,8 +1662,10 @@ pub mod pulsar_cdc {
             for _ in 0..self.config.batch_size {
                 match tokio::time::timeout(
                     std::time::Duration::from_millis(self.config.poll_timeout_ms),
-                    consumer.try_next()
-                ).await {
+                    consumer.try_next(),
+                )
+                .await
+                {
                     Ok(Ok(Some(msg))) => {
                         if let Ok(vec_msg) = self.parse_message(&msg) {
                             messages.push(vec_msg);
@@ -1657,19 +1686,24 @@ pub mod pulsar_cdc {
             let json: serde_json::Value = serde_json::from_slice(payload)
                 .map_err(|e| NeedleError::InvalidFormat(format!("JSON parse error: {}", e)))?;
 
-            let id = json.get(&self.config.id_field)
+            let id = json
+                .get(&self.config.id_field)
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| NeedleError::InvalidFormat("Missing id field".to_string()))?
                 .to_string();
 
-            let vector: Vec<f32> = json.get(&self.config.vector_field)
+            let vector: Vec<f32> = json
+                .get(&self.config.vector_field)
                 .and_then(|v| v.as_array())
                 .ok_or_else(|| NeedleError::InvalidFormat("Missing vector field".to_string()))?
                 .iter()
                 .filter_map(|v| v.as_f64().map(|f| f as f32))
                 .collect();
 
-            let metadata = self.config.metadata_field.as_ref()
+            let metadata = self
+                .config
+                .metadata_field
+                .as_ref()
                 .and_then(|field| json.get(field).cloned());
 
             Ok(VectorMessage {
@@ -1689,9 +1723,9 @@ pub mod pulsar_cdc {
 #[cfg(feature = "cdc-postgres")]
 pub mod postgres_cdc {
     use super::*;
-    use tokio_postgres::{Client, NoTls, Row};
     use std::sync::Arc;
     use tokio::sync::Mutex;
+    use tokio_postgres::{Client, NoTls, Row};
 
     /// PostgreSQL CDC consumer
     pub struct PostgresVectorConsumer {
@@ -1705,7 +1739,9 @@ pub mod postgres_cdc {
         pub async fn new(config: ConsumerConfig) -> Result<Self> {
             let (client, connection) = tokio_postgres::connect(&config.brokers, NoTls)
                 .await
-                .map_err(|e| NeedleError::InvalidOperation(format!("PostgreSQL connection error: {}", e)))?;
+                .map_err(|e| {
+                    NeedleError::InvalidOperation(format!("PostgreSQL connection error: {}", e))
+                })?;
 
             // Spawn connection task
             tokio::spawn(async move {
@@ -1739,9 +1775,14 @@ pub mod postgres_cdc {
             );
 
             let rows = client
-                .query(&query, &[&(last_lsn as i64), &(self.config.batch_size as i64)])
+                .query(
+                    &query,
+                    &[&(last_lsn as i64), &(self.config.batch_size as i64)],
+                )
                 .await
-                .map_err(|e| NeedleError::InvalidOperation(format!("PostgreSQL query error: {}", e)))?;
+                .map_err(|e| {
+                    NeedleError::InvalidOperation(format!("PostgreSQL query error: {}", e))
+                })?;
 
             let mut messages = Vec::with_capacity(rows.len());
             let mut max_ts = last_lsn;
@@ -1762,11 +1803,13 @@ pub mod postgres_cdc {
         }
 
         fn row_to_message(&self, row: &Row) -> Result<VectorMessage> {
-            let id: String = row.try_get("id")
+            let id: String = row
+                .try_get("id")
                 .map_err(|e| NeedleError::InvalidFormat(format!("Missing id: {}", e)))?;
 
             // PostgreSQL array to Vec<f32>
-            let vector: Vec<f32> = row.try_get::<_, Vec<f32>>("vector")
+            let vector: Vec<f32> = row
+                .try_get::<_, Vec<f32>>("vector")
                 .or_else(|_| {
                     // Try as f64 array and convert
                     row.try_get::<_, Vec<f64>>("vector")
@@ -1794,11 +1837,15 @@ pub mod postgres_cdc {
 #[cfg(feature = "cdc-mongodb")]
 pub mod mongodb_cdc {
     use super::*;
-    use mongodb::{Client, options::ClientOptions, Collection, bson::{doc, Document}};
+    use futures::StreamExt;
     use mongodb::change_stream::event::ChangeStreamEvent;
+    use mongodb::{
+        bson::{doc, Document},
+        options::ClientOptions,
+        Client, Collection,
+    };
     use std::sync::Arc;
     use tokio::sync::Mutex;
-    use futures::StreamExt;
 
     /// MongoDB change stream consumer
     pub struct MongoVectorConsumer {
@@ -1810,12 +1857,13 @@ pub mod mongodb_cdc {
     impl MongoVectorConsumer {
         /// Create a new MongoDB change stream consumer
         pub async fn new(config: ConsumerConfig) -> Result<Self> {
-            let client_options = ClientOptions::parse(&config.brokers)
-                .await
-                .map_err(|e| NeedleError::InvalidOperation(format!("MongoDB connection error: {}", e)))?;
+            let client_options = ClientOptions::parse(&config.brokers).await.map_err(|e| {
+                NeedleError::InvalidOperation(format!("MongoDB connection error: {}", e))
+            })?;
 
-            let client = Client::with_options(client_options)
-                .map_err(|e| NeedleError::InvalidOperation(format!("MongoDB client error: {}", e)))?;
+            let client = Client::with_options(client_options).map_err(|e| {
+                NeedleError::InvalidOperation(format!("MongoDB client error: {}", e))
+            })?;
 
             // Parse database and collection from topic (format: "database.collection")
             let parts: Vec<&str> = config.topic.split('.').collect();
@@ -1839,13 +1887,13 @@ pub mod mongodb_cdc {
             let resume_token = self.resume_token.lock().await.clone();
 
             let mut change_stream = if let Some(token) = resume_token {
-                self.collection.watch()
-                    .resume_after(token)
-                    .await
+                self.collection.watch().resume_after(token).await
             } else {
                 self.collection.watch().await
             }
-            .map_err(|e| NeedleError::InvalidOperation(format!("MongoDB change stream error: {}", e)))?;
+            .map_err(|e| {
+                NeedleError::InvalidOperation(format!("MongoDB change stream error: {}", e))
+            })?;
 
             let mut messages = Vec::new();
 
@@ -1853,7 +1901,8 @@ pub mod mongodb_cdc {
             let timeout = tokio::time::Duration::from_millis(self.config.poll_timeout_ms);
             let deadline = tokio::time::Instant::now() + timeout;
 
-            while messages.len() < self.config.batch_size && tokio::time::Instant::now() < deadline {
+            while messages.len() < self.config.batch_size && tokio::time::Instant::now() < deadline
+            {
                 match tokio::time::timeout_at(deadline, change_stream.next()).await {
                     Ok(Some(Ok(event))) => {
                         // Update resume token
@@ -1873,29 +1922,30 @@ pub mod mongodb_cdc {
         }
 
         fn event_to_message(&self, event: &ChangeStreamEvent<Document>) -> Result<VectorMessage> {
-            let doc = event.full_document.as_ref()
-                .ok_or_else(|| NeedleError::InvalidFormat("No full document in change event".to_string()))?;
+            let doc = event.full_document.as_ref().ok_or_else(|| {
+                NeedleError::InvalidFormat("No full document in change event".to_string())
+            })?;
 
-            let id = doc.get_str("_id")
+            let id = doc
+                .get_str("_id")
                 .or_else(|_| doc.get_object_id("_id").map(|oid| oid.to_hex()))
                 .map_err(|_| NeedleError::InvalidFormat("Missing _id field".to_string()))?
                 .to_string();
 
-            let vector: Vec<f32> = doc.get_array(&self.config.vector_field)
+            let vector: Vec<f32> = doc
+                .get_array(&self.config.vector_field)
                 .map_err(|_| NeedleError::InvalidFormat("Missing vector field".to_string()))?
                 .iter()
                 .filter_map(|v| v.as_f64().map(|f| f as f32))
                 .collect();
 
             let metadata = self.config.metadata_field.as_ref().and_then(|field| {
-                doc.get_document(field).ok().map(|d| {
-                    serde_json::to_value(d).unwrap_or(serde_json::Value::Null)
-                })
+                doc.get_document(field)
+                    .ok()
+                    .map(|d| serde_json::to_value(d).unwrap_or(serde_json::Value::Null))
             });
 
-            let timestamp = event.cluster_time
-                .map(|t| t.time as u64)
-                .unwrap_or(0);
+            let timestamp = event.cluster_time.map(|t| t.time as u64).unwrap_or(0);
 
             Ok(VectorMessage {
                 id,
@@ -2029,13 +2079,7 @@ impl VectorStreamPipeline {
         self.stages.push(StreamStage {
             name: name.to_string(),
             op: StreamOp::Filter,
-            processor: Box::new(move |msg| {
-                if predicate(&msg) {
-                    Some(msg)
-                } else {
-                    None
-                }
-            }),
+            processor: Box::new(move |msg| if predicate(&msg) { Some(msg) } else { None }),
         });
         self
     }
@@ -2111,7 +2155,10 @@ impl VectorStreamPipeline {
 
     /// Process a batch of messages
     pub fn process_batch(&self, messages: Vec<VectorMessage>) -> Vec<VectorMessage> {
-        messages.into_iter().filter_map(|m| self.process(m)).collect()
+        messages
+            .into_iter()
+            .filter_map(|m| self.process(m))
+            .collect()
     }
 
     /// Get metrics snapshot
@@ -2418,7 +2465,8 @@ impl BackpressureController {
     /// Notify the controller that messages were committed/acked.
     pub fn on_commit(&self, count: u64) {
         let prev = self.in_flight.load(Ordering::Relaxed);
-        self.in_flight.store(prev.saturating_sub(count), Ordering::Relaxed);
+        self.in_flight
+            .store(prev.saturating_sub(count), Ordering::Relaxed);
         self.evaluate();
     }
 
@@ -2646,7 +2694,9 @@ mod tests {
         let producer = VectorProducer::new(config).unwrap();
 
         producer.send("v1", &[1.0, 2.0], None).unwrap();
-        producer.send("v2", &[3.0, 4.0], Some(serde_json::json!({"key": "value"}))).unwrap();
+        producer
+            .send("v2", &[3.0, 4.0], Some(serde_json::json!({"key": "value"})))
+            .unwrap();
 
         let output = producer.get_mock_output();
         assert_eq!(output.len(), 2);
@@ -2775,17 +2825,14 @@ mod tests {
         let processed_ids = Arc::new(RwLock::new(Vec::new()));
         let ids_clone = processed_ids.clone();
 
-        let processor = TransactionalProcessor::new(
-            consumer.clone(),
-            store,
-            move |msg: &VectorMessage| {
+        let processor =
+            TransactionalProcessor::new(consumer.clone(), store, move |msg: &VectorMessage| {
                 ids_clone.write().push(msg.id.clone());
                 Ok(())
-            },
-        )
-        .unwrap()
-        .with_max_retries(3)
-        .with_checkpoint_interval(10);
+            })
+            .unwrap()
+            .with_max_retries(3)
+            .with_checkpoint_interval(10);
 
         consumer.start().unwrap();
 

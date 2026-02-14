@@ -84,14 +84,19 @@ pub enum DecayFunction {
     /// Linear decay over time
     Linear { decay_rate_per_hour: f64 },
     /// Step decay - discrete drops at intervals
-    Step { interval_hours: f64, decay_per_step: f64 },
+    Step {
+        interval_hours: f64,
+        decay_per_step: f64,
+    },
     /// Power law decay (forgetting curve)
     PowerLaw { exponent: f64 },
 }
 
 impl Default for DecayFunction {
     fn default() -> Self {
-        DecayFunction::Exponential { half_life_hours: 168.0 } // 1 week
+        DecayFunction::Exponential {
+            half_life_hours: 168.0,
+        } // 1 week
     }
 }
 
@@ -103,16 +108,17 @@ impl DecayFunction {
             DecayFunction::Exponential { half_life_hours } => {
                 0.5_f64.powf(age_hours / half_life_hours)
             }
-            DecayFunction::Linear { decay_rate_per_hour } => {
-                (1.0 - decay_rate_per_hour * age_hours).max(0.0)
-            }
-            DecayFunction::Step { interval_hours, decay_per_step } => {
+            DecayFunction::Linear {
+                decay_rate_per_hour,
+            } => (1.0 - decay_rate_per_hour * age_hours).max(0.0),
+            DecayFunction::Step {
+                interval_hours,
+                decay_per_step,
+            } => {
                 let steps = (age_hours / interval_hours).floor();
                 (1.0 - decay_per_step * steps).max(0.0)
             }
-            DecayFunction::PowerLaw { exponent } => {
-                1.0 / (1.0 + age_hours).powf(*exponent)
-            }
+            DecayFunction::PowerLaw { exponent } => 1.0 / (1.0 + age_hours).powf(*exponent),
         }
     }
 }
@@ -452,7 +458,8 @@ impl AgentMemory {
             for memory in short_term.values() {
                 let similarity = self.compute_similarity(query_embedding, &memory.embedding);
                 if similarity >= self.config.recall_threshold {
-                    let effective_importance = memory.effective_importance(&self.config.decay_function);
+                    let effective_importance =
+                        memory.effective_importance(&self.config.decay_function);
                     let relevance = similarity as f64 * 0.7 + effective_importance * 0.3;
                     results.push(RecallResult {
                         memory: memory.clone(),
@@ -470,7 +477,8 @@ impl AgentMemory {
             for memory in long_term.values() {
                 let similarity = self.compute_similarity(query_embedding, &memory.embedding);
                 if similarity >= self.config.recall_threshold {
-                    let effective_importance = memory.effective_importance(&self.config.decay_function);
+                    let effective_importance =
+                        memory.effective_importance(&self.config.decay_function);
                     let relevance = similarity as f64 * 0.7 + effective_importance * 0.3;
                     results.push(RecallResult {
                         memory: memory.clone(),
@@ -498,8 +506,8 @@ impl AgentMemory {
         if !results.is_empty() {
             stats.recall_hits += 1;
         }
-        stats.avg_recall_time_us = 
-            (stats.avg_recall_time_us * (stats.total_recalls - 1) + elapsed.as_micros() as u64) 
+        stats.avg_recall_time_us = (stats.avg_recall_time_us * (stats.total_recalls - 1)
+            + elapsed.as_micros() as u64)
             / stats.total_recalls;
 
         Ok(results)
@@ -524,12 +532,11 @@ impl AgentMemory {
     pub fn get_associations(&self, memory_id: &str) -> Vec<Memory> {
         let memory = self.get(memory_id);
         match memory {
-            Some(mem) => {
-                mem.associations
-                    .iter()
-                    .filter_map(|id| self.get(id))
-                    .collect()
-            }
+            Some(mem) => mem
+                .associations
+                .iter()
+                .filter_map(|id| self.get(id))
+                .collect(),
             None => Vec::new(),
         }
     }
@@ -578,15 +585,23 @@ impl AgentMemory {
 
         for mut memory in to_consolidate {
             memory.memory_type = MemoryType::LongTerm;
-            
+
             self.short_term.write().remove(&memory.id);
-            self.long_term.write().insert(memory.id.clone(), memory.clone());
-            
+            self.long_term
+                .write()
+                .insert(memory.id.clone(), memory.clone());
+
             // Update type tracking
             let mut by_type = self.by_type.write();
-            by_type.entry(MemoryType::ShortTerm).or_default().remove(&memory.id);
-            by_type.entry(MemoryType::LongTerm).or_default().insert(memory.id);
-            
+            by_type
+                .entry(MemoryType::ShortTerm)
+                .or_default()
+                .remove(&memory.id);
+            by_type
+                .entry(MemoryType::LongTerm)
+                .or_default()
+                .insert(memory.id);
+
             consolidated += 1;
         }
 
@@ -622,10 +637,7 @@ impl AgentMemory {
     /// Get working memory content
     pub fn get_working_memory(&self) -> Vec<Memory> {
         let working = self.working.read();
-        working
-            .iter()
-            .filter_map(|id| self.get(id))
-            .collect()
+        working.iter().filter_map(|id| self.get(id)).collect()
     }
 
     /// Clear working memory
@@ -673,7 +685,7 @@ impl AgentMemory {
     fn find_associations(&self, embedding: &[f32], exclude_id: &str) -> Vec<String> {
         let threshold = self.config.association_threshold;
         let max = self.config.max_associations;
-        
+
         let mut associations = Vec::new();
 
         // Check long-term memories
@@ -707,13 +719,13 @@ impl AgentMemory {
 
     fn add_to_working(&self, id: &str) {
         let mut working = self.working.write();
-        
+
         // Remove if already present
         working.retain(|i| i != id);
-        
+
         // Add to front
         working.push_front(id.to_string());
-        
+
         // Enforce capacity
         while working.len() > self.config.working_memory_capacity {
             working.pop_back();
@@ -723,7 +735,7 @@ impl AgentMemory {
     fn maybe_evict_short_term(&self) {
         let capacity = self.config.short_term_capacity;
         let mut short_term = self.short_term.write();
-        
+
         while short_term.len() >= capacity {
             // Find lowest importance memory
             let lowest = short_term
@@ -747,7 +759,7 @@ impl AgentMemory {
     fn maybe_evict_long_term(&self) {
         let capacity = self.config.long_term_capacity;
         let mut long_term = self.long_term.write();
-        
+
         while long_term.len() >= capacity {
             // Find lowest importance memory
             let lowest = long_term
@@ -1075,7 +1087,13 @@ impl ToolCallCache {
     }
 
     /// Store with a custom TTL.
-    pub fn put_with_ttl(&self, tool_name: &str, arguments: &Value, result: Value, ttl_seconds: u64) {
+    pub fn put_with_ttl(
+        &self,
+        tool_name: &str,
+        arguments: &Value,
+        result: Value,
+        ttl_seconds: u64,
+    ) {
         let key = Self::hash_call(tool_name, arguments);
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -1158,7 +1176,11 @@ pub struct ContextSection {
 }
 
 impl ContextWindowManager {
-    pub fn new(max_tokens: usize, system_prompt_tokens: usize, reserved_for_response: usize) -> Self {
+    pub fn new(
+        max_tokens: usize,
+        system_prompt_tokens: usize,
+        reserved_for_response: usize,
+    ) -> Self {
         Self {
             max_tokens,
             system_prompt_tokens,
@@ -1204,12 +1226,16 @@ impl ContextWindowManager {
         for (i, turn) in conversation.iter().enumerate() {
             sections.push(ContextSection {
                 label: format!("turn_{:04}", i),
-                content: format!("[{}] {}", match turn.role {
-                    ConversationRole::User => "user",
-                    ConversationRole::Assistant => "assistant",
-                    ConversationRole::System => "system",
-                    ConversationRole::Tool => "tool",
-                }, turn.content),
+                content: format!(
+                    "[{}] {}",
+                    match turn.role {
+                        ConversationRole::User => "user",
+                        ConversationRole::Assistant => "assistant",
+                        ConversationRole::System => "system",
+                        ConversationRole::Tool => "tool",
+                    },
+                    turn.content
+                ),
                 token_count: turn.token_count,
                 priority: 100 + i as u32, // more recent = higher
             });
@@ -1254,12 +1280,16 @@ mod tests {
 
     #[test]
     fn test_decay_functions() {
-        let exp = DecayFunction::Exponential { half_life_hours: 24.0 };
+        let exp = DecayFunction::Exponential {
+            half_life_hours: 24.0,
+        };
         assert!((exp.decay_factor(0.0) - 1.0).abs() < 0.01);
         assert!((exp.decay_factor(24.0) - 0.5).abs() < 0.01);
         assert!((exp.decay_factor(48.0) - 0.25).abs() < 0.01);
 
-        let linear = DecayFunction::Linear { decay_rate_per_hour: 0.1 };
+        let linear = DecayFunction::Linear {
+            decay_rate_per_hour: 0.1,
+        };
         assert!((linear.decay_factor(0.0) - 1.0).abs() < 0.01);
         assert!((linear.decay_factor(5.0) - 0.5).abs() < 0.01);
         assert!((linear.decay_factor(10.0)).abs() < 0.01);
@@ -1278,15 +1308,19 @@ mod tests {
     #[test]
     fn test_remember_and_recall() {
         let memory = AgentMemory::new(MemoryConfig::new(64).with_recall_threshold(0.0));
-        
+
         let emb1 = random_embedding(64, 1);
         let emb2 = random_embedding(64, 2);
-        
-        memory.remember(&emb1, MemoryType::LongTerm, json!({"content": "test1"})).unwrap();
-        memory.remember(&emb2, MemoryType::LongTerm, json!({"content": "test2"})).unwrap();
-        
+
+        memory
+            .remember(&emb1, MemoryType::LongTerm, json!({"content": "test1"}))
+            .unwrap();
+        memory
+            .remember(&emb2, MemoryType::LongTerm, json!({"content": "test2"}))
+            .unwrap();
+
         assert_eq!(memory.len(), 2);
-        
+
         // Recall similar to emb1
         let results = memory.recall(&emb1, 5).unwrap();
         assert!(!results.is_empty());
@@ -1299,15 +1333,21 @@ mod tests {
             .with_short_term_capacity(10)
             .with_long_term_capacity(100);
         let memory = AgentMemory::new(config);
-        
+
         let emb = random_embedding(64, 1);
-        
-        memory.remember(&emb, MemoryType::ShortTerm, json!({})).unwrap();
-        memory.remember(&emb, MemoryType::LongTerm, json!({})).unwrap();
-        memory.remember(&emb, MemoryType::Episodic, json!({})).unwrap();
-        
+
+        memory
+            .remember(&emb, MemoryType::ShortTerm, json!({}))
+            .unwrap();
+        memory
+            .remember(&emb, MemoryType::LongTerm, json!({}))
+            .unwrap();
+        memory
+            .remember(&emb, MemoryType::Episodic, json!({}))
+            .unwrap();
+
         assert_eq!(memory.len(), 3);
-        
+
         let stats = memory.stats();
         assert_eq!(stats.short_term_count, 1);
         assert_eq!(stats.long_term_count, 2);
@@ -1319,12 +1359,14 @@ mod tests {
         let mut config = config;
         config.working_memory_capacity = 3;
         let memory = AgentMemory::new(config);
-        
+
         for i in 0..5 {
             let emb = random_embedding(64, i);
-            memory.remember(&emb, MemoryType::Working, json!({"i": i})).unwrap();
+            memory
+                .remember(&emb, MemoryType::Working, json!({"i": i}))
+                .unwrap();
         }
-        
+
         let working = memory.get_working_memory();
         assert_eq!(working.len(), 3);
     }
@@ -1332,13 +1374,15 @@ mod tests {
     #[test]
     fn test_forget() {
         let memory = AgentMemory::new(MemoryConfig::new(64));
-        
+
         let emb = random_embedding(64, 1);
-        let id = memory.remember(&emb, MemoryType::LongTerm, json!({})).unwrap();
-        
+        let id = memory
+            .remember(&emb, MemoryType::LongTerm, json!({}))
+            .unwrap();
+
         assert_eq!(memory.len(), 1);
         assert!(memory.get(&id).is_some());
-        
+
         assert!(memory.forget(&id));
         assert_eq!(memory.len(), 0);
         assert!(memory.get(&id).is_none());
@@ -1348,15 +1392,17 @@ mod tests {
     fn test_eviction() {
         let config = MemoryConfig::new(64).with_short_term_capacity(3);
         let memory = AgentMemory::new(config);
-        
+
         for i in 0..5 {
             let emb = random_embedding(64, i);
-            memory.remember(&emb, MemoryType::ShortTerm, json!({"i": i})).unwrap();
+            memory
+                .remember(&emb, MemoryType::ShortTerm, json!({"i": i}))
+                .unwrap();
         }
-        
+
         // Should have evicted 2
         assert!(memory.short_term.read().len() <= 3);
-        
+
         let stats = memory.stats();
         assert!(stats.evictions >= 2);
     }
@@ -1366,11 +1412,13 @@ mod tests {
         let memory = AgentMemoryBuilder::new(128)
             .short_term_capacity(50)
             .long_term_capacity(5000)
-            .decay_function(DecayFunction::Exponential { half_life_hours: 48.0 })
+            .decay_function(DecayFunction::Exponential {
+                half_life_hours: 48.0,
+            })
             .recall_threshold(0.6)
             .with_associations()
             .build();
-        
+
         assert!(memory.is_empty());
     }
 
@@ -1431,9 +1479,24 @@ mod tests {
         assert_eq!(mgr.available_tokens(), 3096);
 
         let sections = vec![
-            ContextSection { label: "a".into(), content: "low".into(), token_count: 100, priority: 10 },
-            ContextSection { label: "b".into(), content: "high".into(), token_count: 100, priority: 50 },
-            ContextSection { label: "c".into(), content: "huge".into(), token_count: 5000, priority: 99 },
+            ContextSection {
+                label: "a".into(),
+                content: "low".into(),
+                token_count: 100,
+                priority: 10,
+            },
+            ContextSection {
+                label: "b".into(),
+                content: "high".into(),
+                token_count: 100,
+                priority: 50,
+            },
+            ContextSection {
+                label: "c".into(),
+                content: "huge".into(),
+                token_count: 5000,
+                priority: 99,
+            },
         ];
         let result = mgr.build_window(sections);
         // "c" doesn't fit (5000 > 3096). "b" and "a" fit.

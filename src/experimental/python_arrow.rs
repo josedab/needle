@@ -24,7 +24,7 @@
 //! a Python interpreter.
 
 use std::collections::HashMap;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -330,9 +330,7 @@ impl TypedValue {
                 }
             }
             Value::Bool(b) => TypedValue::Boolean(*b),
-            Value::Array(arr) => {
-                TypedValue::List(arr.iter().map(TypedValue::from_json).collect())
-            }
+            Value::Array(arr) => TypedValue::List(arr.iter().map(TypedValue::from_json).collect()),
             Value::Object(obj) => {
                 let map = obj
                     .iter()
@@ -553,7 +551,10 @@ mod tests {
         let typed = metadata_to_python_dict(&original);
         assert!(matches!(typed.get("name"), Some(TypedValue::String(_))));
         assert!(matches!(typed.get("count"), Some(TypedValue::Integer(42))));
-        assert!(matches!(typed.get("active"), Some(TypedValue::Boolean(true))));
+        assert!(matches!(
+            typed.get("active"),
+            Some(TypedValue::Boolean(true))
+        ));
 
         // Round-trip
         for (key, tv) in &typed {

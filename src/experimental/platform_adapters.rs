@@ -25,8 +25,8 @@
 //! let deno_storage = DenoKvAdapter::new().await?;
 //! ```
 
-use crate::edge_runtime::EdgeStorage;
 use crate::error::{NeedleError, Result};
+use crate::experimental::edge_runtime::EdgeStorage;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -125,7 +125,9 @@ impl EdgeStorage for CloudflareKvAdapter {
         let full_prefix = self.full_key(prefix);
 
         // Return cached keys matching prefix
-        Ok(self.cache.read()
+        Ok(self
+            .cache
+            .read()
             .keys()
             .filter(|k| k.starts_with(&full_prefix))
             .cloned()
@@ -287,7 +289,9 @@ impl EdgeStorage for DenoKvAdapter {
     }
 
     fn list(&self, prefix: &str) -> Result<Vec<String>> {
-        Ok(self.cache.read()
+        Ok(self
+            .cache
+            .read()
             .keys()
             .filter(|k| k.starts_with(prefix))
             .cloned()
@@ -347,18 +351,20 @@ impl EdgeStorage for VercelEdgeConfigAdapter {
     fn put(&self, _key: &str, _value: &[u8]) -> Result<()> {
         // Edge Config is read-only at runtime
         Err(NeedleError::InvalidOperation(
-            "Vercel Edge Config is read-only at runtime".into()
+            "Vercel Edge Config is read-only at runtime".into(),
         ))
     }
 
     fn delete(&self, _key: &str) -> Result<()> {
         Err(NeedleError::InvalidOperation(
-            "Vercel Edge Config is read-only at runtime".into()
+            "Vercel Edge Config is read-only at runtime".into(),
         ))
     }
 
     fn list(&self, prefix: &str) -> Result<Vec<String>> {
-        Ok(self.cache.read()
+        Ok(self
+            .cache
+            .read()
             .keys()
             .filter(|k| k.starts_with(prefix))
             .cloned()
@@ -495,9 +501,8 @@ impl<C: EdgeStorage, B: EdgeStorage> EdgeStorage for TieredEdgeStorage<C, B> {
     }
 
     fn list(&self, prefix: &str) -> Result<Vec<String>> {
-        let mut keys: std::collections::HashSet<String> = self.cache.list(prefix)?
-            .into_iter()
-            .collect();
+        let mut keys: std::collections::HashSet<String> =
+            self.cache.list(prefix)?.into_iter().collect();
 
         keys.extend(self.backing.list(prefix)?);
 
@@ -564,14 +569,16 @@ impl<S: EdgeStorage> EdgeStorage for ChunkedEdgeStorage<S> {
             None => return Ok(None),
         };
 
-        let meta: ChunkMetadata = serde_json::from_slice(&meta_bytes)
-            .map_err(NeedleError::Serialization)?;
+        let meta: ChunkMetadata =
+            serde_json::from_slice(&meta_bytes).map_err(NeedleError::Serialization)?;
 
         // Read all chunks
         let mut data = Vec::with_capacity(meta.total_size);
         for i in 0..meta.chunk_count {
             let chunk_key = self.chunk_key(key, i);
-            let chunk = self.inner.get(&chunk_key)?
+            let chunk = self
+                .inner
+                .get(&chunk_key)?
                 .ok_or_else(|| NeedleError::NotFound(format!("Missing chunk {} for {}", i, key)))?;
             data.extend(chunk);
         }
@@ -605,8 +612,7 @@ impl<S: EdgeStorage> EdgeStorage for ChunkedEdgeStorage<S> {
         }
 
         // Write metadata
-        let meta_bytes = serde_json::to_vec(&meta)
-            .map_err(NeedleError::Serialization)?;
+        let meta_bytes = serde_json::to_vec(&meta).map_err(NeedleError::Serialization)?;
         let meta_key = self.meta_key(key);
         self.inner.put(&meta_key, &meta_bytes)?;
 
@@ -634,7 +640,9 @@ impl<S: EdgeStorage> EdgeStorage for ChunkedEdgeStorage<S> {
 
     fn list(&self, prefix: &str) -> Result<Vec<String>> {
         // Get all keys and filter out chunk keys
-        Ok(self.inner.list(prefix)?
+        Ok(self
+            .inner
+            .list(prefix)?
             .into_iter()
             .filter(|k| !k.contains(".__chunk_") && !k.ends_with(".__meta"))
             .collect())
@@ -649,7 +657,7 @@ impl<S: EdgeStorage> EdgeStorage for ChunkedEdgeStorage<S> {
 #[derive(Debug, Clone)]
 pub struct PlatformInfo {
     /// Platform type
-    pub platform: crate::edge_runtime::Platform,
+    pub platform: crate::experimental::edge_runtime::Platform,
     /// Platform version if available
     pub version: Option<String>,
     /// Available storage backends
@@ -676,7 +684,7 @@ impl PlatformInfo {
         // - Generic: fallback
 
         Self {
-            platform: crate::edge_runtime::Platform::GenericWasm,
+            platform: crate::experimental::edge_runtime::Platform::GenericWasm,
             version: None,
             available_storage: vec![StorageType::InMemory],
         }
@@ -697,20 +705,16 @@ impl StorageFactory {
         let info = PlatformInfo::detect();
 
         match info.platform {
-            crate::edge_runtime::Platform::CloudflareWorkers => {
+            crate::experimental::edge_runtime::Platform::CloudflareWorkers => {
                 // Would create tiered KV + R2 storage
-                Box::new(crate::edge_runtime::InMemoryEdgeStorage::new())
+                Box::new(crate::experimental::edge_runtime::InMemoryEdgeStorage::new())
             }
-            crate::edge_runtime::Platform::DenoKv => {
-                Box::new(DenoKvAdapter::new())
-            }
-            crate::edge_runtime::Platform::VercelEdge => {
+            crate::experimental::edge_runtime::Platform::DenoKv => Box::new(DenoKvAdapter::new()),
+            crate::experimental::edge_runtime::Platform::VercelEdge => {
                 // Would create Edge Config + Blob storage
-                Box::new(crate::edge_runtime::InMemoryEdgeStorage::new())
+                Box::new(crate::experimental::edge_runtime::InMemoryEdgeStorage::new())
             }
-            _ => {
-                Box::new(crate::edge_runtime::InMemoryEdgeStorage::new())
-            }
+            _ => Box::new(crate::experimental::edge_runtime::InMemoryEdgeStorage::new()),
         }
     }
 
@@ -721,12 +725,14 @@ impl StorageFactory {
             StorageType::CloudflareR2 => Box::new(CloudflareR2Adapter::new("NEEDLE_R2")),
             StorageType::DenoKv => Box::new(DenoKvAdapter::new()),
             StorageType::VercelEdgeConfig => {
-                Box::new(crate::edge_runtime::InMemoryEdgeStorage::new())
+                Box::new(crate::experimental::edge_runtime::InMemoryEdgeStorage::new())
             }
             StorageType::VercelBlob => {
-                Box::new(crate::edge_runtime::InMemoryEdgeStorage::new())
+                Box::new(crate::experimental::edge_runtime::InMemoryEdgeStorage::new())
             }
-            StorageType::InMemory => Box::new(crate::edge_runtime::InMemoryEdgeStorage::new()),
+            StorageType::InMemory => {
+                Box::new(crate::experimental::edge_runtime::InMemoryEdgeStorage::new())
+            }
         }
     }
 }

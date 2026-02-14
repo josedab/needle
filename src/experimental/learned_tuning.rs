@@ -203,7 +203,8 @@ impl BanditArm {
 
         // UCB1 formula
         if total_pulls > 0 && self.pull_count > 0 {
-            let exploration_term = (2.0 * (total_pulls as f64).ln() / self.pull_count as f64).sqrt();
+            let exploration_term =
+                (2.0 * (total_pulls as f64).ln() / self.pull_count as f64).sqrt();
             self.ucb = self.avg_reward + exploration_term;
         }
     }
@@ -250,16 +251,23 @@ impl OnlineModel {
         }
     }
 
-    fn predict_latency(&self, ef_search: usize, k: usize, filter_complexity: usize, query_norm: f32) -> f64 {
+    fn predict_latency(
+        &self,
+        ef_search: usize,
+        k: usize,
+        filter_complexity: usize,
+        query_norm: f32,
+    ) -> f64 {
         let features = vec![
-            1.0,                        // bias
-            ef_search as f64,           // ef_search
-            k as f64,                   // k
-            filter_complexity as f64,   // filter complexity
-            query_norm as f64,          // query norm
+            1.0,                      // bias
+            ef_search as f64,         // ef_search
+            k as f64,                 // k
+            filter_complexity as f64, // filter complexity
+            query_norm as f64,        // query norm
         ];
 
-        features.iter()
+        features
+            .iter()
             .zip(self.latency_weights.iter())
             .map(|(f, w)| f * w)
             .sum()
@@ -268,13 +276,14 @@ impl OnlineModel {
     fn predict_recall(&self, ef_search: usize, k: usize) -> f64 {
         let log_ef = (ef_search as f64).ln();
         let features = vec![
-            1.0,                // bias
-            ef_search as f64,   // ef_search
-            k as f64,           // k
-            log_ef,             // log(ef_search)
+            1.0,              // bias
+            ef_search as f64, // ef_search
+            k as f64,         // k
+            log_ef,           // log(ef_search)
         ];
 
-        let raw: f64 = features.iter()
+        let raw: f64 = features
+            .iter()
             .zip(self.recall_weights.iter())
             .map(|(f, w)| f * w)
             .sum();
@@ -313,12 +322,7 @@ impl OnlineModel {
             let recall_error = feedback.estimated_recall as f64 - predicted_recall;
 
             let log_ef = (feedback.ef_search as f64).ln();
-            let recall_features = vec![
-                1.0,
-                feedback.ef_search as f64,
-                feedback.k as f64,
-                log_ef,
-            ];
+            let recall_features = vec![1.0, feedback.ef_search as f64, feedback.k as f64, log_ef];
 
             for (i, feature) in recall_features.iter().enumerate() {
                 // Use derivative of sigmoid for logistic regression update
@@ -433,12 +437,21 @@ impl LearnedTuner {
 
             // UCB1 selection for exploration
             let arms = self.arms.read();
-            let best_arm = arms.values()
-                .max_by(|a, b| a.ucb.partial_cmp(&b.ucb).unwrap_or(std::cmp::Ordering::Equal))
+            let best_arm = arms
+                .values()
+                .max_by(|a, b| {
+                    a.ucb
+                        .partial_cmp(&b.ucb)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
                 .map(|a| a.ef_search)
                 .unwrap_or(50);
 
-            (best_arm, true, format!("UCB1 exploration, selected ef_search={}", best_arm))
+            (
+                best_arm,
+                true,
+                format!("UCB1 exploration, selected ef_search={}", best_arm),
+            )
         } else {
             self.exploitation_count.fetch_add(1, Ordering::Relaxed);
 
@@ -481,22 +494,28 @@ impl LearnedTuner {
                 }
             }
 
-            (best_ef, false, format!(
-                "Model exploitation: predicted optimal ef_search={} for recall={:.2}",
-                best_ef, target_recall
-            ))
+            (
+                best_ef,
+                false,
+                format!(
+                    "Model exploitation: predicted optimal ef_search={} for recall={:.2}",
+                    best_ef, target_recall
+                ),
+            )
         };
 
         // Make predictions
         let model = self.model.read();
         let workload = self.workload.read();
 
-        let predicted_latency = model.predict_latency(
-            ef_search,
-            k,
-            workload.avg_filter_complexity as usize,
-            workload.avg_query_norm,
-        ).max(0.1) as f32;
+        let predicted_latency = model
+            .predict_latency(
+                ef_search,
+                k,
+                workload.avg_filter_complexity as usize,
+                workload.avg_query_norm,
+            )
+            .max(0.1) as f32;
 
         let predicted_recall = model.predict_recall(ef_search, k).clamp(0.0, 1.0) as f32;
 
@@ -504,8 +523,9 @@ impl LearnedTuner {
         let arms = self.arms.read();
         let arm_pulls = arms.get(&ef_search).map(|a| a.pull_count).unwrap_or(0);
         let confidence = if total_pulls > 0 {
-            ((arm_pulls as f64 / total_pulls as f64) * (total_samples as f64 / self.config.min_samples as f64).min(1.0))
-                .min(1.0) as f32
+            ((arm_pulls as f64 / total_pulls as f64)
+                * (total_samples as f64 / self.config.min_samples as f64).min(1.0))
+            .min(1.0) as f32
         } else {
             0.0
         };
@@ -540,7 +560,9 @@ impl LearnedTuner {
             let reward = recall_reward * 0.6 + latency_reward * 0.3 + satisfaction_bonus;
 
             // Get or create arm
-            let arm = arms.entry(feedback.ef_search).or_insert_with(|| BanditArm::new(feedback.ef_search));
+            let arm = arms
+                .entry(feedback.ef_search)
+                .or_insert_with(|| BanditArm::new(feedback.ef_search));
             arm.update(reward, total_pulls);
         }
 
@@ -553,22 +575,29 @@ impl LearnedTuner {
             workload.avg_k = workload.avg_k * decay + feedback.k as f32 * (1.0 - decay);
             workload.avg_filter_complexity = workload.avg_filter_complexity * decay
                 + feedback.filter_complexity as f32 * (1.0 - decay);
-            workload.avg_query_norm = workload.avg_query_norm * decay
-                + feedback.query_norm * (1.0 - decay);
+            workload.avg_query_norm =
+                workload.avg_query_norm * decay + feedback.query_norm * (1.0 - decay);
 
             // Infer sensitivities from satisfaction patterns
             if !feedback.satisfied {
                 if feedback.estimated_recall < 0.9 {
-                    workload.recall_sensitivity = (workload.recall_sensitivity * 0.9 + 0.1).min(1.0);
+                    workload.recall_sensitivity =
+                        (workload.recall_sensitivity * 0.9 + 0.1).min(1.0);
                 }
                 if feedback.latency_ms > 10.0 {
-                    workload.latency_sensitivity = (workload.latency_sensitivity * 0.9 + 0.1).min(1.0);
+                    workload.latency_sensitivity =
+                        (workload.latency_sensitivity * 0.9 + 0.1).min(1.0);
                 }
             }
 
             // Update query rate
             if history_len > 0.0 {
-                let oldest = self.history.read().front().map(|f| f.timestamp).unwrap_or(0);
+                let oldest = self
+                    .history
+                    .read()
+                    .front()
+                    .map(|f| f.timestamp)
+                    .unwrap_or(0);
                 let newest = feedback.timestamp;
                 let duration_secs = ((newest - oldest) as f32 / 1000.0).max(1.0);
                 workload.query_rate = history_len / duration_secs;
@@ -601,10 +630,7 @@ impl LearnedTuner {
             history.push_back(feedback);
         }
 
-        debug!(
-            samples = self.history.read().len(),
-            "Recorded feedback"
-        );
+        debug!(samples = self.history.read().len(), "Recorded feedback");
 
         Ok(())
     }
@@ -637,7 +663,11 @@ impl LearnedTuner {
             let arms = self.arms.read();
             arms.values()
                 .filter(|a| a.pull_count > 0)
-                .max_by(|a, b| a.avg_reward.partial_cmp(&b.avg_reward).unwrap_or(std::cmp::Ordering::Equal))
+                .max_by(|a, b| {
+                    a.avg_reward
+                        .partial_cmp(&b.avg_reward)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
                 .map(|a| a.ef_search)
                 .unwrap_or(50)
         };
@@ -746,7 +776,9 @@ impl AdaptiveExecutor {
     /// Get recommended ef_search for a query
     pub fn get_ef_search(&self, k: usize, target_recall: f32) -> usize {
         match self.tuner.recommend_params(k, target_recall) {
-            Ok(params) => params.ef_search.clamp(self.min_ef_search, self.max_ef_search),
+            Ok(params) => params
+                .ef_search
+                .clamp(self.min_ef_search, self.max_ef_search),
             Err(_) => 50, // Fallback
         }
     }
@@ -831,14 +863,16 @@ mod tests {
         let tuner = LearnedTuner::default_tuner();
 
         for i in 0..100 {
-            tuner.record_feedback(QueryFeedback {
-                ef_search: 50,
-                k: 10,
-                latency_ms: 2.0 + (i as f32 * 0.01),
-                estimated_recall: 0.95,
-                satisfied: true,
-                ..Default::default()
-            }).unwrap();
+            tuner
+                .record_feedback(QueryFeedback {
+                    ef_search: 50,
+                    k: 10,
+                    latency_ms: 2.0 + (i as f32 * 0.01),
+                    estimated_recall: 0.95,
+                    satisfied: true,
+                    ..Default::default()
+                })
+                .unwrap();
         }
 
         let stats = tuner.stats();
@@ -857,23 +891,27 @@ mod tests {
 
         // Train on ef_search=100 being better
         for _ in 0..50 {
-            tuner.record_feedback(QueryFeedback {
-                ef_search: 100,
-                k: 10,
-                latency_ms: 3.0,
-                estimated_recall: 0.98,
-                satisfied: true,
-                ..Default::default()
-            }).unwrap();
+            tuner
+                .record_feedback(QueryFeedback {
+                    ef_search: 100,
+                    k: 10,
+                    latency_ms: 3.0,
+                    estimated_recall: 0.98,
+                    satisfied: true,
+                    ..Default::default()
+                })
+                .unwrap();
 
-            tuner.record_feedback(QueryFeedback {
-                ef_search: 50,
-                k: 10,
-                latency_ms: 2.0,
-                estimated_recall: 0.85,
-                satisfied: false,
-                ..Default::default()
-            }).unwrap();
+            tuner
+                .record_feedback(QueryFeedback {
+                    ef_search: 50,
+                    k: 10,
+                    latency_ms: 2.0,
+                    estimated_recall: 0.85,
+                    satisfied: false,
+                    ..Default::default()
+                })
+                .unwrap();
         }
 
         // Should now prefer ef_search=100
@@ -887,14 +925,16 @@ mod tests {
 
         // Record some feedback
         for _ in 0..20 {
-            tuner.record_feedback(QueryFeedback {
-                ef_search: 75,
-                k: 20,
-                latency_ms: 4.0,
-                estimated_recall: 0.93,
-                satisfied: true,
-                ..Default::default()
-            }).unwrap();
+            tuner
+                .record_feedback(QueryFeedback {
+                    ef_search: 75,
+                    k: 20,
+                    latency_ms: 4.0,
+                    estimated_recall: 0.93,
+                    satisfied: true,
+                    ..Default::default()
+                })
+                .unwrap();
         }
 
         // Export state
@@ -917,8 +957,7 @@ mod tests {
     #[test]
     fn test_adaptive_executor() {
         let tuner = LearnedTuner::default_tuner();
-        let executor = AdaptiveExecutor::new(tuner)
-            .with_bounds(20, 200);
+        let executor = AdaptiveExecutor::new(tuner).with_bounds(20, 200);
 
         let ef = executor.get_ef_search(10, 0.95);
         assert!(ef >= 20);
@@ -944,29 +983,38 @@ mod tests {
 
     #[test]
     fn test_workload_profile_update() {
-        let config = TunerConfig::default()
-            .with_learning_rate(0.1);
+        let config = TunerConfig::default().with_learning_rate(0.1);
 
         let tuner = LearnedTuner::new(config);
 
         // Simulate workload with large k values
         // More iterations needed due to exponential moving average decay
         for _ in 0..200 {
-            tuner.record_feedback(QueryFeedback {
-                ef_search: 100,
-                k: 100,
-                latency_ms: 5.0,
-                estimated_recall: 0.95,
-                filter_complexity: 3,
-                satisfied: true,
-                ..Default::default()
-            }).unwrap();
+            tuner
+                .record_feedback(QueryFeedback {
+                    ef_search: 100,
+                    k: 100,
+                    latency_ms: 5.0,
+                    estimated_recall: 0.95,
+                    filter_complexity: 3,
+                    satisfied: true,
+                    ..Default::default()
+                })
+                .unwrap();
         }
 
         let stats = tuner.stats();
         // With decay_factor 0.99, need many samples to converge
         // avg_k should be moving toward 100
-        assert!(stats.workload.avg_k > 10.0, "avg_k should be increasing, got {}", stats.workload.avg_k);
-        assert!(stats.workload.avg_filter_complexity > 0.5, "avg_filter_complexity should be increasing, got {}", stats.workload.avg_filter_complexity);
+        assert!(
+            stats.workload.avg_k > 10.0,
+            "avg_k should be increasing, got {}",
+            stats.workload.avg_k
+        );
+        assert!(
+            stats.workload.avg_filter_complexity > 0.5,
+            "avg_filter_complexity should be increasing, got {}",
+            stats.workload.avg_filter_complexity
+        );
     }
 }

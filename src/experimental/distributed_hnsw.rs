@@ -207,12 +207,10 @@ impl DistributedHnsw {
 
         let mut shards = HashMap::new();
         for &shard_id in &shard_ids {
-            let collection_config = CollectionConfig::new(
-                format!("shard_{}", shard_id.id()),
-                config.dimensions,
-            )
-            .with_distance(config.distance_function)
-            .with_hnsw_config(config.hnsw_config.clone());
+            let collection_config =
+                CollectionConfig::new(format!("shard_{}", shard_id.id()), config.dimensions)
+                    .with_distance(config.distance_function)
+                    .with_hnsw_config(config.hnsw_config.clone());
 
             let collection = Collection::new(collection_config);
             let shard_info = ShardInfo::new(shard_id, collection);
@@ -244,9 +242,9 @@ impl DistributedHnsw {
 
         let shard_id = self.route_id(id);
         let shards = self.shards.read();
-        let shard = shards.get(&shard_id).ok_or_else(|| {
-            NeedleError::InvalidState(format!("Shard {} not found", shard_id))
-        })?;
+        let shard = shards
+            .get(&shard_id)
+            .ok_or_else(|| NeedleError::InvalidState(format!("Shard {} not found", shard_id)))?;
 
         let mut shard_guard = shard.write();
         if shard_guard.state != ShardState::Active {
@@ -286,7 +284,10 @@ impl DistributedHnsw {
                 });
             }
             let shard_id = self.route_id(&id);
-            shard_batches.entry(shard_id).or_default().push((id, vector, metadata));
+            shard_batches
+                .entry(shard_id)
+                .or_default()
+                .push((id, vector, metadata));
         }
 
         let shards = self.shards.read();
@@ -310,7 +311,9 @@ impl DistributedHnsw {
                 if let Err(e) = shard_guard.collection.insert_batch(ids, vecs, metas) {
                     failures.push((shard_id, e.to_string()));
                 } else {
-                    shard_guard.vector_count.fetch_add(count as u64, Ordering::Relaxed);
+                    shard_guard
+                        .vector_count
+                        .fetch_add(count as u64, Ordering::Relaxed);
                     total_inserted += count;
                 }
             }
@@ -392,10 +395,7 @@ impl DistributedHnsw {
         }
 
         // Merge results
-        let total_vectors_searched: usize = successful
-            .iter()
-            .map(|r| r.results.len())
-            .sum();
+        let total_vectors_searched: usize = successful.iter().map(|r| r.results.len()).sum();
 
         let merged = Self::merge_results(&successful, k);
 
@@ -443,9 +443,9 @@ impl DistributedHnsw {
     pub fn delete(&self, id: &str) -> Result<bool> {
         let shard_id = self.route_id(id);
         let shards = self.shards.read();
-        let shard = shards.get(&shard_id).ok_or_else(|| {
-            NeedleError::InvalidState(format!("Shard {} not found", shard_id))
-        })?;
+        let shard = shards
+            .get(&shard_id)
+            .ok_or_else(|| NeedleError::InvalidState(format!("Shard {} not found", shard_id)))?;
 
         let mut shard_guard = shard.write();
         let result = shard_guard.collection.delete(id)?;
@@ -469,7 +469,12 @@ impl DistributedHnsw {
         }
 
         let max_count = counts.iter().max().copied().unwrap_or(0);
-        let min_count = counts.iter().filter(|&&c| c > 0).min().copied().unwrap_or(1);
+        let min_count = counts
+            .iter()
+            .filter(|&&c| c > 0)
+            .min()
+            .copied()
+            .unwrap_or(1);
 
         if min_count > 0 {
             let ratio = max_count as f64 / min_count as f64;
@@ -493,12 +498,10 @@ impl DistributedHnsw {
 
         let new_id = ShardId::new(shards.len() as u32);
 
-        let collection_config = CollectionConfig::new(
-            format!("shard_{}", new_id.id()),
-            self.config.dimensions,
-        )
-        .with_distance(self.config.distance_function)
-        .with_hnsw_config(self.config.hnsw_config.clone());
+        let collection_config =
+            CollectionConfig::new(format!("shard_{}", new_id.id()), self.config.dimensions)
+                .with_distance(self.config.distance_function)
+                .with_hnsw_config(self.config.hnsw_config.clone());
 
         let collection = Collection::new(collection_config);
         let shard_info = ShardInfo::new(new_id, collection);
@@ -522,7 +525,10 @@ impl DistributedHnsw {
                 ));
             }
         } else {
-            return Err(NeedleError::NotFound(format!("Shard {} not found", shard_id)));
+            return Err(NeedleError::NotFound(format!(
+                "Shard {} not found",
+                shard_id
+            )));
         }
 
         shards.remove(&shard_id);
@@ -541,7 +547,12 @@ impl DistributedHnsw {
 
         let total_vectors: u64 = shard_counts.iter().map(|(_, c)| c).sum();
         let max_count = shard_counts.iter().map(|(_, c)| *c).max().unwrap_or(0);
-        let min_count = shard_counts.iter().filter(|(_, c)| *c > 0).map(|(_, c)| *c).min().unwrap_or(1);
+        let min_count = shard_counts
+            .iter()
+            .filter(|(_, c)| *c > 0)
+            .map(|(_, c)| *c)
+            .min()
+            .unwrap_or(1);
         let imbalance_ratio = if min_count > 0 {
             max_count as f64 / min_count as f64
         } else {
@@ -644,7 +655,8 @@ impl<'a> DistributedQueryBuilder<'a> {
 
     /// Execute the search
     pub fn execute(self) -> Result<DistributedSearchResult> {
-        self.index.search_with_filter(&self.query, self.k, self.filter.as_ref())
+        self.index
+            .search_with_filter(&self.query, self.k, self.filter.as_ref())
     }
 }
 
@@ -779,7 +791,9 @@ mod tests {
                 "category": if i % 2 == 0 { "even" } else { "odd" },
                 "index": i
             });
-            index.insert(&format!("vec_{}", i), &vector, Some(metadata)).unwrap();
+            index
+                .insert(&format!("vec_{}", i), &vector, Some(metadata))
+                .unwrap();
         }
 
         // Search with filter

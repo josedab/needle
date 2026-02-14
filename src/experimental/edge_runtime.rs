@@ -75,24 +75,24 @@ impl Platform {
     /// Get platform-specific max execution time in ms
     pub fn max_execution_time_ms(&self) -> u64 {
         match self {
-            Platform::CloudflareWorkers => 30_000,  // 30s (paid)
-            Platform::DenoKv => 60_000,             // 60s
-            Platform::VercelEdge => 30_000,         // 30s
-            Platform::FastlyCompute => 60_000,      // 60s
-            Platform::LambdaEdge => 5_000,          // 5s (viewer request)
-            Platform::GenericWasm => 120_000,       // 2 min
+            Platform::CloudflareWorkers => 30_000, // 30s (paid)
+            Platform::DenoKv => 60_000,            // 60s
+            Platform::VercelEdge => 30_000,        // 30s
+            Platform::FastlyCompute => 60_000,     // 60s
+            Platform::LambdaEdge => 5_000,         // 5s (viewer request)
+            Platform::GenericWasm => 120_000,      // 2 min
         }
     }
 
     /// Get platform-specific max storage size per key in bytes
     pub fn max_storage_value_size(&self) -> usize {
         match self {
-            Platform::CloudflareWorkers => 25 * 1024 * 1024,  // 25 MB (R2)
-            Platform::DenoKv => 64 * 1024,                     // 64 KB
-            Platform::VercelEdge => 4 * 1024 * 1024,           // 4 MB
-            Platform::FastlyCompute => 8 * 1024 * 1024,        // 8 MB
-            Platform::LambdaEdge => 40 * 1024,                 // 40 KB (response)
-            Platform::GenericWasm => 100 * 1024 * 1024,        // 100 MB
+            Platform::CloudflareWorkers => 25 * 1024 * 1024, // 25 MB (R2)
+            Platform::DenoKv => 64 * 1024,                   // 64 KB
+            Platform::VercelEdge => 4 * 1024 * 1024,         // 4 MB
+            Platform::FastlyCompute => 8 * 1024 * 1024,      // 8 MB
+            Platform::LambdaEdge => 40 * 1024,               // 40 KB (response)
+            Platform::GenericWasm => 100 * 1024 * 1024,      // 100 MB
         }
     }
 
@@ -197,9 +197,9 @@ pub struct EdgeHnswConfig {
 impl Default for EdgeHnswConfig {
     fn default() -> Self {
         Self {
-            m: 12,              // Reduced from 16 for memory
+            m: 12,                // Reduced from 16 for memory
             ef_construction: 100, // Reduced from 200
-            ef_search: 30,      // Reduced from 50 for speed
+            ef_search: 30,        // Reduced from 50 for speed
         }
     }
 }
@@ -315,7 +315,12 @@ impl IndexSegment {
     }
 
     /// Add a vector to the segment
-    pub fn add_vector(&mut self, id: String, vector: Vec<f32>, metadata: Option<serde_json::Value>) {
+    pub fn add_vector(
+        &mut self,
+        id: String,
+        vector: Vec<f32>,
+        metadata: Option<serde_json::Value>,
+    ) {
         self.vector_ids.push(id.clone());
         self.vectors.push(vector);
         if let Some(meta) = metadata {
@@ -473,7 +478,9 @@ impl EdgeStorage for InMemoryEdgeStorage {
     }
 
     fn list(&self, prefix: &str) -> Result<Vec<String>> {
-        Ok(self.data.read()
+        Ok(self
+            .data
+            .read()
             .keys()
             .filter(|k| k.starts_with(prefix))
             .cloned()
@@ -572,7 +579,8 @@ impl SearchCache {
 
         // Evict oldest if at capacity
         while entries.len() >= self.max_entries {
-            let oldest = entries.iter()
+            let oldest = entries
+                .iter()
                 .min_by_key(|(_, v)| v.created_at)
                 .map(|(k, _)| *k);
             if let Some(key) = oldest {
@@ -583,11 +591,14 @@ impl SearchCache {
             }
         }
 
-        entries.insert(hash, CachedResult {
-            results,
-            query_hash: hash,
-            created_at: std::time::Instant::now(),
-        });
+        entries.insert(
+            hash,
+            CachedResult {
+                results,
+                query_hash: hash,
+                created_at: std::time::Instant::now(),
+            },
+        );
 
         // Store query vector for semantic matching
         self.query_vectors.write().insert(hash, query.to_vec());
@@ -718,7 +729,8 @@ impl EdgeRuntime {
     pub fn load_collection<S: EdgeStorage>(&mut self, name: &str, storage: &S) -> Result<()> {
         // Load manifest
         let manifest_key = format!("{}/manifest.json", name);
-        let manifest_bytes = storage.get(&manifest_key)?
+        let manifest_bytes = storage
+            .get(&manifest_key)?
             .ok_or_else(|| NeedleError::NotFound(format!("Collection '{}' not found", name)))?;
 
         let manifest_str = String::from_utf8(manifest_bytes)
@@ -755,7 +767,9 @@ impl EdgeRuntime {
     /// Load all segments from storage
     fn load_all_segments<S: EdgeStorage>(&mut self, storage: &S) -> Result<()> {
         let segment_ids: Vec<u32> = {
-            let manifest = self.manifest.as_ref()
+            let manifest = self
+                .manifest
+                .as_ref()
                 .ok_or_else(|| NeedleError::InvalidState("No manifest loaded".into()))?;
             manifest.segments.iter().map(|s| s.id).collect()
         };
@@ -773,17 +787,22 @@ impl EdgeRuntime {
             return Ok(()); // Already loaded
         }
 
-        let manifest = self.manifest.as_ref()
+        let manifest = self
+            .manifest
+            .as_ref()
             .ok_or_else(|| NeedleError::InvalidState("No manifest loaded".into()))?;
 
         let segment_key = format!("{}/segment_{}.bin", manifest.name, segment_id);
-        let segment_bytes = storage.get(&segment_key)?
+        let segment_bytes = storage
+            .get(&segment_key)?
             .ok_or_else(|| NeedleError::NotFound(format!("Segment {} not found", segment_id)))?;
 
         let segment = IndexSegment::from_bytes(&segment_bytes)?;
 
         // Add vectors to collection
-        let collection = self.collection.as_mut()
+        let collection = self
+            .collection
+            .as_mut()
             .ok_or_else(|| NeedleError::InvalidState("No collection initialized".into()))?;
 
         for (i, id) in segment.vector_ids.iter().enumerate() {
@@ -801,10 +820,14 @@ impl EdgeRuntime {
 
     /// Save collection to edge storage
     pub fn save_collection<S: EdgeStorage>(&mut self, storage: &S) -> Result<()> {
-        let collection = self.collection.as_ref()
+        let collection = self
+            .collection
+            .as_ref()
             .ok_or_else(|| NeedleError::InvalidState("No collection initialized".into()))?;
 
-        let manifest = self.manifest.as_mut()
+        let manifest = self
+            .manifest
+            .as_mut()
             .ok_or_else(|| NeedleError::InvalidState("No manifest initialized".into()))?;
 
         // Partition vectors into segments
@@ -858,7 +881,9 @@ impl EdgeRuntime {
         vector: &[f32],
         metadata: Option<serde_json::Value>,
     ) -> Result<()> {
-        let collection = self.collection.as_mut()
+        let collection = self
+            .collection
+            .as_mut()
             .ok_or_else(|| NeedleError::InvalidState("No collection initialized".into()))?;
 
         collection.insert(id, vector, metadata)?;
@@ -880,7 +905,9 @@ impl EdgeRuntime {
         }
         self.stats.cache_misses += 1;
 
-        let collection = self.collection.as_ref()
+        let collection = self
+            .collection
+            .as_ref()
             .ok_or_else(|| NeedleError::InvalidState("No collection initialized".into()))?;
 
         let results = collection.search(query, k)?;
@@ -901,7 +928,9 @@ impl EdgeRuntime {
         self.stats.search_count += 1;
         self.stats.cache_misses += 1; // Filtered searches bypass cache
 
-        let collection = self.collection.as_ref()
+        let collection = self
+            .collection
+            .as_ref()
             .ok_or_else(|| NeedleError::InvalidState("No collection initialized".into()))?;
 
         collection.search_with_filter(query, k, filter)
@@ -909,12 +938,17 @@ impl EdgeRuntime {
 
     /// Get a vector by ID
     pub fn get(&self, id: &str) -> Option<(Vec<f32>, Option<serde_json::Value>)> {
-        self.collection.as_ref()?.get(id).map(|(v, m)| (v.to_vec(), m.cloned()))
+        self.collection
+            .as_ref()?
+            .get(id)
+            .map(|(v, m)| (v.to_vec(), m.cloned()))
     }
 
     /// Delete a vector
     pub fn delete(&mut self, id: &str) -> Result<bool> {
-        let collection = self.collection.as_mut()
+        let collection = self
+            .collection
+            .as_mut()
             .ok_or_else(|| NeedleError::InvalidState("No collection initialized".into()))?;
 
         let deleted = collection.delete(id)?;
@@ -1076,11 +1110,7 @@ pub struct LazySegmentLoader {
 
 impl LazySegmentLoader {
     /// Create a new lazy segment loader
-    pub fn new(
-        manifest: EdgeManifest,
-        storage: Box<dyn EdgeStorage>,
-        max_segments: usize,
-    ) -> Self {
+    pub fn new(manifest: EdgeManifest, storage: Box<dyn EdgeStorage>, max_segments: usize) -> Self {
         Self {
             manifest,
             loaded_segments: HashMap::new(),
@@ -1104,7 +1134,10 @@ impl LazySegmentLoader {
             // Move to end of LRU order (most recently used)
             self.load_order.retain(|id| id != segment_id);
             self.load_order.push(segment_id.to_string());
-            return Ok(self.loaded_segments.get(segment_id).expect("segment was just loaded"));
+            return Ok(self
+                .loaded_segments
+                .get(segment_id)
+                .expect("segment was just loaded"));
         }
 
         // Evict LRU segment if at capacity
@@ -1129,11 +1162,13 @@ impl LazySegmentLoader {
         self.total_loads += 1;
         self.total_load_time_us += elapsed_us;
 
-        self.loaded_segments
-            .insert(segment_id.to_string(), segment);
+        self.loaded_segments.insert(segment_id.to_string(), segment);
         self.load_order.push(segment_id.to_string());
 
-        Ok(self.loaded_segments.get(segment_id).expect("segment was just loaded"))
+        Ok(self
+            .loaded_segments
+            .get(segment_id)
+            .expect("segment was just loaded"))
     }
 
     /// Preload specific segments, returns number successfully loaded
@@ -1356,7 +1391,10 @@ impl EdgeSearchCache {
         }
 
         self.hits += 1;
-        let entry = self.cache.get_mut(&query_hash).expect("entry was just inserted");
+        let entry = self
+            .cache
+            .get_mut(&query_hash)
+            .expect("entry was just inserted");
         entry.access_count += 1;
         Some(&entry.results)
     }
@@ -1564,7 +1602,11 @@ impl EdgeRuntimeEnhanced {
         }
 
         // Sort by distance and take top-k
-        all_results.sort_by(|a, b| a.distance.partial_cmp(&b.distance).unwrap_or(std::cmp::Ordering::Equal));
+        all_results.sort_by(|a, b| {
+            a.distance
+                .partial_cmp(&b.distance)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         all_results.truncate(k);
 
         // Cache results
@@ -1620,7 +1662,9 @@ mod tests {
     fn test_edge_runtime_basic() {
         let mut runtime = EdgeRuntime::new(EdgeConfig::default());
 
-        runtime.create_collection("test", 128, DistanceFunction::Cosine).unwrap();
+        runtime
+            .create_collection("test", 128, DistanceFunction::Cosine)
+            .unwrap();
 
         // Insert vectors
         for i in 0..100 {
@@ -1643,8 +1687,16 @@ mod tests {
 
         let query = vec![1.0, 2.0, 3.0];
         let results = vec![
-            SearchResult { id: "a".into(), distance: 0.1, metadata: None },
-            SearchResult { id: "b".into(), distance: 0.2, metadata: None },
+            SearchResult {
+                id: "a".into(),
+                distance: 0.1,
+                metadata: None,
+            },
+            SearchResult {
+                id: "b".into(),
+                distance: 0.2,
+                metadata: None,
+            },
         ];
 
         // Initially no cache
@@ -1671,9 +1723,11 @@ mod tests {
         let query2 = vec![0.999, 0.001, 0.0]; // Very similar
         let query3 = vec![0.0, 1.0, 0.0]; // Different
 
-        let results = vec![
-            SearchResult { id: "a".into(), distance: 0.1, metadata: None },
-        ];
+        let results = vec![SearchResult {
+            id: "a".into(),
+            distance: 0.1,
+            metadata: None,
+        }];
 
         cache.put(&query1, results);
 
@@ -1689,7 +1743,11 @@ mod tests {
         let mut segment = IndexSegment::new(0, 0);
 
         segment.add_vector("v1".into(), vec![1.0, 2.0], None);
-        segment.add_vector("v2".into(), vec![3.0, 4.0], Some(serde_json::json!({"key": "value"})));
+        segment.add_vector(
+            "v2".into(),
+            vec![3.0, 4.0],
+            Some(serde_json::json!({"key": "value"})),
+        );
 
         assert_eq!(segment.metadata.vector_count, 2);
         assert!(!segment.is_full(10));
@@ -1708,9 +1766,13 @@ mod tests {
         let mut runtime = EdgeRuntime::new(EdgeConfig::default());
 
         // Create and populate collection
-        runtime.create_collection("test", 64, DistanceFunction::Cosine).unwrap();
+        runtime
+            .create_collection("test", 64, DistanceFunction::Cosine)
+            .unwrap();
         for i in 0..50 {
-            runtime.insert(format!("v{}", i), &random_vector(64), None).unwrap();
+            runtime
+                .insert(format!("v{}", i), &random_vector(64), None)
+                .unwrap();
         }
 
         // Save to storage
@@ -1775,8 +1837,7 @@ mod tests {
         vectors_per_segment: usize,
         dim: usize,
     ) -> EdgeManifest {
-        let mut manifest =
-            EdgeManifest::new(collection_name, dim, DistanceFunction::Cosine);
+        let mut manifest = EdgeManifest::new(collection_name, dim, DistanceFunction::Cosine);
 
         for seg_idx in 0..num_segments {
             let mut segment = IndexSegment::new(seg_idx as u32, seg_idx * vectors_per_segment);
@@ -1876,8 +1937,7 @@ mod tests {
 
     #[test]
     fn test_cold_start_optimizer_plan_warmup_none() {
-        let manifest =
-            EdgeManifest::new("test", 4, DistanceFunction::Cosine);
+        let manifest = EdgeManifest::new("test", 4, DistanceFunction::Cosine);
         let optimizer = ColdStartOptimizer::new(Platform::CloudflareWorkers)
             .with_strategy(WarmupStrategy::None);
 
@@ -1901,8 +1961,7 @@ mod tests {
 
     #[test]
     fn test_cold_start_optimizer_plan_warmup_smallest() {
-        let mut manifest =
-            EdgeManifest::new("test", 4, DistanceFunction::Cosine);
+        let mut manifest = EdgeManifest::new("test", 4, DistanceFunction::Cosine);
         manifest.add_segment(SegmentMetadata {
             id: 0,
             vector_count: 10,
@@ -1943,13 +2002,9 @@ mod tests {
 
     #[test]
     fn test_cold_start_optimizer_plan_warmup_custom() {
-        let manifest =
-            EdgeManifest::new("test", 4, DistanceFunction::Cosine);
+        let manifest = EdgeManifest::new("test", 4, DistanceFunction::Cosine);
         let optimizer = ColdStartOptimizer::new(Platform::VercelEdge)
-            .with_strategy(WarmupStrategy::Custom(vec![
-                "seg_a".into(),
-                "seg_b".into(),
-            ]));
+            .with_strategy(WarmupStrategy::Custom(vec!["seg_a".into(), "seg_b".into()]));
 
         let plan = optimizer.plan_warmup(&manifest);
         assert_eq!(plan, vec!["seg_a", "seg_b"]);
@@ -2025,11 +2080,14 @@ mod tests {
         let mut cache = EdgeSearchCache::new(10, Duration::from_millis(1));
 
         let hash = EdgeSearchCache::hash_query(&[1.0], 1);
-        cache.put(hash, vec![EdgeSearchResult {
-            id: "x".into(),
-            distance: 0.0,
-            segment_id: "s0".into(),
-        }]);
+        cache.put(
+            hash,
+            vec![EdgeSearchResult {
+                id: "x".into(),
+                distance: 0.0,
+                segment_id: "s0".into(),
+            }],
+        );
 
         // Sleep to let TTL expire
         std::thread::sleep(Duration::from_millis(5));

@@ -122,7 +122,8 @@ impl KMeans {
             match Self::fit_single(vectors, k, &config, seed) {
                 Ok(result) => {
                     if best_result.is_none()
-                        || result.inertia < best_result.as_ref().expect("checked is_none above").inertia
+                        || result.inertia
+                            < best_result.as_ref().expect("checked is_none above").inertia
                     {
                         best_result = Some(result);
                     }
@@ -670,11 +671,7 @@ pub fn elbow_method(vectors: &[&[f32]], max_k: usize, config: &ClusteringConfig)
 }
 
 /// Silhouette score for clustering quality
-pub fn silhouette_score(
-    vectors: &[&[f32]],
-    labels: &[usize],
-    distance: &DistanceFunction,
-) -> f32 {
+pub fn silhouette_score(vectors: &[&[f32]], labels: &[usize], distance: &DistanceFunction) -> f32 {
     if vectors.len() != labels.len() || vectors.is_empty() {
         return 0.0;
     }
@@ -821,10 +818,12 @@ mod tests {
 
     #[test]
     fn test_hierarchical_clustering() {
-        let vectors = [vec![0.0, 0.0],
+        let vectors = [
+            vec![0.0, 0.0],
             vec![0.1, 0.1],
             vec![5.0, 5.0],
-            vec![5.1, 5.1]];
+            vec![5.1, 5.1],
+        ];
         let refs: Vec<&[f32]> = vectors.iter().map(|v| v.as_slice()).collect();
 
         let hc = HierarchicalClustering::fit(&refs, Linkage::Single, DistanceFunction::Euclidean);

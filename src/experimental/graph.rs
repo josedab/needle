@@ -770,8 +770,7 @@ mod tests {
     #[test]
     fn test_graph_build() {
         let (vectors, ids) = create_test_data();
-        let graph =
-            SemanticGraph::build(&vectors, &ids, GraphConfig::with_k(5)).unwrap();
+        let graph = SemanticGraph::build(&vectors, &ids, GraphConfig::with_k(5)).unwrap();
 
         assert_eq!(graph.num_nodes(), 20);
         assert!(graph.num_edges() > 0);
@@ -780,8 +779,7 @@ mod tests {
     #[test]
     fn test_neighbors() {
         let (vectors, ids) = create_test_data();
-        let graph =
-            SemanticGraph::build(&vectors, &ids, GraphConfig::with_k(5)).unwrap();
+        let graph = SemanticGraph::build(&vectors, &ids, GraphConfig::with_k(5)).unwrap();
 
         let neighbors = graph.neighbors("cluster1_0");
         assert!(!neighbors.is_empty());
@@ -797,8 +795,7 @@ mod tests {
     #[test]
     fn test_find_path() {
         let (vectors, ids) = create_test_data();
-        let graph =
-            SemanticGraph::build(&vectors, &ids, GraphConfig::with_k(5)).unwrap();
+        let graph = SemanticGraph::build(&vectors, &ids, GraphConfig::with_k(5)).unwrap();
 
         // Path within same cluster should exist
         let path = graph.find_path("cluster1_0", "cluster1_5");
@@ -813,8 +810,7 @@ mod tests {
     #[test]
     fn test_best_path() {
         let (vectors, ids) = create_test_data();
-        let graph =
-            SemanticGraph::build(&vectors, &ids, GraphConfig::with_k(5)).unwrap();
+        let graph = SemanticGraph::build(&vectors, &ids, GraphConfig::with_k(5)).unwrap();
 
         let path = graph.find_best_path("cluster1_0", "cluster1_5");
         assert!(path.is_some());
@@ -823,8 +819,7 @@ mod tests {
     #[test]
     fn test_neighborhood() {
         let (vectors, ids) = create_test_data();
-        let graph =
-            SemanticGraph::build(&vectors, &ids, GraphConfig::with_k(5)).unwrap();
+        let graph = SemanticGraph::build(&vectors, &ids, GraphConfig::with_k(5)).unwrap();
 
         let neighborhood = graph.get_neighborhood("cluster1_0", 2);
         assert_eq!(neighborhood.center, "cluster1_0");
@@ -834,8 +829,7 @@ mod tests {
     #[test]
     fn test_detect_communities() {
         let (vectors, ids) = create_test_data();
-        let graph =
-            SemanticGraph::build(&vectors, &ids, GraphConfig::with_k(3)).unwrap();
+        let graph = SemanticGraph::build(&vectors, &ids, GraphConfig::with_k(3)).unwrap();
 
         let communities = graph.detect_communities();
         assert!(!communities.is_empty());
@@ -848,8 +842,7 @@ mod tests {
     #[test]
     fn test_graph_stats() {
         let (vectors, ids) = create_test_data();
-        let graph =
-            SemanticGraph::build(&vectors, &ids, GraphConfig::with_k(5)).unwrap();
+        let graph = SemanticGraph::build(&vectors, &ids, GraphConfig::with_k(5)).unwrap();
 
         let stats = graph.stats();
         assert_eq!(stats.num_nodes, 20);
@@ -860,8 +853,7 @@ mod tests {
     #[test]
     fn test_top_nodes_by_degree() {
         let (vectors, ids) = create_test_data();
-        let graph =
-            SemanticGraph::build(&vectors, &ids, GraphConfig::with_k(5)).unwrap();
+        let graph = SemanticGraph::build(&vectors, &ids, GraphConfig::with_k(5)).unwrap();
 
         let top = graph.top_nodes_by_degree(5);
         assert_eq!(top.len(), 5);
@@ -875,8 +867,7 @@ mod tests {
     #[test]
     fn test_find_similar() {
         let (vectors, ids) = create_test_data();
-        let graph =
-            SemanticGraph::build(&vectors, &ids, GraphConfig::with_k(5)).unwrap();
+        let graph = SemanticGraph::build(&vectors, &ids, GraphConfig::with_k(5)).unwrap();
 
         // Query similar to cluster 1
         let query = vec![1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
@@ -890,8 +881,7 @@ mod tests {
     #[test]
     fn test_edge_list_export() {
         let (vectors, ids) = create_test_data();
-        let graph =
-            SemanticGraph::build(&vectors, &ids, GraphConfig::with_k(5)).unwrap();
+        let graph = SemanticGraph::build(&vectors, &ids, GraphConfig::with_k(5)).unwrap();
 
         let edges = graph.to_edge_list();
         assert!(!edges.is_empty());
@@ -905,8 +895,7 @@ mod tests {
         let vectors: Vec<Vec<f32>> = Vec::new();
         let ids: Vec<String> = Vec::new();
 
-        let graph =
-            SemanticGraph::build(&vectors, &ids, GraphConfig::default()).unwrap();
+        let graph = SemanticGraph::build(&vectors, &ids, GraphConfig::default()).unwrap();
 
         assert_eq!(graph.num_nodes(), 0);
         assert_eq!(graph.num_edges(), 0);
@@ -917,8 +906,7 @@ mod tests {
         let vectors = vec![vec![1.0, 0.0, 0.0]];
         let ids = vec!["single".to_string()];
 
-        let graph =
-            SemanticGraph::build(&vectors, &ids, GraphConfig::default()).unwrap();
+        let graph = SemanticGraph::build(&vectors, &ids, GraphConfig::default()).unwrap();
 
         assert_eq!(graph.num_nodes(), 1);
         assert_eq!(graph.neighbors("single").len(), 0);

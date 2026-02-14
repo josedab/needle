@@ -166,8 +166,7 @@ impl WorkloadProfile {
         if used_filter {
             self.filter_query_count += 1;
         }
-        self.queries_with_filters_pct =
-            self.filter_query_count as f64 / self.query_count as f64;
+        self.queries_with_filters_pct = self.filter_query_count as f64 / self.query_count as f64;
     }
 
     fn update_vector_stats(&mut self, count: usize, dims: usize) {
@@ -355,8 +354,7 @@ impl AdaptiveIndex {
         // Auto-migrate if enabled and the recommendation has changed.
         if self.config.auto_migrate {
             let rec = self.analyze_workload();
-            if rec.recommended != self.active_strategy
-                && rec.recommended != IndexStrategy::DiskAnn
+            if rec.recommended != self.active_strategy && rec.recommended != IndexStrategy::DiskAnn
             {
                 let _ = self.migrate_index(rec.recommended);
             }
@@ -545,8 +543,7 @@ impl AdaptiveIndex {
             };
         }
 
-        let projected_memory =
-            profile.vector_count * cfg.bytes_per_vector_estimate;
+        let projected_memory = profile.vector_count * cfg.bytes_per_vector_estimate;
         let budget_constrained =
             cfg.memory_budget_bytes > 0 && projected_memory > cfg.memory_budget_bytes;
         let severely_constrained =
@@ -684,8 +681,8 @@ impl AdaptiveIndex {
 
     fn brute_force_search(&self, query: &[f32], k: usize) -> Vec<SearchResult> {
         use ordered_float::OrderedFloat;
-        use std::collections::BinaryHeap;
         use std::cmp::Reverse;
+        use std::collections::BinaryHeap;
 
         let mut heap: BinaryHeap<Reverse<(OrderedFloat<f32>, usize)>> = BinaryHeap::new();
 
@@ -963,15 +960,12 @@ mod tests {
             auto_migrate: true,
             ..Default::default()
         };
-        let mut idx = AdaptiveIndex::new(
-            4,
-            DistanceFunction::Cosine,
-            IndexStrategy::BruteForce,
-            cfg,
-        );
+        let mut idx =
+            AdaptiveIndex::new(4, DistanceFunction::Cosine, IndexStrategy::BruteForce, cfg);
         // Insert enough vectors to trigger migration from brute-force.
         for i in 0..10 {
-            idx.insert(format!("v{i}"), &random_vec(4, i as u64)).unwrap();
+            idx.insert(format!("v{i}"), &random_vec(4, i as u64))
+                .unwrap();
         }
         // Should have auto-migrated to HNSW since brute_force_max_vectors=5.
         assert_eq!(idx.active_strategy(), IndexStrategy::Hnsw);
