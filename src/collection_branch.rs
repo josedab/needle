@@ -494,8 +494,10 @@ mod tests {
     #[test]
     fn test_create_and_list_branches() {
         let mut tree = BranchTree::new();
-        tree.create_branch("dev", "main").expect("create dev");
-        tree.create_branch("feature", "dev").expect("create feature");
+        tree.create_branch("dev", "main")
+            .expect("failed to create 'dev' branch from 'main' — 'main' should exist by default");
+        tree.create_branch("feature", "dev")
+            .expect("failed to create 'feature' branch from 'dev' — 'dev' was just created");
 
         let branches = tree.list_branches();
         assert_eq!(branches.len(), 3);
@@ -504,33 +506,52 @@ mod tests {
     #[test]
     fn test_duplicate_branch() {
         let mut tree = BranchTree::new();
-        tree.create_branch("dev", "main").expect("create");
+        tree.create_branch("dev", "main")
+            .expect("failed to create 'dev' branch from 'main'");
         assert!(tree.create_branch("dev", "main").is_err());
     }
 
     #[test]
     fn test_insert_and_get_with_cow() {
         let mut tree = BranchTree::new();
-        tree.insert("main", "d1", vec![1.0, 2.0]).expect("insert");
-        tree.create_branch("dev", "main").expect("create");
+        tree.insert("main", "d1", vec![1.0, 2.0])
+            .expect("failed to insert 'd1' into 'main' branch");
+        tree.create_branch("dev", "main")
+            .expect("failed to create 'dev' branch from 'main'");
 
         // Dev inherits from main
-        assert_eq!(tree.get("dev", "d1").expect("get"), &[1.0, 2.0]);
+        assert_eq!(
+            tree.get("dev", "d1")
+                .expect("failed to get 'd1' from 'dev' — should inherit from 'main'"),
+            &[1.0, 2.0]
+        );
 
         // Override on dev
-        tree.insert("dev", "d1", vec![3.0, 4.0]).expect("insert");
-        assert_eq!(tree.get("dev", "d1").expect("get"), &[3.0, 4.0]);
+        tree.insert("dev", "d1", vec![3.0, 4.0])
+            .expect("failed to insert override for 'd1' on 'dev' branch");
+        assert_eq!(
+            tree.get("dev", "d1")
+                .expect("failed to get 'd1' from 'dev' after override"),
+            &[3.0, 4.0]
+        );
 
         // Main unchanged
-        assert_eq!(tree.get("main", "d1").expect("get"), &[1.0, 2.0]);
+        assert_eq!(
+            tree.get("main", "d1")
+                .expect("failed to get 'd1' from 'main' — should be unchanged after dev override"),
+            &[1.0, 2.0]
+        );
     }
 
     #[test]
     fn test_delete_on_branch() {
         let mut tree = BranchTree::new();
-        tree.insert("main", "d1", vec![1.0]).expect("insert");
-        tree.create_branch("dev", "main").expect("create");
-        tree.delete("dev", "d1").expect("delete");
+        tree.insert("main", "d1", vec![1.0])
+            .expect("failed to insert 'd1' into 'main'");
+        tree.create_branch("dev", "main")
+            .expect("failed to create 'dev' branch from 'main'");
+        tree.delete("dev", "d1")
+            .expect("failed to delete 'd1' from 'dev' branch");
 
         // Deleted on dev
         assert!(tree.get("dev", "d1").is_err());
@@ -541,43 +562,60 @@ mod tests {
     #[test]
     fn test_list_ids() {
         let mut tree = BranchTree::new();
-        tree.insert("main", "a", vec![1.0]).expect("insert");
-        tree.insert("main", "b", vec![2.0]).expect("insert");
-        tree.create_branch("dev", "main").expect("create");
-        tree.insert("dev", "c", vec![3.0]).expect("insert");
-        tree.delete("dev", "a").expect("delete");
+        tree.insert("main", "a", vec![1.0])
+            .expect("failed to insert 'a' into 'main'");
+        tree.insert("main", "b", vec![2.0])
+            .expect("failed to insert 'b' into 'main'");
+        tree.create_branch("dev", "main")
+            .expect("failed to create 'dev' branch from 'main'");
+        tree.insert("dev", "c", vec![3.0])
+            .expect("failed to insert 'c' into 'dev'");
+        tree.delete("dev", "a")
+            .expect("failed to delete 'a' from 'dev'");
 
-        let ids = tree.list_ids("dev").expect("list");
+        let ids = tree.list_ids("dev")
+            .expect("failed to list IDs for 'dev' branch");
         assert_eq!(ids, vec!["b", "c"]);
 
-        let main_ids = tree.list_ids("main").expect("list");
+        let main_ids = tree.list_ids("main")
+            .expect("failed to list IDs for 'main' branch");
         assert_eq!(main_ids, vec!["a", "b"]);
     }
 
     #[test]
     fn test_diff() {
         let mut tree = BranchTree::new();
-        tree.insert("main", "d1", vec![1.0]).expect("insert");
-        tree.insert("main", "d2", vec![2.0]).expect("insert");
-        tree.create_branch("dev", "main").expect("create");
-        tree.insert("dev", "d1", vec![1.1]).expect("modify");
-        tree.insert("dev", "d3", vec![3.0]).expect("new");
-        tree.delete("dev", "d2").expect("delete");
+        tree.insert("main", "d1", vec![1.0])
+            .expect("failed to insert 'd1' into 'main'");
+        tree.insert("main", "d2", vec![2.0])
+            .expect("failed to insert 'd2' into 'main'");
+        tree.create_branch("dev", "main")
+            .expect("failed to create 'dev' branch from 'main'");
+        tree.insert("dev", "d1", vec![1.1])
+            .expect("failed to modify 'd1' on 'dev'");
+        tree.insert("dev", "d3", vec![3.0])
+            .expect("failed to insert new 'd3' on 'dev'");
+        tree.delete("dev", "d2")
+            .expect("failed to delete 'd2' from 'dev'");
 
-        let diffs = tree.diff("dev", "main").expect("diff");
+        let diffs = tree.diff("dev", "main")
+            .expect("failed to diff 'dev' against 'main'");
         assert_eq!(diffs.len(), 3);
     }
 
     #[test]
     fn test_merge_no_conflicts() {
         let mut tree = BranchTree::new();
-        tree.insert("main", "d1", vec![1.0]).expect("insert");
-        tree.create_branch("dev", "main").expect("create");
-        tree.insert("dev", "d2", vec![2.0]).expect("insert");
+        tree.insert("main", "d1", vec![1.0])
+            .expect("failed to insert 'd1' into 'main'");
+        tree.create_branch("dev", "main")
+            .expect("failed to create 'dev' branch from 'main'");
+        tree.insert("dev", "d2", vec![2.0])
+            .expect("failed to insert 'd2' into 'dev'");
 
         let result = tree
             .merge("dev", "main", MergeStrategy::SourceWins)
-            .expect("merge");
+            .expect("failed to merge 'dev' into 'main' with SourceWins strategy");
         assert_eq!(result.merged, 1);
         assert_eq!(result.conflicts, 0);
         assert!(tree.contains("main", "d2"));
@@ -586,46 +624,66 @@ mod tests {
     #[test]
     fn test_merge_with_conflicts() {
         let mut tree = BranchTree::new();
-        tree.insert("main", "d1", vec![1.0]).expect("insert");
-        tree.create_branch("dev", "main").expect("create");
+        tree.insert("main", "d1", vec![1.0])
+            .expect("failed to insert 'd1' into 'main'");
+        tree.create_branch("dev", "main")
+            .expect("failed to create 'dev' branch from 'main'");
 
         // Both branches modify d1
-        tree.insert("main", "d1", vec![1.1]).expect("main modify");
-        tree.insert("dev", "d1", vec![1.2]).expect("dev modify");
-        tree.insert("dev", "d2", vec![2.0]).expect("new on dev");
+        tree.insert("main", "d1", vec![1.1])
+            .expect("failed to modify 'd1' on 'main' — simulating concurrent edit");
+        tree.insert("dev", "d1", vec![1.2])
+            .expect("failed to modify 'd1' on 'dev' — simulating concurrent edit");
+        tree.insert("dev", "d2", vec![2.0])
+            .expect("failed to insert new 'd2' on 'dev'");
 
         // Source wins: dev's d1 overwrites main's
         let result = tree
             .merge("dev", "main", MergeStrategy::SourceWins)
-            .expect("merge");
+            .expect("failed to merge 'dev' into 'main' with SourceWins — conflict on 'd1' expected");
         assert_eq!(result.conflicts, 1);
         assert_eq!(result.merged, 2); // d1 (conflict resolved) + d2
-        assert_eq!(tree.get("main", "d1").expect("get"), &[1.2]);
+        assert_eq!(
+            tree.get("main", "d1")
+                .expect("failed to get 'd1' from 'main' after SourceWins merge"),
+            &[1.2]
+        );
     }
 
     #[test]
     fn test_merge_target_wins() {
         let mut tree = BranchTree::new();
-        tree.insert("main", "d1", vec![1.0]).expect("insert");
-        tree.create_branch("dev", "main").expect("create");
-        tree.insert("main", "d1", vec![1.1]).expect("modify");
-        tree.insert("dev", "d1", vec![1.2]).expect("modify");
+        tree.insert("main", "d1", vec![1.0])
+            .expect("failed to insert 'd1' into 'main'");
+        tree.create_branch("dev", "main")
+            .expect("failed to create 'dev' branch from 'main'");
+        tree.insert("main", "d1", vec![1.1])
+            .expect("failed to modify 'd1' on 'main'");
+        tree.insert("dev", "d1", vec![1.2])
+            .expect("failed to modify 'd1' on 'dev'");
 
         let result = tree
             .merge("dev", "main", MergeStrategy::TargetWins)
-            .expect("merge");
+            .expect("failed to merge 'dev' into 'main' with TargetWins strategy");
         assert_eq!(result.conflicts, 1);
         assert_eq!(result.skipped, 1);
         // Main keeps its version
-        assert_eq!(tree.get("main", "d1").expect("get"), &[1.1]);
+        assert_eq!(
+            tree.get("main", "d1")
+                .expect("failed to get 'd1' from 'main' after TargetWins merge"),
+            &[1.1]
+        );
     }
 
     #[test]
     fn test_frozen_branch() {
         let mut tree = BranchTree::new();
-        tree.insert("main", "d1", vec![1.0]).expect("insert");
-        tree.create_branch("stable", "main").expect("create");
-        tree.freeze("stable").expect("freeze");
+        tree.insert("main", "d1", vec![1.0])
+            .expect("failed to insert 'd1' into 'main'");
+        tree.create_branch("stable", "main")
+            .expect("failed to create 'stable' branch from 'main'");
+        tree.freeze("stable")
+            .expect("failed to freeze 'stable' branch");
 
         assert!(tree.insert("stable", "d2", vec![2.0]).is_err());
         assert!(tree.delete("stable", "d1").is_err());
@@ -634,8 +692,10 @@ mod tests {
     #[test]
     fn test_delete_branch() {
         let mut tree = BranchTree::new();
-        tree.create_branch("dev", "main").expect("create");
-        tree.delete_branch("dev").expect("delete");
+        tree.create_branch("dev", "main")
+            .expect("failed to create 'dev' branch from 'main'");
+        tree.delete_branch("dev")
+            .expect("failed to delete 'dev' branch — it has no children and is not 'main'");
         assert!(tree.branch_info("dev").is_none());
 
         // Cannot delete main
@@ -645,8 +705,10 @@ mod tests {
     #[test]
     fn test_cannot_delete_branch_with_children() {
         let mut tree = BranchTree::new();
-        tree.create_branch("dev", "main").expect("create");
-        tree.create_branch("feature", "dev").expect("create");
+        tree.create_branch("dev", "main")
+            .expect("failed to create 'dev' branch from 'main'");
+        tree.create_branch("feature", "dev")
+            .expect("failed to create 'feature' branch from 'dev'");
         assert!(tree.delete_branch("dev").is_err());
     }
 }
