@@ -47,18 +47,33 @@ use tokio::sync::{Mutex, RwLock, Semaphore};
 /// Errors that can occur during embedding operations
 #[derive(Error, Debug)]
 pub enum EmbeddingProviderError {
-    #[error("API error: {message} (status: {status_code:?})")] ApiError { message: String, status_code: Option<u16> },
-    #[error("Rate limit exceeded: {0}")] RateLimitExceeded(String),
-    #[error("Authentication failed: {0}")] AuthenticationError(String),
-    #[error("Invalid input: {0}")] InvalidInput(String),
-    #[error("Network error: {0}")] NetworkError(String),
-    #[error("Request timeout after {0:?}")] Timeout(Duration),
-    #[error("Provider unavailable: {0}")] ProviderUnavailable(String),
-    #[error("Configuration error: {0}")] ConfigurationError(String),
-    #[error("Serialization error: {0}")] SerializationError(String),
-    #[error("Model not found: {0}")] ModelNotFound(String),
-    #[error("Batch size {size} exceeds maximum {max_size}")] BatchTooLarge { size: usize, max_size: usize },
-    #[error("Initialization error: {0}")] InitializationError(String),
+    #[error("API error: {message} (status: {status_code:?})")]
+    ApiError {
+        message: String,
+        status_code: Option<u16>,
+    },
+    #[error("Rate limit exceeded: {0}")]
+    RateLimitExceeded(String),
+    #[error("Authentication failed: {0}")]
+    AuthenticationError(String),
+    #[error("Invalid input: {0}")]
+    InvalidInput(String),
+    #[error("Network error: {0}")]
+    NetworkError(String),
+    #[error("Request timeout after {0:?}")]
+    Timeout(Duration),
+    #[error("Provider unavailable: {0}")]
+    ProviderUnavailable(String),
+    #[error("Configuration error: {0}")]
+    ConfigurationError(String),
+    #[error("Serialization error: {0}")]
+    SerializationError(String),
+    #[error("Model not found: {0}")]
+    ModelNotFound(String),
+    #[error("Batch size {size} exceeds maximum {max_size}")]
+    BatchTooLarge { size: usize, max_size: usize },
+    #[error("Initialization error: {0}")]
+    InitializationError(String),
 }
 
 pub type Result<T> = std::result::Result<T, EmbeddingProviderError>;
@@ -69,17 +84,28 @@ pub type Result<T> = std::result::Result<T, EmbeddingProviderError>;
 
 /// Configuration for batching embedding requests
 #[derive(Debug, Clone)]
-pub struct BatchConfig { pub max_batch_size: usize, pub batch_delay: Duration }
+pub struct BatchConfig {
+    pub max_batch_size: usize,
+    pub batch_delay: Duration,
+}
 
 impl Default for BatchConfig {
-    fn default() -> Self { Self { max_batch_size: 100, batch_delay: Duration::from_millis(50) } }
+    fn default() -> Self {
+        Self {
+            max_batch_size: 100,
+            batch_delay: Duration::from_millis(50),
+        }
+    }
 }
 
 /// OpenAI provider configuration
 #[derive(Debug, Clone)]
 pub struct OpenAIConfig {
-    pub api_key: String, pub model: String, pub base_url: String,
-    pub timeout: Duration, pub dimensions: Option<usize>,
+    pub api_key: String,
+    pub model: String,
+    pub base_url: String,
+    pub timeout: Duration,
+    pub dimensions: Option<usize>,
 }
 
 impl OpenAIConfig {
@@ -107,18 +133,28 @@ impl OpenAIConfig {
 /// Cohere provider configuration
 #[derive(Debug, Clone)]
 pub struct CohereConfig {
-    pub api_key: String, pub model: String, pub base_url: String,
-    pub timeout: Duration, pub input_type: CohereInputType,
+    pub api_key: String,
+    pub model: String,
+    pub base_url: String,
+    pub timeout: Duration,
+    pub input_type: CohereInputType,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CohereInputType { SearchQuery, SearchDocument, Classification, Clustering }
+pub enum CohereInputType {
+    SearchQuery,
+    SearchDocument,
+    Classification,
+    Clustering,
+}
 
 impl CohereInputType {
     pub fn as_str(&self) -> &'static str {
         match self {
-            Self::SearchQuery => "search_query", Self::SearchDocument => "search_document",
-            Self::Classification => "classification", Self::Clustering => "clustering",
+            Self::SearchQuery => "search_query",
+            Self::SearchDocument => "search_document",
+            Self::Classification => "classification",
+            Self::Clustering => "clustering",
         }
     }
 }
@@ -137,11 +173,19 @@ impl CohereConfig {
 
 /// Ollama provider configuration
 #[derive(Debug, Clone)]
-pub struct OllamaConfig { pub model: String, pub base_url: String, pub timeout: Duration }
+pub struct OllamaConfig {
+    pub model: String,
+    pub base_url: String,
+    pub timeout: Duration,
+}
 
 impl Default for OllamaConfig {
     fn default() -> Self {
-        Self { model: "nomic-embed-text".into(), base_url: "http://localhost:11434".into(), timeout: Duration::from_secs(60) }
+        Self {
+            model: "nomic-embed-text".into(),
+            base_url: "http://localhost:11434".into(),
+            timeout: Duration::from_secs(60),
+        }
     }
 }
 
@@ -156,13 +200,21 @@ pub struct MockConfig {
 
 impl Default for MockConfig {
     fn default() -> Self {
-        Self { dimensions: 384, latency: Duration::from_millis(10), normalize: true, seed: Some(42) }
+        Self {
+            dimensions: 384,
+            latency: Duration::from_millis(10),
+            normalize: true,
+            seed: Some(42),
+        }
     }
 }
 
 impl MockConfig {
     pub fn new(dimensions: usize) -> Self {
-        Self { dimensions, ..Default::default() }
+        Self {
+            dimensions,
+            ..Default::default()
+        }
     }
 }
 
@@ -179,7 +231,9 @@ pub trait EmbeddingProvider: Send + Sync {
 
     async fn embed(&self, text: String) -> Result<Vec<f32>> {
         let results = self.embed_batch(vec![text]).await?;
-        results.into_iter().next()
+        results
+            .into_iter()
+            .next()
             .ok_or_else(|| EmbeddingProviderError::InvalidInput("Empty result".into()))
     }
 
@@ -207,34 +261,49 @@ impl OpenAIProvider {
             .build()
             .expect("Failed to create HTTP client");
         let dimensions = config.dimensions.unwrap_or(1536);
-        Self { config, client, dimensions }
+        Self {
+            config,
+            client,
+            dimensions,
+        }
     }
 
     pub fn from_env() -> Result<Self> {
-        let api_key = std::env::var("OPENAI_API_KEY")
-            .map_err(|_| EmbeddingProviderError::ConfigurationError("OPENAI_API_KEY not set".into()))?;
+        let api_key = std::env::var("OPENAI_API_KEY").map_err(|_| {
+            EmbeddingProviderError::ConfigurationError("OPENAI_API_KEY not set".into())
+        })?;
         Ok(Self::new(OpenAIConfig::new(api_key)))
     }
 }
 
 #[async_trait]
 impl EmbeddingProvider for OpenAIProvider {
-    fn name(&self) -> &str { "openai" }
-    fn dimensions(&self) -> usize { self.dimensions }
-    fn max_batch_size(&self) -> usize { 100 }
+    fn name(&self) -> &str {
+        "openai"
+    }
+    fn dimensions(&self) -> usize {
+        self.dimensions
+    }
+    fn max_batch_size(&self) -> usize {
+        100
+    }
 
     async fn embed_batch(&self, texts: Vec<String>) -> Result<Vec<Vec<f32>>> {
-        if texts.is_empty() { return Ok(Vec::new()); }
+        if texts.is_empty() {
+            return Ok(Vec::new());
+        }
         let mut body = serde_json::json!({ "model": self.config.model, "input": texts });
         if let Some(dims) = self.config.dimensions {
             body["dimensions"] = serde_json::json!(dims);
         }
 
-        let resp = self.client
+        let resp = self
+            .client
             .post(format!("{}/embeddings", self.config.base_url))
             .header("Authorization", format!("Bearer {}", self.config.api_key))
             .json(&body)
-            .send().await
+            .send()
+            .await
             .map_err(|e| EmbeddingProviderError::NetworkError(e.to_string()))?;
 
         let status = resp.status();
@@ -245,16 +314,26 @@ impl EmbeddingProvider for OpenAIProvider {
             });
         }
 
-        let result: serde_json::Value = resp.json().await
+        let result: serde_json::Value = resp
+            .json()
+            .await
             .map_err(|e| EmbeddingProviderError::SerializationError(e.to_string()))?;
 
-        result["data"].as_array()
+        result["data"]
+            .as_array()
             .ok_or_else(|| EmbeddingProviderError::SerializationError("Missing data".into()))?
             .iter()
             .map(|item| {
-                item["embedding"].as_array()
-                    .map(|arr| arr.iter().filter_map(|v| v.as_f64().map(|f| f as f32)).collect())
-                    .ok_or_else(|| EmbeddingProviderError::SerializationError("Missing embedding".into()))
+                item["embedding"]
+                    .as_array()
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|v| v.as_f64().map(|f| f as f32))
+                            .collect()
+                    })
+                    .ok_or_else(|| {
+                        EmbeddingProviderError::SerializationError("Missing embedding".into())
+                    })
             })
             .collect()
     }
@@ -274,30 +353,45 @@ impl CohereProvider {
         let client = reqwest::Client::builder()
             .timeout(config.timeout)
             .build()
-            .map_err(|e| EmbeddingProviderError::InitializationError(format!("Failed to create HTTP client: {}", e)))?;
+            .map_err(|e| {
+                EmbeddingProviderError::InitializationError(format!(
+                    "Failed to create HTTP client: {}",
+                    e
+                ))
+            })?;
         Ok(Self { config, client })
     }
 }
 
 #[async_trait]
 impl EmbeddingProvider for CohereProvider {
-    fn name(&self) -> &str { "cohere" }
-    fn dimensions(&self) -> usize { 1024 }
-    fn max_batch_size(&self) -> usize { 96 }
+    fn name(&self) -> &str {
+        "cohere"
+    }
+    fn dimensions(&self) -> usize {
+        1024
+    }
+    fn max_batch_size(&self) -> usize {
+        96
+    }
 
     async fn embed_batch(&self, texts: Vec<String>) -> Result<Vec<Vec<f32>>> {
-        if texts.is_empty() { return Ok(Vec::new()); }
+        if texts.is_empty() {
+            return Ok(Vec::new());
+        }
         let body = serde_json::json!({
             "model": self.config.model,
             "texts": texts,
             "input_type": self.config.input_type.as_str(),
         });
 
-        let resp = self.client
+        let resp = self
+            .client
             .post(format!("{}/embed", self.config.base_url))
             .header("Authorization", format!("Bearer {}", self.config.api_key))
             .json(&body)
-            .send().await
+            .send()
+            .await
             .map_err(|e| EmbeddingProviderError::NetworkError(e.to_string()))?;
 
         if !resp.status().is_success() {
@@ -309,12 +403,22 @@ impl EmbeddingProvider for CohereProvider {
             });
         }
 
-        let result: serde_json::Value = resp.json().await
+        let result: serde_json::Value = resp
+            .json()
+            .await
             .map_err(|e| EmbeddingProviderError::SerializationError(e.to_string()))?;
 
-        Ok(result["embeddings"].as_array().unwrap_or(&vec![]).iter()
-            .map(|arr| arr.as_array().unwrap_or(&vec![]).iter()
-                .filter_map(|v| v.as_f64().map(|f| f as f32)).collect())
+        Ok(result["embeddings"]
+            .as_array()
+            .unwrap_or(&vec![])
+            .iter()
+            .map(|arr| {
+                arr.as_array()
+                    .unwrap_or(&vec![])
+                    .iter()
+                    .filter_map(|v| v.as_f64().map(|f| f as f32))
+                    .collect()
+            })
             .collect())
     }
 }
@@ -334,27 +438,50 @@ impl OllamaProvider {
         let client = reqwest::Client::builder()
             .timeout(config.timeout)
             .build()
-            .map_err(|e| EmbeddingProviderError::InitializationError(format!("Failed to create HTTP client: {}", e)))?;
-        Ok(Self { config, client, dimensions: Arc::new(RwLock::new(None)) })
+            .map_err(|e| {
+                EmbeddingProviderError::InitializationError(format!(
+                    "Failed to create HTTP client: {}",
+                    e
+                ))
+            })?;
+        Ok(Self {
+            config,
+            client,
+            dimensions: Arc::new(RwLock::new(None)),
+        })
     }
 }
 
 #[async_trait]
 impl EmbeddingProvider for OllamaProvider {
-    fn name(&self) -> &str { "ollama" }
-    fn dimensions(&self) -> usize { self.dimensions.try_read().ok().and_then(|d| *d).unwrap_or(768) }
-    fn max_batch_size(&self) -> usize { 32 }
+    fn name(&self) -> &str {
+        "ollama"
+    }
+    fn dimensions(&self) -> usize {
+        self.dimensions
+            .try_read()
+            .ok()
+            .and_then(|d| *d)
+            .unwrap_or(768)
+    }
+    fn max_batch_size(&self) -> usize {
+        32
+    }
 
     async fn embed_batch(&self, texts: Vec<String>) -> Result<Vec<Vec<f32>>> {
-        if texts.is_empty() { return Ok(Vec::new()); }
+        if texts.is_empty() {
+            return Ok(Vec::new());
+        }
         let mut embeddings = Vec::with_capacity(texts.len());
 
         for text in texts {
             let body = serde_json::json!({ "model": self.config.model, "prompt": text });
-            let resp = self.client
+            let resp = self
+                .client
                 .post(format!("{}/api/embeddings", self.config.base_url))
                 .json(&body)
-                .send().await
+                .send()
+                .await
                 .map_err(|e| EmbeddingProviderError::NetworkError(e.to_string()))?;
 
             if !resp.status().is_success() {
@@ -366,12 +493,19 @@ impl EmbeddingProvider for OllamaProvider {
                 });
             }
 
-            let result: serde_json::Value = resp.json().await
+            let result: serde_json::Value = resp
+                .json()
+                .await
                 .map_err(|e| EmbeddingProviderError::SerializationError(e.to_string()))?;
 
-            let emb: Vec<f32> = result["embedding"].as_array()
-                .ok_or_else(|| EmbeddingProviderError::SerializationError("Missing embedding".into()))?
-                .iter().filter_map(|v| v.as_f64().map(|f| f as f32)).collect();
+            let emb: Vec<f32> = result["embedding"]
+                .as_array()
+                .ok_or_else(|| {
+                    EmbeddingProviderError::SerializationError("Missing embedding".into())
+                })?
+                .iter()
+                .filter_map(|v| v.as_f64().map(|f| f as f32))
+                .collect();
 
             if self.dimensions.read().await.is_none() {
                 *self.dimensions.write().await = Some(emb.len());
@@ -393,10 +527,15 @@ pub struct MockProvider {
 
 impl MockProvider {
     pub fn new(config: MockConfig) -> Self {
-        Self { config, call_count: AtomicU64::new(0) }
+        Self {
+            config,
+            call_count: AtomicU64::new(0),
+        }
     }
 
-    pub fn call_count(&self) -> u64 { self.call_count.load(Ordering::Relaxed) }
+    pub fn call_count(&self) -> u64 {
+        self.call_count.load(Ordering::Relaxed)
+    }
 
     fn generate_embedding(&self, text: &str) -> Vec<f32> {
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -412,7 +551,9 @@ impl MockProvider {
 
         if self.config.normalize {
             let norm: f32 = emb.iter().map(|x| x * x).sum::<f32>().sqrt();
-            if norm > 0.0 { emb.iter_mut().for_each(|v| *v /= norm); }
+            if norm > 0.0 {
+                emb.iter_mut().for_each(|v| *v /= norm);
+            }
         }
         emb
     }
@@ -420,9 +561,15 @@ impl MockProvider {
 
 #[async_trait]
 impl EmbeddingProvider for MockProvider {
-    fn name(&self) -> &str { "mock" }
-    fn dimensions(&self) -> usize { self.config.dimensions }
-    fn max_batch_size(&self) -> usize { 1000 }
+    fn name(&self) -> &str {
+        "mock"
+    }
+    fn dimensions(&self) -> usize {
+        self.config.dimensions
+    }
+    fn max_batch_size(&self) -> usize {
+        1000
+    }
 
     async fn embed_batch(&self, texts: Vec<String>) -> Result<Vec<Vec<f32>>> {
         self.call_count.fetch_add(1, Ordering::Relaxed);
@@ -437,20 +584,34 @@ impl EmbeddingProvider for MockProvider {
 // Caching Layer
 // ============================================================================
 
-struct CacheEntry { embedding: Vec<f32>, created_at: Instant }
+struct CacheEntry {
+    embedding: Vec<f32>,
+    created_at: Instant,
+}
 
 pub struct EmbeddingCache {
     entries: Mutex<HashMap<String, CacheEntry>>,
-    max_entries: usize, ttl: Option<Duration>, hits: AtomicU64, misses: AtomicU64,
+    max_entries: usize,
+    ttl: Option<Duration>,
+    hits: AtomicU64,
+    misses: AtomicU64,
 }
 
 impl EmbeddingCache {
     pub fn new(max_entries: usize) -> Self {
-        Self { entries: Mutex::new(HashMap::new()), max_entries, ttl: None,
-               hits: AtomicU64::new(0), misses: AtomicU64::new(0) }
+        Self {
+            entries: Mutex::new(HashMap::new()),
+            max_entries,
+            ttl: None,
+            hits: AtomicU64::new(0),
+            misses: AtomicU64::new(0),
+        }
     }
 
-    pub fn with_ttl(mut self, ttl: Duration) -> Self { self.ttl = Some(ttl); self }
+    pub fn with_ttl(mut self, ttl: Duration) -> Self {
+        self.ttl = Some(ttl);
+        self
+    }
 
     pub async fn get(&self, text: &str) -> Option<Vec<f32>> {
         let entries = self.entries.lock().await;
@@ -467,14 +628,31 @@ impl EmbeddingCache {
     pub async fn put(&self, text: String, embedding: Vec<f32>) {
         let mut entries = self.entries.lock().await;
         while entries.len() >= self.max_entries {
-            if let Some(k) = entries.iter().min_by_key(|(_, e)| e.created_at).map(|(k, _)| k.clone()) {
+            if let Some(k) = entries
+                .iter()
+                .min_by_key(|(_, e)| e.created_at)
+                .map(|(k, _)| k.clone())
+            {
                 entries.remove(&k);
-            } else { break; }
+            } else {
+                break;
+            }
         }
-        entries.insert(text, CacheEntry { embedding, created_at: Instant::now() });
+        entries.insert(
+            text,
+            CacheEntry {
+                embedding,
+                created_at: Instant::now(),
+            },
+        );
     }
 
-    pub fn stats(&self) -> (u64, u64) { (self.hits.load(Ordering::Relaxed), self.misses.load(Ordering::Relaxed)) }
+    pub fn stats(&self) -> (u64, u64) {
+        (
+            self.hits.load(Ordering::Relaxed),
+            self.misses.load(Ordering::Relaxed),
+        )
+    }
 }
 
 pub struct CachedProvider<P: EmbeddingProvider> {
@@ -484,25 +662,39 @@ pub struct CachedProvider<P: EmbeddingProvider> {
 
 impl<P: EmbeddingProvider> CachedProvider<P> {
     pub fn new(provider: P, max_entries: usize) -> Self {
-        Self { inner: provider, cache: EmbeddingCache::new(max_entries) }
+        Self {
+            inner: provider,
+            cache: EmbeddingCache::new(max_entries),
+        }
     }
 
-    pub fn cache_stats(&self) -> (u64, u64) { self.cache.stats() }
+    pub fn cache_stats(&self) -> (u64, u64) {
+        self.cache.stats()
+    }
 }
 
 #[async_trait]
 impl<P: EmbeddingProvider> EmbeddingProvider for CachedProvider<P> {
-    fn name(&self) -> &str { self.inner.name() }
-    fn dimensions(&self) -> usize { self.inner.dimensions() }
-    fn max_batch_size(&self) -> usize { self.inner.max_batch_size() }
+    fn name(&self) -> &str {
+        self.inner.name()
+    }
+    fn dimensions(&self) -> usize {
+        self.inner.dimensions()
+    }
+    fn max_batch_size(&self) -> usize {
+        self.inner.max_batch_size()
+    }
 
     async fn embed_batch(&self, texts: Vec<String>) -> Result<Vec<Vec<f32>>> {
         let mut results = vec![None; texts.len()];
         let mut uncached = Vec::new();
 
         for (i, text) in texts.iter().enumerate() {
-            if let Some(emb) = self.cache.get(text).await { results[i] = Some(emb); }
-            else { uncached.push((i, text.clone())); }
+            if let Some(emb) = self.cache.get(text).await {
+                results[i] = Some(emb);
+            } else {
+                uncached.push((i, text.clone()));
+            }
         }
 
         if !uncached.is_empty() {
@@ -513,11 +705,17 @@ impl<P: EmbeddingProvider> EmbeddingProvider for CachedProvider<P> {
                 results[i] = Some(emb);
             }
         }
-        results.into_iter()
+        results
+            .into_iter()
             .enumerate()
-            .map(|(i, r)| r.ok_or_else(|| EmbeddingProviderError::InvalidInput(
-                format!("Missing embedding result at index {}", i)
-            )))
+            .map(|(i, r)| {
+                r.ok_or_else(|| {
+                    EmbeddingProviderError::InvalidInput(format!(
+                        "Missing embedding result at index {}",
+                        i
+                    ))
+                })
+            })
             .collect()
     }
 }
@@ -527,15 +725,19 @@ impl<P: EmbeddingProvider> EmbeddingProvider for CachedProvider<P> {
 // ============================================================================
 
 pub struct RateLimiter {
-    tokens: Mutex<f64>, max_tokens: f64, refill_rate: f64,
-    last_refill: Mutex<Instant>, semaphore: Semaphore,
+    tokens: Mutex<f64>,
+    max_tokens: f64,
+    refill_rate: f64,
+    last_refill: Mutex<Instant>,
+    semaphore: Semaphore,
 }
 
 impl RateLimiter {
     pub fn new(requests_per_minute: u32, burst_size: usize) -> Self {
         let max = burst_size as f64;
         Self {
-            tokens: Mutex::new(max), max_tokens: max,
+            tokens: Mutex::new(max),
+            max_tokens: max,
             refill_rate: requests_per_minute as f64 / 60.0,
             last_refill: Mutex::new(Instant::now()),
             semaphore: Semaphore::new(burst_size),
@@ -543,15 +745,22 @@ impl RateLimiter {
     }
 
     pub async fn acquire(&self) -> Result<()> {
-        let _permit = self.semaphore.acquire().await
-            .map_err(|_| EmbeddingProviderError::RateLimitExceeded("Semaphore closed".into()))?;
+        let _permit =
+            self.semaphore.acquire().await.map_err(|_| {
+                EmbeddingProviderError::RateLimitExceeded("Semaphore closed".into())
+            })?;
         loop {
             let mut last = self.last_refill.lock().await;
             let mut tokens = self.tokens.lock().await;
-            *tokens = (*tokens + last.elapsed().as_secs_f64() * self.refill_rate).min(self.max_tokens);
+            *tokens =
+                (*tokens + last.elapsed().as_secs_f64() * self.refill_rate).min(self.max_tokens);
             *last = Instant::now();
-            if *tokens >= 1.0 { *tokens -= 1.0; return Ok(()); }
-            drop(tokens); drop(last);
+            if *tokens >= 1.0 {
+                *tokens -= 1.0;
+                return Ok(());
+            }
+            drop(tokens);
+            drop(last);
             tokio::time::sleep(Duration::from_secs_f64(1.0 / self.refill_rate)).await;
         }
     }
@@ -564,15 +773,24 @@ pub struct RateLimitedProvider<P: EmbeddingProvider> {
 
 impl<P: EmbeddingProvider> RateLimitedProvider<P> {
     pub fn new(provider: P, requests_per_minute: u32, burst_size: usize) -> Self {
-        Self { inner: provider, limiter: RateLimiter::new(requests_per_minute, burst_size) }
+        Self {
+            inner: provider,
+            limiter: RateLimiter::new(requests_per_minute, burst_size),
+        }
     }
 }
 
 #[async_trait]
 impl<P: EmbeddingProvider> EmbeddingProvider for RateLimitedProvider<P> {
-    fn name(&self) -> &str { self.inner.name() }
-    fn dimensions(&self) -> usize { self.inner.dimensions() }
-    fn max_batch_size(&self) -> usize { self.inner.max_batch_size() }
+    fn name(&self) -> &str {
+        self.inner.name()
+    }
+    fn dimensions(&self) -> usize {
+        self.inner.dimensions()
+    }
+    fn max_batch_size(&self) -> usize {
+        self.inner.max_batch_size()
+    }
 
     async fn embed_batch(&self, texts: Vec<String>) -> Result<Vec<Vec<f32>>> {
         self.limiter.acquire().await?;
@@ -591,18 +809,29 @@ pub struct BatchingProvider<P: EmbeddingProvider> {
 
 impl<P: EmbeddingProvider> BatchingProvider<P> {
     pub fn new(provider: P, config: BatchConfig) -> Self {
-        Self { inner: provider, config }
+        Self {
+            inner: provider,
+            config,
+        }
     }
 }
 
 #[async_trait]
 impl<P: EmbeddingProvider> EmbeddingProvider for BatchingProvider<P> {
-    fn name(&self) -> &str { self.inner.name() }
-    fn dimensions(&self) -> usize { self.inner.dimensions() }
-    fn max_batch_size(&self) -> usize { self.config.max_batch_size }
+    fn name(&self) -> &str {
+        self.inner.name()
+    }
+    fn dimensions(&self) -> usize {
+        self.inner.dimensions()
+    }
+    fn max_batch_size(&self) -> usize {
+        self.config.max_batch_size
+    }
 
     async fn embed_batch(&self, texts: Vec<String>) -> Result<Vec<Vec<f32>>> {
-        if texts.is_empty() { return Ok(Vec::new()); }
+        if texts.is_empty() {
+            return Ok(Vec::new());
+        }
         let mut all = Vec::with_capacity(texts.len());
 
         for (i, chunk) in texts.chunks(self.config.max_batch_size).enumerate() {
@@ -674,7 +903,10 @@ mod tests {
     async fn test_batching_provider() {
         let batch = BatchingProvider::new(
             MockProvider::new(MockConfig::new(32)),
-            BatchConfig { max_batch_size: 2, batch_delay: Duration::ZERO },
+            BatchConfig {
+                max_batch_size: 2,
+                batch_delay: Duration::ZERO,
+            },
         );
         let texts: Vec<_> = (0..5).map(|i| format!("t{}", i)).collect();
         assert_eq!(batch.embed_batch(texts).await.unwrap().len(), 5);
@@ -685,9 +917,13 @@ mod tests {
         let chain = BatchingProvider::new(
             RateLimitedProvider::new(
                 CachedProvider::new(MockProvider::new(MockConfig::new(64)), 1000),
-                100, 10,
+                100,
+                10,
             ),
-            BatchConfig { max_batch_size: 10, batch_delay: Duration::ZERO },
+            BatchConfig {
+                max_batch_size: 10,
+                batch_delay: Duration::ZERO,
+            },
         );
         let texts: Vec<_> = (0..15).map(|i| format!("text{}", i)).collect();
         let e1 = chain.embed_batch(texts.clone()).await.unwrap();
@@ -704,9 +940,14 @@ mod tests {
 
     #[test]
     fn test_configs() {
-        let o = OpenAIConfig::new("k".into()).with_model("lg").with_dimensions(3072);
+        let o = OpenAIConfig::new("k".into())
+            .with_model("lg")
+            .with_dimensions(3072);
         assert_eq!(o.dimensions, Some(3072));
-        assert_eq!(CohereConfig::new("k".into()).input_type.as_str(), "search_document");
+        assert_eq!(
+            CohereConfig::new("k".into()).input_type.as_str(),
+            "search_document"
+        );
         assert_eq!(OllamaConfig::default().model, "nomic-embed-text");
     }
 }
