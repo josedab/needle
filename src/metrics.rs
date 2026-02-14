@@ -108,15 +108,15 @@ impl HttpMetrics {
             requests_total: CounterVec::new(
                 prometheus::opts!("needle_http_requests_total_noop", "noop"),
                 &["method", "path", "status"],
-            ).unwrap(),
+            ).expect("noop requests_total metric has valid static config"),
             request_duration_seconds: HistogramVec::new(
                 prometheus::histogram_opts!("needle_http_request_duration_noop", "noop"),
                 &["method", "path"],
-            ).unwrap(),
+            ).expect("noop request_duration_seconds metric has valid static config"),
             requests_in_flight: GaugeVec::new(
                 prometheus::opts!("needle_http_requests_in_flight_noop", "noop"),
                 &["method"],
-            ).unwrap(),
+            ).expect("noop requests_in_flight metric has valid static config"),
         }
     }
 
@@ -320,37 +320,37 @@ impl NeedleMetrics {
         Self {
             operations_total: CounterVec::new(
                 prometheus::opts!("needle_ops_noop", "noop"), &["collection", "operation"],
-            ).unwrap(),
+            ).expect("noop operations_total metric has valid static config"),
             errors_total: CounterVec::new(
                 prometheus::opts!("needle_errors_noop", "noop"), &["collection", "operation", "error_type"],
-            ).unwrap(),
+            ).expect("noop errors_total metric has valid static config"),
             operation_duration_seconds: HistogramVec::new(
                 prometheus::histogram_opts!("needle_duration_noop", "noop"), &["collection", "operation"],
-            ).unwrap(),
+            ).expect("noop operation_duration metric has valid static config"),
             search_result_count: HistogramVec::new(
                 prometheus::histogram_opts!("needle_search_count_noop", "noop"), &["collection"],
-            ).unwrap(),
+            ).expect("noop search_result_count metric has valid static config"),
             hnsw_visited_nodes: HistogramVec::new(
                 prometheus::histogram_opts!("needle_hnsw_visited_noop", "noop"), &["collection"],
-            ).unwrap(),
+            ).expect("noop hnsw_visited_nodes metric has valid static config"),
             hnsw_layers_traversed: HistogramVec::new(
                 prometheus::histogram_opts!("needle_hnsw_layers_noop", "noop"), &["collection"],
-            ).unwrap(),
+            ).expect("noop hnsw_layers_traversed metric has valid static config"),
             collection_vectors: GaugeVec::new(
                 prometheus::opts!("needle_vectors_noop", "noop"), &["collection"],
-            ).unwrap(),
+            ).expect("noop collection_vectors metric has valid static config"),
             collection_deleted_vectors: GaugeVec::new(
                 prometheus::opts!("needle_deleted_noop", "noop"), &["collection"],
-            ).unwrap(),
+            ).expect("noop collection_deleted_vectors metric has valid static config"),
             collection_dimensions: GaugeVec::new(
                 prometheus::opts!("needle_dims_noop", "noop"), &["collection"],
-            ).unwrap(),
+            ).expect("noop collection_dimensions metric has valid static config"),
             index_levels: GaugeVec::new(
                 prometheus::opts!("needle_levels_noop", "noop"), &["collection"],
-            ).unwrap(),
+            ).expect("noop index_levels metric has valid static config"),
             memory_bytes: GaugeVec::new(
                 prometheus::opts!("needle_memory_noop", "noop"), &["collection", "component"],
-            ).unwrap(),
+            ).expect("noop memory_bytes metric has valid static config"),
         }
     }
 
