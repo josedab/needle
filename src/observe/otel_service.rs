@@ -283,20 +283,20 @@ impl ObservabilityService {
 
     /// Record an insert operation.
     pub fn record_insert(&self, collection: &str, duration: Duration, success: bool) {
-        self.record_operation(OperationType::Insert, collection, duration, success, HashMap::new());
+        self.record_operation(
+            OperationType::Insert,
+            collection,
+            duration,
+            success,
+            HashMap::new(),
+        );
         if self.config.enable_latency_histograms {
             self.insert_histogram.write().record(duration);
         }
     }
 
     /// Record a search operation.
-    pub fn record_search(
-        &self,
-        collection: &str,
-        duration: Duration,
-        k: usize,
-        success: bool,
-    ) {
+    pub fn record_search(&self, collection: &str, duration: Duration, k: usize, success: bool) {
         let mut attrs = HashMap::new();
         attrs.insert("k".into(), k.to_string());
         self.record_operation(OperationType::Search, collection, duration, success, attrs);
@@ -307,7 +307,13 @@ impl ObservabilityService {
 
     /// Record a delete operation.
     pub fn record_delete(&self, collection: &str, duration: Duration, success: bool) {
-        self.record_operation(OperationType::Delete, collection, duration, success, HashMap::new());
+        self.record_operation(
+            OperationType::Delete,
+            collection,
+            duration,
+            success,
+            HashMap::new(),
+        );
     }
 
     /// Record a generic operation.
@@ -416,17 +422,19 @@ impl ObservabilityService {
              needle_search_latency_ms{{service=\"{}\",quantile=\"0.5\"}} {:.4}\n\
              needle_search_latency_ms{{service=\"{}\",quantile=\"0.95\"}} {:.4}\n\
              needle_search_latency_ms{{service=\"{}\",quantile=\"0.99\"}} {:.4}\n\n",
-            svc, snap.search_latency_p50_ms,
-            svc, snap.search_latency_p95_ms,
-            svc, snap.search_latency_p99_ms,
+            svc,
+            snap.search_latency_p50_ms,
+            svc,
+            snap.search_latency_p95_ms,
+            svc,
+            snap.search_latency_p99_ms,
         ));
         out.push_str(&format!(
             "# HELP needle_insert_latency_ms Insert latency\n\
              # TYPE needle_insert_latency_ms summary\n\
              needle_insert_latency_ms{{service=\"{}\",quantile=\"0.5\"}} {:.4}\n\
              needle_insert_latency_ms{{service=\"{}\",quantile=\"0.95\"}} {:.4}\n\n",
-            svc, snap.insert_latency_p50_ms,
-            svc, snap.insert_latency_p95_ms,
+            svc, snap.insert_latency_p50_ms, svc, snap.insert_latency_p95_ms,
         ));
         out.push_str(&format!(
             "# HELP needle_search_qps Search queries per second\n\
@@ -472,9 +480,7 @@ mod tests {
 
     #[test]
     fn test_record_and_snapshot() {
-        let config = ObservabilityConfig::builder()
-            .service_name("test")
-            .build();
+        let config = ObservabilityConfig::builder().service_name("test").build();
         let obs = ObservabilityService::new(config);
 
         obs.record_insert("col1", Duration::from_millis(1), true);

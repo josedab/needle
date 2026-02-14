@@ -216,7 +216,10 @@ impl PlanNode {
         let mut result = String::new();
         let prefix = "  ".repeat(indent);
 
-        result.push_str(&format!("{}-> {} ({})\n", prefix, self.node_type, self.description));
+        result.push_str(&format!(
+            "{}-> {} ({})\n",
+            prefix, self.node_type, self.description
+        ));
 
         if !self.properties.is_empty() {
             for (k, v) in &self.properties {
@@ -325,7 +328,10 @@ impl QueryProfile {
         let mut output = String::new();
 
         output.push_str(&format!("Query Profile: {}\n", self.query_id));
-        output.push_str(&format!("Total Time: {:.3} ms\n", self.total_time_us as f64 / 1000.0));
+        output.push_str(&format!(
+            "Total Time: {:.3} ms\n",
+            self.total_time_us as f64 / 1000.0
+        ));
         output.push_str(&format!("Results: {}\n\n", self.result_count));
 
         // Execution plan
@@ -611,8 +617,15 @@ impl ProfileBuilder {
                 self.profile.hints.push(OptimizationHint {
                     severity: HintSeverity::Warning,
                     category: "Performance".to_string(),
-                    message: format!("{} stage takes {}% of query time", stage.stage.name(), pct as i32),
-                    suggestion: format!("Consider optimizing {} stage or using caching", stage.stage.name()),
+                    message: format!(
+                        "{} stage takes {}% of query time",
+                        stage.stage.name(),
+                        pct as i32
+                    ),
+                    suggestion: format!(
+                        "Consider optimizing {} stage or using caching",
+                        stage.stage.name()
+                    ),
                     estimated_improvement: Some(pct / 2.0),
                 });
             }
@@ -767,8 +780,7 @@ mod tests {
         let mut profiler = QueryProfiler::new();
 
         let builder = profiler.start("slow_query");
-        builder
-            .start_stage(ExecutionStage::VectorSearch);
+        builder.start_stage(ExecutionStage::VectorSearch);
 
         // Simulate slow stage
         std::thread::sleep(Duration::from_millis(50));

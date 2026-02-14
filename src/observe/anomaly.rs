@@ -51,11 +51,7 @@ impl LocalOutlierFactor {
     }
 
     /// Fit with specific distance function
-    pub fn fit_with_distance(
-        vectors: &[&[f32]],
-        k: usize,
-        distance: DistanceFunction,
-    ) -> Self {
+    pub fn fit_with_distance(vectors: &[&[f32]], k: usize, distance: DistanceFunction) -> Self {
         let n = vectors.len();
         let k = k.min(n.saturating_sub(1)).max(1);
 
@@ -113,13 +109,7 @@ impl LocalOutlierFactor {
 
                 let lof_sum: f32 = neighbors[i]
                     .iter()
-                    .map(|(j, _)| {
-                        if lrd[*j] == f32::MAX {
-                            0.0
-                        } else {
-                            lrd[*j]
-                        }
-                    })
+                    .map(|(j, _)| if lrd[*j] == f32::MAX { 0.0 } else { lrd[*j] })
                     .sum();
 
                 if neighbors[i].is_empty() {
@@ -160,10 +150,7 @@ impl LocalOutlierFactor {
             return vec![1.0; vectors.len()];
         }
 
-        vectors
-            .iter()
-            .map(|v| self.score_single(v))
-            .collect()
+        vectors.iter().map(|v| self.score_single(v)).collect()
     }
 
     /// Score a single vector
@@ -187,10 +174,7 @@ impl LocalOutlierFactor {
         }
 
         // Compute reachability distances
-        let reach_sum: f32 = dists
-            .iter()
-            .map(|(j, d)| d.max(self.k_distances[*j]))
-            .sum();
+        let reach_sum: f32 = dists.iter().map(|(j, d)| d.max(self.k_distances[*j])).sum();
 
         let lrd_new = if reach_sum > 0.0 {
             k as f32 / reach_sum
@@ -203,7 +187,8 @@ impl LocalOutlierFactor {
             .iter()
             .map(|(j, _)| {
                 let lrd_j = {
-                    let sum: f32 = self.vectors
+                    let sum: f32 = self
+                        .vectors
                         .iter()
                         .enumerate()
                         .filter(|(i, _)| *i != *j)
@@ -213,9 +198,17 @@ impl LocalOutlierFactor {
                         })
                         .take(self.k)
                         .sum();
-                    if sum > 0.0 { self.k as f32 / sum } else { f32::MAX }
+                    if sum > 0.0 {
+                        self.k as f32 / sum
+                    } else {
+                        f32::MAX
+                    }
                 };
-                if lrd_j == f32::MAX { 0.0 } else { lrd_j }
+                if lrd_j == f32::MAX {
+                    0.0
+                } else {
+                    lrd_j
+                }
             })
             .sum();
 
@@ -295,7 +288,11 @@ impl IsolationForest {
             return 0.5;
         }
 
-        let avg_path: f32 = self.trees.iter().map(|t| t.path_length(vector) as f32).sum();
+        let avg_path: f32 = self
+            .trees
+            .iter()
+            .map(|t| t.path_length(vector) as f32)
+            .sum();
         let avg_path = avg_path / self.trees.len() as f32;
 
         // Anomaly score: 2^(-avg_path / c(n))
@@ -383,9 +380,8 @@ impl IsolationTree {
         let threshold = rng.gen::<f32>() * (max - min) + min;
 
         // Split
-        let (left_vecs, right_vecs): (Vec<&[f32]>, Vec<&[f32]>) = vectors
-            .iter()
-            .partition(|v| v[feature] < threshold);
+        let (left_vecs, right_vecs): (Vec<&[f32]>, Vec<&[f32]>) =
+            vectors.iter().partition(|v| v[feature] < threshold);
 
         if left_vecs.is_empty() || right_vecs.is_empty() {
             return IsolationNode::Leaf {
@@ -396,8 +392,20 @@ impl IsolationTree {
         IsolationNode::Internal {
             feature,
             threshold,
-            left: Box::new(Self::build_node(&left_vecs, dims, depth + 1, max_depth, rng)),
-            right: Box::new(Self::build_node(&right_vecs, dims, depth + 1, max_depth, rng)),
+            left: Box::new(Self::build_node(
+                &left_vecs,
+                dims,
+                depth + 1,
+                max_depth,
+                rng,
+            )),
+            right: Box::new(Self::build_node(
+                &right_vecs,
+                dims,
+                depth + 1,
+                max_depth,
+                rng,
+            )),
         }
     }
 
@@ -551,7 +559,12 @@ impl StatisticalOutlierDetector {
             q3[d] = values[(3 * n) / 4];
         }
 
-        Self { means, stds, q1, q3 }
+        Self {
+            means,
+            stds,
+            q1,
+            q3,
+        }
     }
 
     /// Z-score based outlier detection
@@ -598,13 +611,15 @@ impl StatisticalOutlierDetector {
             .map(|v| {
                 v.iter()
                     .zip(self.means.iter().zip(self.stds.iter()))
-                    .map(|(&val, (&mean, &std))| {
-                        if std > 0.0 {
-                            (val - mean) / std
-                        } else {
-                            0.0
-                        }
-                    })
+                    .map(
+                        |(&val, (&mean, &std))| {
+                            if std > 0.0 {
+                                (val - mean) / std
+                            } else {
+                                0.0
+                            }
+                        },
+                    )
                     .collect()
             })
             .collect()
@@ -672,7 +687,8 @@ impl EnsembleAnomalyDetector {
         min_votes: usize,
     ) -> Vec<usize> {
         let n = self.lof.scores().len();
-        let lof_outliers: HashSet<usize> = self.lof.find_outliers(lof_threshold).into_iter().collect();
+        let lof_outliers: HashSet<usize> =
+            self.lof.find_outliers(lof_threshold).into_iter().collect();
 
         let iforest_scores: Vec<f32> = (0..n)
             .map(|i| self.iforest.score_single(&self.lof.vectors[i]))
@@ -724,9 +740,7 @@ mod tests {
 
         // Normal points clustered around origin
         for _ in 0..95 {
-            let v: Vec<f32> = (0..8)
-                .map(|_| (rng.gen::<f32>() - 0.5) * 2.0)
-                .collect();
+            let v: Vec<f32> = (0..8).map(|_| (rng.gen::<f32>() - 0.5) * 2.0).collect();
             vectors.push(v);
         }
 

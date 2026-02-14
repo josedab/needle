@@ -764,7 +764,10 @@ impl OtelExporter {
     fn resource_attributes(&self) -> HashMap<String, String> {
         let mut attrs = self.config.resource_attributes.clone();
         attrs.insert("service.name".into(), self.config.service_name.clone());
-        attrs.insert("service.version".into(), self.config.service_version.clone());
+        attrs.insert(
+            "service.version".into(),
+            self.config.service_version.clone(),
+        );
         attrs
     }
 }
@@ -977,16 +980,19 @@ mod tests {
         suite.record_query_latency("docs", 500);
         suite.record_query_latency("docs", 2000);
         suite.record_error("docs", "timeout");
-        suite.update_index_health("docs", IndexHealthMetrics {
-            vector_count: 1000,
-            fragmentation_ratio: 0.1,
-            balance_score: 0.9,
-            memory_usage_bytes: 50000,
-            disk_usage_bytes: 0,
-            deleted_count: 10,
-            avg_connections_per_node: 12.0,
-            last_compaction: None,
-        });
+        suite.update_index_health(
+            "docs",
+            IndexHealthMetrics {
+                vector_count: 1000,
+                fragmentation_ratio: 0.1,
+                balance_score: 0.9,
+                memory_usage_bytes: 50000,
+                disk_usage_bytes: 0,
+                deleted_count: 10,
+                avg_connections_per_node: 12.0,
+                last_compaction: None,
+            },
+        );
 
         let exporter = OtelExporter::new(OtelExportConfig::default());
         let metrics = exporter.collect(&suite);
@@ -994,15 +1000,24 @@ mod tests {
         // Should have latency histogram + error counter + recall gauge + vector_count gauge
         assert!(metrics.len() >= 4);
 
-        let latency = metrics.iter().find(|m| m.name == "needle.query.latency_us").unwrap();
+        let latency = metrics
+            .iter()
+            .find(|m| m.name == "needle.query.latency_us")
+            .unwrap();
         assert_eq!(latency.metric_type, "histogram");
         assert_eq!(latency.data_points[0].count, Some(2));
 
-        let errors = metrics.iter().find(|m| m.name == "needle.errors.total").unwrap();
+        let errors = metrics
+            .iter()
+            .find(|m| m.name == "needle.errors.total")
+            .unwrap();
         assert_eq!(errors.metric_type, "counter");
         assert_eq!(errors.data_points[0].value, Some(1.0));
 
-        let recall = metrics.iter().find(|m| m.name == "needle.index.balance_score").unwrap();
+        let recall = metrics
+            .iter()
+            .find(|m| m.name == "needle.index.balance_score")
+            .unwrap();
         assert_eq!(recall.metric_type, "gauge");
     }
 
@@ -1012,8 +1027,7 @@ mod tests {
         suite.record_query_latency("test", 100);
 
         let exporter = OtelExporter::new(
-            OtelExportConfig::new("http://localhost:4317")
-                .with_service_name("needle-test"),
+            OtelExportConfig::new("http://localhost:4317").with_service_name("needle-test"),
         );
         let json = exporter.export_json(&suite);
         let parsed: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
@@ -1021,7 +1035,10 @@ mod tests {
 
         let arr = parsed.as_array().unwrap();
         assert!(!arr.is_empty());
-        assert!(arr[0]["resource"]["service.name"].as_str().unwrap().contains("needle-test"));
+        assert!(arr[0]["resource"]["service.name"]
+            .as_str()
+            .unwrap()
+            .contains("needle-test"));
     }
 
     #[test]

@@ -240,7 +240,9 @@ impl DriftDetector {
     /// Add vectors to establish baseline distribution.
     pub fn add_baseline(&mut self, vectors: &[Vec<f32>]) -> Result<()> {
         if vectors.is_empty() {
-            return Err(NeedleError::InvalidInput("Empty baseline vectors".to_string()));
+            return Err(NeedleError::InvalidInput(
+                "Empty baseline vectors".to_string(),
+            ));
         }
 
         // Validate dimensions
@@ -276,7 +278,9 @@ impl DriftDetector {
             )));
         }
 
-        let stats = self.baseline.get_or_insert_with(|| VectorStats::new(self.dimensions));
+        let stats = self
+            .baseline
+            .get_or_insert_with(|| VectorStats::new(self.dimensions));
         stats.update(vector);
 
         let magnitude = vector.iter().map(|x| x * x).sum::<f32>().sqrt();
@@ -291,7 +295,9 @@ impl DriftDetector {
             stats.finalize_variance();
             Ok(())
         } else {
-            Err(NeedleError::InvalidInput("No baseline vectors added".to_string()))
+            Err(NeedleError::InvalidInput(
+                "No baseline vectors added".to_string(),
+            ))
         }
     }
 
@@ -514,7 +520,8 @@ impl DriftDetector {
     /// Compute overall drift score.
     fn compute_drift_score(&self, centroid_shift: f32, variance_ratio: f32, ks_stat: f32) -> f32 {
         let centroid_score = (centroid_shift / self.config.centroid_threshold).min(1.0);
-        let variance_score = ((variance_ratio - 1.0).abs() / self.config.variance_threshold).min(1.0);
+        let variance_score =
+            ((variance_ratio - 1.0).abs() / self.config.variance_threshold).min(1.0);
         let ks_score = (ks_stat / self.config.ks_threshold).min(1.0);
 
         // Weighted average
@@ -528,13 +535,15 @@ impl DriftDetector {
 
     /// Get recent drift trend.
     pub fn get_trend(&self, window: usize) -> DriftTrend {
-        let recent: Vec<&DriftHistoryEntry> = self.drift_history.iter().rev().take(window).collect();
+        let recent: Vec<&DriftHistoryEntry> =
+            self.drift_history.iter().rev().take(window).collect();
 
         if recent.is_empty() {
             return DriftTrend::Stable;
         }
 
-        let avg_score: f32 = recent.iter().map(|e| e.drift_score).sum::<f32>() / recent.len() as f32;
+        let avg_score: f32 =
+            recent.iter().map(|e| e.drift_score).sum::<f32>() / recent.len() as f32;
         let drift_count = recent.iter().filter(|e| e.is_drifting).count();
         let drift_rate = drift_count as f32 / recent.len() as f32;
 
@@ -601,9 +610,13 @@ impl DriftDetector {
 
     /// Get top drifting dimensions.
     pub fn top_drifting_dimensions(&self, n: usize) -> Result<Vec<DimensionDrift>> {
-        let baseline = self.baseline.as_ref()
+        let baseline = self
+            .baseline
+            .as_ref()
             .ok_or_else(|| NeedleError::InvalidInput("No baseline".to_string()))?;
-        let current = self.current_stats.as_ref()
+        let current = self
+            .current_stats
+            .as_ref()
             .ok_or_else(|| NeedleError::InvalidInput("No current stats".to_string()))?;
 
         let mut dims = self.compute_dimension_drift(baseline, current);
@@ -1415,7 +1428,11 @@ mod tests {
             // Should not be drifting for same distribution
             // Note: with random sampling, some variance is expected
             if report.samples_analyzed >= 10 {
-                assert!(report.drift_score < 0.8, "Drift score too high: {}", report.drift_score);
+                assert!(
+                    report.drift_score < 0.8,
+                    "Drift score too high: {}",
+                    report.drift_score
+                );
             }
         }
     }
@@ -1441,7 +1458,10 @@ mod tests {
             }
         }
 
-        assert!(is_drifting_detected, "Drift should be detected for shifted distribution");
+        assert!(
+            is_drifting_detected,
+            "Drift should be detected for shifted distribution"
+        );
     }
 
     #[test]
@@ -1450,7 +1470,9 @@ mod tests {
         config.window_size = 20;
 
         let mut detector = DriftDetector::new(4, config);
-        detector.add_baseline(&generate_vectors(50, 4, 0.0)).unwrap();
+        detector
+            .add_baseline(&generate_vectors(50, 4, 0.0))
+            .unwrap();
 
         // Add more vectors than window size
         for vec in generate_vectors(30, 4, 0.0) {
@@ -1469,9 +1491,13 @@ mod tests {
         let mut detector = DriftDetector::new(4, config);
 
         // Baseline
-        detector.add_baseline(&[vec![0.0, 0.0, 0.0, 0.0],
-            vec![0.1, 0.1, 0.1, 0.1],
-            vec![-0.1, -0.1, -0.1, -0.1]]).unwrap();
+        detector
+            .add_baseline(&[
+                vec![0.0, 0.0, 0.0, 0.0],
+                vec![0.1, 0.1, 0.1, 0.1],
+                vec![-0.1, -0.1, -0.1, -0.1],
+            ])
+            .unwrap();
 
         // Check vectors where only dimension 0 is shifted
         for _ in 0..10 {
@@ -1480,8 +1506,13 @@ mod tests {
 
             if let Some(dims) = &report.dimension_drift {
                 // Dimension 0 should have highest drift
-                let max_drift_dim = dims.iter()
-                    .max_by(|a, b| a.drift_score.partial_cmp(&b.drift_score).unwrap_or(std::cmp::Ordering::Equal))
+                let max_drift_dim = dims
+                    .iter()
+                    .max_by(|a, b| {
+                        a.drift_score
+                            .partial_cmp(&b.drift_score)
+                            .unwrap_or(std::cmp::Ordering::Equal)
+                    })
                     .unwrap();
                 assert_eq!(max_drift_dim.dimension, 0);
             }
@@ -1494,7 +1525,9 @@ mod tests {
         config.min_samples = 5;
 
         let mut detector = DriftDetector::new(4, config);
-        detector.add_baseline(&generate_vectors(20, 4, 0.0)).unwrap();
+        detector
+            .add_baseline(&generate_vectors(20, 4, 0.0))
+            .unwrap();
 
         for vec in generate_vectors(30, 4, 0.0) {
             let _ = detector.check(&vec);
@@ -1509,12 +1542,14 @@ mod tests {
         let mut config = DriftConfig::default();
         config.min_samples = 5;
         // Use higher thresholds to reduce false positives from random sampling variance
-        config.centroid_threshold = 1.0;  // Very high - almost never drift
-        config.variance_threshold = 5.0;  // Allow 5x variance change
-        config.ks_threshold = 1.0;        // Max KS is 1.0
+        config.centroid_threshold = 1.0; // Very high - almost never drift
+        config.variance_threshold = 5.0; // Allow 5x variance change
+        config.ks_threshold = 1.0; // Max KS is 1.0
 
         let mut detector = DriftDetector::new(4, config);
-        detector.add_baseline(&generate_vectors(20, 4, 0.0)).unwrap();
+        detector
+            .add_baseline(&generate_vectors(20, 4, 0.0))
+            .unwrap();
 
         // Add vectors from same distribution
         for vec in generate_vectors(50, 4, 0.0) {
@@ -1534,7 +1569,9 @@ mod tests {
     #[test]
     fn test_reset_window() {
         let mut detector = DriftDetector::new(4, DriftConfig::default());
-        detector.add_baseline(&generate_vectors(20, 4, 0.0)).unwrap();
+        detector
+            .add_baseline(&generate_vectors(20, 4, 0.0))
+            .unwrap();
 
         for vec in generate_vectors(30, 4, 0.0) {
             let _ = detector.check(&vec);
@@ -1551,7 +1588,9 @@ mod tests {
     #[test]
     fn test_full_reset() {
         let mut detector = DriftDetector::new(4, DriftConfig::default());
-        detector.add_baseline(&generate_vectors(20, 4, 0.0)).unwrap();
+        detector
+            .add_baseline(&generate_vectors(20, 4, 0.0))
+            .unwrap();
 
         for vec in generate_vectors(30, 4, 0.0) {
             let _ = detector.check(&vec);
@@ -1570,7 +1609,9 @@ mod tests {
         config.min_samples = 5;
 
         let mut detector = DriftDetector::new(4, config);
-        detector.add_baseline(&generate_vectors(20, 4, 0.0)).unwrap();
+        detector
+            .add_baseline(&generate_vectors(20, 4, 0.0))
+            .unwrap();
 
         for vec in generate_vectors(30, 4, 0.0) {
             let _ = detector.check(&vec);
@@ -1605,7 +1646,9 @@ mod tests {
         config.min_samples = 5;
 
         let mut detector = DriftDetector::new(4, config);
-        detector.add_baseline(&generate_vectors(20, 4, 0.0)).unwrap();
+        detector
+            .add_baseline(&generate_vectors(20, 4, 0.0))
+            .unwrap();
 
         // Add vectors with dimension 0 heavily shifted
         for _ in 0..10 {
@@ -1723,7 +1766,11 @@ mod tests {
         let mut detector = MultiBaselineDetector::new(4, config);
 
         detector
-            .add_baseline("baseline_v1", &generate_vectors(20, 4, 0.0), Some("First baseline"))
+            .add_baseline(
+                "baseline_v1",
+                &generate_vectors(20, 4, 0.0),
+                Some("First baseline"),
+            )
             .unwrap();
 
         detector
