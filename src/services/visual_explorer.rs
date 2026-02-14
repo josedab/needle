@@ -36,9 +36,8 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::collection::SearchResult;
-use crate::database::{CollectionRef, ExportEntry};
-use crate::error::{NeedleError, Result};
+use crate::database::CollectionRef;
+use crate::error::Result;
 
 // ── Configuration ────────────────────────────────────────────────────────────
 
@@ -221,10 +220,7 @@ impl CollectionExplorer {
     }
 
     /// Create from raw vectors (for testing or custom data).
-    pub fn from_vectors(
-        vectors: Vec<(String, Vec<f32>)>,
-        config: ExplorerConfig,
-    ) -> Self {
+    pub fn from_vectors(vectors: Vec<(String, Vec<f32>)>, config: ExplorerConfig) -> Self {
         Self {
             vectors,
             metadata: HashMap::new(),
@@ -252,9 +248,7 @@ impl CollectionExplorer {
 
         let (min_x, max_x, min_y, max_y) = points.iter().fold(
             (f32::MAX, f32::MIN, f32::MAX, f32::MIN),
-            |(mnx, mxx, mny, mxy), p| {
-                (mnx.min(p.x), mxx.max(p.x), mny.min(p.y), mxy.max(p.y))
-            },
+            |(mnx, mxx, mny, mxy), p| (mnx.min(p.x), mxx.max(p.x), mny.min(p.y), mxy.max(p.y)),
         );
 
         Projection {
@@ -279,10 +273,8 @@ impl CollectionExplorer {
         let dims = self.vectors[0].1.len();
 
         // Initialize centroids (first k vectors)
-        let mut centroids: Vec<Vec<f32>> = self.vectors[..k]
-            .iter()
-            .map(|(_, v)| v.clone())
-            .collect();
+        let mut centroids: Vec<Vec<f32>> =
+            self.vectors[..k].iter().map(|(_, v)| v.clone()).collect();
 
         let mut assignments = vec![0usize; self.vectors.len()];
         let max_iterations = 20;
@@ -409,7 +401,11 @@ impl CollectionExplorer {
         // Per-dimension stats
         let mut dim_stats = Vec::with_capacity(dims);
         for d in 0..dims {
-            let values: Vec<f32> = self.vectors.iter().map(|(_, v)| v.get(d).copied().unwrap_or(0.0)).collect();
+            let values: Vec<f32> = self
+                .vectors
+                .iter()
+                .map(|(_, v)| v.get(d).copied().unwrap_or(0.0))
+                .collect();
             let mean = values.iter().sum::<f32>() / n as f32;
             let variance = values.iter().map(|v| (v - mean).powi(2)).sum::<f32>() / n as f32;
             let min = values.iter().copied().fold(f32::MAX, f32::min);
@@ -431,7 +427,8 @@ impl CollectionExplorer {
             .map(|(_, v)| v.iter().map(|x| x * x).sum::<f32>().sqrt())
             .collect();
         let avg_norm = norms.iter().sum::<f32>() / n as f32;
-        let norm_std = (norms.iter().map(|n| (n - avg_norm).powi(2)).sum::<f32>() / n as f32).sqrt();
+        let norm_std =
+            (norms.iter().map(|n| (n - avg_norm).powi(2)).sum::<f32>() / n as f32).sqrt();
 
         // Sampled pairwise distance
         let sample_size = n.min(100);
@@ -482,9 +479,7 @@ impl CollectionExplorer {
 
         let (min_x, max_x, min_y, max_y) = projection.iter().fold(
             (f32::MAX, f32::MIN, f32::MAX, f32::MIN),
-            |(mnx, mxx, mny, mxy), (x, y)| {
-                (mnx.min(*x), mxx.max(*x), mny.min(*y), mxy.max(*y))
-            },
+            |(mnx, mxx, mny, mxy), (x, y)| (mnx.min(*x), mxx.max(*x), mny.min(*y), mxy.max(*y)),
         );
 
         let range_x = (max_x - min_x).max(0.001);
@@ -492,8 +487,10 @@ impl CollectionExplorer {
 
         let mut grid: HashMap<(usize, usize), usize> = HashMap::new();
         for (x, y) in &projection {
-            let col = (((x - min_x) / range_x * (resolution - 1) as f32) as usize).min(resolution - 1);
-            let row = (((y - min_y) / range_y * (resolution - 1) as f32) as usize).min(resolution - 1);
+            let col =
+                (((x - min_x) / range_x * (resolution - 1) as f32) as usize).min(resolution - 1);
+            let row =
+                (((y - min_y) / range_y * (resolution - 1) as f32) as usize).min(resolution - 1);
             *grid.entry((row, col)).or_insert(0) += 1;
         }
 
@@ -553,7 +550,11 @@ impl CollectionExplorer {
             // Multiply by centered data covariance
             let mut new_pc1 = vec![0.0f32; dims];
             for (_, v) in &self.vectors {
-                let centered: Vec<f32> = v.iter().enumerate().map(|(d, val)| val - mean.get(d).unwrap_or(&0.0)).collect();
+                let centered: Vec<f32> = v
+                    .iter()
+                    .enumerate()
+                    .map(|(d, val)| val - mean.get(d).unwrap_or(&0.0))
+                    .collect();
                 let dot: f32 = centered.iter().zip(pc1.iter()).map(|(a, b)| a * b).sum();
                 for (d, c) in centered.iter().enumerate() {
                     if d < dims {
@@ -580,7 +581,11 @@ impl CollectionExplorer {
         for _ in 0..self.config.pca_iterations {
             let mut new_pc2 = vec![0.0f32; dims];
             for (_, v) in &self.vectors {
-                let centered: Vec<f32> = v.iter().enumerate().map(|(d, val)| val - mean.get(d).unwrap_or(&0.0)).collect();
+                let centered: Vec<f32> = v
+                    .iter()
+                    .enumerate()
+                    .map(|(d, val)| val - mean.get(d).unwrap_or(&0.0))
+                    .collect();
                 let dot: f32 = centered.iter().zip(pc2.iter()).map(|(a, b)| a * b).sum();
                 for (d, c) in centered.iter().enumerate() {
                     if d < dims {
@@ -589,7 +594,11 @@ impl CollectionExplorer {
                 }
             }
             // Orthogonalize
-            let dot = new_pc2.iter().zip(pc1.iter()).map(|(a, b)| a * b).sum::<f32>();
+            let dot = new_pc2
+                .iter()
+                .zip(pc1.iter())
+                .map(|(a, b)| a * b)
+                .sum::<f32>();
             for (d, v) in new_pc2.iter_mut().enumerate() {
                 *v -= dot * pc1.get(d).unwrap_or(&0.0);
             }
@@ -606,7 +615,11 @@ impl CollectionExplorer {
         self.vectors
             .iter()
             .map(|(id, v)| {
-                let centered: Vec<f32> = v.iter().enumerate().map(|(d, val)| val - mean.get(d).unwrap_or(&0.0)).collect();
+                let centered: Vec<f32> = v
+                    .iter()
+                    .enumerate()
+                    .map(|(d, val)| val - mean.get(d).unwrap_or(&0.0))
+                    .collect();
                 let x: f32 = centered.iter().zip(pc1.iter()).map(|(a, b)| a * b).sum();
                 let y: f32 = centered.iter().zip(pc2.iter()).map(|(a, b)| a * b).sum();
                 ProjectedPoint {
@@ -614,9 +627,10 @@ impl CollectionExplorer {
                     x,
                     y,
                     cluster: None,
-                    label: self.metadata.get(id).and_then(|m| {
-                        m.get("label").and_then(|v| v.as_str()).map(String::from)
-                    }),
+                    label: self
+                        .metadata
+                        .get(id)
+                        .and_then(|m| m.get("label").and_then(|v| v.as_str()).map(String::from)),
                 }
             })
             .collect()
@@ -709,7 +723,8 @@ mod tests {
 
     #[test]
     fn test_projection_first_two() {
-        let explorer = CollectionExplorer::from_vectors(sample_vectors(), ExplorerConfig::default());
+        let explorer =
+            CollectionExplorer::from_vectors(sample_vectors(), ExplorerConfig::default());
         let proj = explorer.project(ProjectionMethod::FirstTwo);
         assert_eq!(proj.points.len(), 5);
         assert_eq!(proj.points[0].x, 1.0);
@@ -718,7 +733,8 @@ mod tests {
 
     #[test]
     fn test_projection_pca() {
-        let explorer = CollectionExplorer::from_vectors(sample_vectors(), ExplorerConfig::default());
+        let explorer =
+            CollectionExplorer::from_vectors(sample_vectors(), ExplorerConfig::default());
         let proj = explorer.project(ProjectionMethod::PCA);
         assert_eq!(proj.points.len(), 5);
         assert!(proj.variance_explained.is_some());
@@ -726,7 +742,8 @@ mod tests {
 
     #[test]
     fn test_projection_random() {
-        let explorer = CollectionExplorer::from_vectors(sample_vectors(), ExplorerConfig::default());
+        let explorer =
+            CollectionExplorer::from_vectors(sample_vectors(), ExplorerConfig::default());
         let proj = explorer.project(ProjectionMethod::Random);
         assert_eq!(proj.points.len(), 5);
         // Deterministic with same seed
@@ -736,7 +753,8 @@ mod tests {
 
     #[test]
     fn test_clustering() {
-        let explorer = CollectionExplorer::from_vectors(sample_vectors(), ExplorerConfig::default());
+        let explorer =
+            CollectionExplorer::from_vectors(sample_vectors(), ExplorerConfig::default());
         let clusters = explorer.cluster(2);
         assert!(!clusters.is_empty());
         assert!(clusters.len() <= 2);
@@ -747,7 +765,8 @@ mod tests {
 
     #[test]
     fn test_clustering_k_larger_than_n() {
-        let explorer = CollectionExplorer::from_vectors(sample_vectors(), ExplorerConfig::default());
+        let explorer =
+            CollectionExplorer::from_vectors(sample_vectors(), ExplorerConfig::default());
         let clusters = explorer.cluster(100);
         // k capped to n
         let total: usize = clusters.iter().map(|c| c.size).sum();
@@ -756,7 +775,8 @@ mod tests {
 
     #[test]
     fn test_viz_stats() {
-        let explorer = CollectionExplorer::from_vectors(sample_vectors(), ExplorerConfig::default());
+        let explorer =
+            CollectionExplorer::from_vectors(sample_vectors(), ExplorerConfig::default());
         let stats = explorer.viz_stats();
         assert_eq!(stats.total_vectors, 5);
         assert_eq!(stats.dimensions, 4);
@@ -766,8 +786,7 @@ mod tests {
 
     #[test]
     fn test_empty_collection() {
-        let explorer =
-            CollectionExplorer::from_vectors(Vec::new(), ExplorerConfig::default());
+        let explorer = CollectionExplorer::from_vectors(Vec::new(), ExplorerConfig::default());
         let proj = explorer.project(ProjectionMethod::PCA);
         assert!(proj.points.is_empty());
 
@@ -803,7 +822,8 @@ mod tests {
 
     #[test]
     fn test_bounds() {
-        let explorer = CollectionExplorer::from_vectors(sample_vectors(), ExplorerConfig::default());
+        let explorer =
+            CollectionExplorer::from_vectors(sample_vectors(), ExplorerConfig::default());
         let proj = explorer.project(ProjectionMethod::FirstTwo);
         let (min_x, min_y, max_x, max_y) = proj.bounds;
         assert!(max_x >= min_x);

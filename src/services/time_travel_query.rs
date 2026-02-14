@@ -39,7 +39,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::database::Database;
-use crate::error::{NeedleError, Result};
+use crate::error::Result;
 
 // ── Configuration ────────────────────────────────────────────────────────────
 
@@ -164,11 +164,7 @@ pub struct TimeTravelService<'a> {
 
 impl<'a> TimeTravelService<'a> {
     /// Create a new time-travel service for a collection.
-    pub fn new(
-        db: &'a Database,
-        collection: &str,
-        config: TimeTravelConfig,
-    ) -> Result<Self> {
+    pub fn new(db: &'a Database, collection: &str, config: TimeTravelConfig) -> Result<Self> {
         let _coll = db.collection(collection)?;
         Ok(Self {
             db,
@@ -183,12 +179,7 @@ impl<'a> TimeTravelService<'a> {
     }
 
     /// Insert or update a vector (creates a new version).
-    pub fn insert(
-        &mut self,
-        id: &str,
-        vector: &[f32],
-        metadata: Option<Value>,
-    ) -> Result<Version> {
+    pub fn insert(&mut self, id: &str, vector: &[f32], metadata: Option<Value>) -> Result<Version> {
         self.current += 1;
         let version = self.current;
 
@@ -289,7 +280,8 @@ impl<'a> TimeTravelService<'a> {
         results.sort_by(|a, b| {
             let da = dist_fn.compute(query, &a.vector);
             let db_dist = dist_fn.compute(query, &b.vector);
-            da.partial_cmp(&db_dist).unwrap_or(std::cmp::Ordering::Equal)
+            da.partial_cmp(&db_dist)
+                .unwrap_or(std::cmp::Ordering::Equal)
         });
 
         results.truncate(k);
@@ -305,14 +297,8 @@ impl<'a> TimeTravelService<'a> {
         };
 
         for (id, history) in &self.versions {
-            let at_from = history
-                .range(..=from)
-                .next_back()
-                .map(|(_, r)| r.clone());
-            let at_to = history
-                .range(..=to)
-                .next_back()
-                .map(|(_, r)| r.clone());
+            let at_from = history.range(..=from).next_back().map(|(_, r)| r.clone());
+            let at_to = history.range(..=to).next_back().map(|(_, r)| r.clone());
 
             match (at_from, at_to) {
                 (None, Some(r)) if !r.deleted => {
@@ -376,7 +362,10 @@ impl<'a> TimeTravelService<'a> {
         // Collect the state at target_version
         let mut state_at_target: Vec<(String, Option<VersionedVector>)> = Vec::new();
         for (id, history) in &self.versions {
-            let record = history.range(..=target_version).next_back().map(|(_, r)| r.clone());
+            let record = history
+                .range(..=target_version)
+                .next_back()
+                .map(|(_, r)| r.clone());
             state_at_target.push((id.clone(), record));
         }
 
@@ -402,7 +391,11 @@ impl<'a> TimeTravelService<'a> {
             }
         }
 
-        self.record_audit(self.current, AuditOp::Rollback, &format!("v{target_version}"));
+        self.record_audit(
+            self.current,
+            AuditOp::Rollback,
+            &format!("v{target_version}"),
+        );
         Ok(self.current)
     }
 

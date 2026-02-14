@@ -304,12 +304,7 @@ impl BrowserCollection {
     }
 
     /// Insert a vector with optional metadata.
-    pub fn insert(
-        &mut self,
-        id: &str,
-        vector: &[f32],
-        metadata: Option<Value>,
-    ) -> Result<()> {
+    pub fn insert(&mut self, id: &str, vector: &[f32], metadata: Option<Value>) -> Result<()> {
         self.collection.insert(id, vector, metadata)?;
         self.vector_count += 1;
 
@@ -324,10 +319,7 @@ impl BrowserCollection {
     }
 
     /// Insert multiple vectors in a batch.
-    pub fn insert_batch(
-        &mut self,
-        items: &[(&str, &[f32], Option<Value>)],
-    ) -> Result<usize> {
+    pub fn insert_batch(&mut self, items: &[(&str, &[f32], Option<Value>)]) -> Result<usize> {
         let mut count = 0;
         for (id, vector, metadata) in items {
             self.insert(id, vector, metadata.clone())?;
@@ -357,10 +349,8 @@ impl BrowserCollection {
             self.collection.search(query, k)?
         };
 
-        let mut browser_results: Vec<BrowserSearchResult> = results
-            .into_iter()
-            .map(BrowserSearchResult::from)
-            .collect();
+        let mut browser_results: Vec<BrowserSearchResult> =
+            results.into_iter().map(BrowserSearchResult::from).collect();
 
         // Apply score threshold
         if let Some(threshold) = opts.score_threshold {
@@ -506,8 +496,12 @@ mod tests {
     fn test_browser_collection_crud() {
         let mut coll = make_collection(4);
 
-        coll.insert("v1", &[1.0, 2.0, 3.0, 4.0], Some(serde_json::json!({"a": 1})))
-            .unwrap();
+        coll.insert(
+            "v1",
+            &[1.0, 2.0, 3.0, 4.0],
+            Some(serde_json::json!({"a": 1})),
+        )
+        .unwrap();
         assert_eq!(coll.len(), 1);
 
         let got = coll.get("v1").unwrap();
@@ -532,8 +526,12 @@ mod tests {
     #[test]
     fn test_browser_collection_serialization() {
         let mut coll = make_collection(4);
-        coll.insert("v1", &[1.0, 2.0, 3.0, 4.0], Some(serde_json::json!({"k": "v"})))
-            .unwrap();
+        coll.insert(
+            "v1",
+            &[1.0, 2.0, 3.0, 4.0],
+            Some(serde_json::json!({"k": "v"})),
+        )
+        .unwrap();
 
         let bytes = coll.to_json_bytes().unwrap();
         let restored = BrowserCollection::from_json_bytes(&bytes).unwrap();

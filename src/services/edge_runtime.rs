@@ -172,8 +172,8 @@ pub struct ReadOnlyCollection {
 impl ReadOnlyCollection {
     /// Create from a Collection (marks it as read-only for edge use).
     pub fn new(name: &str, dimensions: usize, ef_search: usize) -> Result<Self> {
-        let config = CollectionConfig::new(name, dimensions)
-            .with_distance(DistanceFunction::Cosine);
+        let config =
+            CollectionConfig::new(name, dimensions).with_distance(DistanceFunction::Cosine);
         let collection = Collection::new(config);
 
         Ok(Self {
@@ -185,10 +185,7 @@ impl ReadOnlyCollection {
     }
 
     /// Load vectors into the collection (during cold start).
-    pub fn load_vectors(
-        &mut self,
-        vectors: &[(&str, &[f32], Option<Value>)],
-    ) -> Result<usize> {
+    pub fn load_vectors(&mut self, vectors: &[(&str, &[f32], Option<Value>)]) -> Result<usize> {
         let mut count = 0;
         for &(id, vec, ref meta) in vectors {
             self.inner.insert(id, vec, meta.clone())?;

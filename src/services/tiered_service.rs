@@ -400,9 +400,7 @@ mod tests {
     #[test]
     fn test_promote_demote() {
         let db = make_db();
-        let config = TieredServiceConfig::builder()
-            .collection("test")
-            .build();
+        let config = TieredServiceConfig::builder().collection("test").build();
 
         let svc = TieredService::new(&db, config).unwrap();
         svc.insert("v1", &[0.1, 0.2, 0.3, 0.4], None).unwrap();
@@ -417,9 +415,7 @@ mod tests {
     #[test]
     fn test_maintenance_report() {
         let db = make_db();
-        let config = TieredServiceConfig::builder()
-            .collection("test")
-            .build();
+        let config = TieredServiceConfig::builder().collection("test").build();
 
         let svc = TieredService::new(&db, config).unwrap();
         svc.insert("v1", &[0.1, 0.2, 0.3, 0.4], None).unwrap();
@@ -440,9 +436,7 @@ mod tests {
     #[test]
     fn test_stats() {
         let db = make_db();
-        let config = TieredServiceConfig::builder()
-            .collection("test")
-            .build();
+        let config = TieredServiceConfig::builder().collection("test").build();
 
         let svc = TieredService::new(&db, config).unwrap();
         svc.insert("v1", &[0.1, 0.2, 0.3, 0.4], None).unwrap();

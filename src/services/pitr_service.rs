@@ -275,9 +275,9 @@ impl<'a> PitrService<'a> {
         })?;
 
         let snap_data = self.snapshot_data.read();
-        let col_snapshots = snap_data.get(&point.id).ok_or_else(|| {
-            NeedleError::InvalidArgument("snapshot data not found".into())
-        })?;
+        let col_snapshots = snap_data
+            .get(&point.id)
+            .ok_or_else(|| NeedleError::InvalidArgument("snapshot data not found".into()))?;
 
         let mut collections_restored = Vec::new();
         let mut vectors_restored = 0usize;
@@ -362,9 +362,8 @@ impl<'a> PitrService<'a> {
         }
 
         // Enforce retention period
-        let cutoff_ms = now_ms().saturating_sub(
-            self.config.retention_days as u64 * 24 * 3600 * 1000,
-        );
+        let cutoff_ms =
+            now_ms().saturating_sub(self.config.retention_days as u64 * 24 * 3600 * 1000);
         snapshots.retain(|s| {
             if s.timestamp_ms < cutoff_ms {
                 data.remove(&s.id);
@@ -393,9 +392,7 @@ mod tests {
         let coll = db.collection("test").unwrap();
         coll.insert("v1", &[0.1, 0.2, 0.3, 0.4], None).unwrap();
 
-        let config = PitrServiceConfig::builder()
-            .retention_days(7)
-            .build();
+        let config = PitrServiceConfig::builder().retention_days(7).build();
         let svc = PitrService::new(&db, config).unwrap();
 
         let snap = svc.create_snapshot("test-snap").unwrap();
@@ -463,9 +460,7 @@ mod tests {
     #[test]
     fn test_verify_snapshot() {
         let db = make_db();
-        let config = PitrServiceConfig::builder()
-            .enable_checksums(true)
-            .build();
+        let config = PitrServiceConfig::builder().enable_checksums(true).build();
         let svc = PitrService::new(&db, config).unwrap();
 
         let snap = svc.create_snapshot("verified").unwrap();
@@ -475,9 +470,7 @@ mod tests {
     #[test]
     fn test_retention_max_snapshots() {
         let db = make_db();
-        let config = PitrServiceConfig::builder()
-            .max_snapshots(2)
-            .build();
+        let config = PitrServiceConfig::builder().max_snapshots(2).build();
         let svc = PitrService::new(&db, config).unwrap();
 
         svc.create_snapshot("s1").unwrap();
