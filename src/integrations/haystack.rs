@@ -147,7 +147,10 @@ impl NeedleDocumentStore {
     }
 
     /// Create from an existing collection.
-    pub fn from_collection(collection: crate::collection::Collection, config: DocumentStoreConfig) -> Self {
+    pub fn from_collection(
+        collection: crate::collection::Collection,
+        config: DocumentStoreConfig,
+    ) -> Self {
         let inner = FrameworkCollection::from_collection(collection);
         Self { inner, config }
     }
@@ -171,7 +174,10 @@ impl NeedleDocumentStore {
             let mut metadata = doc.metadata.clone();
             if self.config.store_content {
                 if let Value::Object(ref mut map) = metadata {
-                    map.insert(self.config.content_key.clone(), Value::String(doc.content.clone()));
+                    map.insert(
+                        self.config.content_key.clone(),
+                        Value::String(doc.content.clone()),
+                    );
                     map.insert("_content_type".to_string(), json!(doc.content_type));
                 }
             }
@@ -179,13 +185,17 @@ impl NeedleDocumentStore {
             match self.config.duplicate_policy {
                 DuplicatePolicy::Overwrite => {
                     let _ = self.inner.write().delete(&doc.id);
-                    self.inner.write().insert(&doc.id, embedding, Some(metadata))?;
+                    self.inner
+                        .write()
+                        .insert(&doc.id, embedding, Some(metadata))?;
                     written += 1;
                 }
                 DuplicatePolicy::Skip => {
                     let exists = self.inner.read().get(&doc.id).is_some();
                     if !exists {
-                        self.inner.write().insert(&doc.id, embedding, Some(metadata))?;
+                        self.inner
+                            .write()
+                            .insert(&doc.id, embedding, Some(metadata))?;
                         written += 1;
                     }
                 }
@@ -194,7 +204,9 @@ impl NeedleDocumentStore {
                     if exists {
                         return Err(NeedleError::DuplicateId(doc.id.clone()));
                     }
-                    self.inner.write().insert(&doc.id, embedding, Some(metadata))?;
+                    self.inner
+                        .write()
+                        .insert(&doc.id, embedding, Some(metadata))?;
                     written += 1;
                 }
             }
@@ -336,7 +348,9 @@ mod tests {
             HaystackDocument::new("d1", "A"),
             HaystackDocument::new("d2", "B"),
         ];
-        store.write_documents(&docs, &[vec![1.0; 4], vec![0.0; 4]]).unwrap();
+        store
+            .write_documents(&docs, &[vec![1.0; 4], vec![0.0; 4]])
+            .unwrap();
         assert_eq!(store.count_documents(), 2);
 
         let deleted = store.delete_documents(&["d1".to_string()]).unwrap();
@@ -350,9 +364,8 @@ mod tests {
             duplicate_policy: DuplicatePolicy::Skip,
             ..DocumentStoreConfig::new("test", 4)
         };
-        let collection = crate::collection::Collection::new(
-            crate::collection::CollectionConfig::new("test", 4),
-        );
+        let collection =
+            crate::collection::Collection::new(crate::collection::CollectionConfig::new("test", 4));
         let store = NeedleDocumentStore::from_collection(collection, config);
 
         let doc = HaystackDocument::new("d1", "First");
@@ -370,9 +383,8 @@ mod tests {
             duplicate_policy: DuplicatePolicy::Error,
             ..DocumentStoreConfig::new("test", 4)
         };
-        let collection = crate::collection::Collection::new(
-            crate::collection::CollectionConfig::new("test", 4),
-        );
+        let collection =
+            crate::collection::Collection::new(crate::collection::CollectionConfig::new("test", 4));
         let store = NeedleDocumentStore::from_collection(collection, config);
 
         let doc = HaystackDocument::new("d1", "Content");
@@ -397,8 +409,7 @@ mod tests {
 
     #[test]
     fn test_content_type() {
-        let doc = HaystackDocument::new("d1", "A")
-            .with_content_type(ContentType::Table);
+        let doc = HaystackDocument::new("d1", "A").with_content_type(ContentType::Table);
         assert_eq!(doc.content_type, ContentType::Table);
     }
 

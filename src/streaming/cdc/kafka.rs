@@ -1,14 +1,5 @@
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::Arc;
-use std::time::Duration;
-
-use tokio::sync::RwLock;
-
-use super::{
-    CdcConfig, CdcConnector, CdcConnectorStats, CdcPosition,
-};
 use super::debezium::DebeziumParser;
-use crate::streaming::core::{ChangeEvent, StreamError, StreamResult};
+use super::CdcConfig;
 
 // ============================================================================
 // Kafka Connector Config
@@ -158,10 +149,7 @@ impl CdcConnector for KafkaConnector {
         use rdkafka::consumer::StreamConsumer;
         use rdkafka::Message;
 
-        let consumer = self
-            .consumer
-            .as_ref()
-            .ok_or(StreamError::StreamClosed)?;
+        let consumer = self.consumer.as_ref().ok_or(StreamError::StreamClosed)?;
 
         let timeout = Duration::from_millis(self.config.cdc_config.fetch_timeout_ms);
 
@@ -211,10 +199,7 @@ impl CdcConnector for KafkaConnector {
         use rdkafka::consumer::Consumer;
         use rdkafka::TopicPartitionList;
 
-        let consumer = self
-            .consumer
-            .as_ref()
-            .ok_or(StreamError::StreamClosed)?;
+        let consumer = self.consumer.as_ref().ok_or(StreamError::StreamClosed)?;
 
         let offset: i64 = position
             .position

@@ -70,7 +70,9 @@ impl fmt::Display for StreamError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             StreamError::StreamClosed => write!(f, "Stream has been closed"),
-            StreamError::BufferOverflow => write!(f, "Buffer overflow - backpressure limit reached"),
+            StreamError::BufferOverflow => {
+                write!(f, "Buffer overflow - backpressure limit reached")
+            }
             StreamError::InvalidResumeToken(t) => write!(f, "Invalid resume token: {}", t),
             StreamError::SubscriptionError(e) => write!(f, "Subscription error: {}", e),
             StreamError::EventLogError(e) => write!(f, "Event log error: {}", e),
@@ -316,12 +318,12 @@ impl ResumeToken {
             )));
         }
 
-        let position = parts[0]
-            .parse::<u64>()
-            .map_err(|_| StreamError::InvalidResumeToken(format!("Invalid position: {}", parts[0])))?;
-        let timestamp = parts[1]
-            .parse::<u64>()
-            .map_err(|_| StreamError::InvalidResumeToken(format!("Invalid timestamp: {}", parts[1])))?;
+        let position = parts[0].parse::<u64>().map_err(|_| {
+            StreamError::InvalidResumeToken(format!("Invalid position: {}", parts[0]))
+        })?;
+        let timestamp = parts[1].parse::<u64>().map_err(|_| {
+            StreamError::InvalidResumeToken(format!("Invalid timestamp: {}", parts[1]))
+        })?;
 
         Ok(Self {
             position,

@@ -6,8 +6,8 @@ use std::time::Duration;
 use tokio::sync::{broadcast, mpsc, Mutex, RwLock};
 
 use super::core::{
-    ChangeEvent, ChangeEventFilter, StreamError, StreamResult,
-    DEFAULT_BUFFER_SIZE, DEFAULT_CHANNEL_CAPACITY,
+    ChangeEvent, ChangeEventFilter, StreamError, StreamResult, DEFAULT_BUFFER_SIZE,
+    DEFAULT_CHANNEL_CAPACITY,
 };
 
 // ============================================================================
@@ -224,21 +224,25 @@ impl PubSub {
         let subs = self.subscriptions.read().await;
         if let Some(subscribers) = subs.get(&event.collection) {
             for sub in subscribers {
-                if sub.active.load(Ordering::Relaxed) && sub.filter.matches(&event)
-                    && sub.sender.try_send(event.clone()).is_err() {
-                        // Buffer the event for backpressure handling
-                        self.buffer_event(event.clone()).await?;
-                    }
+                if sub.active.load(Ordering::Relaxed)
+                    && sub.filter.matches(&event)
+                    && sub.sender.try_send(event.clone()).is_err()
+                {
+                    // Buffer the event for backpressure handling
+                    self.buffer_event(event.clone()).await?;
+                }
             }
         }
 
         // Send to global subscribers
         let global_subs = self.global_subscriptions.read().await;
         for sub in global_subs.iter() {
-            if sub.active.load(Ordering::Relaxed) && sub.filter.matches(&event)
-                && sub.sender.try_send(event.clone()).is_err() {
-                    self.buffer_event(event.clone()).await?;
-                }
+            if sub.active.load(Ordering::Relaxed)
+                && sub.filter.matches(&event)
+                && sub.sender.try_send(event.clone()).is_err()
+            {
+                self.buffer_event(event.clone()).await?;
+            }
         }
 
         Ok(())
@@ -283,7 +287,11 @@ impl PubSub {
     pub async fn subscriber_count(&self, collection: &str) -> usize {
         let subs = self.subscriptions.read().await;
         subs.get(collection)
-            .map(|s| s.iter().filter(|sub| sub.active.load(Ordering::Relaxed)).count())
+            .map(|s| {
+                s.iter()
+                    .filter(|sub| sub.active.load(Ordering::Relaxed))
+                    .count()
+            })
             .unwrap_or(0)
     }
 
@@ -294,7 +302,11 @@ impl PubSub {
 
         let collection_count: usize = subs
             .values()
-            .map(|s| s.iter().filter(|sub| sub.active.load(Ordering::Relaxed)).count())
+            .map(|s| {
+                s.iter()
+                    .filter(|sub| sub.active.load(Ordering::Relaxed))
+                    .count()
+            })
             .sum();
 
         let global_count = global

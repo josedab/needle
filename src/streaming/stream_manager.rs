@@ -6,12 +6,11 @@ use std::time::Duration;
 use tokio::sync::{mpsc, RwLock};
 
 use super::core::{
-    ChangeEvent, ChangeEventFilter, ResumeToken, StreamError, StreamResult,
-    DEFAULT_BUFFER_SIZE, DEFAULT_CHANNEL_CAPACITY, COMPACTION_THRESHOLD,
-    current_timestamp_millis,
+    current_timestamp_millis, ChangeEvent, ChangeEventFilter, ResumeToken, StreamError,
+    StreamResult, COMPACTION_THRESHOLD, DEFAULT_BUFFER_SIZE, DEFAULT_CHANNEL_CAPACITY,
 };
-use super::pubsub::{PubSub, Subscriber};
 use super::event_log::{EventLog, ReplayOptions};
+use super::pubsub::{PubSub, Subscriber};
 
 // ============================================================================
 // Change Stream

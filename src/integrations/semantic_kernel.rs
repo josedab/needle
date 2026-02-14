@@ -147,9 +147,9 @@ impl NeedleMemoryStore {
     ) -> Result<String> {
         self.create_collection(collection_name);
         let cols = self.collections.read();
-        let col = cols.get(collection_name).ok_or_else(|| {
-            NeedleError::CollectionNotFound(collection_name.to_string())
-        })?;
+        let col = cols
+            .get(collection_name)
+            .ok_or_else(|| NeedleError::CollectionNotFound(collection_name.to_string()))?;
 
         let metadata = json!({
             "_text": record.text,
@@ -162,7 +162,8 @@ impl NeedleMemoryStore {
 
         // Delete existing if present (upsert semantics)
         let _ = col.write().delete(&record.id);
-        col.write().insert(&record.id, embedding, Some(metadata.clone()))?;
+        col.write()
+            .insert(&record.id, embedding, Some(metadata.clone()))?;
 
         Ok(record.id.clone())
     }
@@ -202,9 +203,9 @@ impl NeedleMemoryStore {
     /// Remove a record by ID.
     pub fn remove(&self, collection_name: &str, key: &str) -> Result<()> {
         let cols = self.collections.read();
-        let col = cols.get(collection_name).ok_or_else(|| {
-            NeedleError::CollectionNotFound(collection_name.to_string())
-        })?;
+        let col = cols
+            .get(collection_name)
+            .ok_or_else(|| NeedleError::CollectionNotFound(collection_name.to_string()))?;
         let _ = col.write().delete(key);
         Ok(())
     }
@@ -218,9 +219,9 @@ impl NeedleMemoryStore {
         min_relevance: f32,
     ) -> Result<Vec<MemoryQueryResult>> {
         let cols = self.collections.read();
-        let col = cols.get(collection_name).ok_or_else(|| {
-            NeedleError::CollectionNotFound(collection_name.to_string())
-        })?;
+        let col = cols
+            .get(collection_name)
+            .ok_or_else(|| NeedleError::CollectionNotFound(collection_name.to_string()))?;
 
         let results = col.search(embedding, limit, None)?;
 
@@ -270,10 +271,7 @@ fn metadata_to_record(id: &str, metadata: &Value) -> MemoryRecord {
             .get("_timestamp")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string()),
-        additional_metadata: metadata
-            .get("_additional")
-            .cloned()
-            .unwrap_or(json!({})),
+        additional_metadata: metadata.get("_additional").cloned().unwrap_or(json!({})),
     }
 }
 
@@ -316,7 +314,9 @@ mod tests {
             .with_description("preference")
             .with_external_source("chat-1");
 
-        store.upsert("default", &record, &[1.0, 0.0, 0.0, 0.0]).unwrap();
+        store
+            .upsert("default", &record, &[1.0, 0.0, 0.0, 0.0])
+            .unwrap();
         assert_eq!(store.count("default"), 1);
 
         let retrieved = store.get("default", "m1").unwrap();
@@ -378,10 +378,7 @@ mod tests {
             MemoryRecord::new("m1", "Very relevant"),
             MemoryRecord::new("m2", "Less relevant"),
         ];
-        let embeddings = vec![
-            vec![1.0, 0.0, 0.0, 0.0],
-            vec![0.0, 1.0, 0.0, 0.0],
-        ];
+        let embeddings = vec![vec![1.0, 0.0, 0.0, 0.0], vec![0.0, 1.0, 0.0, 0.0]];
         store.upsert_batch("col", &records, &embeddings).unwrap();
 
         let results = store

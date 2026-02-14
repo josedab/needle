@@ -149,7 +149,11 @@ impl TextNode {
     }
 
     /// Add a relationship to another node
-    pub fn with_relationship(mut self, rel_type: NodeRelationship, node_id: impl Into<String>) -> Self {
+    pub fn with_relationship(
+        mut self,
+        rel_type: NodeRelationship,
+        node_id: impl Into<String>,
+    ) -> Self {
         self.relationships.insert(
             rel_type,
             RelatedNode {
@@ -199,7 +203,7 @@ impl TextNode {
         let mut map = serde_json::Map::new();
         map.insert("_text".to_string(), json!(self.text));
         map.insert("_node_id".to_string(), json!(self.id));
-        
+
         if let Some(hash) = &self.hash {
             map.insert("_hash".to_string(), json!(hash));
         }
@@ -209,12 +213,12 @@ impl TextNode {
         if let Some(end) = self.end_char_idx {
             map.insert("_end_char_idx".to_string(), json!(end));
         }
-        
+
         // Add user metadata
         for (k, v) in &self.metadata {
             map.insert(k.clone(), v.clone());
         }
-        
+
         // Add relationships
         if !self.relationships.is_empty() {
             let rels: HashMap<String, String> = self
@@ -224,7 +228,7 @@ impl TextNode {
                 .collect();
             map.insert("_relationships".to_string(), json!(rels));
         }
-        
+
         Value::Object(map)
     }
 
@@ -232,9 +236,9 @@ impl TextNode {
     pub fn from_metadata(id: &str, metadata: &Value) -> Option<Self> {
         let map = metadata.as_object()?;
         let text = map.get("_text")?.as_str()?.to_string();
-        
+
         let mut node = Self::new(text).with_id(id);
-        
+
         if let Some(hash) = map.get("_hash").and_then(|v| v.as_str()) {
             node.hash = Some(hash.to_string());
         }
@@ -244,14 +248,14 @@ impl TextNode {
         if let Some(end) = map.get("_end_char_idx").and_then(|v| v.as_u64()) {
             node.end_char_idx = Some(end as usize);
         }
-        
+
         // Extract user metadata (non-underscore prefixed keys)
         for (k, v) in map {
             if !k.starts_with('_') {
                 node.metadata.insert(k.clone(), v.clone());
             }
         }
-        
+
         Some(node)
     }
 }
@@ -334,10 +338,7 @@ impl NeedleVectorStoreIndex {
             config.distance_function,
         );
 
-        Ok(Self {
-            collection,
-            config,
-        })
+        Ok(Self { collection, config })
     }
 
     /// Create an index from an existing collection
@@ -379,7 +380,7 @@ impl NeedleVectorStoreIndex {
             } else {
                 None
             };
-            
+
             collection.insert(&node.id, embedding, metadata)?;
             ids.push(node.id.clone());
         }
@@ -391,13 +392,13 @@ impl NeedleVectorStoreIndex {
     pub fn delete_nodes(&self, node_ids: &[String]) -> Result<usize> {
         let mut collection = self.collection.write();
         let mut deleted = 0;
-        
+
         for id in node_ids {
             if collection.delete(id)? {
                 deleted += 1;
             }
         }
-        
+
         Ok(deleted)
     }
 
@@ -583,19 +584,20 @@ impl DocumentChunker {
     fn split_text(&self, text: &str) -> Vec<(String, usize, usize)> {
         let mut chunks = Vec::new();
         let paragraphs: Vec<&str> = text.split(&self.config.separator).collect();
-        
+
         let mut current_chunk = String::new();
         let mut current_start = 0;
         let mut char_pos = 0;
 
         for para in paragraphs {
             let para_len = para.len();
-            
-            if current_chunk.len() + para_len > self.config.chunk_size && !current_chunk.is_empty() {
+
+            if current_chunk.len() + para_len > self.config.chunk_size && !current_chunk.is_empty()
+            {
                 // Save current chunk
                 let chunk_end = char_pos;
                 chunks.push((current_chunk.clone(), current_start, chunk_end));
-                
+
                 // Start new chunk with overlap
                 let overlap_start = if current_chunk.len() > self.config.chunk_overlap {
                     current_chunk.len() - self.config.chunk_overlap
@@ -729,7 +731,7 @@ impl ConversationMemory {
     /// Add a message to memory
     pub fn add_message(&self, message: ChatMessage, embedding: Option<&[f32]>) -> Result<()> {
         let mut messages = self.messages.write();
-        
+
         // Add to vector store if enabled
         if let (Some(store), Some(emb)) = (&self.vector_store, embedding) {
             let msg_id = self.message_count.fetch_add(1, Ordering::SeqCst);
@@ -737,7 +739,7 @@ impl ConversationMemory {
                 .with_id(format!("msg_{}", msg_id))
                 .with_metadata("role", format!("{:?}", message.role))
                 .with_metadata("timestamp", message.timestamp as i64);
-            
+
             store.insert_nodes(&[node], &[emb.to_vec()])?;
         }
 
@@ -752,12 +754,20 @@ impl ConversationMemory {
     }
 
     /// Add a user message
-    pub fn add_user_message(&self, content: impl Into<String>, embedding: Option<&[f32]>) -> Result<()> {
+    pub fn add_user_message(
+        &self,
+        content: impl Into<String>,
+        embedding: Option<&[f32]>,
+    ) -> Result<()> {
         self.add_message(ChatMessage::new(MessageRole::User, content), embedding)
     }
 
     /// Add an assistant message
-    pub fn add_assistant_message(&self, content: impl Into<String>, embedding: Option<&[f32]>) -> Result<()> {
+    pub fn add_assistant_message(
+        &self,
+        content: impl Into<String>,
+        embedding: Option<&[f32]>,
+    ) -> Result<()> {
         self.add_message(ChatMessage::new(MessageRole::Assistant, content), embedding)
     }
 
@@ -791,7 +801,7 @@ impl ConversationMemory {
         })?;
 
         let results = store.query(query_embedding, top_k)?;
-        
+
         // Map back to chat messages
         let messages = self.messages.read();
         let relevant: Vec<ChatMessage> = results
@@ -838,13 +848,13 @@ impl ConversationMemory {
                 },
                 msg.content
             );
-            
+
             // Rough token estimate (4 chars per token)
             let msg_tokens = formatted.len() / 4;
             if token_estimate + msg_tokens > max_tokens {
                 break;
             }
-            
+
             result = formatted + &result;
             token_estimate += msg_tokens;
         }
@@ -884,25 +894,25 @@ impl RetrieverQueryEngine {
     /// Retrieve relevant nodes
     pub fn retrieve(&self, query_embedding: &[f32]) -> Result<Vec<NodeWithScore>> {
         let mut results = self.index.query(query_embedding, self.top_k)?;
-        
+
         if let Some(threshold) = self.score_threshold {
             results.retain(|r| r.score >= threshold);
         }
-        
+
         Ok(results)
     }
 
     /// Retrieve and format context for LLM
     pub fn retrieve_context(&self, query_embedding: &[f32]) -> Result<String> {
         let nodes = self.retrieve(query_embedding)?;
-        
+
         let context = nodes
             .iter()
             .enumerate()
             .map(|(i, n)| format!("[{}] {}", i + 1, n.node.text))
             .collect::<Vec<_>>()
             .join("\n\n");
-        
+
         Ok(context)
     }
 }
@@ -1047,7 +1057,9 @@ mod tests {
         let memory = ConversationMemory::new(config).unwrap();
 
         for i in 0..10 {
-            memory.add_user_message(format!("Message {}", i), None).unwrap();
+            memory
+                .add_user_message(format!("Message {}", i), None)
+                .unwrap();
         }
 
         assert_eq!(memory.len(), 5);
@@ -1059,7 +1071,9 @@ mod tests {
         let memory = ConversationMemory::new(config).unwrap();
 
         memory.add_user_message("What is AI?", None).unwrap();
-        memory.add_assistant_message("AI is artificial intelligence.", None).unwrap();
+        memory
+            .add_assistant_message("AI is artificial intelligence.", None)
+            .unwrap();
 
         let history = memory.get_formatted_history(None);
         assert!(history.contains("User:"));

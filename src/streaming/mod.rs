@@ -91,28 +91,26 @@
 //! let mut stream = manager.create_stream_with_resume(&resume_token).await?;
 //! ```
 
-pub mod core;
-pub mod pubsub;
-pub mod event_log;
-pub mod stream_manager;
 pub mod cdc;
+pub mod core;
+pub mod event_log;
+pub mod pubsub;
+pub mod stream_manager;
 
 // Re-export all public types for backwards compatibility
-pub use core::{
-    ChangeEvent, ChangeEventFilter, OperationType, ResumeToken, StreamError, StreamResult,
-};
-pub(crate) use core::{
-    DEFAULT_BUFFER_SIZE, DEFAULT_CHANNEL_CAPACITY, COMPACTION_THRESHOLD,
-};
-pub use pubsub::{PubSub, Subscriber};
-pub use event_log::{EventLog, EventLogSnapshot, ReplayOptions};
-pub use stream_manager::{ChangeStream, StreamManager, StreamManagerConfig, StreamStats};
 pub use cdc::{
     CdcConfig, CdcConnector, CdcConnectorStats, CdcIngestionPipeline, CdcPipelineStats,
     CdcPosition, DebeziumParser, DebeziumSourceType, KafkaConnector, KafkaConnectorConfig,
-    MongoCdcConfig, MongoCdcConnector, PostgresCdcConfig, PostgresCdcConnector,
-    PulsarConnector, PulsarConnectorConfig, PulsarSubscriptionPosition,
+    MongoCdcConfig, MongoCdcConnector, PostgresCdcConfig, PostgresCdcConnector, PulsarConnector,
+    PulsarConnectorConfig, PulsarSubscriptionPosition,
 };
+pub use core::{
+    ChangeEvent, ChangeEventFilter, OperationType, ResumeToken, StreamError, StreamResult,
+};
+pub(crate) use core::{COMPACTION_THRESHOLD, DEFAULT_BUFFER_SIZE, DEFAULT_CHANNEL_CAPACITY};
+pub use event_log::{EventLog, EventLogSnapshot, ReplayOptions};
+pub use pubsub::{PubSub, Subscriber};
+pub use stream_manager::{ChangeStream, StreamManager, StreamManagerConfig, StreamStats};
 
 // ============================================================================
 // Tests
@@ -251,8 +249,14 @@ mod tests {
         assert_eq!("insert".parse::<OperationType>(), Ok(OperationType::Insert));
         assert_eq!("UPDATE".parse::<OperationType>(), Ok(OperationType::Update));
         assert_eq!("Delete".parse::<OperationType>(), Ok(OperationType::Delete));
-        assert_eq!("createIndex".parse::<OperationType>(), Ok(OperationType::CreateIndex));
-        assert_eq!("create_index".parse::<OperationType>(), Ok(OperationType::CreateIndex));
+        assert_eq!(
+            "createIndex".parse::<OperationType>(),
+            Ok(OperationType::CreateIndex)
+        );
+        assert_eq!(
+            "create_index".parse::<OperationType>(),
+            Ok(OperationType::CreateIndex)
+        );
         assert_eq!("invalid".parse::<OperationType>(), Err(()));
     }
 
@@ -1036,7 +1040,10 @@ mod tests {
 
         assert!(event.updated_fields.is_some());
         assert!(event.removed_fields.is_some());
-        assert_eq!(event.removed_fields.as_ref().unwrap(), &vec!["old_field".to_string()]);
+        assert_eq!(
+            event.removed_fields.as_ref().unwrap(),
+            &vec!["old_field".to_string()]
+        );
     }
 
     #[test]
@@ -1119,10 +1126,7 @@ mod tests {
         let config = PulsarConnectorConfig::default();
 
         assert_eq!(config.service_url, "pulsar://localhost:6650");
-        assert_eq!(
-            config.topic,
-            "persistent://public/default/needle-cdc"
-        );
+        assert_eq!(config.topic, "persistent://public/default/needle-cdc");
         assert_eq!(config.subscription, "needle-cdc-subscription");
         assert_eq!(config.consumer_name, "needle-cdc-consumer");
         assert_eq!(config.batch_size, 100);
@@ -1172,8 +1176,8 @@ mod tests {
     #[tokio::test]
     async fn test_cdc_ingestion_pipeline_with_transformer() {
         let manager = Arc::new(StreamManager::new());
-        let pipeline = CdcIngestionPipeline::new(Arc::clone(&manager))
-            .with_transformer(|mut event| {
+        let pipeline =
+            CdcIngestionPipeline::new(Arc::clone(&manager)).with_transformer(|mut event| {
                 // Add a prefix to collection name
                 event.collection = format!("transformed_{}", event.collection);
                 Some(event)
@@ -1189,15 +1193,14 @@ mod tests {
     #[tokio::test]
     async fn test_cdc_ingestion_pipeline_filter() {
         let manager = Arc::new(StreamManager::new());
-        let pipeline = CdcIngestionPipeline::new(Arc::clone(&manager))
-            .with_transformer(|event| {
-                // Filter out delete operations
-                if event.operation == OperationType::Delete {
-                    None
-                } else {
-                    Some(event)
-                }
-            });
+        let pipeline = CdcIngestionPipeline::new(Arc::clone(&manager)).with_transformer(|event| {
+            // Filter out delete operations
+            if event.operation == OperationType::Delete {
+                None
+            } else {
+                Some(event)
+            }
+        });
 
         let insert = ChangeEvent::insert("test", "1", vec![1], 0);
         let delete = ChangeEvent::delete("test", "1", 0);
@@ -1213,8 +1216,7 @@ mod tests {
     #[tokio::test]
     async fn test_cdc_ingestion_pipeline_checkpoint() {
         let manager = Arc::new(StreamManager::new());
-        let pipeline = CdcIngestionPipeline::new(Arc::clone(&manager))
-            .with_checkpoint_interval(5);
+        let pipeline = CdcIngestionPipeline::new(Arc::clone(&manager)).with_checkpoint_interval(5);
 
         // Ingest some events
         for i in 0..10 {

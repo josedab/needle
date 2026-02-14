@@ -9,9 +9,7 @@ use std::sync::Arc;
 
 use tokio::sync::RwLock;
 
-use super::core::{
-    ChangeEvent, StreamError, StreamResult, current_timestamp_millis,
-};
+use super::core::{current_timestamp_millis, ChangeEvent, StreamError, StreamResult};
 use super::stream_manager::StreamManager;
 
 pub use debezium::{DebeziumParser, DebeziumSourceType};

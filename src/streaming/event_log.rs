@@ -4,8 +4,7 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 
 use super::core::{
-    ChangeEvent, OperationType, ResumeToken, StreamError, StreamResult,
-    COMPACTION_THRESHOLD,
+    ChangeEvent, OperationType, ResumeToken, StreamError, StreamResult, COMPACTION_THRESHOLD,
 };
 
 // ============================================================================

@@ -1,17 +1,4 @@
-use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::Arc;
-use std::time::Duration;
-
-use tokio::sync::RwLock;
-
-use super::{
-    CdcConfig, CdcConnector, CdcConnectorStats, CdcPosition,
-};
-use crate::streaming::core::{
-    ChangeEvent, OperationType, ResumeToken, StreamError, StreamResult,
-    current_timestamp_millis,
-};
+use super::CdcConfig;
 
 // ============================================================================
 // PostgreSQL CDC Config
@@ -75,7 +62,8 @@ impl PostgresCdcConnector {
 
     /// Add table to collection mapping
     pub fn with_mapping(mut self, table: impl Into<String>, collection: impl Into<String>) -> Self {
-        self.collection_mapping.insert(table.into(), collection.into());
+        self.collection_mapping
+            .insert(table.into(), collection.into());
         self
     }
 
@@ -96,8 +84,15 @@ impl PostgresCdcConnector {
                 let value: serde_json::Value = serde_json::from_str(&json_str)
                     .map_err(|e| StreamError::EventLogError(format!("Parse error: {}", e)))?;
 
-                let table = value.get("table").and_then(|v| v.as_str()).unwrap_or("unknown");
-                let collection = self.collection_mapping.get(table).cloned().unwrap_or_else(|| table.to_string());
+                let table = value
+                    .get("table")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown");
+                let collection = self
+                    .collection_mapping
+                    .get(table)
+                    .cloned()
+                    .unwrap_or_else(|| table.to_string());
                 let id = value.get("id").map(|v| v.to_string());
 
                 Ok(Some(ChangeEvent::insert(
@@ -113,8 +108,15 @@ impl PostgresCdcConnector {
                 let value: serde_json::Value = serde_json::from_str(&json_str)
                     .map_err(|e| StreamError::EventLogError(format!("Parse error: {}", e)))?;
 
-                let table = value.get("table").and_then(|v| v.as_str()).unwrap_or("unknown");
-                let collection = self.collection_mapping.get(table).cloned().unwrap_or_else(|| table.to_string());
+                let table = value
+                    .get("table")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown");
+                let collection = self
+                    .collection_mapping
+                    .get(table)
+                    .cloned()
+                    .unwrap_or_else(|| table.to_string());
                 let id = value.get("id").map(|v| v.to_string()).unwrap_or_default();
 
                 let event = ChangeEvent {
@@ -139,8 +141,15 @@ impl PostgresCdcConnector {
                 let value: serde_json::Value = serde_json::from_str(&json_str)
                     .map_err(|e| StreamError::EventLogError(format!("Parse error: {}", e)))?;
 
-                let table = value.get("table").and_then(|v| v.as_str()).unwrap_or("unknown");
-                let collection = self.collection_mapping.get(table).cloned().unwrap_or_else(|| table.to_string());
+                let table = value
+                    .get("table")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown");
+                let collection = self
+                    .collection_mapping
+                    .get(table)
+                    .cloned()
+                    .unwrap_or_else(|| table.to_string());
                 let id = value.get("id").map(|v| v.to_string()).unwrap_or_default();
 
                 Ok(Some(ChangeEvent::delete(&collection, &id, 0)))
@@ -153,9 +162,12 @@ impl PostgresCdcConnector {
 #[cfg(feature = "cdc-postgres")]
 impl CdcConnector for PostgresCdcConnector {
     async fn connect(&mut self) -> StreamResult<()> {
-        let (client, connection) = tokio_postgres::connect(&self.config.connection_string, tokio_postgres::NoTls)
-            .await
-            .map_err(|e| StreamError::SubscriptionError(format!("PostgreSQL connect error: {}", e)))?;
+        let (client, connection) =
+            tokio_postgres::connect(&self.config.connection_string, tokio_postgres::NoTls)
+                .await
+                .map_err(|e| {
+                    StreamError::SubscriptionError(format!("PostgreSQL connect error: {}", e))
+                })?;
 
         // Spawn connection handler
         tokio::spawn(async move {

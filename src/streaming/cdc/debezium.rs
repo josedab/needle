@@ -1,11 +1,7 @@
 use std::collections::HashMap;
 
-use super::{
-    CdcConfig, CdcConnectorStats, CdcPosition, StreamError, StreamResult,
-};
-use crate::streaming::core::{
-    ChangeEvent, OperationType, ResumeToken, current_timestamp_millis,
-};
+use super::{StreamError, StreamResult};
+use crate::streaming::core::{current_timestamp_millis, ChangeEvent, OperationType, ResumeToken};
 
 // ============================================================================
 // Debezium Format Parser
