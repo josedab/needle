@@ -1,17 +1,4 @@
-use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
-use std::time::Duration;
-
-use tokio::sync::RwLock;
-
-use super::{
-    CdcConfig, CdcConnector, CdcConnectorStats, CdcPosition,
-};
-use crate::streaming::core::{
-    ChangeEvent, OperationType, ResumeToken, StreamError, StreamResult,
-    current_timestamp_millis,
-};
+use super::CdcConfig;
 
 // ============================================================================
 // MongoDB CDC Config
@@ -193,8 +180,8 @@ impl CdcConnector for MongoCdcConnector {
     }
 
     async fn next_change(&mut self) -> StreamResult<Option<ChangeEvent>> {
-        use futures_util::StreamExt;
         use ::mongodb::options::ChangeStreamOptions;
+        use futures_util::StreamExt;
 
         let client = self.client.as_ref().ok_or(StreamError::StreamClosed)?;
         let db = client.database(&self.config.database);
@@ -222,9 +209,13 @@ impl CdcConnector for MongoCdcConnector {
 
                 // Store resume token
                 if let Some(token) = change_stream.resume_token() {
-                    *self.resume_token.write().await = Some(token.to_raw_value().as_document()
-                        .cloned()
-                        .unwrap_or_default());
+                    *self.resume_token.write().await = Some(
+                        token
+                            .to_raw_value()
+                            .as_document()
+                            .cloned()
+                            .unwrap_or_default(),
+                    );
                 }
 
                 // Convert to raw document for processing
