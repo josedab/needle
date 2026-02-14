@@ -153,11 +153,7 @@ impl PCA {
                 }
 
                 // Check convergence
-                let diff: f32 = v
-                    .iter()
-                    .zip(new_v.iter())
-                    .map(|(a, b)| (a - b).abs())
-                    .sum();
+                let diff: f32 = v.iter().zip(new_v.iter()).map(|(a, b)| (a - b).abs()).sum();
 
                 v = new_v;
                 eigenvalue = new_eigenvalue;
@@ -439,7 +435,8 @@ impl NeighborEmbedding {
             // Update with momentum
             for i in 0..n {
                 for j in 0..self.output_dims {
-                    velocity[i][j] = momentum * velocity[i][j] - self.learning_rate * gradients[i][j];
+                    velocity[i][j] =
+                        momentum * velocity[i][j] - self.learning_rate * gradients[i][j];
                     y[i][j] += velocity[i][j];
                 }
             }
@@ -577,12 +574,7 @@ impl NeighborEmbedding {
         q
     }
 
-    fn compute_gradients(
-        &self,
-        p: &[Vec<f32>],
-        q: &[Vec<f32>],
-        y: &[Vec<f32>],
-    ) -> Vec<Vec<f32>> {
+    fn compute_gradients(&self, p: &[Vec<f32>], q: &[Vec<f32>], y: &[Vec<f32>]) -> Vec<Vec<f32>> {
         let n = y.len();
         let mut gradients = vec![vec![0.0; self.output_dims]; n];
 

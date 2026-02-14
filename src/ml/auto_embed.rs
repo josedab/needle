@@ -43,9 +43,7 @@ use std::time::{Duration, Instant};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum EmbeddingBackend {
     /// Mock embeddings for testing (deterministic, hash-based)
-    Mock {
-        dimensions: usize,
-    },
+    Mock { dimensions: usize },
     /// Local ONNX model
     #[cfg(feature = "embeddings")]
     Onnx {
@@ -62,20 +60,12 @@ pub enum EmbeddingBackend {
     },
     /// Cohere API
     #[cfg(feature = "embedding-providers")]
-    Cohere {
-        api_key: String,
-        model: String,
-    },
+    Cohere { api_key: String, model: String },
     /// Ollama local server
     #[cfg(feature = "embedding-providers")]
-    Ollama {
-        base_url: String,
-        model: String,
-    },
+    Ollama { base_url: String, model: String },
     /// Custom provider (user-supplied embedding function)
-    Custom {
-        dimensions: usize,
-    },
+    Custom { dimensions: usize },
     /// Model registry backed inference - selects model by ID from the built-in registry
     Registry {
         model_name: String,
@@ -303,13 +293,17 @@ impl AutoEmbedder {
         let _lock = self.stats_lock.read();
         let total_time = self.total_embed_time_us.load(Ordering::Relaxed);
         let total_gen = self.embeddings_generated.load(Ordering::Relaxed);
-        
+
         AutoEmbedStats {
             embeddings_generated: total_gen,
             cache_hits: self.cache_hits.load(Ordering::Relaxed),
             cache_misses: self.cache_misses.load(Ordering::Relaxed),
             total_embed_time_us: total_time,
-            avg_embed_time_us: if total_gen > 0 { total_time / total_gen } else { 0 },
+            avg_embed_time_us: if total_gen > 0 {
+                total_time / total_gen
+            } else {
+                0
+            },
             texts_processed: self.texts_processed.load(Ordering::Relaxed),
             chars_processed: self.chars_processed.load(Ordering::Relaxed),
         }
@@ -318,7 +312,7 @@ impl AutoEmbedder {
     /// Generate embedding for a single text
     pub fn embed(&self, text: &str) -> Result<Vec<f32>> {
         let start = Instant::now();
-        
+
         // Truncate if needed
         let text = if text.len() > self.config.max_text_length {
             &text[..self.config.max_text_length]
@@ -357,7 +351,7 @@ impl AutoEmbedder {
         // Store in cache
         if let Some(ref cache) = self.cache {
             let mut cache_write = cache.write();
-            
+
             // Evict old entries if at capacity
             if cache_write.len() >= self.config.cache_size {
                 // Simple eviction: remove oldest entry
@@ -398,11 +392,7 @@ impl AutoEmbedder {
 
     /// Get cache statistics
     pub fn cache_stats(&self) -> (usize, u64, u64) {
-        let size = self
-            .cache
-            .as_ref()
-            .map(|c| c.read().len())
-            .unwrap_or(0);
+        let size = self.cache.as_ref().map(|c| c.read().len()).unwrap_or(0);
         (
             size,
             self.cache_hits.load(Ordering::Relaxed),
@@ -450,7 +440,10 @@ impl AutoEmbedder {
             EmbeddingBackend::Custom { dimensions } => {
                 Ok(self.generate_mock_embedding(text, *dimensions))
             }
-            EmbeddingBackend::Registry { dimensions, model_name } => {
+            EmbeddingBackend::Registry {
+                dimensions,
+                model_name,
+            } => {
                 // When ort feature is available, this would load the ONNX model from the
                 // registry cache dir and run inference. Without it, fall back to
                 // deterministic hash-based embeddings that are consistent per model+text.
@@ -498,12 +491,8 @@ impl std::fmt::Debug for AutoEmbedder {
 /// Trait for types that support text-based insertion with automatic embedding
 pub trait TextInsertable {
     /// Insert a text document with automatic embedding generation
-    fn insert_text(
-        &self,
-        id: impl Into<String>,
-        text: &str,
-        metadata: Option<Value>,
-    ) -> Result<()>;
+    fn insert_text(&self, id: impl Into<String>, text: &str, metadata: Option<Value>)
+        -> Result<()>;
 
     /// Insert multiple text documents in batch
     fn insert_texts_batch(
@@ -793,10 +782,7 @@ pub trait TextFirstCollection {
     ) -> Result<Vec<f32>>;
 
     /// Insert multiple texts, returning their embeddings
-    fn insert_texts(
-        &self,
-        items: &[(String, String, Option<Value>)],
-    ) -> Result<Vec<Vec<f32>>>;
+    fn insert_texts(&self, items: &[(String, String, Option<Value>)]) -> Result<Vec<Vec<f32>>>;
 
     /// Search by text query, returning [`TextSearchResult`]s
     fn search_text(&self, query: &str, k: usize) -> Result<Vec<TextSearchResult>>;
@@ -894,10 +880,10 @@ mod tests {
     #[test]
     fn test_auto_embedder_basic() {
         let embedder = AutoEmbedder::new(AutoEmbedConfig::mock(128));
-        
+
         let embedding = embedder.embed("Hello, world!").unwrap();
         assert_eq!(embedding.len(), 128);
-        
+
         // Check normalization
         let norm: f32 = embedding.iter().map(|x| x * x).sum::<f32>().sqrt();
         assert!((norm - 1.0).abs() < 1e-5);
@@ -906,23 +892,23 @@ mod tests {
     #[test]
     fn test_auto_embedder_deterministic() {
         let embedder = AutoEmbedder::new(AutoEmbedConfig::mock(64));
-        
+
         let e1 = embedder.embed("test text").unwrap();
         let e2 = embedder.embed("test text").unwrap();
-        
+
         assert_eq!(e1, e2);
     }
 
     #[test]
     fn test_auto_embedder_cache() {
         let embedder = AutoEmbedder::new(AutoEmbedConfig::mock(64).with_cache_size(100));
-        
+
         // First call - cache miss
         let _ = embedder.embed("cached text").unwrap();
         let (_, hits, misses) = embedder.cache_stats();
         assert_eq!(hits, 0);
         assert_eq!(misses, 1);
-        
+
         // Second call - cache hit
         let _ = embedder.embed("cached text").unwrap();
         let (_, hits, misses) = embedder.cache_stats();
@@ -933,10 +919,10 @@ mod tests {
     #[test]
     fn test_auto_embedder_batch() {
         let embedder = AutoEmbedder::new(AutoEmbedConfig::mock(64));
-        
+
         let texts = vec!["text1", "text2", "text3"];
         let embeddings = embedder.embed_batch(&texts).unwrap();
-        
+
         assert_eq!(embeddings.len(), 3);
         for emb in &embeddings {
             assert_eq!(emb.len(), 64);
@@ -946,10 +932,10 @@ mod tests {
     #[test]
     fn test_auto_embedder_stats() {
         let embedder = AutoEmbedder::new(AutoEmbedConfig::mock(64).without_cache());
-        
+
         let _ = embedder.embed("text1").unwrap();
         let _ = embedder.embed("text2").unwrap();
-        
+
         let stats = embedder.stats();
         assert_eq!(stats.embeddings_generated, 2);
         assert_eq!(stats.texts_processed, 2);
@@ -958,7 +944,10 @@ mod tests {
     #[test]
     fn test_embedding_backend_dimensions() {
         assert_eq!(EmbeddingBackend::mock(256).dimensions(), 256);
-        assert_eq!(EmbeddingBackend::Custom { dimensions: 512 }.dimensions(), 512);
+        assert_eq!(
+            EmbeddingBackend::Custom { dimensions: 512 }.dimensions(),
+            512
+        );
     }
 
     #[test]
@@ -967,7 +956,7 @@ mod tests {
             .with_backend(EmbeddingBackend::mock(256))
             .with_cache(5000)
             .with_batch_size(64);
-        
+
         let (name, config) = builder.build();
         assert_eq!(name, "test");
         assert_eq!(config.dimensions(), 256);
@@ -983,7 +972,10 @@ mod tests {
     fn test_model_hub_creation_and_listing() {
         let hub = ModelHub::new();
         let models = hub.list_models();
-        assert!(models.len() >= 5, "hub should contain at least 5 pre-loaded models");
+        assert!(
+            models.len() >= 5,
+            "hub should contain at least 5 pre-loaded models"
+        );
         assert!(hub.get_model("all-MiniLM-L6-v2").is_some());
         assert!(hub.get_model("bge-small-en").is_some());
         assert!(hub.get_model("text-embedding-3-small").is_some());
@@ -1046,11 +1038,11 @@ mod tests {
             self.embedder.embed(text)
         }
 
-        fn insert_texts(
-            &self,
-            items: &[(String, String, Option<Value>)],
-        ) -> Result<Vec<Vec<f32>>> {
-            items.iter().map(|(_, text, _)| self.embedder.embed(text)).collect()
+        fn insert_texts(&self, items: &[(String, String, Option<Value>)]) -> Result<Vec<Vec<f32>>> {
+            items
+                .iter()
+                .map(|(_, text, _)| self.embedder.embed(text))
+                .collect()
         }
 
         fn search_text(&self, query: &str, k: usize) -> Result<Vec<TextSearchResult>> {

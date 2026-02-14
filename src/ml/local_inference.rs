@@ -445,8 +445,7 @@ impl InferenceEngine {
         stats.batches_processed += (texts.len() / self.config.batch_size.max(1) + 1) as u64;
         stats.total_inference_ms += duration.as_millis() as u64;
         if stats.texts_processed > 0 {
-            stats.avg_latency_ms =
-                stats.total_inference_ms as f64 / stats.texts_processed as f64;
+            stats.avg_latency_ms = stats.total_inference_ms as f64 / stats.texts_processed as f64;
         }
         let throughput = texts.len() as f64 / duration.as_secs_f64().max(0.001);
         if throughput > stats.peak_throughput {
@@ -470,9 +469,7 @@ impl InferenceEngine {
     /// Run inference on a batch of texts using the current backend.
     fn run_inference_batch(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>> {
         match &self.model_spec.source {
-            ModelSource::Mock { dimension } => {
-                self.mock_inference(texts, *dimension)
-            }
+            ModelSource::Mock { dimension } => self.mock_inference(texts, *dimension),
             _ => {
                 // For non-mock models, generate deterministic embeddings
                 // based on text content. A real implementation would use
