@@ -2,6 +2,23 @@
 
 Thank you for your interest in contributing to Needle! This document provides guidelines and information for contributors.
 
+## Quick Start (TL;DR)
+
+```bash
+git clone https://github.com/YOUR_FORK/needle && cd needle
+make setup          # Install tools, verify environment, build
+# ... make your changes ...
+make quick          # Format + lint + unit tests (fast feedback loop)
+cargo test --lib    # Run unit tests only (~1,300 tests, <5s)
+make check          # Full pre-commit: format + lint + all tests
+# Open your PR — CI will run the full suite automatically
+```
+
+> **Minimum requirements:** Rust stable (see `rust-toolchain.toml`), Git.
+> Run `make doctor` to verify your environment.
+
+---
+
 ## Table of Contents
 
 - [Code of Conduct](#code-of-conduct)
