@@ -69,8 +69,8 @@ use crate::quantization::ProductQuantizer;
 use ordered_float::OrderedFloat;
 use rand::seq::SliceRandom;
 use rand::thread_rng;
-use std::collections::BinaryHeap;
 use std::cmp::Reverse;
+use std::collections::BinaryHeap;
 use thiserror::Error;
 
 /// IVF index errors
@@ -267,17 +267,11 @@ impl IvfIndex {
         let centroids = self.kmeans(vectors)?;
 
         // Initialize clusters
-        self.clusters = centroids
-            .into_iter()
-            .map(IvfCluster::new)
-            .collect();
+        self.clusters = centroids.into_iter().map(IvfCluster::new).collect();
 
         // Train PQ if enabled
         if self.config.use_pq {
-            self.pq = Some(ProductQuantizer::train(
-                vectors,
-                self.config.pq_subvectors,
-            ));
+            self.pq = Some(ProductQuantizer::train(vectors, self.config.pq_subvectors));
         }
 
         self.trained = true;
@@ -376,7 +370,11 @@ impl IvfIndex {
             if total == 0.0 {
                 // All remaining points are at centroids
                 let remaining: Vec<usize> = (0..n)
-                    .filter(|&i| !centroids.iter().any(|c| euclidean_distance(vectors[i], c) < 1e-10))
+                    .filter(|&i| {
+                        !centroids
+                            .iter()
+                            .any(|c| euclidean_distance(vectors[i], c) < 1e-10)
+                    })
                     .collect();
                 if remaining.is_empty() {
                     break;
@@ -425,7 +423,11 @@ impl IvfIndex {
         // Find nearest cluster
         let cluster_idx = self.find_nearest_centroid(
             vector,
-            &self.clusters.iter().map(|c| c.centroid.clone()).collect::<Vec<_>>(),
+            &self
+                .clusters
+                .iter()
+                .map(|c| c.centroid.clone())
+                .collect::<Vec<_>>(),
         );
 
         let cluster = &mut self.clusters[cluster_idx];
@@ -506,10 +508,8 @@ impl IvfIndex {
         }
 
         // Extract results
-        let mut results: Vec<(usize, f32)> = heap
-            .into_iter()
-            .map(|Reverse((d, id))| (id, d.0))
-            .collect();
+        let mut results: Vec<(usize, f32)> =
+            heap.into_iter().map(|Reverse((d, id))| (id, d.0)).collect();
 
         results.sort_by_key(|(_, d)| OrderedFloat(*d));
         Ok(results)
@@ -615,17 +615,21 @@ mod tests {
         // Results should contain the query itself (id 0) with low distance
         let query_result = results.iter().find(|(id, _)| *id == 0);
         assert!(query_result.is_some(), "Query vector should be in results");
-        assert!(query_result.unwrap().1 < 0.1, "Query distance should be near zero");
+        assert!(
+            query_result.unwrap().1 < 0.1,
+            "Query distance should be near zero"
+        );
 
         // First result should have low distance (could be query or very similar vector)
-        assert!(results[0].1 < 1.0, "Top result should have reasonable distance");
+        assert!(
+            results[0].1 < 1.0,
+            "Top result should have reasonable distance"
+        );
     }
 
     #[test]
     fn test_ivf_pq() {
-        let config = IvfConfig::new(4)
-            .with_nprobe(2)
-            .with_pq(4, 8);
+        let config = IvfConfig::new(4).with_nprobe(2).with_pq(4, 8);
         let mut index = IvfIndex::new(32, config);
 
         let vectors = random_vectors(100, 32);

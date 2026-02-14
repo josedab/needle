@@ -259,9 +259,9 @@ impl ModalityIndex {
         self.vectors.push((doc_index, vector.to_vec()));
 
         let all_vecs: Vec<Vec<f32>> = self.vectors.iter().map(|(_, v)| v.clone()).collect();
-        self.hnsw.insert(idx, vector, &all_vecs).map_err(|_| {
-            NeedleError::Index("HNSW insert failed".into())
-        })?;
+        self.hnsw
+            .insert(idx, vector, &all_vecs)
+            .map_err(|_| NeedleError::Index("HNSW insert failed".into()))?;
 
         Ok(())
     }
@@ -283,9 +283,7 @@ impl ModalityIndex {
 
         Ok(raw
             .into_iter()
-            .filter_map(|(idx, dist)| {
-                self.vectors.get(idx).map(|(doc_idx, _)| (*doc_idx, dist))
-            })
+            .filter_map(|(idx, dist)| self.vectors.get(idx).map(|(doc_idx, _)| (*doc_idx, dist)))
             .collect())
     }
 
@@ -321,10 +319,7 @@ impl MultiModalUnifiedIndex {
     pub fn new(config: MultiModalIndexConfig) -> Self {
         let mut indices = HashMap::new();
         for mc in &config.modalities {
-            indices.insert(
-                mc.modality,
-                RwLock::new(ModalityIndex::new(mc.clone())),
-            );
+            indices.insert(mc.modality, RwLock::new(ModalityIndex::new(mc.clone())));
         }
 
         Self {
@@ -361,10 +356,9 @@ impl MultiModalUnifiedIndex {
         modality: Modality,
         k: usize,
     ) -> Result<Vec<MultiModalSearchResult>> {
-        let index = self
-            .indices
-            .get(&modality)
-            .ok_or_else(|| NeedleError::InvalidInput(format!("No index for modality: {}", modality)))?;
+        let index = self.indices.get(&modality).ok_or_else(|| {
+            NeedleError::InvalidInput(format!("No index for modality: {}", modality))
+        })?;
 
         let raw = index.read().search(query, k)?;
         let docs = self.documents.read();
@@ -455,10 +449,7 @@ impl MultiModalUnifiedIndex {
             .filter_map(|(id, scores)| {
                 let combined = match self.config.fusion {
                     FusionStrategy::WeightedAverage => {
-                        let total_weight: f32 = scores
-                            .keys()
-                            .filter_map(|m| weights.get(m))
-                            .sum();
+                        let total_weight: f32 = scores.keys().filter_map(|m| weights.get(m)).sum();
                         if total_weight > 0.0 {
                             scores
                                 .iter()
@@ -469,12 +460,13 @@ impl MultiModalUnifiedIndex {
                             0.0
                         }
                     }
-                    FusionStrategy::BestOf => {
-                        scores.values().cloned().fold(0.0f32, f32::max)
-                    }
+                    FusionStrategy::BestOf => scores.values().cloned().fold(0.0f32, f32::max),
                     FusionStrategy::ReciprocalRankFusion => {
                         // Simplified RRF: 1 / (k + rank)
-                        scores.values().map(|s| 1.0 / (60.0 + (1.0 - s) * 100.0)).sum()
+                        scores
+                            .values()
+                            .map(|s| 1.0 / (60.0 + (1.0 - s) * 100.0))
+                            .sum()
                     }
                     FusionStrategy::Intersection => {
                         if scores.len() == queries.len() {
@@ -507,9 +499,8 @@ impl MultiModalUnifiedIndex {
             })
             .collect();
 
-        fused_results.sort_by(|a, b| {
-            OrderedFloat(b.combined_score).cmp(&OrderedFloat(a.combined_score))
-        });
+        fused_results
+            .sort_by(|a, b| OrderedFloat(b.combined_score).cmp(&OrderedFloat(a.combined_score)));
         fused_results.truncate(k);
 
         Ok(fused_results)

@@ -439,7 +439,11 @@ impl<'a> HybridSearch<'a> {
         }
 
         // Check distance spread
-        let min_dist = ann_result.results.first().map(|r| r.distance).unwrap_or(0.0);
+        let min_dist = ann_result
+            .results
+            .first()
+            .map(|r| r.distance)
+            .unwrap_or(0.0);
         let max_dist = ann_result.results.last().map(|r| r.distance).unwrap_or(0.0);
 
         if min_dist > 0.0 && max_dist / min_dist > self.config.cascade_threshold {
@@ -484,8 +488,8 @@ impl<'a> HybridSearch<'a> {
         let distances: Vec<f32> = results.iter().map(|r| r.distance).collect();
 
         let mean = distances.iter().sum::<f32>() / distances.len() as f32;
-        let variance = distances.iter().map(|d| (d - mean).powi(2)).sum::<f32>()
-            / distances.len() as f32;
+        let variance =
+            distances.iter().map(|d| (d - mean).powi(2)).sum::<f32>() / distances.len() as f32;
         let std_dev = variance.sqrt();
 
         // Coefficient of variation - lower is better
@@ -500,7 +504,11 @@ impl<'a> HybridSearch<'a> {
     }
 
     /// Calculate actual recall between ANN and exact results
-    fn calculate_recall(&self, ann_results: &[SearchResult], exact_results: &[SearchResult]) -> f32 {
+    fn calculate_recall(
+        &self,
+        ann_results: &[SearchResult],
+        exact_results: &[SearchResult],
+    ) -> f32 {
         if exact_results.is_empty() {
             return if ann_results.is_empty() { 1.0 } else { 0.0 };
         }
@@ -566,15 +574,13 @@ impl<'a> HybridSearch<'a> {
             stats.verified_searches += 1;
             if let Some(recall) = result.actual_recall {
                 let n = stats.verified_searches as f32;
-                stats.avg_actual_recall =
-                    stats.avg_actual_recall * (n - 1.0) / n + recall / n;
+                stats.avg_actual_recall = stats.avg_actual_recall * (n - 1.0) / n + recall / n;
             }
         }
 
         if let Some(recall) = result.estimated_recall {
             let n = stats.total_searches as f32;
-            stats.avg_estimated_recall =
-                stats.avg_estimated_recall * (n - 1.0) / n + recall / n;
+            stats.avg_estimated_recall = stats.avg_estimated_recall * (n - 1.0) / n + recall / n;
         }
 
         // Update latency averages (approximate based on whether exact was used)
@@ -585,8 +591,7 @@ impl<'a> HybridSearch<'a> {
             stats.exact_searches += 1;
         } else {
             let n = (stats.ann_searches + 1) as f32;
-            stats.avg_ann_latency_ms =
-                stats.avg_ann_latency_ms * (n - 1.0) / n + latency_ms / n;
+            stats.avg_ann_latency_ms = stats.avg_ann_latency_ms * (n - 1.0) / n + latency_ms / n;
             stats.ann_searches += 1;
         }
     }
