@@ -313,17 +313,20 @@ impl LoadPredictor {
         for point in self.history.iter().skip(1) {
             // CPU
             let prev_smoothed = smoothed_cpu;
-            smoothed_cpu = alpha * point.cpu_utilization + (1.0 - alpha) * (smoothed_cpu + trend_cpu);
+            smoothed_cpu =
+                alpha * point.cpu_utilization + (1.0 - alpha) * (smoothed_cpu + trend_cpu);
             trend_cpu = beta * (smoothed_cpu - prev_smoothed) + (1.0 - beta) * trend_cpu;
 
             // Memory
             let prev_smoothed = smoothed_mem;
-            smoothed_mem = alpha * point.memory_utilization + (1.0 - alpha) * (smoothed_mem + trend_mem);
+            smoothed_mem =
+                alpha * point.memory_utilization + (1.0 - alpha) * (smoothed_mem + trend_mem);
             trend_mem = beta * (smoothed_mem - prev_smoothed) + (1.0 - beta) * trend_mem;
 
             // Latency
             let prev_smoothed = smoothed_lat;
-            smoothed_lat = alpha * point.query_latency_ms + (1.0 - alpha) * (smoothed_lat + trend_lat);
+            smoothed_lat =
+                alpha * point.query_latency_ms + (1.0 - alpha) * (smoothed_lat + trend_lat);
             trend_lat = beta * (smoothed_lat - prev_smoothed) + (1.0 - beta) * trend_lat;
 
             // QPS
@@ -374,8 +377,12 @@ impl LoadPredictor {
             return None;
         }
 
-        let max_hour = pattern.iter().max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))?;
-        let min_hour = pattern.iter().min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))?;
+        let max_hour = pattern
+            .iter()
+            .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))?;
+        let min_hour = pattern
+            .iter()
+            .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))?;
 
         Some(SeasonalityPattern {
             period_hours: 24,
@@ -674,7 +681,8 @@ impl AutoScaler {
     /// Analyze current metrics
     fn analyze_current_metrics(&self) -> MetricAnalysis {
         let cpu_ratio = self.current_metrics.cpu_utilization / self.config.target_cpu_utilization;
-        let mem_ratio = self.current_metrics.memory_utilization / self.config.target_memory_utilization;
+        let mem_ratio =
+            self.current_metrics.memory_utilization / self.config.target_memory_utilization;
         let lat_ratio = self.current_metrics.query_latency_ms / self.config.target_latency_ms;
 
         MetricAnalysis {
@@ -741,7 +749,8 @@ impl AutoScaler {
 
         // Check for predicted load increase
         if let Some(pred) = predicted {
-            if pred.cpu_utilization > self.config.target_cpu_utilization * self.config.scale_up_threshold
+            if pred.cpu_utilization
+                > self.config.target_cpu_utilization * self.config.scale_up_threshold
                 && current_shards < self.config.max_shards
             {
                 return ScalingDecision {

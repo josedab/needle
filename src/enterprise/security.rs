@@ -42,20 +42,34 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Permission {
-    Read, Write, Delete, Admin, Search, Export,
+    Read,
+    Write,
+    Delete,
+    Admin,
+    Search,
+    Export,
 }
 
 impl Permission {
     pub fn all() -> Vec<Permission> {
-        vec![Permission::Read, Permission::Write, Permission::Delete,
-             Permission::Admin, Permission::Search, Permission::Export]
+        vec![
+            Permission::Read,
+            Permission::Write,
+            Permission::Delete,
+            Permission::Admin,
+            Permission::Search,
+            Permission::Export,
+        ]
     }
 
     pub fn name(&self) -> &'static str {
         match self {
-            Permission::Read => "read", Permission::Write => "write",
-            Permission::Delete => "delete", Permission::Admin => "admin",
-            Permission::Search => "search", Permission::Export => "export",
+            Permission::Read => "read",
+            Permission::Write => "write",
+            Permission::Delete => "delete",
+            Permission::Admin => "admin",
+            Permission::Search => "search",
+            Permission::Export => "export",
         }
     }
 }
@@ -90,7 +104,10 @@ pub struct PermissionGrant {
 
 impl PermissionGrant {
     pub fn new(permission: Permission, resource: Resource) -> Self {
-        Self { permission, resource }
+        Self {
+            permission,
+            resource,
+        }
     }
 }
 
@@ -105,43 +122,64 @@ pub struct Role {
 
 impl Role {
     pub fn new(name: impl Into<String>) -> Self {
-        Self { name: name.into(), description: None, permissions: HashSet::new(), built_in: false }
+        Self {
+            name: name.into(),
+            description: None,
+            permissions: HashSet::new(),
+            built_in: false,
+        }
     }
 
     pub fn with_description(mut self, description: impl Into<String>) -> Self {
-        self.description = Some(description.into()); self
+        self.description = Some(description.into());
+        self
     }
 
     pub fn with_permission(mut self, permission: Permission, resource: Resource) -> Self {
-        self.permissions.insert(PermissionGrant::new(permission, resource)); self
+        self.permissions
+            .insert(PermissionGrant::new(permission, resource));
+        self
     }
 
-    pub fn as_built_in(mut self) -> Self { self.built_in = true; self }
+    pub fn as_built_in(mut self) -> Self {
+        self.built_in = true;
+        self
+    }
 
     pub fn has_permission(&self, permission: Permission, resource: &Resource) -> bool {
-        self.permissions.iter().any(|g| g.permission == permission && g.resource.matches(resource))
+        self.permissions
+            .iter()
+            .any(|g| g.permission == permission && g.resource.matches(resource))
     }
 
     pub fn admin() -> Self {
-        let mut role = Self::new("admin").with_description("Full administrative access").as_built_in();
+        let mut role = Self::new("admin")
+            .with_description("Full administrative access")
+            .as_built_in();
         for perm in Permission::all() {
-            role.permissions.insert(PermissionGrant::new(perm, Resource::AllCollections));
-            role.permissions.insert(PermissionGrant::new(perm, Resource::System));
+            role.permissions
+                .insert(PermissionGrant::new(perm, Resource::AllCollections));
+            role.permissions
+                .insert(PermissionGrant::new(perm, Resource::System));
         }
         role
     }
 
     pub fn reader() -> Self {
-        Self::new("reader").with_description("Read-only access")
+        Self::new("reader")
+            .with_description("Read-only access")
             .with_permission(Permission::Read, Resource::AllCollections)
-            .with_permission(Permission::Search, Resource::AllCollections).as_built_in()
+            .with_permission(Permission::Search, Resource::AllCollections)
+            .as_built_in()
     }
 
     pub fn writer() -> Self {
-        Self::new("writer").with_description("Read and write access")
+        Self::new("writer")
+            .with_description("Read and write access")
             .with_permission(Permission::Read, Resource::AllCollections)
             .with_permission(Permission::Write, Resource::AllCollections)
-            .with_permission(Permission::Search, Resource::AllCollections).as_built_in()
+            .with_permission(Permission::Search, Resource::AllCollections)
+            .as_built_in()
     }
 }
 
@@ -159,24 +197,51 @@ pub struct User {
 
 impl User {
     pub fn new(id: impl Into<String>) -> Self {
-        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
-        Self { id: id.into(), name: None, email: None, roles: Vec::new(),
-               active: true, created_at: now, attributes: HashMap::new() }
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        Self {
+            id: id.into(),
+            name: None,
+            email: None,
+            roles: Vec::new(),
+            active: true,
+            created_at: now,
+            attributes: HashMap::new(),
+        }
     }
 
-    pub fn with_name(mut self, name: impl Into<String>) -> Self { self.name = Some(name.into()); self }
-    pub fn with_email(mut self, email: impl Into<String>) -> Self { self.email = Some(email.into()); self }
-    pub fn with_role(mut self, role: Role) -> Self { self.roles.push(role); self }
+    pub fn with_name(mut self, name: impl Into<String>) -> Self {
+        self.name = Some(name.into());
+        self
+    }
+    pub fn with_email(mut self, email: impl Into<String>) -> Self {
+        self.email = Some(email.into());
+        self
+    }
+    pub fn with_role(mut self, role: Role) -> Self {
+        self.roles.push(role);
+        self
+    }
     pub fn with_attribute(mut self, k: impl Into<String>, v: impl Into<String>) -> Self {
-        self.attributes.insert(k.into(), v.into()); self
+        self.attributes.insert(k.into(), v.into());
+        self
     }
 
     pub fn has_permission(&self, permission: Permission, resource: &Resource) -> bool {
-        self.active && self.roles.iter().any(|r| r.has_permission(permission, resource))
+        self.active
+            && self
+                .roles
+                .iter()
+                .any(|r| r.has_permission(permission, resource))
     }
 
     pub fn all_permissions(&self) -> HashSet<PermissionGrant> {
-        self.roles.iter().flat_map(|r| r.permissions.clone()).collect()
+        self.roles
+            .iter()
+            .flat_map(|r| r.permissions.clone())
+            .collect()
     }
 }
 
@@ -199,10 +264,18 @@ pub struct PolicyDecision {
 
 impl PolicyDecision {
     pub fn allow(reason: impl Into<String>, role: impl Into<String>) -> Self {
-        Self { allowed: true, reason: reason.into(), granting_role: Some(role.into()) }
+        Self {
+            allowed: true,
+            reason: reason.into(),
+            granting_role: Some(role.into()),
+        }
     }
     pub fn deny(reason: impl Into<String>) -> Self {
-        Self { allowed: false, reason: reason.into(), granting_role: None }
+        Self {
+            allowed: false,
+            reason: reason.into(),
+            granting_role: None,
+        }
     }
 }
 
@@ -214,34 +287,72 @@ pub struct AccessController {
 }
 
 impl AccessController {
-    pub fn new() -> Self { Self { enforce: true, default_allow: false } }
-    pub fn permissive() -> Self { Self { enforce: false, default_allow: true } }
-    pub fn with_enforcement(mut self, enforce: bool) -> Self { self.enforce = enforce; self }
+    pub fn new() -> Self {
+        Self {
+            enforce: true,
+            default_allow: false,
+        }
+    }
+    pub fn permissive() -> Self {
+        Self {
+            enforce: false,
+            default_allow: true,
+        }
+    }
+    pub fn with_enforcement(mut self, enforce: bool) -> Self {
+        self.enforce = enforce;
+        self
+    }
 }
 
 impl AccessControl for AccessController {
     fn can_access(&self, user: &User, permission: Permission, resource: &Resource) -> bool {
-        if !self.enforce { self.default_allow } else { user.has_permission(permission, resource) }
+        if !self.enforce {
+            self.default_allow
+        } else {
+            user.has_permission(permission, resource)
+        }
     }
 
     fn authorize(&self, user: &User, permission: Permission, resource: &Resource) -> Result<()> {
-        if self.can_access(user, permission, resource) { Ok(()) }
-        else { Err(NeedleError::InvalidInput(format!(
-            "Access denied: user '{}' lacks {} permission on {:?}", user.id, permission.name(), resource))) }
+        if self.can_access(user, permission, resource) {
+            Ok(())
+        } else {
+            Err(NeedleError::InvalidInput(format!(
+                "Access denied: user '{}' lacks {} permission on {:?}",
+                user.id,
+                permission.name(),
+                resource
+            )))
+        }
     }
 
     fn evaluate(&self, user: &User, permission: Permission, resource: &Resource) -> PolicyDecision {
         // Note: No timing measurement to prevent timing attack information leakage.
         // Attackers could use timing differences to probe permission structures.
         if !self.enforce {
-            if self.default_allow { PolicyDecision::allow("Enforcement disabled", "none") }
-            else { PolicyDecision::deny("Enforcement disabled, default deny") }
+            if self.default_allow {
+                PolicyDecision::allow("Enforcement disabled", "none")
+            } else {
+                PolicyDecision::deny("Enforcement disabled, default deny")
+            }
         } else if !user.active {
             PolicyDecision::deny("User is inactive")
-        } else if let Some(role) = user.roles.iter().find(|r| r.has_permission(permission, resource)) {
-            PolicyDecision::allow(format!("Permission {} granted", permission.name()), &role.name)
+        } else if let Some(role) = user
+            .roles
+            .iter()
+            .find(|r| r.has_permission(permission, resource))
+        {
+            PolicyDecision::allow(
+                format!("Permission {} granted", permission.name()),
+                &role.name,
+            )
         } else {
-            PolicyDecision::deny(format!("No role grants {} on {:?}", permission.name(), resource))
+            PolicyDecision::deny(format!(
+                "No role grants {} on {:?}",
+                permission.name(),
+                resource
+            ))
         }
     }
 }
@@ -250,9 +361,23 @@ impl AccessControl for AccessController {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AuditAction {
-    Login, Logout, Read, Write, Delete, Search, Export,
-    CreateCollection, DropCollection, CreateUser, ModifyUser, DeleteUser,
-    CreateRole, ModifyRole, DeleteRole, ConfigChange, AccessDenied,
+    Login,
+    Logout,
+    Read,
+    Write,
+    Delete,
+    Search,
+    Export,
+    CreateCollection,
+    DropCollection,
+    CreateUser,
+    ModifyUser,
+    DeleteUser,
+    CreateRole,
+    ModifyRole,
+    DeleteRole,
+    ConfigChange,
+    AccessDenied,
 }
 
 impl AuditAction {
@@ -270,7 +395,11 @@ impl AuditAction {
 /// The result of an audited action.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum AuditResult { Success, Failure, Denied }
+pub enum AuditResult {
+    Success,
+    Failure,
+    Denied,
+}
 
 /// An audit event recording a security-relevant action.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -288,16 +417,46 @@ pub struct AuditEvent {
 }
 
 impl AuditEvent {
-    pub fn new(user_id: impl Into<String>, action: AuditAction, resource: impl Into<String>, result: AuditResult) -> Self {
-        let timestamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis() as u64;
-        Self { id: 0, timestamp, user_id: user_id.into(), action, resource: resource.into(),
-               result, details: None, client_ip: None, session_id: None, duration_ms: None }
+    pub fn new(
+        user_id: impl Into<String>,
+        action: AuditAction,
+        resource: impl Into<String>,
+        result: AuditResult,
+    ) -> Self {
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+        Self {
+            id: 0,
+            timestamp,
+            user_id: user_id.into(),
+            action,
+            resource: resource.into(),
+            result,
+            details: None,
+            client_ip: None,
+            session_id: None,
+            duration_ms: None,
+        }
     }
 
-    pub fn with_details(mut self, d: impl Into<String>) -> Self { self.details = Some(d.into()); self }
-    pub fn with_client_ip(mut self, ip: impl Into<String>) -> Self { self.client_ip = Some(ip.into()); self }
-    pub fn with_session_id(mut self, s: impl Into<String>) -> Self { self.session_id = Some(s.into()); self }
-    pub fn with_duration(mut self, d: Duration) -> Self { self.duration_ms = Some(d.as_millis() as u64); self }
+    pub fn with_details(mut self, d: impl Into<String>) -> Self {
+        self.details = Some(d.into());
+        self
+    }
+    pub fn with_client_ip(mut self, ip: impl Into<String>) -> Self {
+        self.client_ip = Some(ip.into());
+        self
+    }
+    pub fn with_session_id(mut self, s: impl Into<String>) -> Self {
+        self.session_id = Some(s.into());
+        self
+    }
+    pub fn with_duration(mut self, d: Duration) -> Self {
+        self.duration_ms = Some(d.as_millis() as u64);
+        self
+    }
 }
 
 /// Trait for audit log implementations.
@@ -326,26 +485,86 @@ pub struct AuditQuery {
 }
 
 impl AuditQuery {
-    pub fn new() -> Self { Self::default() }
-    pub fn user(mut self, id: impl Into<String>) -> Self { self.user_id = Some(id.into()); self }
-    pub fn action(mut self, a: AuditAction) -> Self { self.action = Some(a); self }
-    pub fn result(mut self, r: AuditResult) -> Self { self.result = Some(r); self }
-    pub fn resource(mut self, p: impl Into<String>) -> Self { self.resource_prefix = Some(p.into()); self }
-    pub fn from(mut self, ts: u64) -> Self { self.from_timestamp = Some(ts); self }
-    pub fn to(mut self, ts: u64) -> Self { self.to_timestamp = Some(ts); self }
-    pub fn min_severity(mut self, s: u8) -> Self { self.min_severity = Some(s); self }
-    pub fn limit(mut self, l: usize) -> Self { self.limit = Some(l); self }
-    pub fn offset(mut self, o: usize) -> Self { self.offset = Some(o); self }
-    pub fn ascending(mut self) -> Self { self.ascending = true; self }
+    pub fn new() -> Self {
+        Self::default()
+    }
+    pub fn user(mut self, id: impl Into<String>) -> Self {
+        self.user_id = Some(id.into());
+        self
+    }
+    pub fn action(mut self, a: AuditAction) -> Self {
+        self.action = Some(a);
+        self
+    }
+    pub fn result(mut self, r: AuditResult) -> Self {
+        self.result = Some(r);
+        self
+    }
+    pub fn resource(mut self, p: impl Into<String>) -> Self {
+        self.resource_prefix = Some(p.into());
+        self
+    }
+    pub fn from(mut self, ts: u64) -> Self {
+        self.from_timestamp = Some(ts);
+        self
+    }
+    pub fn to(mut self, ts: u64) -> Self {
+        self.to_timestamp = Some(ts);
+        self
+    }
+    pub fn min_severity(mut self, s: u8) -> Self {
+        self.min_severity = Some(s);
+        self
+    }
+    pub fn limit(mut self, l: usize) -> Self {
+        self.limit = Some(l);
+        self
+    }
+    pub fn offset(mut self, o: usize) -> Self {
+        self.offset = Some(o);
+        self
+    }
+    pub fn ascending(mut self) -> Self {
+        self.ascending = true;
+        self
+    }
 
     pub fn matches(&self, e: &AuditEvent) -> bool {
-        if let Some(ref u) = self.user_id { if &e.user_id != u { return false; } }
-        if let Some(a) = self.action { if e.action != a { return false; } }
-        if let Some(r) = self.result { if e.result != r { return false; } }
-        if let Some(ref p) = self.resource_prefix { if !e.resource.starts_with(p) { return false; } }
-        if let Some(f) = self.from_timestamp { if e.timestamp < f { return false; } }
-        if let Some(t) = self.to_timestamp { if e.timestamp > t { return false; } }
-        if let Some(s) = self.min_severity { if e.action.severity() < s { return false; } }
+        if let Some(ref u) = self.user_id {
+            if &e.user_id != u {
+                return false;
+            }
+        }
+        if let Some(a) = self.action {
+            if e.action != a {
+                return false;
+            }
+        }
+        if let Some(r) = self.result {
+            if e.result != r {
+                return false;
+            }
+        }
+        if let Some(ref p) = self.resource_prefix {
+            if !e.resource.starts_with(p) {
+                return false;
+            }
+        }
+        if let Some(f) = self.from_timestamp {
+            if e.timestamp < f {
+                return false;
+            }
+        }
+        if let Some(t) = self.to_timestamp {
+            if e.timestamp > t {
+                return false;
+            }
+        }
+        if let Some(s) = self.min_severity {
+            if e.action.severity() < s {
+                return false;
+            }
+        }
         true
     }
 }
@@ -359,41 +578,77 @@ pub struct InMemoryAuditLog {
 
 impl InMemoryAuditLog {
     pub fn new(capacity: usize) -> Self {
-        Self { events: RwLock::new(VecDeque::with_capacity(capacity)), capacity, next_id: RwLock::new(1) }
+        Self {
+            events: RwLock::new(VecDeque::with_capacity(capacity)),
+            capacity,
+            next_id: RwLock::new(1),
+        }
     }
-    pub fn all_events(&self) -> Vec<AuditEvent> { self.events.read().iter().cloned().collect() }
+    pub fn all_events(&self) -> Vec<AuditEvent> {
+        self.events.read().iter().cloned().collect()
+    }
 }
 
-impl Default for InMemoryAuditLog { fn default() -> Self { Self::new(10000) } }
+impl Default for InMemoryAuditLog {
+    fn default() -> Self {
+        Self::new(10000)
+    }
+}
 
 impl AuditLogger for InMemoryAuditLog {
     fn log(&self, mut event: AuditEvent) -> Result<u64> {
         let mut next_id = self.next_id.write();
-        event.id = *next_id; *next_id += 1;
+        event.id = *next_id;
+        *next_id += 1;
         let id = event.id;
         let mut events = self.events.write();
-        if events.len() >= self.capacity { events.pop_front(); }
+        if events.len() >= self.capacity {
+            events.pop_front();
+        }
         events.push_back(event);
         Ok(id)
     }
 
-    fn query(&self) -> AuditQuery { AuditQuery::new() }
+    fn query(&self) -> AuditQuery {
+        AuditQuery::new()
+    }
 
     fn execute_query(&self, query: &AuditQuery) -> Result<Vec<AuditEvent>> {
         let events = self.events.read();
-        let mut results: Vec<_> = events.iter().filter(|e| query.matches(e)).cloned().collect();
-        if query.ascending { results.sort_by_key(|e| e.timestamp); }
-        else { results.sort_by_key(|e| std::cmp::Reverse(e.timestamp)); }
-        let results: Vec<_> = results.into_iter().skip(query.offset.unwrap_or(0)).collect();
-        Ok(if let Some(l) = query.limit { results.into_iter().take(l).collect() } else { results })
+        let mut results: Vec<_> = events
+            .iter()
+            .filter(|e| query.matches(e))
+            .cloned()
+            .collect();
+        if query.ascending {
+            results.sort_by_key(|e| e.timestamp);
+        } else {
+            results.sort_by_key(|e| std::cmp::Reverse(e.timestamp));
+        }
+        let results: Vec<_> = results
+            .into_iter()
+            .skip(query.offset.unwrap_or(0))
+            .collect();
+        Ok(if let Some(l) = query.limit {
+            results.into_iter().take(l).collect()
+        } else {
+            results
+        })
     }
 
-    fn count(&self) -> usize { self.events.read().len() }
-    fn clear(&self) -> Result<()> { self.events.write().clear(); Ok(()) }
+    fn count(&self) -> usize {
+        self.events.read().len()
+    }
+    fn clear(&self) -> Result<()> {
+        self.events.write().clear();
+        Ok(())
+    }
     fn rotate(&self) -> Result<()> {
         let mut events = self.events.write();
         let trim_to = self.capacity / 2;
-        while events.len() > trim_to { events.pop_front(); }
+        while events.len() > trim_to {
+            events.pop_front();
+        }
         Ok(())
     }
 }
@@ -409,7 +664,12 @@ pub struct FileAuditLogConfig {
 
 impl Default for FileAuditLogConfig {
     fn default() -> Self {
-        Self { base_path: PathBuf::from("audit.log"), max_file_size: 10 * 1024 * 1024, max_files: 5, buffered: true }
+        Self {
+            base_path: PathBuf::from("audit.log"),
+            max_file_size: 10 * 1024 * 1024,
+            max_files: 5,
+            buffered: true,
+        }
     }
 }
 
@@ -424,34 +684,67 @@ pub struct FileAuditLog {
 impl FileAuditLog {
     pub fn new(config: FileAuditLogConfig) -> Result<Self> {
         let current_size = if config.base_path.exists() {
-            std::fs::metadata(&config.base_path).map(|m| m.len()).unwrap_or(0)
-        } else { 0 };
+            std::fs::metadata(&config.base_path)
+                .map(|m| m.len())
+                .unwrap_or(0)
+        } else {
+            0
+        };
         let next_id = Self::find_max_id(&config.base_path)? + 1;
-        Ok(Self { config, current_size: RwLock::new(current_size), next_id: RwLock::new(next_id), write_lock: RwLock::new(()) })
+        Ok(Self {
+            config,
+            current_size: RwLock::new(current_size),
+            next_id: RwLock::new(next_id),
+            write_lock: RwLock::new(()),
+        })
     }
 
     fn find_max_id(path: &Path) -> Result<u64> {
-        if !path.exists() { return Ok(0); }
+        if !path.exists() {
+            return Ok(0);
+        }
         let file = File::open(path)?;
         let mut max_id = 0u64;
         for line in BufReader::new(file).lines().map_while(|r| r.ok()) {
-            if let Ok(e) = serde_json::from_str::<AuditEvent>(&line) { max_id = max_id.max(e.id); }
+            if let Ok(e) = serde_json::from_str::<AuditEvent>(&line) {
+                max_id = max_id.max(e.id);
+            }
         }
         Ok(max_id)
     }
 
     fn rotated_path(&self, i: usize) -> PathBuf {
-        let ext = self.config.base_path.extension().map(|e| e.to_string_lossy().to_string()).unwrap_or_else(|| "log".into());
-        let stem = self.config.base_path.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| "audit".into());
-        self.config.base_path.with_file_name(format!("{}.{}.{}", stem, i, ext))
+        let ext = self
+            .config
+            .base_path
+            .extension()
+            .map(|e| e.to_string_lossy().to_string())
+            .unwrap_or_else(|| "log".into());
+        let stem = self
+            .config
+            .base_path
+            .file_stem()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| "audit".into());
+        self.config
+            .base_path
+            .with_file_name(format!("{}.{}.{}", stem, i, ext))
     }
 
     fn rotate_internal(&self) -> Result<()> {
         let oldest = self.rotated_path(self.config.max_files - 1);
-        if oldest.exists() { std::fs::remove_file(&oldest)?; }
+        if oldest.exists() {
+            std::fs::remove_file(&oldest)?;
+        }
         for i in (0..self.config.max_files - 1).rev() {
-            let current = if i == 0 { self.config.base_path.clone() } else { self.rotated_path(i) };
-            if current.exists() { std::fs::rename(&current, self.rotated_path(i + 1))?; }
+            let current = if i == 0 {
+                self.config.base_path.clone()
+            } else {
+                self.rotated_path(i)
+            };
+            if current.exists() {
+                std::fs::rename(&current, self.rotated_path(i + 1))?;
+            }
         }
         *self.current_size.write() = 0;
         Ok(())
@@ -462,60 +755,112 @@ impl AuditLogger for FileAuditLog {
     fn log(&self, mut event: AuditEvent) -> Result<u64> {
         let _lock = self.write_lock.write();
         let mut next_id = self.next_id.write();
-        event.id = *next_id; *next_id += 1;
-        let id = event.id; drop(next_id);
+        event.id = *next_id;
+        *next_id += 1;
+        let id = event.id;
+        drop(next_id);
         let line = serde_json::to_string(&event)? + "\n";
         let line_bytes = line.as_bytes();
         let mut current_size = self.current_size.write();
         if *current_size + line_bytes.len() as u64 > self.config.max_file_size {
-            drop(current_size); self.rotate_internal()?; current_size = self.current_size.write();
+            drop(current_size);
+            self.rotate_internal()?;
+            current_size = self.current_size.write();
         }
-        let mut file = OpenOptions::new().create(true).append(true).open(&self.config.base_path)?;
+        let mut file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.config.base_path)?;
         file.write_all(line_bytes)?;
-        if !self.config.buffered { file.flush()?; }
+        if !self.config.buffered {
+            file.flush()?;
+        }
         *current_size += line_bytes.len() as u64;
         Ok(id)
     }
 
-    fn query(&self) -> AuditQuery { AuditQuery::new() }
+    fn query(&self) -> AuditQuery {
+        AuditQuery::new()
+    }
 
     fn execute_query(&self, query: &AuditQuery) -> Result<Vec<AuditEvent>> {
         let _lock = self.write_lock.read();
         let mut results = Vec::new();
         let mut files = vec![self.config.base_path.clone()];
-        for i in 1..self.config.max_files { let p = self.rotated_path(i); if p.exists() { files.push(p); } }
+        for i in 1..self.config.max_files {
+            let p = self.rotated_path(i);
+            if p.exists() {
+                files.push(p);
+            }
+        }
         for path in files {
-            if !path.exists() { continue; }
-            for line in BufReader::new(File::open(&path)?).lines().map_while(|r| r.ok()) {
+            if !path.exists() {
+                continue;
+            }
+            for line in BufReader::new(File::open(&path)?)
+                .lines()
+                .map_while(|r| r.ok())
+            {
                 if let Ok(e) = serde_json::from_str::<AuditEvent>(&line) {
-                    if query.matches(&e) { results.push(e); }
+                    if query.matches(&e) {
+                        results.push(e);
+                    }
                 }
             }
         }
-        if query.ascending { results.sort_by_key(|e| e.timestamp); }
-        else { results.sort_by_key(|e| std::cmp::Reverse(e.timestamp)); }
-        let results: Vec<_> = results.into_iter().skip(query.offset.unwrap_or(0)).collect();
-        Ok(if let Some(l) = query.limit { results.into_iter().take(l).collect() } else { results })
+        if query.ascending {
+            results.sort_by_key(|e| e.timestamp);
+        } else {
+            results.sort_by_key(|e| std::cmp::Reverse(e.timestamp));
+        }
+        let results: Vec<_> = results
+            .into_iter()
+            .skip(query.offset.unwrap_or(0))
+            .collect();
+        Ok(if let Some(l) = query.limit {
+            results.into_iter().take(l).collect()
+        } else {
+            results
+        })
     }
 
     fn count(&self) -> usize {
         let _lock = self.write_lock.read();
         let mut count = 0;
         let mut files = vec![self.config.base_path.clone()];
-        for i in 1..self.config.max_files { let p = self.rotated_path(i); if p.exists() { files.push(p); } }
-        for path in files { if let Ok(f) = File::open(&path) { count += BufReader::new(f).lines().count(); } }
+        for i in 1..self.config.max_files {
+            let p = self.rotated_path(i);
+            if p.exists() {
+                files.push(p);
+            }
+        }
+        for path in files {
+            if let Ok(f) = File::open(&path) {
+                count += BufReader::new(f).lines().count();
+            }
+        }
         count
     }
 
     fn clear(&self) -> Result<()> {
         let _lock = self.write_lock.write();
-        if self.config.base_path.exists() { std::fs::remove_file(&self.config.base_path)?; }
-        for i in 1..self.config.max_files { let p = self.rotated_path(i); if p.exists() { std::fs::remove_file(&p)?; } }
+        if self.config.base_path.exists() {
+            std::fs::remove_file(&self.config.base_path)?;
+        }
+        for i in 1..self.config.max_files {
+            let p = self.rotated_path(i);
+            if p.exists() {
+                std::fs::remove_file(&p)?;
+            }
+        }
         *self.current_size.write() = 0;
         Ok(())
     }
 
-    fn rotate(&self) -> Result<()> { let _lock = self.write_lock.write(); self.rotate_internal() }
+    fn rotate(&self) -> Result<()> {
+        let _lock = self.write_lock.write();
+        self.rotate_internal()
+    }
 }
 
 /// A security context combining access control and audit logging.
@@ -526,28 +871,60 @@ pub struct SecurityContext {
 
 impl SecurityContext {
     pub fn new(ac: Arc<dyn AccessControl>, al: Arc<dyn AuditLogger>) -> Self {
-        Self { access_controller: ac, audit_logger: al }
+        Self {
+            access_controller: ac,
+            audit_logger: al,
+        }
     }
 
     pub fn in_memory() -> Self {
-        Self { access_controller: Arc::new(AccessController::new()), audit_logger: Arc::new(InMemoryAuditLog::new(1000)) }
+        Self {
+            access_controller: Arc::new(AccessController::new()),
+            audit_logger: Arc::new(InMemoryAuditLog::new(1000)),
+        }
     }
 
     pub fn permissive() -> Self {
-        Self { access_controller: Arc::new(AccessController::permissive()), audit_logger: Arc::new(InMemoryAuditLog::new(1000)) }
+        Self {
+            access_controller: Arc::new(AccessController::permissive()),
+            audit_logger: Arc::new(InMemoryAuditLog::new(1000)),
+        }
     }
 
-    pub fn check_access(&self, user: &User, perm: Permission, res: &Resource, action: AuditAction) -> Result<()> {
+    pub fn check_access(
+        &self,
+        user: &User,
+        perm: Permission,
+        res: &Resource,
+        action: AuditAction,
+    ) -> Result<()> {
         let decision = self.access_controller.evaluate(user, perm, res);
         let res_str = match res {
-            Resource::Collection(n) => n.clone(), Resource::AllCollections => "*".into(), Resource::System => "system".into(),
+            Resource::Collection(n) => n.clone(),
+            Resource::AllCollections => "*".into(),
+            Resource::System => "system".into(),
         };
-        let result = if decision.allowed { AuditResult::Success } else { AuditResult::Denied };
-        self.audit_logger.log(AuditEvent::new(&user.id, action, res_str, result).with_details(&decision.reason))?;
-        if decision.allowed { Ok(()) } else { Err(NeedleError::InvalidInput(format!("Access denied: {}", decision.reason))) }
+        let result = if decision.allowed {
+            AuditResult::Success
+        } else {
+            AuditResult::Denied
+        };
+        self.audit_logger.log(
+            AuditEvent::new(&user.id, action, res_str, result).with_details(&decision.reason),
+        )?;
+        if decision.allowed {
+            Ok(())
+        } else {
+            Err(NeedleError::InvalidInput(format!(
+                "Access denied: {}",
+                decision.reason
+            )))
+        }
     }
 
-    pub fn log_event(&self, event: AuditEvent) -> Result<u64> { self.audit_logger.log(event) }
+    pub fn log_event(&self, event: AuditEvent) -> Result<u64> {
+        self.audit_logger.log(event)
+    }
 }
 
 #[cfg(test)]
@@ -627,7 +1004,8 @@ mod tests {
     #[test]
     fn test_audit_event() {
         let e = AuditEvent::new("alice", AuditAction::Search, "docs", AuditResult::Success)
-            .with_details("query").with_client_ip("127.0.0.1");
+            .with_details("query")
+            .with_client_ip("127.0.0.1");
         assert_eq!(e.user_id, "alice");
         assert_eq!(e.action, AuditAction::Search);
     }
@@ -649,8 +1027,22 @@ mod tests {
     #[test]
     fn test_in_memory_audit_log() {
         let log = InMemoryAuditLog::new(100);
-        let id1 = log.log(AuditEvent::new("alice", AuditAction::Read, "docs", AuditResult::Success)).unwrap();
-        let id2 = log.log(AuditEvent::new("bob", AuditAction::Write, "users", AuditResult::Success)).unwrap();
+        let id1 = log
+            .log(AuditEvent::new(
+                "alice",
+                AuditAction::Read,
+                "docs",
+                AuditResult::Success,
+            ))
+            .unwrap();
+        let id2 = log
+            .log(AuditEvent::new(
+                "bob",
+                AuditAction::Write,
+                "users",
+                AuditResult::Success,
+            ))
+            .unwrap();
         assert_eq!(id1, 1);
         assert_eq!(id2, 2);
         assert_eq!(log.count(), 2);
@@ -659,15 +1051,35 @@ mod tests {
     #[test]
     fn test_in_memory_audit_log_capacity() {
         let log = InMemoryAuditLog::new(5);
-        for i in 0..10 { log.log(AuditEvent::new(format!("user{}", i), AuditAction::Read, "docs", AuditResult::Success)).unwrap(); }
+        for i in 0..10 {
+            log.log(AuditEvent::new(
+                format!("user{}", i),
+                AuditAction::Read,
+                "docs",
+                AuditResult::Success,
+            ))
+            .unwrap();
+        }
         assert_eq!(log.count(), 5);
     }
 
     #[test]
     fn test_in_memory_audit_log_query() {
         let log = InMemoryAuditLog::new(100);
-        log.log(AuditEvent::new("alice", AuditAction::Read, "docs", AuditResult::Success)).unwrap();
-        log.log(AuditEvent::new("bob", AuditAction::Write, "docs", AuditResult::Success)).unwrap();
+        log.log(AuditEvent::new(
+            "alice",
+            AuditAction::Read,
+            "docs",
+            AuditResult::Success,
+        ))
+        .unwrap();
+        log.log(AuditEvent::new(
+            "bob",
+            AuditAction::Write,
+            "docs",
+            AuditResult::Success,
+        ))
+        .unwrap();
         let results = log.execute_query(&AuditQuery::new().user("alice")).unwrap();
         assert_eq!(results.len(), 1);
     }
@@ -680,20 +1092,40 @@ mod tests {
             let l = Arc::clone(&log);
             handles.push(thread::spawn(move || {
                 for j in 0..100 {
-                    l.log(AuditEvent::new(format!("u{}", i), AuditAction::Read, format!("r{}", j), AuditResult::Success)).unwrap();
+                    l.log(AuditEvent::new(
+                        format!("u{}", i),
+                        AuditAction::Read,
+                        format!("r{}", j),
+                        AuditResult::Success,
+                    ))
+                    .unwrap();
                 }
             }));
         }
-        for h in handles { h.join().unwrap(); }
+        for h in handles {
+            h.join().unwrap();
+        }
         assert_eq!(log.count(), 1000);
     }
 
     #[test]
     fn test_file_audit_log() {
         let dir = tempfile::tempdir().unwrap();
-        let cfg = FileAuditLogConfig { base_path: dir.path().join("audit.log"), max_file_size: 1024 * 1024, max_files: 3, buffered: false };
+        let cfg = FileAuditLogConfig {
+            base_path: dir.path().join("audit.log"),
+            max_file_size: 1024 * 1024,
+            max_files: 3,
+            buffered: false,
+        };
         let log = FileAuditLog::new(cfg).unwrap();
-        let id1 = log.log(AuditEvent::new("alice", AuditAction::Read, "docs", AuditResult::Success)).unwrap();
+        let id1 = log
+            .log(AuditEvent::new(
+                "alice",
+                AuditAction::Read,
+                "docs",
+                AuditResult::Success,
+            ))
+            .unwrap();
         assert_eq!(id1, 1);
         assert_eq!(log.count(), 1);
     }
@@ -701,27 +1133,90 @@ mod tests {
     #[test]
     fn test_file_audit_log_query() {
         let dir = tempfile::tempdir().unwrap();
-        let cfg = FileAuditLogConfig { base_path: dir.path().join("audit.log"), max_file_size: 1024 * 1024, max_files: 3, buffered: false };
+        let cfg = FileAuditLogConfig {
+            base_path: dir.path().join("audit.log"),
+            max_file_size: 1024 * 1024,
+            max_files: 3,
+            buffered: false,
+        };
         let log = FileAuditLog::new(cfg).unwrap();
-        log.log(AuditEvent::new("alice", AuditAction::Read, "docs", AuditResult::Success)).unwrap();
-        log.log(AuditEvent::new("bob", AuditAction::Write, "docs", AuditResult::Success)).unwrap();
-        assert_eq!(log.execute_query(&AuditQuery::new().user("alice")).unwrap().len(), 1);
+        log.log(AuditEvent::new(
+            "alice",
+            AuditAction::Read,
+            "docs",
+            AuditResult::Success,
+        ))
+        .unwrap();
+        log.log(AuditEvent::new(
+            "bob",
+            AuditAction::Write,
+            "docs",
+            AuditResult::Success,
+        ))
+        .unwrap();
+        assert_eq!(
+            log.execute_query(&AuditQuery::new().user("alice"))
+                .unwrap()
+                .len(),
+            1
+        );
     }
 
     #[test]
     fn test_file_audit_log_persistence() {
         let dir = tempfile::tempdir().unwrap();
-        let cfg = FileAuditLogConfig { base_path: dir.path().join("audit.log"), max_file_size: 1024 * 1024, max_files: 3, buffered: false };
-        { let log = FileAuditLog::new(cfg.clone()).unwrap(); log.log(AuditEvent::new("alice", AuditAction::Read, "docs", AuditResult::Success)).unwrap(); }
-        { let log = FileAuditLog::new(cfg).unwrap(); assert_eq!(log.count(), 1); assert_eq!(log.log(AuditEvent::new("bob", AuditAction::Read, "docs", AuditResult::Success)).unwrap(), 2); }
+        let cfg = FileAuditLogConfig {
+            base_path: dir.path().join("audit.log"),
+            max_file_size: 1024 * 1024,
+            max_files: 3,
+            buffered: false,
+        };
+        {
+            let log = FileAuditLog::new(cfg.clone()).unwrap();
+            log.log(AuditEvent::new(
+                "alice",
+                AuditAction::Read,
+                "docs",
+                AuditResult::Success,
+            ))
+            .unwrap();
+        }
+        {
+            let log = FileAuditLog::new(cfg).unwrap();
+            assert_eq!(log.count(), 1);
+            assert_eq!(
+                log.log(AuditEvent::new(
+                    "bob",
+                    AuditAction::Read,
+                    "docs",
+                    AuditResult::Success
+                ))
+                .unwrap(),
+                2
+            );
+        }
     }
 
     #[test]
     fn test_security_context() {
         let ctx = SecurityContext::in_memory();
         let user = User::new("alice").with_role(Role::reader());
-        assert!(ctx.check_access(&user, Permission::Read, &Resource::Collection("docs".into()), AuditAction::Read).is_ok());
-        assert!(ctx.check_access(&user, Permission::Admin, &Resource::System, AuditAction::ConfigChange).is_err());
+        assert!(ctx
+            .check_access(
+                &user,
+                Permission::Read,
+                &Resource::Collection("docs".into()),
+                AuditAction::Read
+            )
+            .is_ok());
+        assert!(ctx
+            .check_access(
+                &user,
+                Permission::Admin,
+                &Resource::System,
+                AuditAction::ConfigChange
+            )
+            .is_err());
         assert_eq!(ctx.audit_logger.count(), 2);
     }
 
@@ -729,7 +1224,14 @@ mod tests {
     fn test_security_context_permissive() {
         let ctx = SecurityContext::permissive();
         let user = User::new("alice");
-        assert!(ctx.check_access(&user, Permission::Admin, &Resource::System, AuditAction::ConfigChange).is_ok());
+        assert!(ctx
+            .check_access(
+                &user,
+                Permission::Admin,
+                &Resource::System,
+                AuditAction::ConfigChange
+            )
+            .is_ok());
     }
 
     #[test]

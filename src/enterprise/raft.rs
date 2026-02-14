@@ -112,14 +112,9 @@ pub enum Command {
         metadata: HashMap<String, String>,
     },
     /// Update a vector.
-    Update {
-        id: String,
-        vector: Vec<f32>,
-    },
+    Update { id: String, vector: Vec<f32> },
     /// Delete a vector.
-    Delete {
-        id: String,
-    },
+    Delete { id: String },
     /// No-op (for leader establishment).
     Noop,
     /// Cluster configuration change.
@@ -209,10 +204,7 @@ pub enum RaftMessage {
         data: Vec<u8>,
     },
     /// Snapshot response.
-    InstallSnapshotResponse {
-        term: Term,
-        success: bool,
-    },
+    InstallSnapshotResponse { term: Term, success: bool },
 }
 
 /// Outgoing message.
@@ -290,8 +282,8 @@ impl RaftNode {
 
     /// Generate random election timeout.
     fn random_election_timeout(config: &RaftConfig) -> Duration {
-        use std::hash::{Hash, Hasher};
         use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
 
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -418,7 +410,9 @@ impl RaftNode {
 
     /// Send append entries to all followers.
     fn send_append_entries_to_all(&mut self) {
-        let peers: Vec<NodeId> = self.cluster.iter()
+        let peers: Vec<NodeId> = self
+            .cluster
+            .iter()
             .filter(|&&peer| peer != self.id)
             .copied()
             .collect();
@@ -433,7 +427,9 @@ impl RaftNode {
         let prev_log_index = next_idx.saturating_sub(1);
         let prev_log_term = self.log_term_at(prev_log_index);
 
-        let entries: Vec<LogEntry> = self.log.iter()
+        let entries: Vec<LogEntry> = self
+            .log
+            .iter()
             .filter(|e| e.index >= next_idx)
             .take(self.config.max_entries_per_append)
             .cloned()
@@ -461,7 +457,12 @@ impl RaftNode {
             RaftMessage::RequestVoteResponse(resp) => self.handle_vote_response(from, resp),
             RaftMessage::AppendEntries(append) => self.handle_append_entries(from, append),
             RaftMessage::AppendEntriesResponse(resp) => self.handle_append_response(from, resp),
-            RaftMessage::InstallSnapshot { term, leader_id, metadata, data } => {
+            RaftMessage::InstallSnapshot {
+                term,
+                leader_id,
+                metadata,
+                data,
+            } => {
                 self.handle_install_snapshot(term, leader_id, metadata, data);
             }
             RaftMessage::InstallSnapshotResponse { term, success } => {
@@ -730,7 +731,8 @@ impl RaftNode {
         if index == 0 {
             return 0;
         }
-        self.log.iter()
+        self.log
+            .iter()
             .find(|e| e.index == index)
             .map(|e| e.term)
             .unwrap_or(0)
@@ -811,8 +813,7 @@ pub struct NodeStatus {
 // ============================================================================
 
 /// Persistent state that must survive restarts.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct PersistentState {
     /// Current term.
     pub current_term: Term,
@@ -821,7 +822,6 @@ pub struct PersistentState {
     /// Cluster configuration.
     pub cluster: Vec<NodeId>,
 }
-
 
 /// Trait for persistent storage backends.
 pub trait RaftStorage: Send + Sync {
@@ -909,7 +909,11 @@ impl RaftStorage for MemoryStorage {
 
     fn load_entries(&self, from_index: LogIndex) -> Result<Vec<LogEntry>> {
         let log = self.log.read().map_err(|_| NeedleError::LockError)?;
-        Ok(log.iter().filter(|e| e.index >= from_index).cloned().collect())
+        Ok(log
+            .iter()
+            .filter(|e| e.index >= from_index)
+            .cloned()
+            .collect())
     }
 
     fn truncate_log(&self, from_index: LogIndex) -> Result<()> {
@@ -1034,9 +1038,7 @@ impl FileStorage {
                 .lock()
                 .map_err(|_| NeedleError::LockError)?;
             if let Some(ref mut writer) = *segment {
-                writer
-                    .flush()
-                    .map_err(|e| NeedleError::Io(e))?;
+                writer.flush().map_err(|e| NeedleError::Io(e))?;
             }
             *segment = None;
         }
@@ -1099,8 +1101,8 @@ impl FileStorage {
                 .read_exact(&mut data)
                 .map_err(|e| NeedleError::Io(e))?;
 
-            let entry: LogEntry = serde_json::from_slice(&data)
-                .map_err(|e| NeedleError::Serialization(e))?;
+            let entry: LogEntry =
+                serde_json::from_slice(&data).map_err(|e| NeedleError::Serialization(e))?;
             entries.push(entry);
         }
 
@@ -1130,25 +1132,21 @@ impl RaftStorage for FileStorage {
             return Ok(None);
         }
 
-        let file =
-            File::open(&self.state_path).map_err(|e| NeedleError::Io(e))?;
+        let file = File::open(&self.state_path).map_err(|e| NeedleError::Io(e))?;
         let reader = BufReader::new(file);
-        let state: PersistentState = serde_json::from_reader(reader)
-            .map_err(|e| NeedleError::Serialization(e))?;
+        let state: PersistentState =
+            serde_json::from_reader(reader).map_err(|e| NeedleError::Serialization(e))?;
         Ok(Some(state))
     }
 
     fn save_state(&self, state: &PersistentState) -> Result<()> {
         let temp_path = self.state_path.with_extension("tmp");
-        let file =
-            File::create(&temp_path).map_err(|e| NeedleError::Io(e))?;
+        let file = File::create(&temp_path).map_err(|e| NeedleError::Io(e))?;
         let writer = BufWriter::new(file);
-        serde_json::to_writer_pretty(writer, state)
-            .map_err(|e| NeedleError::Serialization(e))?;
+        serde_json::to_writer_pretty(writer, state).map_err(|e| NeedleError::Serialization(e))?;
 
         // Atomic rename
-        fs::rename(&temp_path, &self.state_path)
-            .map_err(|e| NeedleError::Io(e))?;
+        fs::rename(&temp_path, &self.state_path).map_err(|e| NeedleError::Io(e))?;
         Ok(())
     }
 
@@ -1166,20 +1164,13 @@ impl RaftStorage for FileStorage {
 
         if let Some(ref mut writer) = *segment {
             for entry in entries {
-                let data = serde_json::to_vec(entry)
-                    .map_err(|e| NeedleError::Serialization(e))?;
+                let data = serde_json::to_vec(entry).map_err(|e| NeedleError::Serialization(e))?;
                 let len = (data.len() as u32).to_le_bytes();
-                writer
-                    .write_all(&len)
-                    .map_err(|e| NeedleError::Io(e))?;
-                writer
-                    .write_all(&data)
-                    .map_err(|e| NeedleError::Io(e))?;
+                writer.write_all(&len).map_err(|e| NeedleError::Io(e))?;
+                writer.write_all(&data).map_err(|e| NeedleError::Io(e))?;
                 segment_entries.push(entry.clone());
             }
-            writer
-                .flush()
-                .map_err(|e| NeedleError::Io(e))?;
+            writer.flush().map_err(|e| NeedleError::Io(e))?;
         }
 
         // Check if we need to rotate
@@ -1212,7 +1203,10 @@ impl RaftStorage for FileStorage {
         let entries = self.load_entries(1)?;
 
         // Filter entries to keep
-        let keep: Vec<LogEntry> = entries.into_iter().filter(|e| e.index < from_index).collect();
+        let keep: Vec<LogEntry> = entries
+            .into_iter()
+            .filter(|e| e.index < from_index)
+            .collect();
 
         // Delete all segments
         for path in self.all_segment_paths()? {
@@ -1278,11 +1272,9 @@ impl RaftStorage for FileStorage {
 
         let file = File::create(&temp_path).map_err(|e| NeedleError::Io(e))?;
         let writer = BufWriter::new(file);
-        serde_json::to_writer(writer, snapshot)
-            .map_err(|e| NeedleError::Serialization(e))?;
+        serde_json::to_writer(writer, snapshot).map_err(|e| NeedleError::Serialization(e))?;
 
-        fs::rename(&temp_path, &snapshot_path)
-            .map_err(|e| NeedleError::Io(e))?;
+        fs::rename(&temp_path, &snapshot_path).map_err(|e| NeedleError::Io(e))?;
         Ok(())
     }
 
@@ -1303,8 +1295,8 @@ impl RaftStorage for FileStorage {
         if let Some(latest) = snapshots.last() {
             let file = File::open(latest).map_err(|e| NeedleError::Io(e))?;
             let reader = BufReader::new(file);
-            let snapshot: Snapshot = serde_json::from_reader(reader)
-                .map_err(|e| NeedleError::Serialization(e))?;
+            let snapshot: Snapshot =
+                serde_json::from_reader(reader).map_err(|e| NeedleError::Serialization(e))?;
             return Ok(Some(snapshot));
         }
 
@@ -1316,7 +1308,10 @@ impl RaftStorage for FileStorage {
         let entries = self.load_entries(1)?;
 
         // Keep only entries after up_to_index
-        let keep: Vec<LogEntry> = entries.into_iter().filter(|e| e.index > up_to_index).collect();
+        let keep: Vec<LogEntry> = entries
+            .into_iter()
+            .filter(|e| e.index > up_to_index)
+            .collect();
 
         // Delete old segments
         for path in self.all_segment_paths()? {
@@ -1583,7 +1578,8 @@ mod tests {
 
         let nodes: Vec<NodeId> = (0..size).map(|i| NodeId(i as u64)).collect();
 
-        nodes.iter()
+        nodes
+            .iter()
             .map(|&id| {
                 let mut node = RaftNode::new(id, config.clone());
                 node.initialize(nodes.clone());
@@ -1610,11 +1606,14 @@ mod tests {
 
     #[test]
     fn test_election_timeout() {
-        let mut node = RaftNode::new(NodeId(1), RaftConfig {
-            election_timeout_min: Duration::from_millis(1),
-            election_timeout_max: Duration::from_millis(2),
-            ..Default::default()
-        });
+        let mut node = RaftNode::new(
+            NodeId(1),
+            RaftConfig {
+                election_timeout_min: Duration::from_millis(1),
+                election_timeout_max: Duration::from_millis(2),
+                ..Default::default()
+            },
+        );
         node.initialize(vec![NodeId(2), NodeId(3)]);
 
         std::thread::sleep(Duration::from_millis(10));
@@ -1798,9 +1797,21 @@ mod tests {
 
         // Append entries
         let entries = vec![
-            LogEntry { term: 1, index: 1, command: Command::Noop },
-            LogEntry { term: 1, index: 2, command: Command::Noop },
-            LogEntry { term: 2, index: 3, command: Command::Noop },
+            LogEntry {
+                term: 1,
+                index: 1,
+                command: Command::Noop,
+            },
+            LogEntry {
+                term: 1,
+                index: 2,
+                command: Command::Noop,
+            },
+            LogEntry {
+                term: 2,
+                index: 3,
+                command: Command::Noop,
+            },
         ];
         storage.append_entries(&entries).unwrap();
 
@@ -1821,9 +1832,21 @@ mod tests {
         let storage = MemoryStorage::new();
 
         let entries = vec![
-            LogEntry { term: 1, index: 1, command: Command::Noop },
-            LogEntry { term: 1, index: 2, command: Command::Noop },
-            LogEntry { term: 2, index: 3, command: Command::Noop },
+            LogEntry {
+                term: 1,
+                index: 1,
+                command: Command::Noop,
+            },
+            LogEntry {
+                term: 1,
+                index: 2,
+                command: Command::Noop,
+            },
+            LogEntry {
+                term: 2,
+                index: 3,
+                command: Command::Noop,
+            },
         ];
         storage.append_entries(&entries).unwrap();
 
@@ -1865,10 +1888,26 @@ mod tests {
         let storage = MemoryStorage::new();
 
         let entries = vec![
-            LogEntry { term: 1, index: 1, command: Command::Noop },
-            LogEntry { term: 1, index: 2, command: Command::Noop },
-            LogEntry { term: 2, index: 3, command: Command::Noop },
-            LogEntry { term: 2, index: 4, command: Command::Noop },
+            LogEntry {
+                term: 1,
+                index: 1,
+                command: Command::Noop,
+            },
+            LogEntry {
+                term: 1,
+                index: 2,
+                command: Command::Noop,
+            },
+            LogEntry {
+                term: 2,
+                index: 3,
+                command: Command::Noop,
+            },
+            LogEntry {
+                term: 2,
+                index: 4,
+                command: Command::Noop,
+            },
         ];
         storage.append_entries(&entries).unwrap();
 
@@ -1913,7 +1952,11 @@ mod tests {
 
         // Append entries
         let entries = vec![
-            LogEntry { term: 1, index: 1, command: Command::Noop },
+            LogEntry {
+                term: 1,
+                index: 1,
+                command: Command::Noop,
+            },
             LogEntry {
                 term: 1,
                 index: 2,
@@ -1996,7 +2039,8 @@ mod tests {
         storage.save_state(&state).unwrap();
 
         // Create node with storage
-        let node = RaftNode::with_storage(NodeId(1), RaftConfig::default(), Box::new(storage)).unwrap();
+        let node =
+            RaftNode::with_storage(NodeId(1), RaftConfig::default(), Box::new(storage)).unwrap();
 
         // Node should have restored state
         assert_eq!(node.term(), 10);

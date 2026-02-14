@@ -254,9 +254,10 @@ impl TenantManager {
     /// Store the SHA-256 hash of an encryption key for the given tenant.
     pub fn set_encryption_key(&self, tenant_id: &TenantId, key: &[u8]) -> Result<()> {
         let mut inner = self.inner.write();
-        let tenant = inner.tenants.get_mut(tenant_id).ok_or_else(|| {
-            NeedleError::NotFound(format!("Tenant '{}' not found", tenant_id.0))
-        })?;
+        let tenant = inner
+            .tenants
+            .get_mut(tenant_id)
+            .ok_or_else(|| NeedleError::NotFound(format!("Tenant '{}' not found", tenant_id.0)))?;
         let hash = sha256_hex(key);
         tenant.encryption_key_hash = Some(hash);
         tenant.updated_at = Utc::now().to_rfc3339();
@@ -266,9 +267,10 @@ impl TenantManager {
     /// Verify that the provided key matches the stored hash.
     pub fn verify_encryption_key(&self, tenant_id: &TenantId, key: &[u8]) -> Result<bool> {
         let inner = self.inner.read();
-        let tenant = inner.tenants.get(tenant_id).ok_or_else(|| {
-            NeedleError::NotFound(format!("Tenant '{}' not found", tenant_id.0))
-        })?;
+        let tenant = inner
+            .tenants
+            .get(tenant_id)
+            .ok_or_else(|| NeedleError::NotFound(format!("Tenant '{}' not found", tenant_id.0)))?;
         match &tenant.encryption_key_hash {
             Some(stored) => {
                 let hash = sha256_hex(key);
@@ -281,9 +283,10 @@ impl TenantManager {
     /// Check whether adding `vectors_to_add` would exceed the tenant's quota.
     pub fn check_quota(&self, tenant_id: &TenantId, vectors_to_add: u64) -> Result<bool> {
         let inner = self.inner.read();
-        let tenant = inner.tenants.get(tenant_id).ok_or_else(|| {
-            NeedleError::NotFound(format!("Tenant '{}' not found", tenant_id.0))
-        })?;
+        let tenant = inner
+            .tenants
+            .get(tenant_id)
+            .ok_or_else(|| NeedleError::NotFound(format!("Tenant '{}' not found", tenant_id.0)))?;
         Ok(tenant.current_vectors + vectors_to_add <= tenant.config.max_vectors)
     }
 
@@ -295,9 +298,10 @@ impl TenantManager {
         storage_added: u64,
     ) -> Result<()> {
         let mut inner = self.inner.write();
-        let tenant = inner.tenants.get_mut(tenant_id).ok_or_else(|| {
-            NeedleError::NotFound(format!("Tenant '{}' not found", tenant_id.0))
-        })?;
+        let tenant = inner
+            .tenants
+            .get_mut(tenant_id)
+            .ok_or_else(|| NeedleError::NotFound(format!("Tenant '{}' not found", tenant_id.0)))?;
         tenant.current_vectors += vectors_added;
         tenant.current_storage_bytes += storage_added;
         tenant.updated_at = Utc::now().to_rfc3339();
@@ -307,9 +311,10 @@ impl TenantManager {
     /// Build a `ResourceUsage` snapshot for the tenant.
     pub fn get_usage(&self, tenant_id: &TenantId) -> Result<ResourceUsage> {
         let inner = self.inner.read();
-        let tenant = inner.tenants.get(tenant_id).ok_or_else(|| {
-            NeedleError::NotFound(format!("Tenant '{}' not found", tenant_id.0))
-        })?;
+        let tenant = inner
+            .tenants
+            .get(tenant_id)
+            .ok_or_else(|| NeedleError::NotFound(format!("Tenant '{}' not found", tenant_id.0)))?;
         let utilization = if tenant.config.max_vectors > 0 {
             (tenant.current_vectors as f32 / tenant.config.max_vectors as f32) * 100.0
         } else {
@@ -344,11 +349,7 @@ impl TenantManager {
     }
 
     /// Check whether the tenant's policy includes the given permission.
-    pub fn check_permission(
-        &self,
-        tenant_id: &TenantId,
-        permission: &Permission,
-    ) -> Result<bool> {
+    pub fn check_permission(&self, tenant_id: &TenantId, permission: &Permission) -> Result<bool> {
         let inner = self.inner.read();
         if !inner.tenants.contains_key(tenant_id) {
             return Err(NeedleError::NotFound(format!(
@@ -385,9 +386,10 @@ impl TenantManager {
     /// Build a GDPR export manifest for the tenant.
     pub fn prepare_gdpr_export(&self, tenant_id: &TenantId) -> Result<GdprExport> {
         let inner = self.inner.read();
-        let tenant = inner.tenants.get(tenant_id).ok_or_else(|| {
-            NeedleError::NotFound(format!("Tenant '{}' not found", tenant_id.0))
-        })?;
+        let tenant = inner
+            .tenants
+            .get(tenant_id)
+            .ok_or_else(|| NeedleError::NotFound(format!("Tenant '{}' not found", tenant_id.0)))?;
 
         let collections: Vec<String> = tenant.collections.iter().cloned().collect();
         let export = GdprExport {
@@ -396,9 +398,7 @@ impl TenantManager {
             total_vectors: tenant.current_vectors,
             collections,
             format: ExportFormat::Json,
-            checksum: sha256_hex(
-                format!("{}:{}", tenant_id.0, tenant.current_vectors).as_bytes(),
-            ),
+            checksum: sha256_hex(format!("{}:{}", tenant_id.0, tenant.current_vectors).as_bytes()),
         };
         Ok(export)
     }
@@ -434,9 +434,10 @@ impl TenantManager {
     /// Enforce quota before an operation. Returns error if quota exceeded.
     pub fn enforce_quota(&self, tenant_id: &TenantId, vectors_to_add: u64) -> Result<()> {
         let inner = self.inner.read();
-        let tenant = inner.tenants.get(tenant_id).ok_or_else(|| {
-            NeedleError::NotFound(format!("Tenant '{}' not found", tenant_id.0))
-        })?;
+        let tenant = inner
+            .tenants
+            .get(tenant_id)
+            .ok_or_else(|| NeedleError::NotFound(format!("Tenant '{}' not found", tenant_id.0)))?;
 
         if tenant.status != TenantStatus::Active {
             return Err(NeedleError::InvalidOperation(format!(
@@ -458,14 +459,17 @@ impl TenantManager {
     /// Enforce storage quota.
     pub fn enforce_storage_quota(&self, tenant_id: &TenantId, bytes_to_add: u64) -> Result<()> {
         let inner = self.inner.read();
-        let tenant = inner.tenants.get(tenant_id).ok_or_else(|| {
-            NeedleError::NotFound(format!("Tenant '{}' not found", tenant_id.0))
-        })?;
+        let tenant = inner
+            .tenants
+            .get(tenant_id)
+            .ok_or_else(|| NeedleError::NotFound(format!("Tenant '{}' not found", tenant_id.0)))?;
 
         if tenant.current_storage_bytes + bytes_to_add > tenant.config.max_storage_bytes {
             return Err(NeedleError::QuotaExceeded(format!(
                 "Tenant '{}': adding {} bytes would exceed storage limit of {} (current: {})",
-                tenant_id.0, bytes_to_add, tenant.config.max_storage_bytes,
+                tenant_id.0,
+                bytes_to_add,
+                tenant.config.max_storage_bytes,
                 tenant.current_storage_bytes
             )));
         }
@@ -476,9 +480,10 @@ impl TenantManager {
     /// Enforce collection count quota.
     pub fn enforce_collection_quota(&self, tenant_id: &TenantId) -> Result<()> {
         let inner = self.inner.read();
-        let tenant = inner.tenants.get(tenant_id).ok_or_else(|| {
-            NeedleError::NotFound(format!("Tenant '{}' not found", tenant_id.0))
-        })?;
+        let tenant = inner
+            .tenants
+            .get(tenant_id)
+            .ok_or_else(|| NeedleError::NotFound(format!("Tenant '{}' not found", tenant_id.0)))?;
 
         if tenant.collections.len() as u32 >= tenant.config.max_collections {
             return Err(NeedleError::QuotaExceeded(format!(
@@ -494,9 +499,10 @@ impl TenantManager {
     pub fn add_collection(&self, tenant_id: &TenantId, collection_name: String) -> Result<()> {
         self.enforce_collection_quota(tenant_id)?;
         let mut inner = self.inner.write();
-        let tenant = inner.tenants.get_mut(tenant_id).ok_or_else(|| {
-            NeedleError::NotFound(format!("Tenant '{}' not found", tenant_id.0))
-        })?;
+        let tenant = inner
+            .tenants
+            .get_mut(tenant_id)
+            .ok_or_else(|| NeedleError::NotFound(format!("Tenant '{}' not found", tenant_id.0)))?;
         tenant.collections.insert(collection_name);
         tenant.updated_at = Utc::now().to_rfc3339();
         Ok(())
@@ -505,9 +511,10 @@ impl TenantManager {
     /// Remove a collection from a tenant's namespace.
     pub fn remove_collection(&self, tenant_id: &TenantId, collection_name: &str) -> Result<()> {
         let mut inner = self.inner.write();
-        let tenant = inner.tenants.get_mut(tenant_id).ok_or_else(|| {
-            NeedleError::NotFound(format!("Tenant '{}' not found", tenant_id.0))
-        })?;
+        let tenant = inner
+            .tenants
+            .get_mut(tenant_id)
+            .ok_or_else(|| NeedleError::NotFound(format!("Tenant '{}' not found", tenant_id.0)))?;
         tenant.collections.remove(collection_name);
         tenant.updated_at = Utc::now().to_rfc3339();
         Ok(())
@@ -559,10 +566,10 @@ pub struct MeteringConfig {
 impl Default for MeteringConfig {
     fn default() -> Self {
         Self {
-            cost_per_insert_mc: 1,    // $0.0001 per insert
-            cost_per_query_mc: 5,     // $0.0005 per query
+            cost_per_insert_mc: 1,         // $0.0001 per insert
+            cost_per_query_mc: 5,          // $0.0005 per query
             cost_per_gb_month_mc: 250_000, // $25 per GB-month
-            cost_per_batch_mc: 25,    // $0.0025 per batch search
+            cost_per_batch_mc: 25,         // $0.0025 per batch search
         }
     }
 }
@@ -652,7 +659,14 @@ impl UsageMeter {
 
         let total_queries: u64 = tenant_events
             .iter()
-            .filter(|e| matches!(e.event_kind, UsageEventKind::SearchQuery | UsageEventKind::FilteredSearchQuery | UsageEventKind::BatchSearch))
+            .filter(|e| {
+                matches!(
+                    e.event_kind,
+                    UsageEventKind::SearchQuery
+                        | UsageEventKind::FilteredSearchQuery
+                        | UsageEventKind::BatchSearch
+                )
+            })
             .map(|e| e.quantity)
             .sum();
 
@@ -713,7 +727,10 @@ impl TenantRateLimiter {
             .or_insert_with(std::collections::VecDeque::new);
 
         // Purge entries older than 1 second.
-        while deque.front().map_or(false, |t| now.duration_since(*t) > window) {
+        while deque
+            .front()
+            .map_or(false, |t| now.duration_since(*t) > window)
+        {
             deque.pop_front();
         }
 
@@ -828,7 +845,9 @@ mod tests {
         mgr.create_tenant(tid("t1"), "Acme".into(), TenantConfig::default())
             .unwrap();
         mgr.set_encryption_key(&tid("t1"), b"secret-key").unwrap();
-        assert!(mgr.verify_encryption_key(&tid("t1"), b"secret-key").unwrap());
+        assert!(mgr
+            .verify_encryption_key(&tid("t1"), b"secret-key")
+            .unwrap());
         assert!(!mgr.verify_encryption_key(&tid("t1"), b"wrong-key").unwrap());
     }
 
@@ -1017,11 +1036,7 @@ mod tests {
         meter.record(t.clone(), UsageEventKind::VectorInsert, 1000);
         meter.record(t.clone(), UsageEventKind::SearchQuery, 200);
 
-        let summary = meter.billing_summary(
-            &t,
-            "2020-01-01T00:00:00Z",
-            "2030-12-31T23:59:59Z",
-        );
+        let summary = meter.billing_summary(&t, "2020-01-01T00:00:00Z", "2030-12-31T23:59:59Z");
         assert_eq!(summary.total_inserts, 1000);
         assert_eq!(summary.total_queries, 200);
         assert_eq!(summary.events_count, 2);
