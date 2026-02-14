@@ -205,8 +205,7 @@ impl CohereReranker {
         // Mock scoring based on simple term overlap
         // Real implementation would call: POST {base_url}/rerank
         let query_lower = query.to_lowercase();
-        let query_terms: std::collections::HashSet<&str> =
-            query_lower.split_whitespace().collect();
+        let query_terms: std::collections::HashSet<&str> = query_lower.split_whitespace().collect();
 
         let mut results: Vec<RerankResult> = documents
             .iter()
@@ -456,9 +455,7 @@ impl Reranker for EnsembleReranker {
             // Build final results
             let mut final_results: Vec<RerankResult> = rrf_scores
                 .into_iter()
-                .map(|(idx, score)| {
-                    RerankResult::with_text(idx, score, documents[idx].to_string())
-                })
+                .map(|(idx, score)| RerankResult::with_text(idx, score, documents[idx].to_string()))
                 .collect();
 
             // Sort by score descending
@@ -492,7 +489,9 @@ impl Reranker for NoOpReranker {
                 .iter()
                 .enumerate()
                 .take(top_k)
-                .map(|(idx, doc)| RerankResult::with_text(idx, 1.0 - (idx as f32 * 0.01), doc.to_string()))
+                .map(|(idx, doc)| {
+                    RerankResult::with_text(idx, 1.0 - (idx as f32 * 0.01), doc.to_string())
+                })
                 .collect();
             Ok(results)
         })

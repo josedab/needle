@@ -431,7 +431,10 @@ impl InstanceRegistry {
         self.instances
             .read()
             .values()
-            .filter(|i| i.config.collections.is_empty() || i.config.collections.contains(&collection.to_string()))
+            .filter(|i| {
+                i.config.collections.is_empty()
+                    || i.config.collections.contains(&collection.to_string())
+            })
             .cloned()
             .collect()
     }
@@ -511,7 +514,9 @@ impl InstanceRegistry {
         let instances = self.instances.read();
         instances
             .iter()
-            .filter(|(_, i)| i.status == HealthStatus::Healthy || i.status == HealthStatus::Degraded)
+            .filter(|(_, i)| {
+                i.status == HealthStatus::Healthy || i.status == HealthStatus::Degraded
+            })
             .min_by(|(_, a), (_, b)| {
                 a.routing_score(latency_weight)
                     .partial_cmp(&b.routing_score(latency_weight))
@@ -955,7 +960,11 @@ impl Federation {
                         available: healthy.len(),
                     });
                 }
-                Ok(healthy.iter().take(n).map(|i| i.config.id.clone()).collect())
+                Ok(healthy
+                    .iter()
+                    .take(n)
+                    .map(|i| i.config.id.clone())
+                    .collect())
             }
         }
     }
@@ -1028,7 +1037,8 @@ impl Federation {
 
         // Merge results
         let total_found: usize = instance_results.iter().map(|(_, r)| r.len()).sum();
-        let instances_responded: Vec<_> = instance_results.iter().map(|(id, _)| id.clone()).collect();
+        let instances_responded: Vec<_> =
+            instance_results.iter().map(|(id, _)| id.clone()).collect();
         let merged = self.merger.merge(instance_results, k);
 
         let execution_time = start.elapsed();
@@ -1152,12 +1162,7 @@ impl DiscoveryService {
     }
 
     /// Record a heartbeat from an instance. Auto-registers unknown instances.
-    pub fn heartbeat(
-        &self,
-        instance_id: &str,
-        endpoint: &str,
-        metadata: HashMap<String, String>,
-    ) {
+    pub fn heartbeat(&self, instance_id: &str, endpoint: &str, metadata: HashMap<String, String>) {
         // Register if unknown
         if self.registry.get(instance_id).is_none() {
             let mut inst = InstanceConfig::new(instance_id, endpoint);
@@ -1166,7 +1171,8 @@ impl DiscoveryService {
             }
             self.registry.register(inst);
         }
-        self.registry.update_health(instance_id, HealthStatus::Healthy);
+        self.registry
+            .update_health(instance_id, HealthStatus::Healthy);
 
         let mut hb = self.heartbeats.write();
         hb.insert(
@@ -1270,9 +1276,9 @@ impl CrossInstanceDedup {
                         }
                         DedupStrategy::AverageDistance => {
                             *count += 1;
-                            existing.distance =
-                                (existing.distance * (*count - 1) as f32 + r.distance)
-                                    / *count as f32;
+                            existing.distance = (existing.distance * (*count - 1) as f32
+                                + r.distance)
+                                / *count as f32;
                         }
                     },
                     None => {
@@ -1282,8 +1288,7 @@ impl CrossInstanceDedup {
             }
         }
 
-        let mut merged: Vec<FederatedSearchResult> =
-            seen.into_values().map(|(r, _)| r).collect();
+        let mut merged: Vec<FederatedSearchResult> = seen.into_values().map(|(r, _)| r).collect();
         merged.sort_by(|a, b| {
             a.distance
                 .partial_cmp(&b.distance)
@@ -1439,9 +1444,15 @@ mod tests {
         );
 
         // Mark all as healthy
-        federation.registry.update_health("us-west-1", HealthStatus::Healthy);
-        federation.registry.update_health("us-east-1", HealthStatus::Healthy);
-        federation.registry.update_health("eu-west-1", HealthStatus::Healthy);
+        federation
+            .registry
+            .update_health("us-west-1", HealthStatus::Healthy);
+        federation
+            .registry
+            .update_health("us-east-1", HealthStatus::Healthy);
+        federation
+            .registry
+            .update_health("eu-west-1", HealthStatus::Healthy);
 
         federation
     }
@@ -1487,8 +1498,12 @@ mod tests {
 
         federation.register_instance(InstanceConfig::new("inst-1", "http://localhost:8081"));
         federation.register_instance(InstanceConfig::new("inst-2", "http://localhost:8082"));
-        federation.registry.update_health("inst-1", HealthStatus::Healthy);
-        federation.registry.update_health("inst-2", HealthStatus::Healthy);
+        federation
+            .registry
+            .update_health("inst-1", HealthStatus::Healthy);
+        federation
+            .registry
+            .update_health("inst-2", HealthStatus::Healthy);
 
         let instances = federation.select_instances("test_collection").unwrap();
         assert_eq!(instances.len(), 2);
@@ -1515,7 +1530,9 @@ mod tests {
         let federation = Federation::new(config);
 
         federation.register_instance(InstanceConfig::new("unhealthy", "http://localhost:8080"));
-        federation.registry.update_health("unhealthy", HealthStatus::Unhealthy);
+        federation
+            .registry
+            .update_health("unhealthy", HealthStatus::Unhealthy);
 
         let result = federation.select_instances("test_collection");
         assert!(matches!(result, Err(FederationError::NoHealthyInstances)));
@@ -1654,27 +1671,23 @@ mod tests {
             ),
             (
                 "inst-2".to_string(),
-                vec![
-                    FederatedSearchResult {
-                        id: "common".to_string(),
-                        distance: 0.15,
-                        metadata: None,
-                        source_instance: "inst-2".to_string(),
-                        collection: "test".to_string(),
-                    },
-                ],
+                vec![FederatedSearchResult {
+                    id: "common".to_string(),
+                    distance: 0.15,
+                    metadata: None,
+                    source_instance: "inst-2".to_string(),
+                    collection: "test".to_string(),
+                }],
             ),
             (
                 "inst-3".to_string(),
-                vec![
-                    FederatedSearchResult {
-                        id: "common".to_string(),
-                        distance: 0.12,
-                        metadata: None,
-                        source_instance: "inst-3".to_string(),
-                        collection: "test".to_string(),
-                    },
-                ],
+                vec![FederatedSearchResult {
+                    id: "common".to_string(),
+                    distance: 0.12,
+                    metadata: None,
+                    source_instance: "inst-3".to_string(),
+                    collection: "test".to_string(),
+                }],
             ),
         ];
 
@@ -1700,7 +1713,9 @@ mod tests {
         let federation = create_test_federation();
 
         // Mark one instance as unhealthy
-        federation.registry.update_health("eu-west-1", HealthStatus::Unhealthy);
+        federation
+            .registry
+            .update_health("eu-west-1", HealthStatus::Unhealthy);
 
         let health = federation.health();
 
@@ -1743,9 +1758,15 @@ mod tests {
         federation.register_instance(InstanceConfig::new("inst-2", "http://localhost:8082"));
         federation.register_instance(InstanceConfig::new("inst-3", "http://localhost:8083"));
 
-        federation.registry.update_health("inst-1", HealthStatus::Healthy);
-        federation.registry.update_health("inst-2", HealthStatus::Healthy);
-        federation.registry.update_health("inst-3", HealthStatus::Healthy);
+        federation
+            .registry
+            .update_health("inst-1", HealthStatus::Healthy);
+        federation
+            .registry
+            .update_health("inst-2", HealthStatus::Healthy);
+        federation
+            .registry
+            .update_health("inst-3", HealthStatus::Healthy);
 
         let instances = federation.select_instances("test_collection").unwrap();
         assert_eq!(instances.len(), 2);
@@ -1759,11 +1780,18 @@ mod tests {
         federation.register_instance(InstanceConfig::new("inst-1", "http://localhost:8081"));
         federation.register_instance(InstanceConfig::new("inst-2", "http://localhost:8082"));
 
-        federation.registry.update_health("inst-1", HealthStatus::Healthy);
-        federation.registry.update_health("inst-2", HealthStatus::Healthy);
+        federation
+            .registry
+            .update_health("inst-1", HealthStatus::Healthy);
+        federation
+            .registry
+            .update_health("inst-2", HealthStatus::Healthy);
 
         let result = federation.select_instances("test_collection");
-        assert!(matches!(result, Err(FederationError::QuorumNotReached { .. })));
+        assert!(matches!(
+            result,
+            Err(FederationError::QuorumNotReached { .. })
+        ));
     }
 
     #[test]
@@ -1843,7 +1871,10 @@ mod tests {
         svc.heartbeat("inst-1", "http://localhost:8081", HashMap::new());
         assert_eq!(svc.tracked_count(), 1);
         assert!(registry.get("inst-1").is_some());
-        assert_eq!(registry.get("inst-1").unwrap().status, HealthStatus::Healthy);
+        assert_eq!(
+            registry.get("inst-1").unwrap().status,
+            HealthStatus::Healthy
+        );
     }
 
     #[test]
@@ -1898,15 +1929,13 @@ mod tests {
                 collection: "test".into(),
             },
         ];
-        let r2 = vec![
-            FederatedSearchResult {
-                id: "v1".into(),
-                distance: 0.2,
-                metadata: None,
-                source_instance: "inst-2".into(),
-                collection: "test".into(),
-            },
-        ];
+        let r2 = vec![FederatedSearchResult {
+            id: "v1".into(),
+            distance: 0.2,
+            metadata: None,
+            source_instance: "inst-2".into(),
+            collection: "test".into(),
+        }];
 
         let merged = dedup.dedup(&[r1, r2], 10);
         assert_eq!(merged.len(), 2);
@@ -1962,12 +1991,10 @@ mod tests {
     #[test]
     fn test_query_planner_basic() {
         let registry = Arc::new(InstanceRegistry::new());
-        registry.register(
-            InstanceConfig::new("i1", "http://localhost:8081").with_collection("docs"),
-        );
-        registry.register(
-            InstanceConfig::new("i2", "http://localhost:8082").with_collection("docs"),
-        );
+        registry
+            .register(InstanceConfig::new("i1", "http://localhost:8081").with_collection("docs"));
+        registry
+            .register(InstanceConfig::new("i2", "http://localhost:8082").with_collection("docs"));
         registry.update_health("i1", HealthStatus::Healthy);
         registry.update_health("i2", HealthStatus::Healthy);
 
@@ -2000,9 +2027,8 @@ mod tests {
     #[test]
     fn test_query_planner_validate() {
         let registry = Arc::new(InstanceRegistry::new());
-        registry.register(
-            InstanceConfig::new("i1", "http://localhost:8081").with_collection("docs"),
-        );
+        registry
+            .register(InstanceConfig::new("i1", "http://localhost:8081").with_collection("docs"));
         registry.update_health("i1", HealthStatus::Healthy);
 
         let planner = QueryPlanner::new(registry.clone());

@@ -206,8 +206,8 @@ impl QueryRouter {
 
         match self.config.load_balancing {
             LoadBalancing::RoundRobin => {
-                let idx =
-                    self.round_robin_counter.fetch_add(1, Ordering::Relaxed) as usize % active.len();
+                let idx = self.round_robin_counter.fetch_add(1, Ordering::Relaxed) as usize
+                    % active.len();
                 Some(active[idx])
             }
             LoadBalancing::Random => {
@@ -215,22 +215,20 @@ impl QueryRouter {
                 let idx = rand::thread_rng().gen_range(0..active.len());
                 Some(active[idx])
             }
-            LoadBalancing::LeastLoaded => {
-                active
-                    .iter()
-                    .min_by_key(|id| {
-                        self.shard_manager
-                            .get_shard(**id)
-                            .map(|s| s.vector_count)
-                            .unwrap_or(u64::MAX)
-                    })
-                    .copied()
-            }
+            LoadBalancing::LeastLoaded => active
+                .iter()
+                .min_by_key(|id| {
+                    self.shard_manager
+                        .get_shard(**id)
+                        .map(|s| s.vector_count)
+                        .unwrap_or(u64::MAX)
+                })
+                .copied(),
             LoadBalancing::LocalityAware => {
                 // For now, just use round-robin
                 // In a real implementation, this would prefer shards on the same node
-                let idx =
-                    self.round_robin_counter.fetch_add(1, Ordering::Relaxed) as usize % active.len();
+                let idx = self.round_robin_counter.fetch_add(1, Ordering::Relaxed) as usize
+                    % active.len();
                 Some(active[idx])
             }
         }
@@ -311,13 +309,12 @@ impl QueryRouter {
         start_time: Instant,
     ) -> RoutingResult<AggregatedResults> {
         // Check minimum shards requirement
-        if successful.len() < self.config.min_shards
-            && !self.config.allow_partial {
-                return Err(RoutingError::PartialResults {
-                    success: successful.len(),
-                    total: successful.len() + failed.len(),
-                });
-            }
+        if successful.len() < self.config.min_shards && !self.config.allow_partial {
+            return Err(RoutingError::PartialResults {
+                success: successful.len(),
+                total: successful.len() + failed.len(),
+            });
+        }
 
         let mut result = self.merge_results(successful, k, start_time);
         result.shards_failed = failed;
