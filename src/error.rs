@@ -185,19 +185,49 @@ impl ErrorCode {
     /// Get a brief description of the error category
     pub fn category(&self) -> &'static str {
         match self {
-            ErrorCode::IoRead | ErrorCode::IoWrite | ErrorCode::IoPermission | ErrorCode::IoDiskFull => "I/O",
-            ErrorCode::SerializationFailed | ErrorCode::DeserializationFailed | ErrorCode::InvalidFormat => "Serialization",
-            ErrorCode::CollectionNotFound | ErrorCode::CollectionAlreadyExists | ErrorCode::CollectionCorrupted | ErrorCode::AliasNotFound | ErrorCode::AliasAlreadyExists | ErrorCode::AliasTargetHasAliases => "Collection",
-            ErrorCode::VectorNotFound | ErrorCode::VectorAlreadyExists | ErrorCode::DimensionMismatch | ErrorCode::InvalidVector => "Vector",
-            ErrorCode::InvalidDatabase | ErrorCode::DatabaseCorrupted | ErrorCode::DatabaseLocked => "Database",
-            ErrorCode::IndexError | ErrorCode::IndexCorrupted | ErrorCode::IndexBuildFailed => "Index",
+            ErrorCode::IoRead
+            | ErrorCode::IoWrite
+            | ErrorCode::IoPermission
+            | ErrorCode::IoDiskFull => "I/O",
+            ErrorCode::SerializationFailed
+            | ErrorCode::DeserializationFailed
+            | ErrorCode::InvalidFormat => "Serialization",
+            ErrorCode::CollectionNotFound
+            | ErrorCode::CollectionAlreadyExists
+            | ErrorCode::CollectionCorrupted
+            | ErrorCode::AliasNotFound
+            | ErrorCode::AliasAlreadyExists
+            | ErrorCode::AliasTargetHasAliases => "Collection",
+            ErrorCode::VectorNotFound
+            | ErrorCode::VectorAlreadyExists
+            | ErrorCode::DimensionMismatch
+            | ErrorCode::InvalidVector => "Vector",
+            ErrorCode::InvalidDatabase
+            | ErrorCode::DatabaseCorrupted
+            | ErrorCode::DatabaseLocked => "Database",
+            ErrorCode::IndexError | ErrorCode::IndexCorrupted | ErrorCode::IndexBuildFailed => {
+                "Index"
+            }
             ErrorCode::InvalidConfig | ErrorCode::MissingConfig => "Configuration",
-            ErrorCode::CapacityExceeded | ErrorCode::QuotaExceeded | ErrorCode::MemoryExhausted => "Resource",
-            ErrorCode::Timeout | ErrorCode::LockTimeout | ErrorCode::Conflict | ErrorCode::NotFound => "Operational",
-            ErrorCode::EncryptionError | ErrorCode::DecryptionError | ErrorCode::AuthenticationFailed => "Security",
-            ErrorCode::ConsensusError | ErrorCode::ReplicationError | ErrorCode::NetworkError => "Distributed",
-            ErrorCode::BackupFailed | ErrorCode::RestoreFailed | ErrorCode::BackupCorrupted => "Backup",
-            ErrorCode::InvalidOperation | ErrorCode::InvalidState | ErrorCode::Unauthorized => "State",
+            ErrorCode::CapacityExceeded | ErrorCode::QuotaExceeded | ErrorCode::MemoryExhausted => {
+                "Resource"
+            }
+            ErrorCode::Timeout
+            | ErrorCode::LockTimeout
+            | ErrorCode::Conflict
+            | ErrorCode::NotFound => "Operational",
+            ErrorCode::EncryptionError
+            | ErrorCode::DecryptionError
+            | ErrorCode::AuthenticationFailed => "Security",
+            ErrorCode::ConsensusError | ErrorCode::ReplicationError | ErrorCode::NetworkError => {
+                "Distributed"
+            }
+            ErrorCode::BackupFailed | ErrorCode::RestoreFailed | ErrorCode::BackupCorrupted => {
+                "Backup"
+            }
+            ErrorCode::InvalidOperation | ErrorCode::InvalidState | ErrorCode::Unauthorized => {
+                "State"
+            }
         }
     }
 }
@@ -368,14 +398,12 @@ pub enum NeedleError {
 impl Recoverable for NeedleError {
     fn error_code(&self) -> ErrorCode {
         match self {
-            NeedleError::Io(source) => {
-                match source.kind() {
-                    std::io::ErrorKind::NotFound => ErrorCode::IoRead,
-                    std::io::ErrorKind::PermissionDenied => ErrorCode::IoPermission,
-                    std::io::ErrorKind::WriteZero => ErrorCode::IoDiskFull,
-                    _ => ErrorCode::IoWrite,
-                }
-            }
+            NeedleError::Io(source) => match source.kind() {
+                std::io::ErrorKind::NotFound => ErrorCode::IoRead,
+                std::io::ErrorKind::PermissionDenied => ErrorCode::IoPermission,
+                std::io::ErrorKind::WriteZero => ErrorCode::IoDiskFull,
+                _ => ErrorCode::IoWrite,
+            },
             NeedleError::Serialization(_) => ErrorCode::SerializationFailed,
             NeedleError::DimensionMismatch { .. } => ErrorCode::DimensionMismatch,
             NeedleError::CollectionNotFound(_) => ErrorCode::CollectionNotFound,
@@ -673,7 +701,10 @@ impl NeedleError {
 
         if self.is_retryable() {
             if let Some(delay) = self.suggested_retry_delay_ms() {
-                output.push_str(&format!("\n\nThis error is retryable. Suggested delay: {}ms", delay));
+                output.push_str(&format!(
+                    "\n\nThis error is retryable. Suggested delay: {}ms",
+                    delay
+                ));
             } else {
                 output.push_str("\n\nThis error is retryable.");
             }
@@ -721,7 +752,7 @@ impl NeedleError {
             ),
             NeedleError::Serialization(_) => String::from(
                 "Failed to parse JSON input. Verify the request body is valid JSON \
-                 and matches the expected schema."
+                 and matches the expected schema.",
             ),
             _ => {
                 let hints = self.recovery_hints();
@@ -772,7 +803,9 @@ mod tests {
             got: 256,
         };
         let hints = error.recovery_hints();
-        assert!(hints.iter().any(|h| h.summary.contains("128") && h.summary.contains("256")));
+        assert!(hints
+            .iter()
+            .any(|h| h.summary.contains("128") && h.summary.contains("256")));
     }
 
     #[test]
@@ -787,13 +820,19 @@ mod tests {
     #[test]
     fn test_io_error_hints_by_kind() {
         // Test NotFound
-        let error = NeedleError::Io(std::io::Error::new(std::io::ErrorKind::NotFound, "file not found"));
+        let error = NeedleError::Io(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "file not found",
+        ));
         let hints = error.recovery_hints();
         assert!(hints.iter().any(|h| h.summary.contains("exist")));
         assert_eq!(error.error_code(), ErrorCode::IoRead);
 
         // Test PermissionDenied
-        let error = NeedleError::Io(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "access denied"));
+        let error = NeedleError::Io(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "access denied",
+        ));
         let hints = error.recovery_hints();
         assert!(hints.iter().any(|h| h.summary.contains("permission")));
         assert_eq!(error.error_code(), ErrorCode::IoPermission);
@@ -801,7 +840,10 @@ mod tests {
 
     #[test]
     fn test_help_dimension_mismatch() {
-        let error = NeedleError::DimensionMismatch { expected: 384, got: 128 };
+        let error = NeedleError::DimensionMismatch {
+            expected: 384,
+            got: 128,
+        };
         let help = error.help();
         assert!(help.contains("384"));
         assert!(help.contains("128"));
