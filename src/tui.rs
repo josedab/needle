@@ -232,7 +232,9 @@ fn render_header(f: &mut Frame, state: &AppState, area: Rect) {
         .iter()
         .map(|v| {
             let style = if *v == state.current_view {
-                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD)
             } else {
                 Style::default().fg(Color::Gray)
             };
@@ -245,7 +247,11 @@ fn render_header(f: &mut Frame, state: &AppState, area: Rect) {
             Block::default()
                 .borders(Borders::ALL)
                 .title(" Needle Vector Database ")
-                .title_style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                .title_style(
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                ),
         )
         .select(state.current_view.index())
         .style(Style::default().fg(Color::White))
@@ -371,9 +377,7 @@ fn render_stat_card(f: &mut Frame, area: Rect, title: &str, value: &str, color: 
         Line::from(""),
         Line::from(Span::styled(
             value,
-            Style::default()
-                .fg(color)
-                .add_modifier(Modifier::BOLD),
+            Style::default().fg(color).add_modifier(Modifier::BOLD),
         )),
     ])
     .alignment(Alignment::Center);
@@ -434,10 +438,7 @@ fn render_collections(f: &mut Frame, state: &mut AppState, area: Rect) {
                 Line::from(""),
                 Line::from(vec![
                     Span::styled("Vector Count: ", Style::default().fg(Color::Gray)),
-                    Span::styled(
-                        format_number(col.count),
-                        Style::default().fg(Color::Green),
-                    ),
+                    Span::styled(format_number(col.count), Style::default().fg(Color::Green)),
                 ]),
                 Line::from(""),
                 Line::from(vec![
@@ -529,10 +530,7 @@ fn render_search(f: &mut Frame, state: &mut AppState, area: Rect) {
     .block(
         Block::default()
             .borders(Borders::ALL)
-            .title(format!(
-                " Results ({}) ",
-                state.search_results.len()
-            )),
+            .title(format!(" Results ({}) ", state.search_results.len())),
     )
     .row_highlight_style(Style::default().bg(Color::DarkGray))
     .highlight_symbol("▶ ");
@@ -551,31 +549,27 @@ fn render_clusters(f: &mut Frame, state: &AppState, area: Rect) {
             .iter()
             .map(|c| {
                 ListItem::new(vec![
-                    Line::from(vec![
-                        Span::styled(
-                            format!("Cluster {}", c.id),
-                            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
-                        ),
-                    ]),
+                    Line::from(vec![Span::styled(
+                        format!("Cluster {}", c.id),
+                        Style::default()
+                            .fg(Color::Cyan)
+                            .add_modifier(Modifier::BOLD),
+                    )]),
                     Line::from(vec![
                         Span::raw("  Size: "),
-                        Span::styled(
-                            c.size.to_string(),
-                            Style::default().fg(Color::Green),
-                        ),
+                        Span::styled(c.size.to_string(), Style::default().fg(Color::Green)),
                     ]),
                 ])
             })
             .collect()
     } else {
-        vec![ListItem::new("No clustering results. Press 'r' to run clustering.")]
+        vec![ListItem::new(
+            "No clustering results. Press 'r' to run clustering.",
+        )]
     };
 
-    let cluster_list = List::new(cluster_items).block(
-        Block::default()
-            .title(" Clusters ")
-            .borders(Borders::ALL),
-    );
+    let cluster_list =
+        List::new(cluster_items).block(Block::default().title(" Clusters ").borders(Borders::ALL));
     f.render_widget(cluster_list, chunks[0]);
 
     let info_text = if let Some(ref data) = state.cluster_data {
@@ -590,15 +584,18 @@ fn render_clusters(f: &mut Frame, state: &AppState, area: Rect) {
             ]),
             Line::from(vec![
                 Span::styled("Iterations: ", Style::default().fg(Color::Gray)),
-                Span::styled(data.iterations.to_string(), Style::default().fg(Color::Green)),
+                Span::styled(
+                    data.iterations.to_string(),
+                    Style::default().fg(Color::Green),
+                ),
             ]),
         ]
     } else {
         vec![Line::from("Run clustering to see results")]
     };
 
-    let info = Paragraph::new(info_text)
-        .block(Block::default().title(" Info ").borders(Borders::ALL));
+    let info =
+        Paragraph::new(info_text).block(Block::default().title(" Info ").borders(Borders::ALL));
     f.render_widget(info, chunks[1]);
 }
 
@@ -609,13 +606,20 @@ fn render_anomalies(f: &mut Frame, state: &AppState, area: Rect) {
         .split(area);
 
     let method_info = if let Some(ref data) = state.anomaly_data {
-        format!("Method: {} | Outliers: {}", data.method, data.outliers.len())
+        format!(
+            "Method: {} | Outliers: {}",
+            data.method,
+            data.outliers.len()
+        )
     } else {
         "No anomaly detection results. Press 'r' to run detection.".to_string()
     };
 
-    let header = Paragraph::new(method_info)
-        .block(Block::default().borders(Borders::ALL).title(" Anomaly Detection "));
+    let header = Paragraph::new(method_info).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(" Anomaly Detection "),
+    );
     f.render_widget(header, chunks[0]);
 
     let items: Vec<ListItem> = if let Some(ref data) = state.anomaly_data {
@@ -626,7 +630,10 @@ fn render_anomalies(f: &mut Frame, state: &AppState, area: Rect) {
                     Line::from(vec![
                         Span::styled(&o.id, Style::default().fg(Color::Red)),
                         Span::raw(" - Score: "),
-                        Span::styled(format!("{:.4}", o.score), Style::default().fg(Color::Yellow)),
+                        Span::styled(
+                            format!("{:.4}", o.score),
+                            Style::default().fg(Color::Yellow),
+                        ),
                     ]),
                     Line::from(vec![
                         Span::raw("  "),
@@ -659,10 +666,7 @@ fn render_streaming(f: &mut Frame, state: &AppState, area: Rect) {
             ListItem::new(Line::from(vec![
                 Span::styled(&e.timestamp, Style::default().fg(Color::DarkGray)),
                 Span::raw(" | "),
-                Span::styled(
-                    format!("{:8}", e.event_type),
-                    Style::default().fg(color),
-                ),
+                Span::styled(format!("{:8}", e.event_type), Style::default().fg(color)),
                 Span::raw(" | "),
                 Span::styled(&e.collection, Style::default().fg(Color::Cyan)),
                 Span::raw(" | "),
@@ -683,7 +687,9 @@ fn render_help(f: &mut Frame, _state: &AppState, area: Rect) {
     let help_text = vec![
         Line::from(Span::styled(
             "Navigation",
-            Style::default().add_modifier(Modifier::BOLD).fg(Color::Cyan),
+            Style::default()
+                .add_modifier(Modifier::BOLD)
+                .fg(Color::Cyan),
         )),
         Line::from("  Tab / Shift+Tab  - Switch between views"),
         Line::from("  ↑ / ↓           - Navigate lists"),
@@ -692,7 +698,9 @@ fn render_help(f: &mut Frame, _state: &AppState, area: Rect) {
         Line::from(""),
         Line::from(Span::styled(
             "Search View",
-            Style::default().add_modifier(Modifier::BOLD).fg(Color::Cyan),
+            Style::default()
+                .add_modifier(Modifier::BOLD)
+                .fg(Color::Cyan),
         )),
         Line::from("  i               - Enter edit mode"),
         Line::from("  Esc             - Exit edit mode"),
@@ -700,7 +708,9 @@ fn render_help(f: &mut Frame, _state: &AppState, area: Rect) {
         Line::from(""),
         Line::from(Span::styled(
             "Collections View",
-            Style::default().add_modifier(Modifier::BOLD).fg(Color::Cyan),
+            Style::default()
+                .add_modifier(Modifier::BOLD)
+                .fg(Color::Cyan),
         )),
         Line::from("  s               - Search in collection"),
         Line::from("  c               - Run clustering"),
@@ -710,17 +720,15 @@ fn render_help(f: &mut Frame, _state: &AppState, area: Rect) {
         Line::from(""),
         Line::from(Span::styled(
             "Clusters / Anomalies View",
-            Style::default().add_modifier(Modifier::BOLD).fg(Color::Cyan),
+            Style::default()
+                .add_modifier(Modifier::BOLD)
+                .fg(Color::Cyan),
         )),
         Line::from("  r               - Run analysis"),
     ];
 
     let help = Paragraph::new(help_text)
-        .block(
-            Block::default()
-                .title(" Help ")
-                .borders(Borders::ALL),
-        )
+        .block(Block::default().title(" Help ").borders(Borders::ALL))
         .wrap(Wrap { trim: true });
     f.render_widget(help, area);
 }
@@ -839,7 +847,9 @@ impl NeedleTui {
             .iter()
             .map(|v| {
                 let style = if *v == self.state.current_view {
-                    Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD)
                 } else {
                     Style::default().fg(Color::Gray)
                 };
@@ -852,7 +862,11 @@ impl NeedleTui {
                 Block::default()
                     .borders(Borders::ALL)
                     .title(" Needle Vector Database ")
-                    .title_style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                    .title_style(
+                        Style::default()
+                            .fg(Color::Cyan)
+                            .add_modifier(Modifier::BOLD),
+                    ),
             )
             .select(self.state.current_view.index())
             .style(Style::default().fg(Color::White))
@@ -976,11 +990,7 @@ impl NeedleTui {
         f.render_widget(block, area);
 
         let value_paragraph = Paragraph::new(value)
-            .style(
-                Style::default()
-                    .fg(color)
-                    .add_modifier(Modifier::BOLD),
-            )
+            .style(Style::default().fg(color).add_modifier(Modifier::BOLD))
             .alignment(Alignment::Center);
 
         // Center vertically
@@ -1054,10 +1064,7 @@ impl NeedleTui {
                     Line::from(""),
                     Line::from(vec![
                         Span::styled("Vector Count: ", Style::default().fg(Color::Gray)),
-                        Span::styled(
-                            format_number(col.count),
-                            Style::default().fg(Color::Green),
-                        ),
+                        Span::styled(format_number(col.count), Style::default().fg(Color::Green)),
                     ]),
                     Line::from(""),
                     Line::from(vec![
@@ -1153,10 +1160,7 @@ impl NeedleTui {
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .title(format!(
-                    " Results ({}) ",
-                    self.state.search_results.len()
-                )),
+                .title(format!(" Results ({}) ", self.state.search_results.len())),
         )
         .row_highlight_style(Style::default().bg(Color::DarkGray))
         .highlight_symbol("▶ ");
@@ -1176,31 +1180,27 @@ impl NeedleTui {
                 .iter()
                 .map(|c| {
                     ListItem::new(vec![
-                        Line::from(vec![
-                            Span::styled(
-                                format!("Cluster {}", c.id),
-                                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
-                            ),
-                        ]),
+                        Line::from(vec![Span::styled(
+                            format!("Cluster {}", c.id),
+                            Style::default()
+                                .fg(Color::Cyan)
+                                .add_modifier(Modifier::BOLD),
+                        )]),
                         Line::from(vec![
                             Span::raw("  Size: "),
-                            Span::styled(
-                                c.size.to_string(),
-                                Style::default().fg(Color::Green),
-                            ),
+                            Span::styled(c.size.to_string(), Style::default().fg(Color::Green)),
                         ]),
                         Line::from(vec![
                             Span::raw("  Centroid: "),
-                            Span::styled(
-                                &c.centroid_preview,
-                                Style::default().fg(Color::Gray),
-                            ),
+                            Span::styled(&c.centroid_preview, Style::default().fg(Color::Gray)),
                         ]),
                     ])
                 })
                 .collect()
         } else {
-            vec![ListItem::new("No clustering results. Press 'r' to run clustering.")]
+            vec![ListItem::new(
+                "No clustering results. Press 'r' to run clustering.",
+            )]
         };
 
         let cluster_list = List::new(cluster_items).block(
@@ -1219,10 +1219,7 @@ impl NeedleTui {
                 ]),
                 Line::from(vec![
                     Span::styled("K: ", Style::default().fg(Color::Gray)),
-                    Span::styled(
-                        data.k.to_string(),
-                        Style::default().fg(Color::Yellow),
-                    ),
+                    Span::styled(data.k.to_string(), Style::default().fg(Color::Yellow)),
                 ]),
                 Line::from(vec![
                     Span::styled("Inertia: ", Style::default().fg(Color::Gray)),
@@ -1309,12 +1306,11 @@ impl NeedleTui {
             ]
         };
 
-        let method_para = Paragraph::new(method_text)
-            .block(
-                Block::default()
-                    .title(" Anomaly Detection ")
-                    .borders(Borders::ALL),
-            );
+        let method_para = Paragraph::new(method_text).block(
+            Block::default()
+                .title(" Anomaly Detection ")
+                .borders(Borders::ALL),
+        );
         f.render_widget(method_para, chunks[0]);
 
         // Outliers list
@@ -1405,11 +1401,8 @@ impl NeedleTui {
             })
             .collect();
 
-        let event_list = List::new(events).block(
-            Block::default()
-                .title(" Event Log ")
-                .borders(Borders::ALL),
-        );
+        let event_list =
+            List::new(events).block(Block::default().title(" Event Log ").borders(Borders::ALL));
         f.render_widget(event_list, chunks[1]);
     }
 
@@ -1508,14 +1501,13 @@ impl NeedleTui {
 
         let mode_indicator = match self.state.input_mode {
             InputMode::Normal => Span::styled(" NORMAL ", Style::default().bg(Color::Blue)),
-            InputMode::Editing => Span::styled(" EDIT ", Style::default().bg(Color::Yellow).fg(Color::Black)),
+            InputMode::Editing => Span::styled(
+                " EDIT ",
+                Style::default().bg(Color::Yellow).fg(Color::Black),
+            ),
         };
 
-        let status_line = Line::from(vec![
-            mode_indicator,
-            Span::raw(" "),
-            Span::raw(status),
-        ]);
+        let status_line = Line::from(vec![mode_indicator, Span::raw(" "), Span::raw(status)]);
 
         let status_bar = Paragraph::new(status_line).block(
             Block::default()
@@ -1799,13 +1791,11 @@ impl NeedleTui {
             .list_collections()
             .into_iter()
             .filter_map(|name| {
-                self.db.collection(&name).ok().map(|col| {
-                    CollectionInfo {
-                        name,
-                        dimensions: col.dimensions().unwrap_or(0),
-                        count: col.len(),
-                        index_type: "HNSW".to_string(),
-                    }
+                self.db.collection(&name).ok().map(|col| CollectionInfo {
+                    name,
+                    dimensions: col.dimensions().unwrap_or(0),
+                    count: col.len(),
+                    index_type: "HNSW".to_string(),
                 })
             })
             .collect()
@@ -1816,7 +1806,11 @@ impl NeedleTui {
         let avg_dimensions = if self.state.collections.is_empty() {
             0
         } else {
-            self.state.collections.iter().map(|c| c.dimensions).sum::<usize>()
+            self.state
+                .collections
+                .iter()
+                .map(|c| c.dimensions)
+                .sum::<usize>()
                 / self.state.collections.len()
         };
 
@@ -1870,13 +1864,11 @@ impl AppState {
             .list_collections()
             .into_iter()
             .filter_map(|name| {
-                db.collection(&name).ok().map(|col| {
-                    CollectionInfo {
-                        name,
-                        dimensions: col.dimensions().unwrap_or(0),
-                        count: col.len(),
-                        index_type: "HNSW".to_string(),
-                    }
+                db.collection(&name).ok().map(|col| CollectionInfo {
+                    name,
+                    dimensions: col.dimensions().unwrap_or(0),
+                    count: col.len(),
+                    index_type: "HNSW".to_string(),
                 })
             })
             .collect();

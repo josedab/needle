@@ -48,27 +48,23 @@ use axum::{
     routing::{delete, get, post, put},
     Json, Router,
 };
-use governor::{
-    clock::DefaultClock,
-    state::keyed::DashMapStateStore,
-    Quota, RateLimiter,
-};
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use governor::{clock::DefaultClock, state::keyed::DashMapStateStore, Quota, RateLimiter};
+use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use sha2::Sha256;
+use std::collections::HashMap;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::num::NonZeroU32;
 use std::sync::Arc;
 use std::time::Duration;
-use std::collections::HashMap;
 use tokio::sync::RwLock;
 use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::timeout::TimeoutLayer;
 use tower_http::trace::TraceLayer;
-use tracing::{info, warn, error};
-use hmac::{Hmac, Mac};
-use sha2::Sha256;
-use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+use tracing::{error, info, warn};
 
 #[cfg(feature = "metrics")]
 use crate::metrics::{http_metrics, metrics};
@@ -146,7 +142,10 @@ impl ApiKey {
 
     /// Convert this API key to a User for RBAC checks.
     pub fn to_user(&self) -> User {
-        let mut user = User::new(format!("apikey:{}", self.key.chars().take(8).collect::<String>()));
+        let mut user = User::new(format!(
+            "apikey:{}",
+            self.key.chars().take(8).collect::<String>()
+        ));
         if let Some(name) = &self.name {
             user = user.with_name(name.clone());
         }
@@ -245,10 +244,7 @@ impl AuthConfig {
             require_auth: false,
             api_keys: Vec::new(),
             jwt_secret: None,
-            public_endpoints: vec![
-                "/health".to_string(),
-                "/".to_string(),
-            ],
+            public_endpoints: vec!["/health".to_string(), "/".to_string()],
         }
     }
 
@@ -318,14 +314,16 @@ impl AuthConfig {
             .map_err(|_| AuthError::InvalidToken("Invalid secret".into()))?;
         mac.update(format!("{}.{}", header, payload).as_bytes());
 
-        let sig_bytes = URL_SAFE_NO_PAD.decode(signature)
+        let sig_bytes = URL_SAFE_NO_PAD
+            .decode(signature)
             .map_err(|_| AuthError::InvalidToken("Invalid signature encoding".into()))?;
 
         mac.verify_slice(&sig_bytes)
             .map_err(|_| AuthError::InvalidSignature)?;
 
         // Decode payload
-        let payload_bytes = URL_SAFE_NO_PAD.decode(payload)
+        let payload_bytes = URL_SAFE_NO_PAD
+            .decode(payload)
             .map_err(|_| AuthError::InvalidToken("Invalid payload encoding".into()))?;
         let claims: JwtClaims = serde_json::from_slice(&payload_bytes)
             .map_err(|e| AuthError::InvalidToken(format!("Invalid claims: {}", e)))?;
@@ -483,7 +481,7 @@ impl CorsConfig {
     pub fn permissive() -> Self {
         Self {
             enabled: true,
-            allowed_origins: None, // Allow all
+            allowed_origins: None,    // Allow all
             allow_credentials: false, // SECURITY: Never combine wildcard origins with credentials
             max_age_secs: 3600,
         }
@@ -562,7 +560,10 @@ impl RateLimitConfig {
 }
 
 fn default_trusted_proxies() -> Vec<IpAddr> {
-    vec![IpAddr::V4(Ipv4Addr::LOCALHOST), IpAddr::V6(Ipv6Addr::LOCALHOST)]
+    vec![
+        IpAddr::V4(Ipv4Addr::LOCALHOST),
+        IpAddr::V6(Ipv6Addr::LOCALHOST),
+    ]
 }
 
 impl Default for ServerConfig {
@@ -576,8 +577,8 @@ impl Default for ServerConfig {
             rate_limit: RateLimitConfig::default(),
             auth: AuthConfig::default(),
             max_body_size: 100 * 1024 * 1024, // 100MB
-            max_batch_size: 10_000, // 10k items max per batch
-            request_timeout_secs: 30, // 30 seconds default timeout
+            max_batch_size: 10_000,           // 10k items max per batch
+            request_timeout_secs: 30,         // 30 seconds default timeout
             trusted_proxies: default_trusted_proxies(),
         }
     }
@@ -716,12 +717,16 @@ impl From<NeedleError> for (StatusCode, Json<ApiError>) {
             NeedleError::VectorNotFound(_) => (StatusCode::NOT_FOUND, "VECTOR_NOT_FOUND"),
             NeedleError::CollectionAlreadyExists(_) => (StatusCode::CONFLICT, "COLLECTION_EXISTS"),
             NeedleError::VectorAlreadyExists(_) => (StatusCode::CONFLICT, "VECTOR_EXISTS"),
-            NeedleError::DimensionMismatch { .. } => (StatusCode::BAD_REQUEST, "DIMENSION_MISMATCH"),
+            NeedleError::DimensionMismatch { .. } => {
+                (StatusCode::BAD_REQUEST, "DIMENSION_MISMATCH")
+            }
             NeedleError::InvalidVector(_) => (StatusCode::BAD_REQUEST, "INVALID_VECTOR"),
             NeedleError::InvalidConfig(_) => (StatusCode::BAD_REQUEST, "INVALID_CONFIG"),
             NeedleError::AliasNotFound(_) => (StatusCode::NOT_FOUND, "ALIAS_NOT_FOUND"),
             NeedleError::AliasAlreadyExists(_) => (StatusCode::CONFLICT, "ALIAS_EXISTS"),
-            NeedleError::CollectionHasAliases(_) => (StatusCode::CONFLICT, "COLLECTION_HAS_ALIASES"),
+            NeedleError::CollectionHasAliases(_) => {
+                (StatusCode::CONFLICT, "COLLECTION_HAS_ALIASES")
+            }
             _ => (StatusCode::INTERNAL_SERVER_ERROR, "INTERNAL_ERROR"),
         };
 
@@ -1031,12 +1036,10 @@ async fn create_collection(
         config = config.with_ef_construction(ef);
     }
 
-    db.create_collection_with_config(config).map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
+    db.create_collection_with_config(config)
+        .map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
 
-    Ok((
-        StatusCode::CREATED,
-        Json(json!({"created": req.name})),
-    ))
+    Ok((StatusCode::CREATED, Json(json!({"created": req.name}))))
 }
 
 /// Get collection info
@@ -1045,7 +1048,9 @@ async fn get_collection(
     Path(name): Path<String>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<ApiError>)> {
     let db = state.db.read().await;
-    let coll = db.collection(&name).map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
+    let coll = db
+        .collection(&name)
+        .map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
 
     Ok(Json(json!({
         "name": name,
@@ -1062,14 +1067,19 @@ async fn delete_collection(
     Path(name): Path<String>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<ApiError>)> {
     let db = state.db.write().await;
-    let dropped = db.delete_collection(&name).map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
+    let dropped = db
+        .delete_collection(&name)
+        .map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
 
     if dropped {
         Ok(Json(json!({"deleted": name})))
     } else {
         Err((
             StatusCode::NOT_FOUND,
-            Json(ApiError::new(format!("Collection '{}' not found", name), "COLLECTION_NOT_FOUND".to_string())),
+            Json(ApiError::new(
+                format!("Collection '{}' not found", name),
+                "COLLECTION_NOT_FOUND".to_string(),
+            )),
         ))
     }
 }
@@ -1081,7 +1091,9 @@ async fn insert_vector(
     Json(req): Json<InsertRequest>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<ApiError>)> {
     let db = state.db.write().await;
-    let coll = db.collection(&collection).map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
+    let coll = db
+        .collection(&collection)
+        .map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
 
     coll.insert_with_ttl(&req.id, &req.vector, req.metadata, req.ttl_seconds)
         .map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
@@ -1099,16 +1111,21 @@ async fn batch_insert(
     if req.vectors.len() > state.max_batch_size {
         return Err((
             StatusCode::PAYLOAD_TOO_LARGE,
-            Json(ApiError::new(format!(
+            Json(ApiError::new(
+                format!(
                     "Batch size {} exceeds maximum allowed {}",
                     req.vectors.len(),
                     state.max_batch_size
-                ), "BATCH_TOO_LARGE".to_string())),
+                ),
+                "BATCH_TOO_LARGE".to_string(),
+            )),
         ));
     }
 
     let db = state.db.write().await;
-    let coll = db.collection(&collection).map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
+    let coll = db
+        .collection(&collection)
+        .map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
 
     let mut inserted = 0;
     let mut errors = Vec::new();
@@ -1133,11 +1150,14 @@ async fn upsert_vector(
     Json(req): Json<UpsertRequest>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<ApiError>)> {
     let db = state.db.write().await;
-    let coll = db.collection(&collection).map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
+    let coll = db
+        .collection(&collection)
+        .map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
 
     // Check if exists and update or insert
     let existed = if coll.get(&req.id).is_some() {
-        coll.delete(&req.id).map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
+        coll.delete(&req.id)
+            .map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
         true
     } else {
         false
@@ -1158,7 +1178,9 @@ async fn get_vector(
     Path((collection, id)): Path<(String, String)>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<ApiError>)> {
     let db = state.db.read().await;
-    let coll = db.collection(&collection).map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
+    let coll = db
+        .collection(&collection)
+        .map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
 
     match coll.get(&id) {
         Some((vector, metadata)) => Ok(Json(VectorResponse {
@@ -1168,7 +1190,10 @@ async fn get_vector(
         })),
         None => Err((
             StatusCode::NOT_FOUND,
-            Json(ApiError::new(format!("Vector '{}' not found", id), "VECTOR_NOT_FOUND".to_string())),
+            Json(ApiError::new(
+                format!("Vector '{}' not found", id),
+                "VECTOR_NOT_FOUND".to_string(),
+            )),
         )),
     }
 }
@@ -1179,16 +1204,23 @@ async fn delete_vector(
     Path((collection, id)): Path<(String, String)>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<ApiError>)> {
     let db = state.db.write().await;
-    let coll = db.collection(&collection).map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
+    let coll = db
+        .collection(&collection)
+        .map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
 
-    let deleted = coll.delete(&id).map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
+    let deleted = coll
+        .delete(&id)
+        .map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
 
     if deleted {
         Ok(Json(json!({"deleted": id})))
     } else {
         Err((
             StatusCode::NOT_FOUND,
-            Json(ApiError::new(format!("Vector '{}' not found", id), "VECTOR_NOT_FOUND".to_string())),
+            Json(ApiError::new(
+                format!("Vector '{}' not found", id),
+                "VECTOR_NOT_FOUND".to_string(),
+            )),
         ))
     }
 }
@@ -1200,18 +1232,24 @@ async fn update_metadata(
     Json(req): Json<UpdateMetadataRequest>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<ApiError>)> {
     let db = state.db.write().await;
-    let coll = db.collection(&collection).map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
+    let coll = db
+        .collection(&collection)
+        .map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
 
     // Get existing vector
     let (vector, _) = coll.get(&id).ok_or_else(|| {
         (
             StatusCode::NOT_FOUND,
-            Json(ApiError::new(format!("Vector '{}' not found", id), "VECTOR_NOT_FOUND".to_string())),
+            Json(ApiError::new(
+                format!("Vector '{}' not found", id),
+                "VECTOR_NOT_FOUND".to_string(),
+            )),
         )
     })?;
 
     // Delete and re-insert with new metadata
-    coll.delete(&id).map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
+    coll.delete(&id)
+        .map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
     coll.insert(&id, &vector, req.metadata)
         .map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
 
@@ -1227,25 +1265,35 @@ async fn search(
     use crate::DistanceFunction;
 
     let db = state.db.read().await;
-    let coll = db.collection(&collection).map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
+    let coll = db
+        .collection(&collection)
+        .map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
 
     // Parse filters once
     let pre_filter = if let Some(filter_value) = &req.filter {
-        Some(Filter::parse(filter_value)
-            .map_err(|e| (StatusCode::BAD_REQUEST, Json(ApiError::new(
-                format!("Invalid pre-filter: {}", e),
-                "INVALID_FILTER"
-            ))))?)
+        Some(Filter::parse(filter_value).map_err(|e| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(ApiError::new(
+                    format!("Invalid pre-filter: {}", e),
+                    "INVALID_FILTER",
+                )),
+            )
+        })?)
     } else {
         None
     };
 
     let post_filter = if let Some(filter_value) = &req.post_filter {
-        Some(Filter::parse(filter_value)
-            .map_err(|e| (StatusCode::BAD_REQUEST, Json(ApiError::new(
-                format!("Invalid post-filter: {}", e),
-                "INVALID_POST_FILTER"
-            ))))?)
+        Some(Filter::parse(filter_value).map_err(|e| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(ApiError::new(
+                    format!("Invalid post-filter: {}", e),
+                    "INVALID_POST_FILTER",
+                )),
+            )
+        })?)
     } else {
         None
     };
@@ -1257,12 +1305,18 @@ async fn search(
             "euclidean" => Some(DistanceFunction::Euclidean),
             "dot" | "dotproduct" => Some(DistanceFunction::DotProduct),
             "manhattan" => Some(DistanceFunction::Manhattan),
-            _ => return Err((
-                StatusCode::BAD_REQUEST,
-                Json(ApiError::new(
-                    format!("Invalid distance function: '{}'. Use: cosine, euclidean, dot, manhattan", dist_str),
-                    "INVALID_DISTANCE")),
-            )),
+            _ => {
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    Json(ApiError::new(
+                        format!(
+                        "Invalid distance function: '{}'. Use: cosine, euclidean, dot, manhattan",
+                        dist_str
+                    ),
+                        "INVALID_DISTANCE",
+                    )),
+                ))
+            }
         }
     } else {
         None
@@ -1276,29 +1330,33 @@ async fn search(
             tracing::warn!("Distance override ignored in explain mode");
         }
         if let Some(ref filter) = pre_filter {
-            let (results, explain) = coll.search_with_filter_explain(&req.vector, req.k, filter)
+            let (results, explain) = coll
+                .search_with_filter_explain(&req.vector, req.k, filter)
                 .map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
             (results, Some(explain))
         } else {
-            let (results, explain) = coll.search_explain(&req.vector, req.k)
+            let (results, explain) = coll
+                .search_explain(&req.vector, req.k)
                 .map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
             (results, Some(explain))
         }
     } else if distance_override.is_some() || pre_filter.is_some() || post_filter.is_some() {
         // Use search_with_options for distance override, pre-filter, or post-filter
-        let results = coll.search_with_options(
-            &req.vector,
-            req.k,
-            distance_override,
-            pre_filter.as_ref(),
-            post_filter.as_ref(),
-            req.post_filter_factor,
-        )
-        .map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
+        let results = coll
+            .search_with_options(
+                &req.vector,
+                req.k,
+                distance_override,
+                pre_filter.as_ref(),
+                post_filter.as_ref(),
+                req.post_filter_factor,
+            )
+            .map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
         (results, None)
     } else {
         // Standard search without filters or distance override
-        let results = coll.search(&req.vector, req.k)
+        let results = coll
+            .search(&req.vector, req.k)
             .map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
         (results, None)
     };
@@ -1334,9 +1392,7 @@ async fn search(
             .enumerate()
             .map(|(i, &v)| (i, v, v.abs()))
             .collect();
-        contributions.sort_by(|a, b| {
-            b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal)
-        });
+        contributions.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
 
         let top_dims: Vec<DimensionContribution> = contributions
             .into_iter()
@@ -1349,7 +1405,8 @@ async fn search(
             .collect();
 
         // Extract distance metric before moving profiling_data
-        let distance_metric = profiling_data.as_ref()
+        let distance_metric = profiling_data
+            .as_ref()
             .map(|p| p.distance_function.clone())
             .unwrap_or_else(|| "cosine".to_string());
 
@@ -1401,20 +1458,32 @@ async fn batch_search(
     if req.vectors.len() > state.max_batch_size {
         return Err((
             StatusCode::PAYLOAD_TOO_LARGE,
-            Json(ApiError::new(format!(
+            Json(ApiError::new(
+                format!(
                     "Batch size {} exceeds maximum allowed {}",
                     req.vectors.len(),
                     state.max_batch_size
-                ), "BATCH_TOO_LARGE".to_string())),
+                ),
+                "BATCH_TOO_LARGE".to_string(),
+            )),
         ));
     }
 
     let db = state.db.read().await;
-    let coll = db.collection(&collection).map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
+    let coll = db
+        .collection(&collection)
+        .map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
 
     let all_results: Vec<Vec<SearchResultResponse>> = if let Some(filter_value) = &req.filter {
-        let filter = Filter::parse(filter_value)
-            .map_err(|e| (StatusCode::BAD_REQUEST, Json(ApiError::new(format!("Invalid filter: {}", e), "INVALID_FILTER".to_string()))))?;
+        let filter = Filter::parse(filter_value).map_err(|e| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(ApiError::new(
+                    format!("Invalid filter: {}", e),
+                    "INVALID_FILTER".to_string(),
+                )),
+            )
+        })?;
 
         let mut results = Vec::new();
         for query in &req.vectors {
@@ -1457,15 +1526,21 @@ async fn radius_search(
     Json(req): Json<RadiusSearchRequest>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<ApiError>)> {
     let db = state.db.read().await;
-    let coll = db.collection(&collection).map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
+    let coll = db
+        .collection(&collection)
+        .map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
 
     // Perform radius search with optional filter
     let raw_results = if let Some(filter_value) = &req.filter {
-        let filter = Filter::parse(filter_value)
-            .map_err(|e| (StatusCode::BAD_REQUEST, Json(ApiError::new(
-                format!("Invalid filter: {}", e),
-                "INVALID_FILTER"
-            ))))?;
+        let filter = Filter::parse(filter_value).map_err(|e| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(ApiError::new(
+                    format!("Invalid filter: {}", e),
+                    "INVALID_FILTER",
+                )),
+            )
+        })?;
         coll.search_radius_with_filter(&req.vector, req.max_distance, req.limit, &filter)
     } else {
         coll.search_radius(&req.vector, req.max_distance, req.limit)
@@ -1505,9 +1580,13 @@ async fn compact_collection(
     Path(collection): Path<String>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<ApiError>)> {
     let db = state.db.write().await;
-    let coll = db.collection(&collection).map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
+    let coll = db
+        .collection(&collection)
+        .map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
 
-    let removed = coll.compact().map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
+    let removed = coll
+        .compact()
+        .map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
 
     Ok(Json(json!({
         "compacted": collection,
@@ -1522,9 +1601,13 @@ async fn list_vectors(
     Query(params): Query<QueryParams>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<ApiError>)> {
     let db = state.db.read().await;
-    let coll = db.collection(&collection).map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
+    let coll = db
+        .collection(&collection)
+        .map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
 
-    let ids = coll.ids().map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
+    let ids = coll
+        .ids()
+        .map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
 
     let offset = params.offset.unwrap_or(0);
     let limit = params.limit.unwrap_or(100).min(1000);
@@ -1545,9 +1628,13 @@ async fn export_collection(
     Path(collection): Path<String>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<ApiError>)> {
     let db = state.db.read().await;
-    let coll = db.collection(&collection).map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
+    let coll = db
+        .collection(&collection)
+        .map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
 
-    let vectors = coll.export_all().map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
+    let vectors = coll
+        .export_all()
+        .map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
 
     let export: Vec<Value> = vectors
         .into_iter()
@@ -1573,7 +1660,8 @@ async fn save_database(
     State(state): State<Arc<AppState>>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<ApiError>)> {
     let mut db = state.db.write().await;
-    db.save().map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
+    db.save()
+        .map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
     Ok(Json(json!({"saved": true})))
 }
 
@@ -1599,9 +1687,7 @@ async fn create_alias_handler(
 }
 
 /// List all aliases
-async fn list_aliases_handler(
-    State(state): State<Arc<AppState>>,
-) -> impl IntoResponse {
+async fn list_aliases_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let db = state.db.read().await;
     let aliases: Vec<AliasInfo> = db
         .list_aliases()
@@ -1623,7 +1709,10 @@ async fn get_alias_handler(
         Some(collection) => Ok(Json(AliasInfo { alias, collection })),
         None => Err((
             StatusCode::NOT_FOUND,
-            Json(ApiError::new(format!("Alias '{}' not found", alias), "ALIAS_NOT_FOUND".to_string())),
+            Json(ApiError::new(
+                format!("Alias '{}' not found", alias),
+                "ALIAS_NOT_FOUND".to_string(),
+            )),
         )),
     }
 }
@@ -1634,7 +1723,8 @@ async fn delete_alias_handler(
     Path(alias): Path<String>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<ApiError>)> {
     let db = state.db.write().await;
-    let deleted = db.delete_alias(&alias)
+    let deleted = db
+        .delete_alias(&alias)
         .map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
 
     if deleted {
@@ -1642,7 +1732,10 @@ async fn delete_alias_handler(
     } else {
         Err((
             StatusCode::NOT_FOUND,
-            Json(ApiError::new(format!("Alias '{}' not found", alias), "ALIAS_NOT_FOUND".to_string())),
+            Json(ApiError::new(
+                format!("Alias '{}' not found", alias),
+                "ALIAS_NOT_FOUND".to_string(),
+            )),
         ))
     }
 }
@@ -1672,9 +1765,12 @@ async fn expire_vectors_handler(
     Path(collection): Path<String>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<ApiError>)> {
     let db = state.db.write().await;
-    let coll = db.collection(&collection).map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
+    let coll = db
+        .collection(&collection)
+        .map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
 
-    let expired = coll.expire_vectors()
+    let expired = coll
+        .expire_vectors()
         .map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
 
     Ok(Json(json!({
@@ -1689,7 +1785,9 @@ async fn ttl_stats_handler(
     Path(collection): Path<String>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<ApiError>)> {
     let db = state.db.read().await;
-    let coll = db.collection(&collection).map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
+    let coll = db
+        .collection(&collection)
+        .map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
 
     let (total_with_ttl, expired_count, earliest_expiration, latest_expiration) = coll.ttl_stats();
 
@@ -1710,7 +1808,13 @@ fn build_cors_layer(config: &CorsConfig) -> CorsLayer {
     }
 
     let mut cors = CorsLayer::new()
-        .allow_methods([Method::GET, Method::POST, Method::DELETE, Method::PUT, Method::OPTIONS])
+        .allow_methods([
+            Method::GET,
+            Method::POST,
+            Method::DELETE,
+            Method::PUT,
+            Method::OPTIONS,
+        ])
         .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION, header::ACCEPT])
         .max_age(std::time::Duration::from_secs(config.max_age_secs));
 
@@ -1719,10 +1823,7 @@ fn build_cors_layer(config: &CorsConfig) -> CorsLayer {
         None => cors.allow_origin(AllowOrigin::any()),
         Some(origins) if origins.is_empty() => cors,
         Some(origins) => {
-            let origins: Vec<_> = origins
-                .iter()
-                .filter_map(|o| o.parse().ok())
-                .collect();
+            let origins: Vec<_> = origins.iter().filter_map(|o| o.parse().ok()).collect();
             cors.allow_origin(origins)
         }
     };
@@ -1787,8 +1888,14 @@ pub fn create_router_with_config(state: Arc<AppState>, config: &ServerConfig) ->
 
     // Apply authentication and rate limiting (auth runs first, then rate limiting)
     let router = router
-        .layer(middleware::from_fn_with_state(state.clone(), rate_limit_middleware))
-        .layer(middleware::from_fn_with_state(state.clone(), auth_middleware))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            rate_limit_middleware,
+        ))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            auth_middleware,
+        ))
         .with_state(state);
 
     // Build final router with all layers
@@ -1820,7 +1927,8 @@ fn create_rate_limiter(config: &RateLimitConfig) -> Option<Arc<PerIpRateLimiter>
 
     // Create quota: requests_per_second with burst_size burst capacity
     let quota = Quota::per_second(
-        NonZeroU32::new(config.requests_per_second).unwrap_or(NonZeroU32::new(100).expect("100 is non-zero")),
+        NonZeroU32::new(config.requests_per_second)
+            .unwrap_or(NonZeroU32::new(100).expect("100 is non-zero")),
     )
     .allow_burst(
         NonZeroU32::new(config.burst_size).unwrap_or(NonZeroU32::new(1).expect("1 is non-zero")),
@@ -1880,7 +1988,10 @@ async fn rate_limit_middleware(
                     client_ip = %client_ip,
                     "Rate limit exceeded"
                 );
-                let error = ApiError::new("Rate limit exceeded. Please slow down.".to_string(), "RATE_LIMIT_EXCEEDED".to_string());
+                let error = ApiError::new(
+                    "Rate limit exceeded. Please slow down.".to_string(),
+                    "RATE_LIMIT_EXCEEDED".to_string(),
+                );
                 (StatusCode::TOO_MANY_REQUESTS, Json(error)).into_response()
             }
         }
@@ -1932,7 +2043,10 @@ async fn auth_middleware(
         }
         None => {
             warn!(path = %path, "Authentication required but no valid credentials provided");
-            let error = ApiError::new("Authentication required".to_string(), "UNAUTHORIZED".to_string());
+            let error = ApiError::new(
+                "Authentication required".to_string(),
+                "UNAUTHORIZED".to_string(),
+            );
             (
                 StatusCode::UNAUTHORIZED,
                 [(header::WWW_AUTHENTICATE, "Bearer, ApiKey")],
@@ -1976,10 +2090,7 @@ fn try_authenticate(request: &Request<Body>, auth_config: &AuthConfig) -> Option
 
 /// Metrics middleware - records HTTP request metrics (when metrics feature is enabled)
 #[cfg(feature = "metrics")]
-async fn metrics_middleware(
-    request: Request<Body>,
-    next: Next,
-) -> Response {
+async fn metrics_middleware(request: Request<Body>, next: Next) -> Response {
     let method = request.method().to_string();
     let path = request.uri().path().to_string();
 
@@ -1996,7 +2107,10 @@ async fn get_metrics() -> impl IntoResponse {
     let output = metrics().export();
     (
         StatusCode::OK,
-        [(header::CONTENT_TYPE, "text/plain; version=0.0.4; charset=utf-8")],
+        [(
+            header::CONTENT_TYPE,
+            "text/plain; version=0.0.4; charset=utf-8",
+        )],
         output,
     )
 }
@@ -2007,7 +2121,7 @@ pub async fn serve(config: ServerConfig) -> Result<(), Box<dyn std::error::Error
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::from_default_env()
-                .add_directive(tracing::Level::INFO.into())
+                .add_directive(tracing::Level::INFO.into()),
         )
         .init();
 
@@ -2060,9 +2174,12 @@ pub async fn serve(config: ServerConfig) -> Result<(), Box<dyn std::error::Error
         info!("Shutdown signal received, starting graceful shutdown");
     };
 
-    axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
-        .with_graceful_shutdown(shutdown_signal)
-        .await?;
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown_signal)
+    .await?;
 
     // Save database on shutdown
     info!("Saving database before shutdown");
@@ -2383,9 +2500,7 @@ mod tests {
 
     #[test]
     fn test_rate_limit_config_chained() {
-        let config = RateLimitConfig::default()
-            .with_rate(500)
-            .with_burst(250);
+        let config = RateLimitConfig::default().with_rate(500).with_burst(250);
         assert!(config.enabled);
         assert_eq!(config.requests_per_second, 500);
         assert_eq!(config.burst_size, 250);
@@ -2431,8 +2546,7 @@ mod tests {
 
     #[test]
     fn test_cors_config_with_origin() {
-        let config = CorsConfig::restrictive()
-            .with_origin("https://example.com");
+        let config = CorsConfig::restrictive().with_origin("https://example.com");
         let origins = config.allowed_origins.unwrap();
         assert_eq!(origins.len(), 1);
         assert!(origins.contains(&"https://example.com".to_string()));
@@ -2482,7 +2596,10 @@ mod tests {
 
     #[test]
     fn test_error_dimension_mismatch() {
-        let err = NeedleError::DimensionMismatch { expected: 384, got: 128 };
+        let err = NeedleError::DimensionMismatch {
+            expected: 384,
+            got: 128,
+        };
         let (status, json): (StatusCode, Json<ApiError>) = err.into();
         assert_eq!(status, StatusCode::BAD_REQUEST);
         assert_eq!(json.code, "DIMENSION_MISMATCH");
@@ -2549,8 +2666,7 @@ mod tests {
     #[test]
     fn test_api_key_expiration() {
         // Key expires in the past
-        let expired_key = ApiKey::new("expired")
-            .expires_at(0); // Unix epoch = expired
+        let expired_key = ApiKey::new("expired").expires_at(0); // Unix epoch = expired
         assert!(expired_key.is_expired());
         assert!(!expired_key.is_valid());
 
@@ -2558,7 +2674,8 @@ mod tests {
         let future_ts = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
-            .as_secs() + 3600; // 1 hour from now
+            .as_secs()
+            + 3600; // 1 hour from now
         let valid_key = ApiKey::new("valid").expires_at(future_ts);
         assert!(!valid_key.is_expired());
         assert!(valid_key.is_valid());
@@ -2588,15 +2705,13 @@ mod tests {
 
     #[test]
     fn test_auth_config_with_api_key() {
-        let config = AuthConfig::new()
-            .with_api_key(ApiKey::new("test-key"));
+        let config = AuthConfig::new().with_api_key(ApiKey::new("test-key"));
         assert_eq!(config.api_keys.len(), 1);
     }
 
     #[test]
     fn test_auth_config_validate_api_key() {
-        let config = AuthConfig::new()
-            .with_api_key(ApiKey::new("valid-key").with_role("admin"));
+        let config = AuthConfig::new().with_api_key(ApiKey::new("valid-key").with_role("admin"));
 
         // Valid key
         let user = config.validate_api_key("valid-key");
@@ -2615,8 +2730,7 @@ mod tests {
 
     #[test]
     fn test_auth_config_public_endpoints() {
-        let config = AuthConfig::new()
-            .with_public_endpoint("/metrics");
+        let config = AuthConfig::new().with_public_endpoint("/metrics");
         assert!(config.is_public_endpoint("/health"));
         assert!(config.is_public_endpoint("/metrics"));
         assert!(!config.is_public_endpoint("/collections"));
@@ -2640,8 +2754,8 @@ mod tests {
 
     #[test]
     fn test_jwt_claims_to_user() {
-        let claims = JwtClaims::new("user@example.com", 3600)
-            .with_roles(vec!["writer".to_string()]);
+        let claims =
+            JwtClaims::new("user@example.com", 3600).with_roles(vec!["writer".to_string()]);
         let user = claims.to_user();
         assert_eq!(user.id, "user@example.com");
         assert!(!user.roles.is_empty());
@@ -2649,11 +2763,9 @@ mod tests {
 
     #[test]
     fn test_jwt_generate_and_validate() {
-        let config = AuthConfig::new()
-            .with_jwt_secret("super-secret-key-for-testing");
+        let config = AuthConfig::new().with_jwt_secret("super-secret-key-for-testing");
 
-        let claims = JwtClaims::new("testuser", 3600)
-            .with_roles(vec!["admin".to_string()]);
+        let claims = JwtClaims::new("testuser", 3600).with_roles(vec!["admin".to_string()]);
 
         // Generate token
         let token = config.generate_jwt(&claims).expect("should generate token");
@@ -2668,15 +2780,13 @@ mod tests {
 
     #[test]
     fn test_jwt_invalid_signature() {
-        let config = AuthConfig::new()
-            .with_jwt_secret("correct-secret");
+        let config = AuthConfig::new().with_jwt_secret("correct-secret");
 
         let claims = JwtClaims::new("user", 3600);
         let token = config.generate_jwt(&claims).unwrap();
 
         // Try validating with a different secret
-        let wrong_config = AuthConfig::new()
-            .with_jwt_secret("wrong-secret");
+        let wrong_config = AuthConfig::new().with_jwt_secret("wrong-secret");
 
         let result = wrong_config.validate_jwt(&token);
         assert!(result.is_err());
@@ -2684,8 +2794,7 @@ mod tests {
 
     #[test]
     fn test_jwt_expired_token() {
-        let config = AuthConfig::new()
-            .with_jwt_secret("secret");
+        let config = AuthConfig::new().with_jwt_secret("secret");
 
         // Create claims that are already expired (negative expiration)
         let now = std::time::SystemTime::now()
@@ -2719,10 +2828,16 @@ mod tests {
 
     #[test]
     fn test_auth_error_display() {
-        assert_eq!(AuthError::MissingCredentials.to_string(), "Authentication required");
+        assert_eq!(
+            AuthError::MissingCredentials.to_string(),
+            "Authentication required"
+        );
         assert_eq!(AuthError::InvalidApiKey.to_string(), "Invalid API key");
         assert_eq!(AuthError::TokenExpired.to_string(), "Token has expired");
-        assert_eq!(AuthError::InvalidSignature.to_string(), "Invalid token signature");
+        assert_eq!(
+            AuthError::InvalidSignature.to_string(),
+            "Invalid token signature"
+        );
     }
 
     #[test]
@@ -2731,8 +2846,7 @@ mod tests {
             .with_api_key(ApiKey::new("test-key"))
             .require_auth(true);
 
-        let server_config = ServerConfig::default()
-            .with_auth(auth_config);
+        let server_config = ServerConfig::default().with_auth(auth_config);
 
         assert!(server_config.auth.require_auth);
         assert_eq!(server_config.auth.api_keys.len(), 1);
