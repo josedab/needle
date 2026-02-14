@@ -363,7 +363,9 @@ impl GatewayConfig {
         if let Ok(key) = std::env::var("HUGGINGFACE_API_KEY") {
             let model = std::env::var("HUGGINGFACE_MODEL")
                 .unwrap_or_else(|_| "sentence-transformers/all-MiniLM-L6-v2".to_string());
-            config.providers.push(ProviderConfig::huggingface(&key, &model));
+            config
+                .providers
+                .push(ProviderConfig::huggingface(&key, &model));
         }
 
         config
@@ -715,7 +717,8 @@ impl ProviderRouter {
 
     /// Select the best provider for a request
     pub fn select_provider(&self) -> Option<&ProviderConfig> {
-        let available: Vec<_> = self.providers
+        let available: Vec<_> = self
+            .providers
             .iter()
             .filter(|p| p.enabled && self.is_available(p.provider_type))
             .collect();
@@ -725,30 +728,32 @@ impl ProviderRouter {
         }
 
         match self.strategy {
-            RoutingStrategy::LowestCost => {
-                available.into_iter().min_by(|a, b| {
-                    a.cost_per_1k_tokens.partial_cmp(&b.cost_per_1k_tokens).unwrap_or(std::cmp::Ordering::Equal)
-                })
-            }
+            RoutingStrategy::LowestCost => available.into_iter().min_by(|a, b| {
+                a.cost_per_1k_tokens
+                    .partial_cmp(&b.cost_per_1k_tokens)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            }),
             RoutingStrategy::LowestLatency => {
                 let metrics = self.metrics.read();
                 available.into_iter().min_by(|a, b| {
-                    let lat_a = metrics.get(&a.provider_type)
+                    let lat_a = metrics
+                        .get(&a.provider_type)
                         .map(|m| m.avg_latency_ms)
                         .unwrap_or(f64::INFINITY);
-                    let lat_b = metrics.get(&b.provider_type)
+                    let lat_b = metrics
+                        .get(&b.provider_type)
                         .map(|m| m.avg_latency_ms)
                         .unwrap_or(f64::INFINITY);
-                    lat_a.partial_cmp(&lat_b).unwrap_or(std::cmp::Ordering::Equal)
+                    lat_a
+                        .partial_cmp(&lat_b)
+                        .unwrap_or(std::cmp::Ordering::Equal)
                 })
             }
             RoutingStrategy::RoundRobin => {
                 let idx = self.round_robin_counter.fetch_add(1, Ordering::Relaxed) as usize;
                 available.get(idx % available.len()).copied()
             }
-            RoutingStrategy::Priority => {
-                available.into_iter().min_by_key(|p| p.priority)
-            }
+            RoutingStrategy::Priority => available.into_iter().min_by_key(|p| p.priority),
             RoutingStrategy::Random => {
                 use rand::Rng;
                 let idx = rand::thread_rng().gen_range(0..available.len());
@@ -761,7 +766,11 @@ impl ProviderRouter {
     pub fn get_fallback(&self, excluded: &[ProviderType]) -> Option<&ProviderConfig> {
         self.providers
             .iter()
-            .filter(|p| p.enabled && !excluded.contains(&p.provider_type) && self.is_available(p.provider_type))
+            .filter(|p| {
+                p.enabled
+                    && !excluded.contains(&p.provider_type)
+                    && self.is_available(p.provider_type)
+            })
             .min_by_key(|p| p.priority)
     }
 
@@ -907,7 +916,9 @@ impl EmbeddingsGateway {
         }
 
         // Select initial provider
-        let mut current_provider = self.router.select_provider()
+        let mut current_provider = self
+            .router
+            .select_provider()
             .ok_or_else(|| NeedleError::InvalidState("No available providers".into()))?
             .clone();
 
@@ -983,14 +994,8 @@ impl EmbeddingsGateway {
         let cost = tokens as f64 * config.cost_per_1k_tokens / 1000.0;
         let latency = start.elapsed().as_millis() as u64;
 
-        self.router.record_result(
-            config.provider_type,
-            true,
-            latency,
-            tokens,
-            cost,
-            None,
-        );
+        self.router
+            .record_result(config.provider_type, true, latency, tokens, cost, None);
 
         Ok(EmbeddingResult {
             embedding,
@@ -1062,7 +1067,9 @@ impl EmbeddingsGateway {
         }
 
         // Embed uncached texts
-        let provider_config = self.router.select_provider()
+        let provider_config = self
+            .router
+            .select_provider()
             .ok_or_else(|| NeedleError::InvalidState("No available providers".into()))?;
 
         let mut total_tokens = 0;
@@ -1195,8 +1202,7 @@ mod tests {
 
     #[test]
     fn test_gateway_embed() {
-        let config = GatewayConfig::new()
-            .add_provider(ProviderConfig::mock(64));
+        let config = GatewayConfig::new().add_provider(ProviderConfig::mock(64));
 
         let gateway = EmbeddingsGateway::new(config).unwrap();
 
@@ -1213,8 +1219,7 @@ mod tests {
 
     #[test]
     fn test_gateway_batch() {
-        let config = GatewayConfig::new()
-            .add_provider(ProviderConfig::mock(64));
+        let config = GatewayConfig::new().add_provider(ProviderConfig::mock(64));
 
         let gateway = EmbeddingsGateway::new(config).unwrap();
 
@@ -1290,8 +1295,7 @@ mod tests {
 
     #[test]
     fn test_gateway_metrics() {
-        let config = GatewayConfig::new()
-            .add_provider(ProviderConfig::mock(64));
+        let config = GatewayConfig::new().add_provider(ProviderConfig::mock(64));
 
         let gateway = EmbeddingsGateway::new(config).unwrap();
 

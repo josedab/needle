@@ -119,7 +119,7 @@ impl MatryoshkaConfig {
             .copied()
             .filter(|&d| d <= full_dimensions)
             .collect();
-        
+
         let stored_tiers = if full_dimensions >= 768 {
             vec![128, 384, full_dimensions]
         } else {
@@ -224,24 +224,18 @@ impl MatryoshkaEmbedding {
         if dim >= self.full.len() {
             return self.full.clone();
         }
-        
+
         // Check cached truncated versions
         if let Some(cached) = self.truncated.get(&dim) {
             return cached.clone();
         }
 
         // Find closest cached tier
-        let closest = self.truncated
-            .keys()
-            .copied()
-            .filter(|&d| d >= dim)
-            .min();
+        let closest = self.truncated.keys().copied().filter(|&d| d >= dim).min();
 
         match closest {
-            Some(cached_dim) => {
-                Self::truncate(&self.truncated[&cached_dim], dim)
-            }
-            None => Self::truncate(&self.full, dim)
+            Some(cached_dim) => Self::truncate(&self.truncated[&cached_dim], dim),
+            None => Self::truncate(&self.full, dim),
         }
     }
 
@@ -367,14 +361,22 @@ impl MatryoshkaIndex {
     /// Search with default strategy
     pub fn search(&self, query: &[f32], k: usize) -> Result<Vec<MatryoshkaSearchResult>> {
         match self.config.search_strategy {
-            SearchStrategy::FullDimensions => self.search_at_dimension(query, k, self.config.full_dimensions),
+            SearchStrategy::FullDimensions => {
+                self.search_at_dimension(query, k, self.config.full_dimensions)
+            }
             SearchStrategy::FastSearch => {
-                let min_tier = *self.config.dimension_tiers.first().unwrap_or(&self.config.full_dimensions);
+                let min_tier = *self
+                    .config
+                    .dimension_tiers
+                    .first()
+                    .unwrap_or(&self.config.full_dimensions);
                 self.search_at_dimension(query, k, min_tier)
             }
-            SearchStrategy::CoarseToFine { coarse_dim, fine_dim, candidate_multiplier } => {
-                self.search_coarse_to_fine(query, k, coarse_dim, fine_dim, candidate_multiplier)
-            }
+            SearchStrategy::CoarseToFine {
+                coarse_dim,
+                fine_dim,
+                candidate_multiplier,
+            } => self.search_coarse_to_fine(query, k, coarse_dim, fine_dim, candidate_multiplier),
             SearchStrategy::Adaptive { target_latency_ms } => {
                 self.search_adaptive(query, k, target_latency_ms)
             }
@@ -410,7 +412,10 @@ impl MatryoshkaIndex {
             .iter()
             .map(|(id, mrl)| {
                 let embedding = mrl.at_dimension(dim);
-                let distance = self.config.distance_function.compute(&search_query, &embedding);
+                let distance = self
+                    .config
+                    .distance_function
+                    .compute(&search_query, &embedding);
                 (id.clone(), distance)
             })
             .collect();
@@ -466,7 +471,10 @@ impl MatryoshkaIndex {
             .iter()
             .map(|(id, mrl)| {
                 let embedding = mrl.at_dimension(coarse_dim);
-                let distance = self.config.distance_function.compute(&coarse_query, &embedding);
+                let distance = self
+                    .config
+                    .distance_function
+                    .compute(&coarse_query, &embedding);
                 (id.clone(), distance, mrl.clone())
             })
             .collect();
@@ -479,7 +487,10 @@ impl MatryoshkaIndex {
             .into_iter()
             .map(|(id, coarse_dist, mrl)| {
                 let fine_embedding = mrl.at_dimension(fine_dim);
-                let fine_dist = self.config.distance_function.compute(&fine_query, &fine_embedding);
+                let fine_dist = self
+                    .config
+                    .distance_function
+                    .compute(&fine_query, &fine_embedding);
                 (id, coarse_dist, fine_dist)
             })
             .collect();
@@ -516,12 +527,15 @@ impl MatryoshkaIndex {
     ) -> Result<Vec<MatryoshkaSearchResult>> {
         // Estimate dimension based on collection size and target latency
         let vector_count = self.vectors.read().len();
-        
+
         // Simple heuristic: lower dims for larger collections or tighter latency
         let dim = if vector_count > 100000 || target_latency_ms < 10 {
             self.config.dimension_tiers.first().copied().unwrap_or(128)
         } else if vector_count > 10000 || target_latency_ms < 50 {
-            self.config.dimension_tiers.get(1).copied()
+            self.config
+                .dimension_tiers
+                .get(1)
+                .copied()
                 .unwrap_or(self.config.dimension_tiers[0])
         } else {
             self.config.full_dimensions
@@ -600,7 +614,7 @@ impl MatryoshkaIndex {
         let mut stats = self.stats.write();
         stats.searches += 1;
         *stats.searches_by_tier.entry(dimension).or_insert(0) += 1;
-        stats.avg_search_time_us = 
+        stats.avg_search_time_us =
             (stats.avg_search_time_us * (stats.searches - 1) + time_us) / stats.searches;
         if reranked {
             stats.reranks += 1;
@@ -679,7 +693,7 @@ impl QualityEstimator {
     /// Create with default calibration
     pub fn new(full_dim: usize) -> Self {
         let mut calibration = HashMap::new();
-        
+
         // Default quality estimates based on empirical data
         for &dim in STANDARD_TIERS {
             if dim <= full_dim {
@@ -700,7 +714,7 @@ impl QualityEstimator {
         if let Some(&quality) = self.calibration.get(&dim) {
             return quality;
         }
-        
+
         // Interpolate
         let ratio = dim as f32 / self.full_dim as f32;
         ratio.powf(0.3).min(1.0)
@@ -711,7 +725,7 @@ impl QualityEstimator {
         // q = ratio^0.3 => ratio = q^(1/0.3)
         let ratio = target_quality.powf(1.0 / 0.3);
         let dim = (ratio * self.full_dim as f32).ceil() as usize;
-        
+
         // Round to nearest standard tier
         STANDARD_TIERS
             .iter()
@@ -775,7 +789,7 @@ mod tests {
     #[test]
     fn test_estimated_quality() {
         let config = MatryoshkaConfig::new(768);
-        
+
         let q_768 = config.estimated_quality(768);
         let q_384 = config.estimated_quality(384);
         let q_128 = config.estimated_quality(128);
@@ -787,8 +801,8 @@ mod tests {
 
     #[test]
     fn test_index_insert_and_search() {
-        let config = MatryoshkaConfig::new(384)
-            .with_search_strategy(SearchStrategy::FullDimensions);
+        let config =
+            MatryoshkaConfig::new(384).with_search_strategy(SearchStrategy::FullDimensions);
         let index = MatryoshkaIndex::new(config);
 
         // Insert vectors
@@ -811,8 +825,8 @@ mod tests {
 
     #[test]
     fn test_coarse_to_fine_search() {
-        let config = MatryoshkaConfig::new(384)
-            .with_search_strategy(SearchStrategy::CoarseToFine {
+        let config =
+            MatryoshkaConfig::new(384).with_search_strategy(SearchStrategy::CoarseToFine {
                 coarse_dim: 64,
                 fine_dim: 384,
                 candidate_multiplier: 3,

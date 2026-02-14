@@ -598,14 +598,16 @@ impl FineTuner {
 
                 // Calculate weight based on interaction strength and recency
                 let age_seconds = now.saturating_sub(positive.timestamp);
-                let decay = (-((age_seconds as f64) / (self.config.interaction_decay_seconds as f64)))
+                let decay = (-((age_seconds as f64)
+                    / (self.config.interaction_decay_seconds as f64)))
                     .exp() as f32;
                 let base_weight = positive.interaction_type.signal_strength().abs();
 
                 for negative in &negatives {
                     let neg_emb = if let Some(ref emb) = negative.document_embedding {
                         emb.clone()
-                    } else if let Some(emb) = self.embedding_store.get_document(&negative.document_id)
+                    } else if let Some(emb) =
+                        self.embedding_store.get_document(&negative.document_id)
                     {
                         emb.clone()
                     } else {
@@ -639,7 +641,9 @@ impl FineTuner {
         triplets.sort_by(|a, b| {
             let dist_a = cosine_distance(&a.anchor, &a.negative);
             let dist_b = cosine_distance(&b.anchor, &b.negative);
-            dist_a.partial_cmp(&dist_b).unwrap_or(std::cmp::Ordering::Equal)
+            dist_a
+                .partial_cmp(&dist_b)
+                .unwrap_or(std::cmp::Ordering::Equal)
         });
 
         // Keep top hard negatives per anchor
@@ -684,9 +688,8 @@ impl FineTuner {
             };
 
             let age_seconds = now.saturating_sub(interaction.timestamp);
-            let decay =
-                (-((age_seconds as f64) / (self.config.interaction_decay_seconds as f64))).exp()
-                    as f32;
+            let decay = (-((age_seconds as f64) / (self.config.interaction_decay_seconds as f64)))
+                .exp() as f32;
             let signal = interaction.interaction_type.signal_strength();
 
             pairs.push(ContrastivePair {
@@ -764,7 +767,9 @@ impl FineTuner {
         self.stats.total_training_time_ms += duration.as_millis() as u64;
         self.stats.training_sessions += 1;
         self.stats.last_loss = Some(final_loss);
-        if self.stats.best_loss.is_none() || final_loss < self.stats.best_loss.expect("checked is_none above") {
+        if self.stats.best_loss.is_none()
+            || final_loss < self.stats.best_loss.expect("checked is_none above")
+        {
             self.stats.best_loss = Some(final_loss);
         }
         self.interactions_since_train = 0;
@@ -805,18 +810,12 @@ impl FineTuner {
                 LossFunction::NTXent => {
                     self.ntxent_loss_backward(&anchor_t, &positive_t, &negative_t, triplet.weight)
                 }
-                LossFunction::MultipleNegativesRanking => self.mnr_loss_backward(
-                    &anchor_t,
-                    &positive_t,
-                    &negative_t,
-                    triplet.weight,
-                ),
-                LossFunction::CosineEmbedding => self.cosine_loss_backward(
-                    &anchor_t,
-                    &positive_t,
-                    &negative_t,
-                    triplet.weight,
-                ),
+                LossFunction::MultipleNegativesRanking => {
+                    self.mnr_loss_backward(&anchor_t, &positive_t, &negative_t, triplet.weight)
+                }
+                LossFunction::CosineEmbedding => {
+                    self.cosine_loss_backward(&anchor_t, &positive_t, &negative_t, triplet.weight)
+                }
             };
 
             total_loss += loss;
@@ -912,7 +911,10 @@ impl FineTuner {
 
         let anchor_grad = scale_vec(
             &sub_vecs(
-                &scale_vec(&gradient_cosine_similarity(anchor, positive), softmax_pos - 1.0),
+                &scale_vec(
+                    &gradient_cosine_similarity(anchor, positive),
+                    softmax_pos - 1.0,
+                ),
                 &scale_vec(&gradient_cosine_similarity(anchor, negative), softmax_neg),
             ),
             weight / self.config.temperature,
@@ -1009,8 +1011,7 @@ impl FineTuner {
             scale_vec(&gradient_cosine_similarity(anchor, positive), -weight)
         };
 
-        let positive_grad =
-            scale_vec(&gradient_cosine_similarity_other(anchor, positive), -weight);
+        let positive_grad = scale_vec(&gradient_cosine_similarity_other(anchor, positive), -weight);
 
         let negative_grad = if neg_sim > self.config.triplet_margin {
             scale_vec(&gradient_cosine_similarity_other(anchor, negative), weight)
@@ -1037,8 +1038,10 @@ impl FineTuner {
                     (pos_dist - neg_dist + self.config.triplet_margin).max(0.0) * triplet.weight
                 }
                 LossFunction::InfoNCE | LossFunction::NTXent => {
-                    let pos_sim = cosine_similarity(&anchor_t, &positive_t) / self.config.temperature;
-                    let neg_sim = cosine_similarity(&anchor_t, &negative_t) / self.config.temperature;
+                    let pos_sim =
+                        cosine_similarity(&anchor_t, &positive_t) / self.config.temperature;
+                    let neg_sim =
+                        cosine_similarity(&anchor_t, &negative_t) / self.config.temperature;
                     let max_sim = pos_sim.max(neg_sim);
                     let exp_pos = (pos_sim - max_sim).exp();
                     let exp_neg = (neg_sim - max_sim).exp();
@@ -1055,7 +1058,8 @@ impl FineTuner {
                 LossFunction::CosineEmbedding => {
                     let pos_sim = cosine_similarity(&anchor_t, &positive_t);
                     let neg_sim = cosine_similarity(&anchor_t, &negative_t);
-                    (1.0 - pos_sim + (neg_sim - self.config.triplet_margin).max(0.0)) * triplet.weight
+                    (1.0 - pos_sim + (neg_sim - self.config.triplet_margin).max(0.0))
+                        * triplet.weight
                 }
             };
 
@@ -1358,8 +1362,16 @@ mod tests {
             tuner.add_document_embedding(&format!("pos{}", i), pos);
             tuner.add_document_embedding(&format!("neg{}", i), neg);
 
-            tuner.record_interaction(&format!("q{}", i), &format!("pos{}", i), InteractionType::Click);
-            tuner.record_interaction(&format!("q{}", i), &format!("neg{}", i), InteractionType::Skip);
+            tuner.record_interaction(
+                &format!("q{}", i),
+                &format!("pos{}", i),
+                InteractionType::Click,
+            );
+            tuner.record_interaction(
+                &format!("q{}", i),
+                &format!("neg{}", i),
+                InteractionType::Skip,
+            );
         }
 
         // Train
@@ -1370,7 +1382,9 @@ mod tests {
 
     #[test]
     fn test_interaction_type_signal_strength() {
-        assert!(InteractionType::Purchase.signal_strength() > InteractionType::Click.signal_strength());
+        assert!(
+            InteractionType::Purchase.signal_strength() > InteractionType::Click.signal_strength()
+        );
         assert!(InteractionType::Click.is_positive());
         assert!(!InteractionType::Skip.is_positive());
         assert!(!InteractionType::Irrelevant.is_positive());

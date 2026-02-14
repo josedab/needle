@@ -382,7 +382,12 @@ impl MultiModalEmbedder {
         let modality = input.modality();
 
         // Check if modality is supported
-        if !self.config.backend.supported_modalities().contains(&modality) {
+        if !self
+            .config
+            .backend
+            .supported_modalities()
+            .contains(&modality)
+        {
             return Err(NeedleError::InvalidInput(format!(
                 "Backend {:?} does not support modality {:?}",
                 self.config.backend, modality
@@ -408,7 +413,10 @@ impl MultiModalEmbedder {
         {
             let mut stats = self.stats.write();
             stats.total_embeddings += 1;
-            *stats.by_modality.entry(modality.name().to_string()).or_default() += 1;
+            *stats
+                .by_modality
+                .entry(modality.name().to_string())
+                .or_default() += 1;
 
             // Update average time
             let n = stats.total_embeddings as f32;
@@ -455,7 +463,10 @@ impl MultiModalEmbedder {
 
         // For now, process sequentially
         // In production, this would use batched inference
-        inputs.iter().map(|input| self.embed(input.clone())).collect()
+        inputs
+            .iter()
+            .map(|input| self.embed(input.clone()))
+            .collect()
     }
 
     /// Generate embedding for an input (backend-specific)
@@ -494,9 +505,7 @@ impl MultiModalEmbedder {
         // In production, this would call the CLIP model
         // For now, return mock embedding
         match input {
-            EmbedInput::Text(_) | EmbedInput::Image { .. } => {
-                self.generate_mock_embedding(input)
-            }
+            EmbedInput::Text(_) | EmbedInput::Image { .. } => self.generate_mock_embedding(input),
             _ => Err(NeedleError::InvalidInput(
                 "CLIP only supports text and image modalities".to_string(),
             )),
@@ -1055,7 +1064,11 @@ impl UnifiedMultiModalIndex {
         }
 
         // Sort by score
-        results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        results.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         results.truncate(query.k);
 
         results
@@ -1081,14 +1094,14 @@ impl UnifiedMultiModalIndex {
                     weight_sum += weight;
                 }
 
-                if weight_sum > 0.0 { total / weight_sum } else { 0.0 }
+                if weight_sum > 0.0 {
+                    total / weight_sum
+                } else {
+                    0.0
+                }
             }
-            FusionStrategy::Max => {
-                scores.values().cloned().fold(0.0f32, f32::max)
-            }
-            FusionStrategy::Min => {
-                scores.values().cloned().fold(1.0f32, f32::min)
-            }
+            FusionStrategy::Max => scores.values().cloned().fold(0.0f32, f32::max),
+            FusionStrategy::Min => scores.values().cloned().fold(1.0f32, f32::min),
             FusionStrategy::RRF => {
                 // Reciprocal Rank Fusion (simplified for single query)
                 let k = 60.0f32; // RRF constant
@@ -1102,10 +1115,13 @@ impl UnifiedMultiModalIndex {
             }
             FusionStrategy::LearnedWeights => {
                 // Fall back to weighted sum (learned weights would require training)
-                self.fuse_scores(scores, &CrossModalConfig {
-                    fusion_strategy: FusionStrategy::WeightedSum,
-                    ..config.clone()
-                })
+                self.fuse_scores(
+                    scores,
+                    &CrossModalConfig {
+                        fusion_strategy: FusionStrategy::WeightedSum,
+                        ..config.clone()
+                    },
+                )
             }
         }
     }
@@ -1286,7 +1302,9 @@ impl TextPreprocessor {
         };
 
         let text = if self.strip_punctuation {
-            text.chars().filter(|c| c.is_alphanumeric() || c.is_whitespace()).collect()
+            text.chars()
+                .filter(|c| c.is_alphanumeric() || c.is_whitespace())
+                .collect()
         } else {
             text
         };
@@ -1362,7 +1380,11 @@ impl EmbeddingModelRegistry {
         let manifests = self.manifests.read();
         let mut candidates: Vec<&ModelManifest> = manifests
             .iter()
-            .filter(|m| modalities.iter().all(|mod_| m.supported_modalities.contains(mod_)))
+            .filter(|m| {
+                modalities
+                    .iter()
+                    .all(|mod_| m.supported_modalities.contains(mod_))
+            })
             .collect();
 
         if let Some(dim) = preferred_dimensions {
@@ -1441,8 +1463,7 @@ mod tests {
 
     #[test]
     fn test_cache() {
-        let config = MultiModalConfig::default()
-            .with_backend(EmbedderBackend::Mock);
+        let config = MultiModalConfig::default().with_backend(EmbedderBackend::Mock);
         let embedder = MultiModalEmbedder::new(config).unwrap();
 
         // First call - cache miss
@@ -1486,9 +1507,7 @@ mod tests {
 
     #[test]
     fn test_cross_modal_search() {
-        let embedder = Arc::new(
-            MultiModalEmbedder::with_backend(EmbedderBackend::Mock).unwrap()
-        );
+        let embedder = Arc::new(MultiModalEmbedder::with_backend(EmbedderBackend::Mock).unwrap());
         let search = CrossModalSearch::new(embedder);
 
         let text_query = search.text_to_image_query("A beautiful sunset").unwrap();
@@ -1500,8 +1519,7 @@ mod tests {
 
     #[test]
     fn test_unsupported_modality() {
-        let config = MultiModalConfig::default()
-            .with_backend(EmbedderBackend::OpenAI);
+        let config = MultiModalConfig::default().with_backend(EmbedderBackend::OpenAI);
         let embedder = MultiModalEmbedder::new(config).unwrap();
 
         // OpenAI doesn't support images
