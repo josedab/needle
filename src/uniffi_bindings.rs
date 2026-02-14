@@ -157,10 +157,10 @@ impl From<crate::error::NeedleError> for NeedleError {
             crate::error::NeedleError::ConsensusError(msg) => NeedleError::ConsensusError { msg },
             crate::error::NeedleError::LockError => NeedleError::LockError,
             crate::error::NeedleError::Timeout(duration) => NeedleError::Timeout {
-                msg: format!("Operation timed out after {:?}", duration)
+                msg: format!("Operation timed out after {:?}", duration),
             },
             crate::error::NeedleError::LockTimeout(duration) => NeedleError::LockTimeout {
-                msg: format!("Lock acquisition timed out after {:?}", duration)
+                msg: format!("Lock acquisition timed out after {:?}", duration),
             },
         }
     }

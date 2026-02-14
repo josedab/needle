@@ -93,7 +93,8 @@ impl WasmCollection {
     /// Get the collection name
     #[wasm_bindgen(getter)]
     pub fn name(&self) -> String {
-        self.inner.read()
+        self.inner
+            .read()
             .map(|guard| guard.name().to_string())
             .unwrap_or_else(|_| "unknown".to_string())
     }
@@ -101,7 +102,8 @@ impl WasmCollection {
     /// Get the vector dimensions
     #[wasm_bindgen(getter)]
     pub fn dimensions(&self) -> usize {
-        self.inner.read()
+        self.inner
+            .read()
             .map(|guard| guard.dimensions())
             .unwrap_or(0)
     }
@@ -109,15 +111,14 @@ impl WasmCollection {
     /// Get the number of vectors
     #[wasm_bindgen(getter)]
     pub fn length(&self) -> usize {
-        self.inner.read()
-            .map(|guard| guard.len())
-            .unwrap_or(0)
+        self.inner.read().map(|guard| guard.len()).unwrap_or(0)
     }
 
     /// Check if the collection is empty
     #[wasm_bindgen(js_name = "isEmpty")]
     pub fn is_empty(&self) -> bool {
-        self.inner.read()
+        self.inner
+            .read()
             .map(|guard| guard.is_empty())
             .unwrap_or(true)
     }
@@ -196,7 +197,9 @@ impl WasmCollection {
                         .collect();
                     result.push(vec);
                 } else {
-                    return Err(JsValue::from_str("vectors must be an array of arrays or Float32Arrays"));
+                    return Err(JsValue::from_str(
+                        "vectors must be an array of arrays or Float32Arrays",
+                    ));
                 }
             }
             result
@@ -205,12 +208,16 @@ impl WasmCollection {
         };
 
         if ids.len() != vectors.len() {
-            return Err(JsValue::from_str("ids and vectors must have the same length"));
+            return Err(JsValue::from_str(
+                "ids and vectors must have the same length",
+            ));
         }
 
         let meta_values: Vec<Option<Value>> = if let Some(meta_list) = metadata_json_array {
             if meta_list.len() != ids.len() {
-                return Err(JsValue::from_str("metadata must have the same length as ids"));
+                return Err(JsValue::from_str(
+                    "metadata must have the same length as ids",
+                ));
             }
             meta_list
                 .into_iter()
@@ -312,7 +319,8 @@ impl WasmCollection {
     /// Set ef_search parameter
     #[wasm_bindgen(js_name = "setEfSearch")]
     pub fn set_ef_search(&self, ef: usize) -> Result<(), JsValue> {
-        self.inner.write()
+        self.inner
+            .write()
             .map_err(|_| JsValue::from_str("Lock poisoned"))?
             .set_ef_search(ef);
         Ok(())
@@ -461,8 +469,7 @@ impl MemoryStats {
             &"vectorsCount".into(),
             &(self.vectors_count as u32).into(),
         );
-        let _ =
-            js_sys::Reflect::set(&obj, &"dimensions".into(), &(self.dimensions as u32).into());
+        let _ = js_sys::Reflect::set(&obj, &"dimensions".into(), &(self.dimensions as u32).into());
         let _ = js_sys::Reflect::set(
             &obj,
             &"estimatedVectorBytes".into(),
@@ -734,8 +741,10 @@ impl WasmCollection {
         let chunk_count = (results.len() + chunk_size - 1) / chunk_size;
 
         for (i, chunk) in results.chunks(chunk_size).enumerate() {
-            let chunk_results: Vec<SearchResult> =
-                chunk.iter().map(|r| SearchResult::from(r.clone())).collect();
+            let chunk_results: Vec<SearchResult> = chunk
+                .iter()
+                .map(|r| SearchResult::from(r.clone()))
+                .collect();
 
             let search_chunk = SearchChunk {
                 results: chunk_results,
@@ -769,8 +778,8 @@ impl WasmCollection {
     /// Import from base64 string
     #[wasm_bindgen(js_name = "fromBase64")]
     pub fn from_base64(base64_str: &str) -> Result<WasmCollection, JsValue> {
-        let bytes =
-            base64_decode(base64_str).map_err(|e| JsValue::from_str(&format!("Invalid base64: {}", e)))?;
+        let bytes = base64_decode(base64_str)
+            .map_err(|e| JsValue::from_str(&format!("Invalid base64: {}", e)))?;
         Self::from_bytes(&bytes)
     }
 
@@ -784,7 +793,11 @@ impl WasmCollection {
 
         let info = js_sys::Object::new();
         let _ = js_sys::Reflect::set(&info, &"name".into(), &coll.name().into());
-        let _ = js_sys::Reflect::set(&info, &"dimensions".into(), &(coll.dimensions() as u32).into());
+        let _ = js_sys::Reflect::set(
+            &info,
+            &"dimensions".into(),
+            &(coll.dimensions() as u32).into(),
+        );
         let _ = js_sys::Reflect::set(&info, &"vectorCount".into(), &(coll.len() as u32).into());
 
         Ok(info)
@@ -792,10 +805,11 @@ impl WasmCollection {
 
     /// Clear all vectors from the collection
     pub fn clear(&self) -> Result<(), JsValue> {
-        let mut guard = self.inner
+        let mut guard = self
+            .inner
             .write()
             .map_err(|_| JsValue::from_str("Lock poisoned"))?;
-        
+
         // Get all IDs and delete them
         let ids: Vec<String> = guard.all_ids();
         for id in ids {
@@ -851,10 +865,7 @@ fn base64_decode(data: &str) -> Result<Vec<u8>, &'static str> {
     let mut result = Vec::new();
 
     for chunk in bytes.chunks(4) {
-        let vals: Vec<u8> = chunk
-            .iter()
-            .filter_map(|&c| char_to_val(c))
-            .collect();
+        let vals: Vec<u8> = chunk.iter().filter_map(|&c| char_to_val(c)).collect();
 
         if vals.len() < 2 {
             continue;
@@ -1071,7 +1082,11 @@ impl PersistentCollection {
         let info = self.collection.get_info()?;
         let _ = js_sys::Reflect::set(&info, &"isDirty".into(), &self.dirty.into());
         let _ = js_sys::Reflect::set(&info, &"dbName".into(), &self.config.db_name.clone().into());
-        let _ = js_sys::Reflect::set(&info, &"storeName".into(), &self.config.store_name.clone().into());
+        let _ = js_sys::Reflect::set(
+            &info,
+            &"storeName".into(),
+            &self.config.store_name.clone().into(),
+        );
         Ok(info)
     }
 }
@@ -1187,7 +1202,8 @@ const NeedleIndexedDb = {
         };
     }
 };
-"#.to_string()
+"#
+    .to_string()
 }
 
 /// Offline-first sync status
@@ -1252,8 +1268,16 @@ impl SyncStatus {
     pub fn to_object(&self) -> js_sys::Object {
         let obj = js_sys::Object::new();
         let _ = js_sys::Reflect::set(&obj, &"isOnline".into(), &self.is_online.into());
-        let _ = js_sys::Reflect::set(&obj, &"pendingChanges".into(), &(self.pending_changes as u32).into());
-        let _ = js_sys::Reflect::set(&obj, &"lastSyncTimestamp".into(), &self.last_sync_timestamp.into());
+        let _ = js_sys::Reflect::set(
+            &obj,
+            &"pendingChanges".into(),
+            &(self.pending_changes as u32).into(),
+        );
+        let _ = js_sys::Reflect::set(
+            &obj,
+            &"lastSyncTimestamp".into(),
+            &self.last_sync_timestamp.into(),
+        );
         obj
     }
 }
@@ -1350,7 +1374,8 @@ async function syncCollections() {
         window.addEventListener('offline', () => callback(false));
     }
 };
-"#.to_string()
+"#
+    .to_string()
 }
 
 // ============================================================================
@@ -1448,8 +1473,11 @@ impl WasmDatabase {
         if bytes.len() < 4 {
             return Err(JsValue::from_str("Invalid database bytes: too short"));
         }
-        let count =
-            u32::from_le_bytes(bytes[pos..pos + 4].try_into().expect("slice is exactly 4 bytes")) as usize;
+        let count = u32::from_le_bytes(
+            bytes[pos..pos + 4]
+                .try_into()
+                .expect("slice is exactly 4 bytes"),
+        ) as usize;
         pos += 4;
 
         let mut collections = std::collections::HashMap::new();
@@ -1458,8 +1486,11 @@ impl WasmDatabase {
             if pos + 4 > bytes.len() {
                 return Err(JsValue::from_str("Truncated database bytes"));
             }
-            let name_len =
-                u32::from_le_bytes(bytes[pos..pos + 4].try_into().expect("slice is exactly 4 bytes")) as usize;
+            let name_len = u32::from_le_bytes(
+                bytes[pos..pos + 4]
+                    .try_into()
+                    .expect("slice is exactly 4 bytes"),
+            ) as usize;
             pos += 4;
 
             if pos + name_len > bytes.len() {
@@ -1472,8 +1503,11 @@ impl WasmDatabase {
             if pos + 8 > bytes.len() {
                 return Err(JsValue::from_str("Truncated collection length"));
             }
-            let coll_len =
-                u64::from_le_bytes(bytes[pos..pos + 8].try_into().expect("slice is exactly 8 bytes")) as usize;
+            let coll_len = u64::from_le_bytes(
+                bytes[pos..pos + 8]
+                    .try_into()
+                    .expect("slice is exactly 8 bytes"),
+            ) as usize;
             pos += 8;
 
             if pos + coll_len > bytes.len() {
@@ -1863,10 +1897,7 @@ impl BatchSearchResults {
 impl WasmCollection {
     /// Get the number of vectors in the collection
     pub fn count(&self) -> usize {
-        self.inner
-            .read()
-            .map(|guard| guard.len())
-            .unwrap_or(0)
+        self.inner.read().map(|guard| guard.len()).unwrap_or(0)
     }
 
     /// Execute a batch search request against this collection
