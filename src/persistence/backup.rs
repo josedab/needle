@@ -80,18 +80,22 @@ fn ensure_path_contained(base: &Path, path: &Path) -> Result<PathBuf> {
         let parent = path.parent().ok_or_else(|| {
             NeedleError::InvalidInput("Invalid path: no parent directory".to_string())
         })?;
-        let canonical_parent = parent.canonicalize().unwrap_or_else(|_| parent.to_path_buf());
+        let canonical_parent = parent
+            .canonicalize()
+            .unwrap_or_else(|_| parent.to_path_buf());
 
         // Construct the full path with the filename
-        let filename = path.file_name().ok_or_else(|| {
-            NeedleError::InvalidInput("Invalid path: no filename".to_string())
-        })?;
+        let filename = path
+            .file_name()
+            .ok_or_else(|| NeedleError::InvalidInput("Invalid path: no filename".to_string()))?;
         canonical_parent.join(filename)
     };
 
     // Verify the path is within the base directory
     if !canonical_path.starts_with(&canonical_base) {
-        return Err(NeedleError::InvalidInput("Path traversal detected: path escapes backup directory".to_string()));
+        return Err(NeedleError::InvalidInput(
+            "Path traversal detected: path escapes backup directory".to_string(),
+        ));
     }
 
     Ok(canonical_path)
@@ -345,8 +349,7 @@ impl BackupManager {
         let file = File::open(&backup_path)?;
         let reader = BufReader::new(file);
 
-        let backup_data: BackupData = serde_json::from_reader(reader)
-            ?;
+        let backup_data: BackupData = serde_json::from_reader(reader)?;
 
         let db = Database::in_memory();
 
@@ -380,8 +383,7 @@ impl BackupManager {
         let file = File::open(&backup_path)?;
         let reader = BufReader::new(file);
 
-        let _: BackupData = serde_json::from_reader(reader)
-            ?;
+        let _: BackupData = serde_json::from_reader(reader)?;
 
         Ok(true)
     }
@@ -397,8 +399,7 @@ impl BackupManager {
         let file = File::open(&metadata_path)?;
         let reader = BufReader::new(file);
 
-        let all_metadata: Vec<BackupMetadata> = serde_json::from_reader(reader)
-            ?;
+        let all_metadata: Vec<BackupMetadata> = serde_json::from_reader(reader)?;
 
         Ok(all_metadata)
     }
@@ -481,8 +482,7 @@ impl BackupManager {
         let file = File::create(&metadata_path)?;
         let writer = BufWriter::new(file);
 
-        serde_json::to_writer_pretty(writer, metadata)
-            ?;
+        serde_json::to_writer_pretty(writer, metadata)?;
 
         Ok(())
     }
@@ -572,10 +572,10 @@ pub struct BackupSchedule {
 impl Default for BackupSchedule {
     fn default() -> Self {
         Self {
-            interval_secs: 86400, // Daily
+            interval_secs: 86400,     // Daily
             daily_time: Some((3, 0)), // 3 AM
-            weekly_days: vec![0],  // Sunday
-            monthly_day: Some(1),  // 1st of month
+            weekly_days: vec![0],     // Sunday
+            monthly_day: Some(1),     // 1st of month
         }
     }
 }
@@ -690,7 +690,7 @@ impl Default for PitrConfig {
             enabled: true,
             wal_retention_secs: 7 * 24 * 3600, // 7 days
             max_wal_size: 1024 * 1024 * 1024,  // 1GB
-            checkpoint_interval: 300,           // 5 minutes
+            checkpoint_interval: 300,          // 5 minutes
         }
     }
 }
@@ -819,12 +819,15 @@ impl IncrementalBackupManager {
 
         // Produce a replication segment when enough WAL entries accumulate
         if let Some(leader) = &self.replication_leader {
-            let last_seg = self.last_segment_lsn.load(std::sync::atomic::Ordering::Acquire);
+            let last_seg = self
+                .last_segment_lsn
+                .load(std::sync::atomic::Ordering::Acquire);
             let entries = self.wal_entries.read();
             let pending: Vec<_> = entries.iter().filter(|e| e.lsn > last_seg).collect();
-            let pending_bytes: usize = pending.iter().map(|e| {
-                e.collection.len() + e.vector_id.as_ref().map_or(0, |v| v.len()) + 64
-            }).sum();
+            let pending_bytes: usize = pending
+                .iter()
+                .map(|e| e.collection.len() + e.vector_id.as_ref().map_or(0, |v| v.len()) + 64)
+                .sum();
 
             if pending.len() >= 32 || pending_bytes >= leader.segment_max_bytes() {
                 let collections: Vec<String> = pending
@@ -838,7 +841,8 @@ impl IncrementalBackupManager {
                 drop(entries);
 
                 leader.produce_segment(lsn_start, lsn_end, collections, pending_bytes);
-                self.last_segment_lsn.store(lsn_end, std::sync::atomic::Ordering::Release);
+                self.last_segment_lsn
+                    .store(lsn_end, std::sync::atomic::Ordering::Release);
             }
         }
     }
@@ -1211,7 +1215,9 @@ impl ReplicationLeader {
         collections: Vec<String>,
         data_bytes: usize,
     ) -> SnapshotSegment {
-        let seq = self.segment_counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let seq = self
+            .segment_counter
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
@@ -1227,7 +1233,8 @@ impl ReplicationLeader {
             created_at: now,
         };
 
-        self.current_lsn.store(lsn_end, std::sync::atomic::Ordering::Release);
+        self.current_lsn
+            .store(lsn_end, std::sync::atomic::Ordering::Release);
         self.segments.write().push(segment.clone());
         segment
     }
@@ -1292,9 +1299,9 @@ impl ReplicationLeader {
 
         match consistency {
             ConsistencyLevel::Eventual => true,
-            ConsistencyLevel::BoundedStaleness { max_staleness_seconds } => {
-                follower.lag_seconds <= *max_staleness_seconds
-            }
+            ConsistencyLevel::BoundedStaleness {
+                max_staleness_seconds,
+            } => follower.lag_seconds <= *max_staleness_seconds,
             ConsistencyLevel::Strong => follower.last_applied_lsn >= leader_lsn,
         }
     }

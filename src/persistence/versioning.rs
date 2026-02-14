@@ -41,8 +41,8 @@ pub type CommitHash = String;
 
 /// Generate a commit hash.
 fn generate_hash() -> CommitHash {
-    use std::hash::{Hash, Hasher};
     use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
 
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -313,7 +313,10 @@ impl VectorRepo {
 
         // Check if deleted
         if self.working_deleted.contains(id) {
-            return Err(NeedleError::NotFound(format!("Vector '{}' was deleted", id)));
+            return Err(NeedleError::NotFound(format!(
+                "Vector '{}' was deleted",
+                id
+            )));
         }
 
         // Get from HEAD commit
@@ -333,15 +336,17 @@ impl VectorRepo {
 
     /// Get a vector at a specific commit.
     pub fn get_at(&self, id: &str, commit_hash: &str) -> Result<VectorEntry> {
-        let commit = self.commits.get(commit_hash)
+        let commit = self
+            .commits
+            .get(commit_hash)
             .ok_or_else(|| NeedleError::NotFound(format!("Commit '{}' not found", commit_hash)))?;
 
-        commit.snapshot.get(id)
-            .cloned()
-            .ok_or_else(|| NeedleError::NotFound(format!(
+        commit.snapshot.get(id).cloned().ok_or_else(|| {
+            NeedleError::NotFound(format!(
                 "Vector '{}' not found at commit '{}'",
                 id, commit_hash
-            )))
+            ))
+        })
     }
 
     /// Commit staged changes.
@@ -350,7 +355,11 @@ impl VectorRepo {
     }
 
     /// Commit with author.
-    pub fn commit_with_author(&mut self, message: &str, author: Option<&str>) -> Result<CommitHash> {
+    pub fn commit_with_author(
+        &mut self,
+        message: &str,
+        author: Option<&str>,
+    ) -> Result<CommitHash> {
         if self.staged.added.is_empty()
             && self.staged.modified.is_empty()
             && self.staged.deleted.is_empty()
@@ -360,7 +369,11 @@ impl VectorRepo {
 
         let hash = generate_hash();
         let head = &self.branches[&self.current_branch].head;
-        let parent = if head.is_empty() { None } else { Some(head.clone()) };
+        let parent = if head.is_empty() {
+            None
+        } else {
+            Some(head.clone())
+        };
 
         // Build snapshot
         let mut snapshot = if let Some(ref p) = parent {
@@ -519,9 +532,13 @@ impl VectorRepo {
 
     /// Diff between two commits.
     pub fn diff(&self, from: &str, to: &str) -> Result<Vec<VectorDiff>> {
-        let from_commit = self.commits.get(from)
+        let from_commit = self
+            .commits
+            .get(from)
             .ok_or_else(|| NeedleError::NotFound(format!("Commit '{}' not found", from)))?;
-        let to_commit = self.commits.get(to)
+        let to_commit = self
+            .commits
+            .get(to)
             .ok_or_else(|| NeedleError::NotFound(format!("Commit '{}' not found", to)))?;
 
         let mut diffs = Vec::new();
@@ -591,7 +608,9 @@ impl VectorRepo {
 
     /// Rollback to a previous commit.
     pub fn rollback(&mut self, commit_hash: &str) -> Result<CommitHash> {
-        let target = self.commits.get(commit_hash)
+        let target = self
+            .commits
+            .get(commit_hash)
             .ok_or_else(|| NeedleError::NotFound(format!("Commit '{}' not found", commit_hash)))?
             .clone();
 
@@ -618,19 +637,27 @@ impl VectorRepo {
 
     /// Merge a branch into current branch.
     pub fn merge(&mut self, branch_name: &str) -> Result<MergeResult> {
-        let source_branch = self.branches.get(branch_name)
+        let source_branch = self
+            .branches
+            .get(branch_name)
             .ok_or_else(|| NeedleError::NotFound(format!("Branch '{}' not found", branch_name)))?
             .clone();
 
         let current_head = &self.branches[&self.current_branch].head;
         if current_head.is_empty() {
-            return Err(NeedleError::InvalidInput("Cannot merge into empty branch".to_string()));
+            return Err(NeedleError::InvalidInput(
+                "Cannot merge into empty branch".to_string(),
+            ));
         }
 
-        let source_commit = self.commits.get(&source_branch.head)
+        let source_commit = self
+            .commits
+            .get(&source_branch.head)
             .ok_or_else(|| NeedleError::NotFound("Source commit not found".to_string()))?
             .clone();
-        let current_commit = self.commits.get(current_head)
+        let current_commit = self
+            .commits
+            .get(current_head)
             .ok_or_else(|| NeedleError::NotFound("Current commit not found".to_string()))?
             .clone();
 
@@ -658,7 +685,10 @@ impl VectorRepo {
         let has_conflicts = !conflicts.is_empty();
 
         if !self.staged.added.is_empty() || !self.staged.modified.is_empty() {
-            let message = format!("Merge branch '{}' into {}", branch_name, self.current_branch);
+            let message = format!(
+                "Merge branch '{}' into {}",
+                branch_name, self.current_branch
+            );
             let commit_hash = self.commit(&message)?;
 
             Ok(MergeResult {
@@ -751,14 +781,23 @@ impl VectorRepo {
             })
             .collect();
 
-        results.sort_by(|a, b| b.similarity.partial_cmp(&a.similarity).unwrap_or(std::cmp::Ordering::Equal));
+        results.sort_by(|a, b| {
+            b.similarity
+                .partial_cmp(&a.similarity)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         results.truncate(k);
 
         Ok(results)
     }
 
     /// Search vectors at a specific commit.
-    pub fn search_at(&self, query: &[f32], commit_hash: &str, k: usize) -> Result<Vec<SearchResult>> {
+    pub fn search_at(
+        &self,
+        query: &[f32],
+        commit_hash: &str,
+        k: usize,
+    ) -> Result<Vec<SearchResult>> {
         if query.len() != self.dimensions {
             return Err(NeedleError::InvalidInput(format!(
                 "Query dimension mismatch: expected {}, got {}",
@@ -767,10 +806,13 @@ impl VectorRepo {
             )));
         }
 
-        let commit = self.commits.get(commit_hash)
+        let commit = self
+            .commits
+            .get(commit_hash)
             .ok_or_else(|| NeedleError::NotFound(format!("Commit '{}' not found", commit_hash)))?;
 
-        let mut results: Vec<SearchResult> = commit.snapshot
+        let mut results: Vec<SearchResult> = commit
+            .snapshot
             .iter()
             .map(|(id, entry)| {
                 let similarity = self.cosine_similarity(query, &entry.vector);
@@ -782,7 +824,11 @@ impl VectorRepo {
             })
             .collect();
 
-        results.sort_by(|a, b| b.similarity.partial_cmp(&a.similarity).unwrap_or(std::cmp::Ordering::Equal));
+        results.sort_by(|a, b| {
+            b.similarity
+                .partial_cmp(&a.similarity)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         results.truncate(k);
 
         Ok(results)
@@ -857,15 +903,13 @@ impl TimeSpec {
         match self {
             TimeSpec::Timestamp(ts) => Ok(*ts),
             TimeSpec::Commit(_) => Err(NeedleError::InvalidInput(
-                "Commit hash cannot be converted to timestamp".to_string()
+                "Commit hash cannot be converted to timestamp".to_string(),
             )),
             TimeSpec::DateTime(s) => {
                 // Parse ISO 8601 format: "2024-01-15T10:30:00Z"
                 parse_datetime(s)
             }
-            TimeSpec::Relative(s) => {
-                parse_relative_time(s)
-            }
+            TimeSpec::Relative(s) => parse_relative_time(s),
         }
     }
 }
@@ -878,17 +922,29 @@ fn parse_datetime(s: &str) -> Result<u64> {
     let parts: Vec<&str> = s.split(' ').collect();
 
     if parts.is_empty() {
-        return Err(NeedleError::InvalidInput(format!("Invalid datetime: {}", s)));
+        return Err(NeedleError::InvalidInput(format!(
+            "Invalid datetime: {}",
+            s
+        )));
     }
 
     let date_parts: Vec<&str> = parts[0].split('-').collect();
     if date_parts.len() != 3 {
-        return Err(NeedleError::InvalidInput(format!("Invalid date format: {}", parts[0])));
+        return Err(NeedleError::InvalidInput(format!(
+            "Invalid date format: {}",
+            parts[0]
+        )));
     }
 
-    let year: i32 = date_parts[0].parse().map_err(|_| NeedleError::InvalidInput("Invalid year".to_string()))?;
-    let month: u32 = date_parts[1].parse().map_err(|_| NeedleError::InvalidInput("Invalid month".to_string()))?;
-    let day: u32 = date_parts[2].parse().map_err(|_| NeedleError::InvalidInput("Invalid day".to_string()))?;
+    let year: i32 = date_parts[0]
+        .parse()
+        .map_err(|_| NeedleError::InvalidInput("Invalid year".to_string()))?;
+    let month: u32 = date_parts[1]
+        .parse()
+        .map_err(|_| NeedleError::InvalidInput("Invalid month".to_string()))?;
+    let day: u32 = date_parts[2]
+        .parse()
+        .map_err(|_| NeedleError::InvalidInput("Invalid day".to_string()))?;
 
     let (hour, minute, second) = if parts.len() > 1 {
         let time_parts: Vec<&str> = parts[1].split(':').collect();
@@ -908,10 +964,13 @@ fn parse_datetime(s: &str) -> Result<u64> {
     let days_since_epoch = days - unix_epoch_days;
 
     if days_since_epoch < 0 {
-        return Err(NeedleError::InvalidInput("Date is before Unix epoch".to_string()));
+        return Err(NeedleError::InvalidInput(
+            "Date is before Unix epoch".to_string(),
+        ));
     }
 
-    let seconds = days_since_epoch as u64 * 86400 + hour as u64 * 3600 + minute as u64 * 60 + second as u64;
+    let seconds =
+        days_since_epoch as u64 * 86400 + hour as u64 * 3600 + minute as u64 * 60 + second as u64;
 
     Ok(seconds)
 }
@@ -990,7 +1049,12 @@ fn parse_relative_time(s: &str) -> Result<u64> {
                 "week" | "weeks" => amount * 86400 * 7,
                 "month" | "months" => amount * 86400 * 30,
                 "year" | "years" => amount * 86400 * 365,
-                _ => return Err(NeedleError::InvalidInput(format!("Unknown time unit: {}", unit))),
+                _ => {
+                    return Err(NeedleError::InvalidInput(format!(
+                        "Unknown time unit: {}",
+                        unit
+                    )))
+                }
             };
 
             return Ok(now.saturating_sub(seconds));
@@ -998,7 +1062,15 @@ fn parse_relative_time(s: &str) -> Result<u64> {
     }
 
     // Handle day names (last monday, last tuesday, etc.)
-    let weekdays = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
+    let weekdays = [
+        "sunday",
+        "monday",
+        "tuesday",
+        "wednesday",
+        "thursday",
+        "friday",
+        "saturday",
+    ];
     for (i, day_name) in weekdays.iter().enumerate() {
         if s.contains(day_name) {
             // Calculate days back to that weekday
@@ -1010,7 +1082,11 @@ fn parse_relative_time(s: &str) -> Result<u64> {
                 7 - (target_day - current_day)
             };
             // If "last", go back one more week if we're on that day
-            let days_back = if s.contains("last") && days_back == 0 { 7 } else { days_back };
+            let days_back = if s.contains("last") && days_back == 0 {
+                7
+            } else {
+                days_back
+            };
             return Ok(now - days_back * 86400);
         }
     }
@@ -1020,7 +1096,10 @@ fn parse_relative_time(s: &str) -> Result<u64> {
         return Ok(now - 86400);
     }
 
-    Err(NeedleError::InvalidInput(format!("Cannot parse relative time: {}", s)))
+    Err(NeedleError::InvalidInput(format!(
+        "Cannot parse relative time: {}",
+        s
+    )))
 }
 
 /// History entry for a vector
@@ -1052,14 +1131,15 @@ pub struct TimeRange {
 impl VectorRepo {
     /// Find the commit that was active at a specific time
     pub fn find_commit_at_time(&self, time: &TimeSpec) -> Result<Option<&Commit>> {
-        let target_ts = match time {
-            TimeSpec::Commit(hash) => {
-                return self.commits.get(hash)
-                    .map(Some)
-                    .ok_or_else(|| NeedleError::NotFound(format!("Commit '{}' not found", hash)));
-            }
-            _ => time.to_timestamp()?,
-        };
+        let target_ts =
+            match time {
+                TimeSpec::Commit(hash) => {
+                    return self.commits.get(hash).map(Some).ok_or_else(|| {
+                        NeedleError::NotFound(format!("Commit '{}' not found", hash))
+                    });
+                }
+                _ => time.to_timestamp()?,
+            };
 
         // Find the most recent commit at or before the target timestamp
         let mut best_commit: Option<&Commit> = None;
@@ -1108,13 +1188,13 @@ impl VectorRepo {
         }
 
         // Find the commit at the specified time
-        let commit = self.find_commit_at_time(time)?
-            .ok_or_else(|| NeedleError::NotFound(
-                "No commit found at the specified time".to_string()
-            ))?;
+        let commit = self.find_commit_at_time(time)?.ok_or_else(|| {
+            NeedleError::NotFound("No commit found at the specified time".to_string())
+        })?;
 
         // Search within that commit's snapshot
-        let mut results: Vec<SearchResult> = commit.snapshot
+        let mut results: Vec<SearchResult> = commit
+            .snapshot
             .iter()
             .map(|(id, entry)| {
                 let similarity = self.cosine_similarity(query, &entry.vector);
@@ -1126,7 +1206,11 @@ impl VectorRepo {
             })
             .collect();
 
-        results.sort_by(|a, b| b.similarity.partial_cmp(&a.similarity).unwrap_or(std::cmp::Ordering::Equal));
+        results.sort_by(|a, b| {
+            b.similarity
+                .partial_cmp(&a.similarity)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         results.truncate(k);
 
         Ok(results)
@@ -1174,9 +1258,7 @@ impl VectorRepo {
             };
 
             let similarity = match (&previous_vector, &current_vector) {
-                (Some(prev), Some(curr)) => {
-                    Some(self.cosine_similarity(prev, &curr.vector))
-                }
+                (Some(prev), Some(curr)) => Some(self.cosine_similarity(prev, &curr.vector)),
                 _ => None,
             };
 
@@ -1201,9 +1283,7 @@ impl VectorRepo {
         let end_commit = self.find_commit_at_time(&range.end)?;
 
         match (start_commit, end_commit) {
-            (Some(start), Some(end)) => {
-                self.diff(&start.hash, &end.hash)
-            }
+            (Some(start), Some(end)) => self.diff(&start.hash, &end.hash),
             (None, Some(end)) => {
                 // From beginning of time to end
                 let mut diffs = Vec::new();
@@ -1236,25 +1316,22 @@ impl VectorRepo {
 
                 Ok(diffs)
             }
-            (None, None) => {
-                Ok(Vec::new())
-            }
+            (None, None) => Ok(Vec::new()),
         }
     }
 
     /// Get a vector at a specific time
     pub fn get_at_time(&self, vector_id: &str, time: &TimeSpec) -> Result<VectorEntry> {
-        let commit = self.find_commit_at_time(time)?
-            .ok_or_else(|| NeedleError::NotFound(
-                "No commit found at the specified time".to_string()
-            ))?;
+        let commit = self.find_commit_at_time(time)?.ok_or_else(|| {
+            NeedleError::NotFound("No commit found at the specified time".to_string())
+        })?;
 
-        commit.snapshot.get(vector_id)
-            .cloned()
-            .ok_or_else(|| NeedleError::NotFound(format!(
+        commit.snapshot.get(vector_id).cloned().ok_or_else(|| {
+            NeedleError::NotFound(format!(
                 "Vector '{}' not found at specified time",
                 vector_id
-            )))
+            ))
+        })
     }
 
     /// Compare a vector between two points in time
@@ -1268,30 +1345,24 @@ impl VectorRepo {
         let entry2 = self.get_at_time(vector_id, time2).ok();
 
         match (entry1, entry2) {
-            (None, None) => {
-                Err(NeedleError::NotFound(format!(
-                    "Vector '{}' not found at either time point",
-                    vector_id
-                )))
-            }
-            (None, Some(e2)) => {
-                Ok(VectorDiff {
-                    id: vector_id.to_string(),
-                    change_type: ChangeType::Added,
-                    old_vector: None,
-                    new_vector: Some(e2.vector),
-                    similarity: None,
-                })
-            }
-            (Some(e1), None) => {
-                Ok(VectorDiff {
-                    id: vector_id.to_string(),
-                    change_type: ChangeType::Deleted,
-                    old_vector: Some(e1.vector),
-                    new_vector: None,
-                    similarity: None,
-                })
-            }
+            (None, None) => Err(NeedleError::NotFound(format!(
+                "Vector '{}' not found at either time point",
+                vector_id
+            ))),
+            (None, Some(e2)) => Ok(VectorDiff {
+                id: vector_id.to_string(),
+                change_type: ChangeType::Added,
+                old_vector: None,
+                new_vector: Some(e2.vector),
+                similarity: None,
+            }),
+            (Some(e1), None) => Ok(VectorDiff {
+                id: vector_id.to_string(),
+                change_type: ChangeType::Deleted,
+                old_vector: Some(e1.vector),
+                new_vector: None,
+                similarity: None,
+            }),
             (Some(e1), Some(e2)) => {
                 if e1.vector == e2.vector {
                     Ok(VectorDiff {
@@ -1320,7 +1391,8 @@ impl VectorRepo {
         let start_ts = range.start.to_timestamp()?;
         let end_ts = range.end.to_timestamp()?;
 
-        let mut commits: Vec<&Commit> = self.commits
+        let mut commits: Vec<&Commit> = self
+            .commits
             .values()
             .filter(|c| c.timestamp >= start_ts && c.timestamp <= end_ts)
             .collect();
@@ -1345,7 +1417,8 @@ mod tests {
     fn test_add_vector() {
         let mut repo = VectorRepo::new("test", 4);
 
-        repo.add("vec1", &[1.0, 2.0, 3.0, 4.0], HashMap::new()).unwrap();
+        repo.add("vec1", &[1.0, 2.0, 3.0, 4.0], HashMap::new())
+            .unwrap();
 
         let status = repo.status();
         assert_eq!(status.staged_added, 1);
@@ -1355,8 +1428,10 @@ mod tests {
     fn test_commit() {
         let mut repo = VectorRepo::new("test", 4);
 
-        repo.add("vec1", &[1.0, 2.0, 3.0, 4.0], HashMap::new()).unwrap();
-        repo.add("vec2", &[5.0, 6.0, 7.0, 8.0], HashMap::new()).unwrap();
+        repo.add("vec1", &[1.0, 2.0, 3.0, 4.0], HashMap::new())
+            .unwrap();
+        repo.add("vec2", &[5.0, 6.0, 7.0, 8.0], HashMap::new())
+            .unwrap();
 
         let hash = repo.commit("Initial commit").unwrap();
 
@@ -1380,7 +1455,8 @@ mod tests {
     fn test_get_vector() {
         let mut repo = VectorRepo::new("test", 4);
 
-        repo.add("vec1", &[1.0, 2.0, 3.0, 4.0], HashMap::new()).unwrap();
+        repo.add("vec1", &[1.0, 2.0, 3.0, 4.0], HashMap::new())
+            .unwrap();
         repo.commit("Add vec1").unwrap();
 
         let entry = repo.get_latest("vec1").unwrap();
@@ -1391,7 +1467,8 @@ mod tests {
     fn test_update_vector() {
         let mut repo = VectorRepo::new("test", 4);
 
-        repo.add("vec1", &[1.0, 2.0, 3.0, 4.0], HashMap::new()).unwrap();
+        repo.add("vec1", &[1.0, 2.0, 3.0, 4.0], HashMap::new())
+            .unwrap();
         repo.commit("Add vec1").unwrap();
 
         repo.update("vec1", &[9.0, 8.0, 7.0, 6.0]).unwrap();
@@ -1405,7 +1482,8 @@ mod tests {
     fn test_delete_vector() {
         let mut repo = VectorRepo::new("test", 4);
 
-        repo.add("vec1", &[1.0, 2.0, 3.0, 4.0], HashMap::new()).unwrap();
+        repo.add("vec1", &[1.0, 2.0, 3.0, 4.0], HashMap::new())
+            .unwrap();
         repo.commit("Add vec1").unwrap();
 
         repo.delete("vec1").unwrap();
@@ -1419,7 +1497,8 @@ mod tests {
     fn test_get_at_commit() {
         let mut repo = VectorRepo::new("test", 4);
 
-        repo.add("vec1", &[1.0, 2.0, 3.0, 4.0], HashMap::new()).unwrap();
+        repo.add("vec1", &[1.0, 2.0, 3.0, 4.0], HashMap::new())
+            .unwrap();
         let commit1 = repo.commit("V1").unwrap();
 
         repo.update("vec1", &[9.0, 8.0, 7.0, 6.0]).unwrap();
@@ -1438,10 +1517,12 @@ mod tests {
     fn test_log() {
         let mut repo = VectorRepo::new("test", 4);
 
-        repo.add("vec1", &[1.0, 2.0, 3.0, 4.0], HashMap::new()).unwrap();
+        repo.add("vec1", &[1.0, 2.0, 3.0, 4.0], HashMap::new())
+            .unwrap();
         repo.commit("Commit 1").unwrap();
 
-        repo.add("vec2", &[5.0, 6.0, 7.0, 8.0], HashMap::new()).unwrap();
+        repo.add("vec2", &[5.0, 6.0, 7.0, 8.0], HashMap::new())
+            .unwrap();
         repo.commit("Commit 2").unwrap();
 
         let history = repo.log(None);
@@ -1454,7 +1535,8 @@ mod tests {
     fn test_branching() {
         let mut repo = VectorRepo::new("test", 4);
 
-        repo.add("vec1", &[1.0, 2.0, 3.0, 4.0], HashMap::new()).unwrap();
+        repo.add("vec1", &[1.0, 2.0, 3.0, 4.0], HashMap::new())
+            .unwrap();
         repo.commit("Main commit").unwrap();
 
         repo.create_branch("feature").unwrap();
@@ -1462,7 +1544,8 @@ mod tests {
 
         assert_eq!(repo.current_branch(), "feature");
 
-        repo.add("vec2", &[5.0, 6.0, 7.0, 8.0], HashMap::new()).unwrap();
+        repo.add("vec2", &[5.0, 6.0, 7.0, 8.0], HashMap::new())
+            .unwrap();
         repo.commit("Feature commit").unwrap();
 
         // Feature branch has vec2
@@ -1477,17 +1560,25 @@ mod tests {
     fn test_diff() {
         let mut repo = VectorRepo::new("test", 4);
 
-        repo.add("vec1", &[1.0, 2.0, 3.0, 4.0], HashMap::new()).unwrap();
+        repo.add("vec1", &[1.0, 2.0, 3.0, 4.0], HashMap::new())
+            .unwrap();
         let commit1 = repo.commit("Add vec1").unwrap();
 
-        repo.add("vec2", &[5.0, 6.0, 7.0, 8.0], HashMap::new()).unwrap();
+        repo.add("vec2", &[5.0, 6.0, 7.0, 8.0], HashMap::new())
+            .unwrap();
         repo.update("vec1", &[9.0, 8.0, 7.0, 6.0]).unwrap();
         let commit2 = repo.commit("Changes").unwrap();
 
         let diffs = repo.diff(&commit1, &commit2).unwrap();
 
-        let added: Vec<_> = diffs.iter().filter(|d| d.change_type == ChangeType::Added).collect();
-        let modified: Vec<_> = diffs.iter().filter(|d| d.change_type == ChangeType::Modified).collect();
+        let added: Vec<_> = diffs
+            .iter()
+            .filter(|d| d.change_type == ChangeType::Added)
+            .collect();
+        let modified: Vec<_> = diffs
+            .iter()
+            .filter(|d| d.change_type == ChangeType::Modified)
+            .collect();
 
         assert_eq!(added.len(), 1);
         assert_eq!(modified.len(), 1);
@@ -1497,7 +1588,8 @@ mod tests {
     fn test_rollback() {
         let mut repo = VectorRepo::new("test", 4);
 
-        repo.add("vec1", &[1.0, 2.0, 3.0, 4.0], HashMap::new()).unwrap();
+        repo.add("vec1", &[1.0, 2.0, 3.0, 4.0], HashMap::new())
+            .unwrap();
         let commit1 = repo.commit("V1").unwrap();
 
         repo.update("vec1", &[9.0, 8.0, 7.0, 6.0]).unwrap();
@@ -1514,13 +1606,15 @@ mod tests {
     fn test_merge() {
         let mut repo = VectorRepo::new("test", 4);
 
-        repo.add("vec1", &[1.0, 2.0, 3.0, 4.0], HashMap::new()).unwrap();
+        repo.add("vec1", &[1.0, 2.0, 3.0, 4.0], HashMap::new())
+            .unwrap();
         repo.commit("Main").unwrap();
 
         repo.create_branch("feature").unwrap();
         repo.checkout("feature").unwrap();
 
-        repo.add("vec2", &[5.0, 6.0, 7.0, 8.0], HashMap::new()).unwrap();
+        repo.add("vec2", &[5.0, 6.0, 7.0, 8.0], HashMap::new())
+            .unwrap();
         repo.commit("Feature").unwrap();
 
         repo.checkout("main").unwrap();
@@ -1535,9 +1629,12 @@ mod tests {
     fn test_search() {
         let mut repo = VectorRepo::new("test", 4);
 
-        repo.add("a", &[1.0, 0.0, 0.0, 0.0], HashMap::new()).unwrap();
-        repo.add("b", &[0.0, 1.0, 0.0, 0.0], HashMap::new()).unwrap();
-        repo.add("c", &[1.0, 1.0, 0.0, 0.0], HashMap::new()).unwrap();
+        repo.add("a", &[1.0, 0.0, 0.0, 0.0], HashMap::new())
+            .unwrap();
+        repo.add("b", &[0.0, 1.0, 0.0, 0.0], HashMap::new())
+            .unwrap();
+        repo.add("c", &[1.0, 1.0, 0.0, 0.0], HashMap::new())
+            .unwrap();
         repo.commit("Vectors").unwrap();
 
         let results = repo.search(&[1.0, 0.0, 0.0, 0.0], 2).unwrap();
@@ -1550,7 +1647,8 @@ mod tests {
     fn test_search_at_commit() {
         let mut repo = VectorRepo::new("test", 4);
 
-        repo.add("a", &[1.0, 0.0, 0.0, 0.0], HashMap::new()).unwrap();
+        repo.add("a", &[1.0, 0.0, 0.0, 0.0], HashMap::new())
+            .unwrap();
         let commit1 = repo.commit("V1").unwrap();
 
         repo.update("a", &[0.0, 1.0, 0.0, 0.0]).unwrap();
@@ -1577,12 +1675,14 @@ mod tests {
     fn test_cannot_checkout_with_changes() {
         let mut repo = VectorRepo::new("test", 4);
 
-        repo.add("vec1", &[1.0, 2.0, 3.0, 4.0], HashMap::new()).unwrap();
+        repo.add("vec1", &[1.0, 2.0, 3.0, 4.0], HashMap::new())
+            .unwrap();
         repo.commit("Main").unwrap();
 
         repo.create_branch("feature").unwrap();
 
-        repo.add("vec2", &[5.0, 6.0, 7.0, 8.0], HashMap::new()).unwrap();
+        repo.add("vec2", &[5.0, 6.0, 7.0, 8.0], HashMap::new())
+            .unwrap();
         // Don't commit
 
         let result = repo.checkout("feature");
@@ -1593,7 +1693,8 @@ mod tests {
     fn test_list_branches() {
         let mut repo = VectorRepo::new("test", 4);
 
-        repo.add("vec1", &[1.0, 2.0, 3.0, 4.0], HashMap::new()).unwrap();
+        repo.add("vec1", &[1.0, 2.0, 3.0, 4.0], HashMap::new())
+            .unwrap();
         repo.commit("Init").unwrap();
 
         repo.create_branch("feature1").unwrap();
@@ -1685,12 +1786,15 @@ mod tests {
     fn test_find_commit_at_time() {
         let mut repo = VectorRepo::new("test", 4);
 
-        repo.add("vec1", &[1.0, 2.0, 3.0, 4.0], HashMap::new()).unwrap();
+        repo.add("vec1", &[1.0, 2.0, 3.0, 4.0], HashMap::new())
+            .unwrap();
         let commit1 = repo.commit("V1").unwrap();
         let ts1 = repo.commits.get(&commit1).unwrap().timestamp;
 
         // Use TimeSpec::Commit for exact commit lookup
-        let found = repo.find_commit_at_time(&TimeSpec::Commit(commit1.clone())).unwrap();
+        let found = repo
+            .find_commit_at_time(&TimeSpec::Commit(commit1.clone()))
+            .unwrap();
         assert!(found.is_some());
         assert_eq!(found.unwrap().hash, commit1);
 
@@ -1707,18 +1811,17 @@ mod tests {
     fn test_search_at_time() {
         let mut repo = VectorRepo::new("test", 4);
 
-        repo.add("a", &[1.0, 0.0, 0.0, 0.0], HashMap::new()).unwrap();
+        repo.add("a", &[1.0, 0.0, 0.0, 0.0], HashMap::new())
+            .unwrap();
         let commit1 = repo.commit("V1").unwrap();
 
         repo.update("a", &[0.0, 1.0, 0.0, 0.0]).unwrap();
         repo.commit("V2").unwrap();
 
         // Search at first commit (using commit-based lookup)
-        let results = repo.search_at_time(
-            &[1.0, 0.0, 0.0, 0.0],
-            &TimeSpec::Commit(commit1),
-            1
-        ).unwrap();
+        let results = repo
+            .search_at_time(&[1.0, 0.0, 0.0, 0.0], &TimeSpec::Commit(commit1), 1)
+            .unwrap();
 
         // Should find vector with high similarity (it was [1,0,0,0] at that time)
         assert!(results[0].similarity > 0.99);
@@ -1728,7 +1831,8 @@ mod tests {
     fn test_vector_history() {
         let mut repo = VectorRepo::new("test", 4);
 
-        repo.add("vec1", &[1.0, 0.0, 0.0, 0.0], HashMap::new()).unwrap();
+        repo.add("vec1", &[1.0, 0.0, 0.0, 0.0], HashMap::new())
+            .unwrap();
         repo.commit("Added").unwrap();
 
         repo.update("vec1", &[0.5, 0.5, 0.0, 0.0]).unwrap();
@@ -1753,14 +1857,17 @@ mod tests {
     fn test_get_at_time() {
         let mut repo = VectorRepo::new("test", 4);
 
-        repo.add("vec1", &[1.0, 2.0, 3.0, 4.0], HashMap::new()).unwrap();
+        repo.add("vec1", &[1.0, 2.0, 3.0, 4.0], HashMap::new())
+            .unwrap();
         let commit1 = repo.commit("V1").unwrap();
 
         repo.update("vec1", &[9.0, 8.0, 7.0, 6.0]).unwrap();
         repo.commit("V2").unwrap();
 
         // Get at commit1 (using commit-based lookup)
-        let entry = repo.get_at_time("vec1", &TimeSpec::Commit(commit1)).unwrap();
+        let entry = repo
+            .get_at_time("vec1", &TimeSpec::Commit(commit1))
+            .unwrap();
         assert_eq!(entry.vector, vec![1.0, 2.0, 3.0, 4.0]);
     }
 
@@ -1768,18 +1875,21 @@ mod tests {
     fn test_compare_at_times() {
         let mut repo = VectorRepo::new("test", 4);
 
-        repo.add("vec1", &[1.0, 0.0, 0.0, 0.0], HashMap::new()).unwrap();
+        repo.add("vec1", &[1.0, 0.0, 0.0, 0.0], HashMap::new())
+            .unwrap();
         let commit1 = repo.commit("V1").unwrap();
 
         repo.update("vec1", &[0.0, 1.0, 0.0, 0.0]).unwrap();
         let commit2 = repo.commit("V2").unwrap();
 
         // Use commit-based time specs for precise comparison
-        let diff = repo.compare_at_times(
-            "vec1",
-            &TimeSpec::Commit(commit1),
-            &TimeSpec::Commit(commit2)
-        ).unwrap();
+        let diff = repo
+            .compare_at_times(
+                "vec1",
+                &TimeSpec::Commit(commit1),
+                &TimeSpec::Commit(commit2),
+            )
+            .unwrap();
 
         assert_eq!(diff.change_type, ChangeType::Modified);
         assert!(diff.similarity.unwrap() < 0.1); // Orthogonal vectors
@@ -1789,10 +1899,12 @@ mod tests {
     fn test_changes_between_times() {
         let mut repo = VectorRepo::new("test", 4);
 
-        repo.add("vec1", &[1.0, 0.0, 0.0, 0.0], HashMap::new()).unwrap();
+        repo.add("vec1", &[1.0, 0.0, 0.0, 0.0], HashMap::new())
+            .unwrap();
         let commit1 = repo.commit("V1").unwrap();
 
-        repo.add("vec2", &[0.0, 1.0, 0.0, 0.0], HashMap::new()).unwrap();
+        repo.add("vec2", &[0.0, 1.0, 0.0, 0.0], HashMap::new())
+            .unwrap();
         repo.update("vec1", &[0.5, 0.5, 0.0, 0.0]).unwrap();
         let commit2 = repo.commit("V2").unwrap();
 
@@ -1804,8 +1916,14 @@ mod tests {
 
         let changes = repo.changes_between(&range).unwrap();
 
-        let added: Vec<_> = changes.iter().filter(|d| d.change_type == ChangeType::Added).collect();
-        let modified: Vec<_> = changes.iter().filter(|d| d.change_type == ChangeType::Modified).collect();
+        let added: Vec<_> = changes
+            .iter()
+            .filter(|d| d.change_type == ChangeType::Added)
+            .collect();
+        let modified: Vec<_> = changes
+            .iter()
+            .filter(|d| d.change_type == ChangeType::Modified)
+            .collect();
 
         assert_eq!(added.len(), 1);
         assert_eq!(modified.len(), 1);
@@ -1815,13 +1933,16 @@ mod tests {
     fn test_commits_in_range() {
         let mut repo = VectorRepo::new("test", 4);
 
-        repo.add("vec1", &[1.0, 0.0, 0.0, 0.0], HashMap::new()).unwrap();
+        repo.add("vec1", &[1.0, 0.0, 0.0, 0.0], HashMap::new())
+            .unwrap();
         repo.commit("V1").unwrap();
 
-        repo.add("vec2", &[0.0, 1.0, 0.0, 0.0], HashMap::new()).unwrap();
+        repo.add("vec2", &[0.0, 1.0, 0.0, 0.0], HashMap::new())
+            .unwrap();
         repo.commit("V2").unwrap();
 
-        repo.add("vec3", &[0.0, 0.0, 1.0, 0.0], HashMap::new()).unwrap();
+        repo.add("vec3", &[0.0, 0.0, 1.0, 0.0], HashMap::new())
+            .unwrap();
         repo.commit("V3").unwrap();
 
         // Get all commits (use wide timestamp range)
@@ -1842,14 +1963,17 @@ mod tests {
     fn test_time_travel_with_deletion() {
         let mut repo = VectorRepo::new("test", 4);
 
-        repo.add("vec1", &[1.0, 2.0, 3.0, 4.0], HashMap::new()).unwrap();
+        repo.add("vec1", &[1.0, 2.0, 3.0, 4.0], HashMap::new())
+            .unwrap();
         let commit1 = repo.commit("Added").unwrap();
 
         repo.delete("vec1").unwrap();
         let commit2 = repo.commit("Deleted").unwrap();
 
         // Can still retrieve at commit1 using commit-based lookup
-        let entry = repo.get_at_time("vec1", &TimeSpec::Commit(commit1)).unwrap();
+        let entry = repo
+            .get_at_time("vec1", &TimeSpec::Commit(commit1))
+            .unwrap();
         assert_eq!(entry.vector, vec![1.0, 2.0, 3.0, 4.0]);
 
         // Cannot retrieve at commit2 (deleted)

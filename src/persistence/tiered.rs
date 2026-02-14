@@ -30,7 +30,7 @@
 
 use crate::error::{NeedleError, Result};
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, BTreeMap};
+use std::collections::{BTreeMap, HashMap};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// Storage tier levels.
@@ -104,9 +104,9 @@ pub struct TierPolicy {
 impl Default for TierPolicy {
     fn default() -> Self {
         Self {
-            hot_retention: Duration::from_secs(3600),      // 1 hour
-            warm_retention: Duration::from_secs(86400),    // 1 day
-            cold_retention: Duration::from_secs(604800),   // 1 week
+            hot_retention: Duration::from_secs(3600),    // 1 hour
+            warm_retention: Duration::from_secs(86400),  // 1 day
+            cold_retention: Duration::from_secs(604800), // 1 week
             hot_access_threshold: 10,
             warm_access_threshold: 3,
             hot_tier_limit: Some(100_000),
@@ -270,10 +270,7 @@ impl TieredStorage {
         self.stats.hot_bytes += original_size;
 
         // Add to time index
-        self.time_index
-            .entry(now)
-            .or_default()
-            .push(id.to_string());
+        self.time_index.entry(now).or_default().push(id.to_string());
 
         Ok(())
     }
@@ -282,7 +279,9 @@ impl TieredStorage {
     pub fn get(&mut self, id: &str) -> Result<Vec<f32>> {
         // Get the tier before borrowing metadata mutably
         let tier = {
-            let meta = self.metadata.get_mut(id)
+            let meta = self
+                .metadata
+                .get_mut(id)
                 .ok_or_else(|| NeedleError::NotFound(format!("Vector '{}' not found", id)))?;
 
             // Update access stats
@@ -349,7 +348,9 @@ impl TieredStorage {
 
     /// Manually move vector to a specific tier.
     pub fn move_to_tier(&mut self, id: &str, target_tier: StorageTier) -> Result<()> {
-        let current_tier = self.metadata.get(id)
+        let current_tier = self
+            .metadata
+            .get(id)
             .ok_or_else(|| NeedleError::NotFound(format!("Vector '{}' not found", id)))?
             .tier;
 
@@ -460,9 +461,7 @@ impl TieredStorage {
                     age_in_tier > self.policy.warm_retention.as_secs()
                         && meta.access_count < self.policy.warm_access_threshold
                 }
-                StorageTier::Cold => {
-                    age_in_tier > self.policy.cold_retention.as_secs()
-                }
+                StorageTier::Cold => age_in_tier > self.policy.cold_retention.as_secs(),
                 StorageTier::Archive => false,
             };
 
@@ -540,9 +539,7 @@ impl TieredStorage {
             StorageTier::Archive | StorageTier::Cold => {
                 meta.access_count >= self.policy.warm_access_threshold
             }
-            StorageTier::Warm => {
-                meta.access_count >= self.policy.hot_access_threshold
-            }
+            StorageTier::Warm => meta.access_count >= self.policy.hot_access_threshold,
             StorageTier::Hot => false,
         };
 
@@ -594,7 +591,10 @@ impl TieredStorage {
         if let Some(stored) = self.archive_tier.get(id) {
             return Ok(stored);
         }
-        Err(NeedleError::NotFound(format!("Vector '{}' not found in any tier", id)))
+        Err(NeedleError::NotFound(format!(
+            "Vector '{}' not found in any tier",
+            id
+        )))
     }
 
     /// Convert vector to bytes.
@@ -808,7 +808,9 @@ mod tests {
     fn test_initial_tier_is_hot() {
         let mut storage = TieredStorage::new(TierPolicy::default());
 
-        storage.put("vec1", &[1.0, 2.0, 3.0], HashMap::new()).unwrap();
+        storage
+            .put("vec1", &[1.0, 2.0, 3.0], HashMap::new())
+            .unwrap();
 
         assert_eq!(storage.get_tier("vec1"), Some(StorageTier::Hot));
     }
@@ -817,7 +819,9 @@ mod tests {
     fn test_manual_tier_move() {
         let mut storage = TieredStorage::new(TierPolicy::default());
 
-        storage.put("vec1", &[1.0, 2.0, 3.0, 4.0], HashMap::new()).unwrap();
+        storage
+            .put("vec1", &[1.0, 2.0, 3.0, 4.0], HashMap::new())
+            .unwrap();
         assert_eq!(storage.get_tier("vec1"), Some(StorageTier::Hot));
 
         storage.move_to_tier("vec1", StorageTier::Warm).unwrap();
@@ -846,8 +850,12 @@ mod tests {
     fn test_stats_tracking() {
         let mut storage = TieredStorage::new(TierPolicy::default());
 
-        storage.put("vec1", &[1.0, 2.0, 3.0, 4.0], HashMap::new()).unwrap();
-        storage.put("vec2", &[5.0, 6.0, 7.0, 8.0], HashMap::new()).unwrap();
+        storage
+            .put("vec1", &[1.0, 2.0, 3.0, 4.0], HashMap::new())
+            .unwrap();
+        storage
+            .put("vec2", &[5.0, 6.0, 7.0, 8.0], HashMap::new())
+            .unwrap();
 
         let stats = storage.stats();
         assert_eq!(stats.hot_count, 2);
@@ -906,8 +914,12 @@ mod tests {
     fn test_cost_estimate() {
         let mut storage = TieredStorage::new(TierPolicy::default());
 
-        storage.put("vec1", &[1.0, 2.0, 3.0, 4.0], HashMap::new()).unwrap();
-        storage.put("vec2", &[1.0, 2.0, 3.0, 4.0], HashMap::new()).unwrap();
+        storage
+            .put("vec1", &[1.0, 2.0, 3.0, 4.0], HashMap::new())
+            .unwrap();
+        storage
+            .put("vec2", &[1.0, 2.0, 3.0, 4.0], HashMap::new())
+            .unwrap();
 
         let cost = storage.estimate_cost();
         assert!(cost.hot_cost > 0.0);
@@ -932,9 +944,7 @@ mod tests {
 
     #[test]
     fn test_tier_limit_enforcement() {
-        let policy = TierPolicyBuilder::new()
-            .hot_tier_limit(2)
-            .build();
+        let policy = TierPolicyBuilder::new().hot_tier_limit(2).build();
 
         let mut storage = TieredStorage::new(policy);
 

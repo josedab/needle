@@ -56,25 +56,25 @@
 //!
 //! All cloud backends include automatic retry with exponential backoff for transient failures.
 
+mod azure;
+mod cached;
 mod common;
 mod config;
-mod local;
-mod cached;
-mod s3;
 mod gcs;
-mod azure;
+mod local;
+mod s3;
 
+pub use azure::{AzureBlobBackend, AzureBlobConfig};
+pub use cached::{
+    CacheStats, CacheTier, CachedBackend, TieredCacheBackend, TieredCacheConfig, TieredCacheStats,
+};
 pub use config::{
     CacheConfig, ConnectionHandle, ConnectionPool, PoolStats, RetryPolicy, StorageBackend,
     StorageConfig,
 };
-pub use local::LocalBackend;
-pub use cached::{
-    CacheStats, CacheTier, CachedBackend, TieredCacheBackend, TieredCacheConfig, TieredCacheStats,
-};
-pub use s3::{S3Backend, S3Config};
 pub use gcs::{GCSBackend, GCSConfig};
-pub use azure::{AzureBlobBackend, AzureBlobConfig};
+pub use local::LocalBackend;
+pub use s3::{S3Backend, S3Config};
 
 use crate::error::Result;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -337,9 +337,9 @@ fn simple_hash(data: &[u8]) -> String {
 mod tests {
     use super::*;
     use cached::key_to_filename;
-    use tempfile::TempDir;
     use std::sync::atomic::Ordering;
     use std::time::Duration;
+    use tempfile::TempDir;
 
     use crate::error::NeedleError;
 
@@ -604,7 +604,8 @@ mod tests {
         let policy = RetryPolicy::default();
 
         // Test successful operation
-        let result = futures::executor::block_on(policy.execute(|| async { Ok::<_, NeedleError>(42) }));
+        let result =
+            futures::executor::block_on(policy.execute(|| async { Ok::<_, NeedleError>(42) }));
         assert_eq!(result.unwrap(), 42);
     }
 
@@ -858,9 +859,11 @@ mod tests {
         assert_eq!(data, b"tiered cache data");
 
         // Check stats
-        assert!(cached.stats().memory_hits.load(Ordering::Relaxed) > 0
-            || cached.stats().ssd_hits.load(Ordering::Relaxed) > 0
-            || cached.stats().origin_fetches.load(Ordering::Relaxed) > 0);
+        assert!(
+            cached.stats().memory_hits.load(Ordering::Relaxed) > 0
+                || cached.stats().ssd_hits.load(Ordering::Relaxed) > 0
+                || cached.stats().origin_fetches.load(Ordering::Relaxed) > 0
+        );
     }
 
     #[test]

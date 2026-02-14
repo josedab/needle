@@ -79,7 +79,7 @@ impl Default for MvccConfig {
             max_versions_per_vector: 100,
             auto_snapshot: true,
             snapshot_interval_seconds: 3600, // 1 hour
-            max_snapshots: 168, // 1 week of hourly snapshots
+            max_snapshots: 168,              // 1 week of hourly snapshots
             enable_gc: true,
             gc_min_age_seconds: 604800, // 1 week
             timestamp_field: "_timestamp".to_string(),
@@ -455,7 +455,10 @@ impl TimeTravelIndex {
         // Add system metadata
         let mut meta = metadata.unwrap_or(serde_json::json!({}));
         if let serde_json::Value::Object(ref mut map) = meta {
-            map.insert(self.config.timestamp_field.clone(), serde_json::json!(timestamp));
+            map.insert(
+                self.config.timestamp_field.clone(),
+                serde_json::json!(timestamp),
+            );
             map.insert(self.config.version_field.clone(), serde_json::json!(txn_id));
         }
 
@@ -602,9 +605,7 @@ impl TimeTravelIndex {
         let visible_ids: Vec<String> = self
             .versions
             .iter()
-            .filter_map(|(id, _)| {
-                self.get_visible_version(id, as_of_txn).map(|_| id.clone())
-            })
+            .filter_map(|(id, _)| self.get_visible_version(id, as_of_txn).map(|_| id.clone()))
             .collect();
 
         if visible_ids.is_empty() {
@@ -625,7 +626,9 @@ impl TimeTravelIndex {
         historical_vectors.sort_by(|a, b| {
             let sim_a = cosine_similarity(query, &a.1);
             let sim_b = cosine_similarity(query, &b.1);
-            sim_b.partial_cmp(&sim_a).unwrap_or(std::cmp::Ordering::Equal)
+            sim_b
+                .partial_cmp(&sim_a)
+                .unwrap_or(std::cmp::Ordering::Equal)
         });
 
         // Take top k
@@ -665,7 +668,11 @@ impl TimeTravelIndex {
         let recent_ids: Vec<String> = self
             .versions
             .iter()
-            .filter(|(_, versions)| versions.iter().any(|v| v.txn_id > since_txn && !v.is_tombstone))
+            .filter(|(_, versions)| {
+                versions
+                    .iter()
+                    .any(|v| v.txn_id > since_txn && !v.is_tombstone)
+            })
             .map(|(id, _)| id.clone())
             .collect();
 
@@ -731,9 +738,9 @@ impl TimeTravelIndex {
             .versions
             .iter()
             .filter(|(_, versions)| {
-                versions.iter().any(|v| {
-                    v.created_at >= start_ts && v.created_at <= end_ts && !v.is_tombstone
-                })
+                versions
+                    .iter()
+                    .any(|v| v.created_at >= start_ts && v.created_at <= end_ts && !v.is_tombstone)
             })
             .map(|(id, _)| id.clone())
             .collect();
@@ -777,7 +784,8 @@ impl TimeTravelIndex {
         };
 
         self.snapshots.insert(snapshot_id.clone(), snapshot);
-        self.snapshot_timeline.insert(timestamp, snapshot_id.clone());
+        self.snapshot_timeline
+            .insert(timestamp, snapshot_id.clone());
 
         // Enforce max snapshots
         while self.snapshots.len() > self.config.max_snapshots {
@@ -817,9 +825,10 @@ impl TimeTravelIndex {
 
     /// Delete a snapshot
     pub fn delete_snapshot(&mut self, id: &str) -> Result<()> {
-        let snapshot = self.snapshots.remove(id).ok_or_else(|| {
-            NeedleError::NotFound(format!("Snapshot '{}' not found", id))
-        })?;
+        let snapshot = self
+            .snapshots
+            .remove(id)
+            .ok_or_else(|| NeedleError::NotFound(format!("Snapshot '{}' not found", id)))?;
         self.snapshot_timeline.remove(&snapshot.timestamp);
         self.stats.total_snapshots = self.snapshots.len();
         Ok(())
@@ -852,10 +861,7 @@ impl TimeTravelIndex {
 
     /// Get vector at a specific version
     pub fn get_at_version(&self, id: &str, version: u64) -> Option<&VectorVersion> {
-        self.versions
-            .get(id)?
-            .iter()
-            .find(|v| v.txn_id == version)
+        self.versions.get(id)?.iter().find(|v| v.txn_id == version)
     }
 
     /// Compare two versions of a vector
@@ -964,7 +970,12 @@ impl TimeTravelIndex {
         let now = Self::now();
         if now - self.last_auto_snapshot >= self.config.snapshot_interval_seconds {
             let name = format!("auto_{}", now);
-            self.create_snapshot_with_options(&name, Some("Automatic snapshot".to_string()), true, Vec::new())?;
+            self.create_snapshot_with_options(
+                &name,
+                Some("Automatic snapshot".to_string()),
+                true,
+                Vec::new(),
+            )?;
             self.last_auto_snapshot = now;
         }
 
@@ -1072,9 +1083,7 @@ fn diff_metadata_changed(
         (Some(serde_json::Value::Object(old_map)), Some(serde_json::Value::Object(new_map))) => {
             old_map
                 .keys()
-                .filter(|k| {
-                    new_map.contains_key(*k) && old_map.get(*k) != new_map.get(*k)
-                })
+                .filter(|k| new_map.contains_key(*k) && old_map.get(*k) != new_map.get(*k))
                 .cloned()
                 .collect()
         }
@@ -1158,7 +1167,9 @@ impl<'a> TimeTravelQueryBuilder<'a> {
 
         match (self.since, self.until) {
             (Some(since), Some(until)) => {
-                return self.index.search_in_range(&self.query, self.k, since, until);
+                return self
+                    .index
+                    .search_in_range(&self.query, self.k, since, until);
             }
             (Some(since), None) => {
                 return self.index.search_since(&self.query, self.k, since);
@@ -1308,11 +1319,7 @@ impl BranchManager {
     }
 
     /// Create a new branch from a snapshot
-    pub fn create_branch(
-        &mut self,
-        name: &str,
-        parent_snapshot: Option<&str>,
-    ) -> Result<&Branch> {
+    pub fn create_branch(&mut self, name: &str, parent_snapshot: Option<&str>) -> Result<&Branch> {
         if self.branches.contains_key(name) {
             return Err(NeedleError::InvalidInput(format!(
                 "Branch '{}' already exists",
@@ -1327,7 +1334,10 @@ impl BranchManager {
         );
         self.branches.insert(name.to_string(), branch);
 
-        Ok(self.branches.get(name).expect("branch exists after insertion"))
+        Ok(self
+            .branches
+            .get(name)
+            .expect("branch exists after insertion"))
     }
 
     /// Create a branch from the current state
@@ -1338,7 +1348,10 @@ impl BranchManager {
     /// Switch to a branch
     pub fn checkout(&mut self, name: &str) -> Result<()> {
         if !self.branches.contains_key(name) {
-            return Err(NeedleError::NotFound(format!("Branch '{}' not found", name)));
+            return Err(NeedleError::NotFound(format!(
+                "Branch '{}' not found",
+                name
+            )));
         }
         self.current_branch = name.to_string();
         Ok(())
@@ -1346,7 +1359,9 @@ impl BranchManager {
 
     /// Get current branch
     pub fn current(&self) -> &Branch {
-        self.branches.get(&self.current_branch).expect("current branch exists")
+        self.branches
+            .get(&self.current_branch)
+            .expect("current branch exists")
     }
 
     /// Get a branch by name
@@ -1442,7 +1457,9 @@ impl BranchManager {
         // Handle conflicts based on strategy
         let success = match strategy {
             ConflictStrategy::Abort if !conflicts.is_empty() => false,
-            ConflictStrategy::TakeSource | ConflictStrategy::TakeTarget | ConflictStrategy::Skip => true,
+            ConflictStrategy::TakeSource
+            | ConflictStrategy::TakeTarget
+            | ConflictStrategy::Skip => true,
             ConflictStrategy::KeepBoth => true,
             ConflictStrategy::Abort => true,
         };
@@ -1451,7 +1468,11 @@ impl BranchManager {
             success,
             vectors_merged,
             conflicts,
-            merge_txn: if success { Some(source_branch.head_txn + 1) } else { None },
+            merge_txn: if success {
+                Some(source_branch.head_txn + 1)
+            } else {
+                None
+            },
             source_branch: source.to_string(),
             target_branch: target.to_string(),
         })
@@ -1755,7 +1776,8 @@ mod tests {
 
         // Simulate changes to both branches
         let feature1_changes: Vec<(&str, &str)> = vec![("doc1", "updated in feature1")];
-        let feature2_changes: Vec<(&str, &str)> = vec![("doc1", "updated in feature2"), ("doc2", "new in feature2")];
+        let feature2_changes: Vec<(&str, &str)> =
+            vec![("doc1", "updated in feature2"), ("doc2", "new in feature2")];
 
         // Check for conflicts
         let modified_in_source: Vec<_> = feature1_changes.iter().map(|(id, _)| *id).collect();
@@ -1779,9 +1801,19 @@ mod tests {
         manager.update_head("feature", 15);
 
         // Empty changes means no conflicts
-        let source_versions: std::collections::HashMap<String, VectorVersion> = std::collections::HashMap::new();
-        let target_versions: std::collections::HashMap<String, VectorVersion> = std::collections::HashMap::new();
-        let result = manager.merge("feature", "main", &source_versions, &target_versions, ConflictStrategy::Abort).unwrap();
+        let source_versions: std::collections::HashMap<String, VectorVersion> =
+            std::collections::HashMap::new();
+        let target_versions: std::collections::HashMap<String, VectorVersion> =
+            std::collections::HashMap::new();
+        let result = manager
+            .merge(
+                "feature",
+                "main",
+                &source_versions,
+                &target_versions,
+                ConflictStrategy::Abort,
+            )
+            .unwrap();
 
         assert!(result.success);
         assert!(result.conflicts.is_empty());
@@ -1797,27 +1829,43 @@ mod tests {
         manager.update_head("feature", 15);
 
         // Create different versions in source and target for the same vector
-        let mut source_versions: std::collections::HashMap<String, VectorVersion> = std::collections::HashMap::new();
-        source_versions.insert("doc1".to_string(), VectorVersion {
-            vector: vec![1.0, 2.0],
-            metadata: None,
-            txn_id: 10,
-            created_at: 1000,
-            is_tombstone: false,
-            deleted_at_txn: None,
-        });
+        let mut source_versions: std::collections::HashMap<String, VectorVersion> =
+            std::collections::HashMap::new();
+        source_versions.insert(
+            "doc1".to_string(),
+            VectorVersion {
+                vector: vec![1.0, 2.0],
+                metadata: None,
+                txn_id: 10,
+                created_at: 1000,
+                is_tombstone: false,
+                deleted_at_txn: None,
+            },
+        );
 
-        let mut target_versions: std::collections::HashMap<String, VectorVersion> = std::collections::HashMap::new();
-        target_versions.insert("doc1".to_string(), VectorVersion {
-            vector: vec![3.0, 4.0],
-            metadata: None,
-            txn_id: 15,
-            created_at: 1500,
-            is_tombstone: false,
-            deleted_at_txn: None,
-        });
+        let mut target_versions: std::collections::HashMap<String, VectorVersion> =
+            std::collections::HashMap::new();
+        target_versions.insert(
+            "doc1".to_string(),
+            VectorVersion {
+                vector: vec![3.0, 4.0],
+                metadata: None,
+                txn_id: 15,
+                created_at: 1500,
+                is_tombstone: false,
+                deleted_at_txn: None,
+            },
+        );
 
-        let result = manager.merge("feature", "main", &source_versions, &target_versions, ConflictStrategy::Abort).unwrap();
+        let result = manager
+            .merge(
+                "feature",
+                "main",
+                &source_versions,
+                &target_versions,
+                ConflictStrategy::Abort,
+            )
+            .unwrap();
         // With conflicts and Abort strategy, success should be false
         assert!(!result.success);
         assert_eq!(result.conflicts.len(), 1);
@@ -1847,7 +1895,10 @@ mod tests {
             source_version: None,
             target_version: None,
         };
-        assert!(matches!(both_modified.conflict_type, ConflictType::BothModified));
+        assert!(matches!(
+            both_modified.conflict_type,
+            ConflictType::BothModified
+        ));
 
         let modify_delete = MergeConflict {
             id: "doc2".to_string(),
@@ -1855,7 +1906,10 @@ mod tests {
             source_version: None,
             target_version: None,
         };
-        assert!(matches!(modify_delete.conflict_type, ConflictType::ModifyDelete));
+        assert!(matches!(
+            modify_delete.conflict_type,
+            ConflictType::ModifyDelete
+        ));
 
         let delete_modify = MergeConflict {
             id: "doc3".to_string(),
@@ -1863,7 +1917,10 @@ mod tests {
             source_version: None,
             target_version: None,
         };
-        assert!(matches!(delete_modify.conflict_type, ConflictType::DeleteModify));
+        assert!(matches!(
+            delete_modify.conflict_type,
+            ConflictType::DeleteModify
+        ));
     }
 
     #[test]

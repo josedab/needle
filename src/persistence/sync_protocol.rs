@@ -59,15 +59,9 @@ pub enum SyncTarget {
         region: String,
     },
     /// Ship to GCS bucket.
-    Gcs {
-        bucket: String,
-        prefix: String,
-    },
+    Gcs { bucket: String, prefix: String },
     /// Ship to Azure Blob container.
-    AzureBlob {
-        container: String,
-        prefix: String,
-    },
+    AzureBlob { container: String, prefix: String },
 }
 
 impl SyncTarget {
@@ -260,8 +254,12 @@ impl SyncManager {
         let elapsed = start.elapsed();
         self.stats.segments_shipped.fetch_add(1, Ordering::Relaxed);
         self.stats.snapshots_created.fetch_add(1, Ordering::Relaxed);
-        self.stats.bytes_shipped.fetch_add(info.size_bytes, Ordering::Relaxed);
-        self.stats.last_ship_ms.store(elapsed.as_millis() as u64, Ordering::Relaxed);
+        self.stats
+            .bytes_shipped
+            .fetch_add(info.size_bytes, Ordering::Relaxed);
+        self.stats
+            .last_ship_ms
+            .store(elapsed.as_millis() as u64, Ordering::Relaxed);
 
         // Record in manifest and history
         {
@@ -286,9 +284,10 @@ impl SyncManager {
     /// Restore the latest snapshot from the sync target into an in-memory database.
     pub fn restore_latest(&self) -> Result<Database> {
         let manifest = self.manifest.read();
-        let last = manifest.segments.last().ok_or_else(|| {
-            NeedleError::NotFound("No segments available for restore".into())
-        })?;
+        let last = manifest
+            .segments
+            .last()
+            .ok_or_else(|| NeedleError::NotFound("No segments available for restore".into()))?;
 
         let filename = format!("segment_{:08}.json", last.id);
         let data = self.read_from_target(&filename)?;
@@ -320,8 +319,7 @@ impl SyncManager {
             return Ok(0);
         }
 
-        let cutoff = Utc::now()
-            - chrono::Duration::hours(self.config.retention_hours as i64);
+        let cutoff = Utc::now() - chrono::Duration::hours(self.config.retention_hours as i64);
         let cutoff_str = cutoff.to_rfc3339();
 
         let mut manifest = self.manifest.write();
@@ -387,11 +385,9 @@ impl SyncManager {
 
     fn read_from_target(&self, filename: &str) -> Result<Vec<u8>> {
         match &self.config.target {
-            SyncTarget::LocalDir(dir) => {
-                std::fs::read(dir.join(filename)).map_err(|e| {
-                    NeedleError::InvalidOperation(format!("Failed to read segment: {}", e))
-                })
-            }
+            SyncTarget::LocalDir(dir) => std::fs::read(dir.join(filename)).map_err(|e| {
+                NeedleError::InvalidOperation(format!("Failed to read segment: {}", e))
+            }),
             _ => Err(NeedleError::NotFound(
                 "Cloud restore not yet implemented".into(),
             )),
@@ -473,8 +469,7 @@ mod tests {
     #[test]
     fn test_retention_policy() {
         let dir = tempfile::tempdir().unwrap();
-        let config = SyncConfig::new(SyncTarget::local(dir.path()))
-            .retention_hours(0); // retain forever
+        let config = SyncConfig::new(SyncTarget::local(dir.path())).retention_hours(0); // retain forever
         let sync = SyncManager::new(config);
 
         let db = make_db();

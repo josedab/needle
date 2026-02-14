@@ -21,12 +21,19 @@ pub trait StorageBackend: Send + Sync {
     ///
     /// Returns the data as a byte vector.
     /// Returns an error if the key does not exist or reading fails.
-    fn read<'a>(&'a self, key: &'a str) -> Pin<Box<dyn Future<Output = Result<Vec<u8>>> + Send + 'a>>;
+    fn read<'a>(
+        &'a self,
+        key: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<u8>>> + Send + 'a>>;
 
     /// Write data to storage.
     ///
     /// Overwrites existing data if the key already exists.
-    fn write<'a>(&'a self, key: &'a str, data: &'a [u8]) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>>;
+    fn write<'a>(
+        &'a self,
+        key: &'a str,
+        data: &'a [u8],
+    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>>;
 
     /// Delete data from storage.
     ///
@@ -36,10 +43,16 @@ pub trait StorageBackend: Send + Sync {
     /// List keys with a given prefix.
     ///
     /// Returns all keys that start with the given prefix.
-    fn list<'a>(&'a self, prefix: &'a str) -> Pin<Box<dyn Future<Output = Result<Vec<String>>> + Send + 'a>>;
+    fn list<'a>(
+        &'a self,
+        prefix: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<String>>> + Send + 'a>>;
 
     /// Check if a key exists.
-    fn exists<'a>(&'a self, key: &'a str) -> Pin<Box<dyn Future<Output = Result<bool>> + Send + 'a>>;
+    fn exists<'a>(
+        &'a self,
+        key: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<bool>> + Send + 'a>>;
 }
 
 // ============================================================================
@@ -93,7 +106,7 @@ pub struct CacheConfig {
 impl Default for CacheConfig {
     fn default() -> Self {
         Self {
-            max_size: 100 * 1024 * 1024, // 100MB
+            max_size: 100 * 1024 * 1024,           // 100MB
             default_ttl: Duration::from_secs(300), // 5 minutes
             enable_stats: true,
         }
@@ -174,7 +187,9 @@ impl ConnectionPool {
 
     /// Acquire a connection from the pool.
     pub fn acquire(&self) -> Result<ConnectionHandle> {
-        self.stats.active_connections.fetch_add(1, Ordering::Relaxed);
+        self.stats
+            .active_connections
+            .fetch_add(1, Ordering::Relaxed);
         self.stats.idle_connections.fetch_sub(1, Ordering::Relaxed);
         self.stats.requests_served.fetch_add(1, Ordering::Relaxed);
 
@@ -287,18 +302,13 @@ impl RetryPolicy {
         }
 
         Err(last_error.unwrap_or_else(|| {
-            NeedleError::Io(std::io::Error::other(
-                "Retry exhausted with no error",
-            ))
+            NeedleError::Io(std::io::Error::other("Retry exhausted with no error"))
         }))
     }
 
     /// Check if an error is retryable.
     fn is_retryable(error: &NeedleError) -> bool {
-        matches!(
-            error,
-            NeedleError::Io(_) | NeedleError::BackupError(_)
-        )
+        matches!(error, NeedleError::Io(_) | NeedleError::BackupError(_))
     }
 }
 

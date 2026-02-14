@@ -1,7 +1,7 @@
 //! Local file system storage backend.
 
-use crate::error::{NeedleError, Result};
 use super::config::{ConnectionPool, RetryPolicy, StorageBackend};
+use crate::error::{NeedleError, Result};
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
@@ -65,7 +65,10 @@ impl LocalBackend {
 }
 
 impl StorageBackend for LocalBackend {
-    fn read<'a>(&'a self, key: &'a str) -> Pin<Box<dyn Future<Output = Result<Vec<u8>>> + Send + 'a>> {
+    fn read<'a>(
+        &'a self,
+        key: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<u8>>> + Send + 'a>> {
         Box::pin(async move {
             let path = self.key_to_path(key);
             let _conn = self.pool.acquire()?;
@@ -84,7 +87,11 @@ impl StorageBackend for LocalBackend {
         })
     }
 
-    fn write<'a>(&'a self, key: &'a str, data: &'a [u8]) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
+    fn write<'a>(
+        &'a self,
+        key: &'a str,
+        data: &'a [u8],
+    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
         Box::pin(async move {
             let path = self.key_to_path(key);
             let _conn = self.pool.acquire()?;
@@ -110,7 +117,10 @@ impl StorageBackend for LocalBackend {
         })
     }
 
-    fn list<'a>(&'a self, prefix: &'a str) -> Pin<Box<dyn Future<Output = Result<Vec<String>>> + Send + 'a>> {
+    fn list<'a>(
+        &'a self,
+        prefix: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<String>>> + Send + 'a>> {
         Box::pin(async move {
             let base = self.key_to_path(prefix);
             let _conn = self.pool.acquire()?;
@@ -121,7 +131,9 @@ impl StorageBackend for LocalBackend {
             let search_dir = if base.is_dir() {
                 base.clone()
             } else {
-                base.parent().map(|p| p.to_path_buf()).unwrap_or_else(|| self.base_path.clone())
+                base.parent()
+                    .map(|p| p.to_path_buf())
+                    .unwrap_or_else(|| self.base_path.clone())
             };
 
             if search_dir.exists() {
@@ -132,7 +144,10 @@ impl StorageBackend for LocalBackend {
         })
     }
 
-    fn exists<'a>(&'a self, key: &'a str) -> Pin<Box<dyn Future<Output = Result<bool>> + Send + 'a>> {
+    fn exists<'a>(
+        &'a self,
+        key: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<bool>> + Send + 'a>> {
         Box::pin(async move {
             let path = self.key_to_path(key);
             let _conn = self.pool.acquire()?;

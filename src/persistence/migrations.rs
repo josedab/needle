@@ -57,7 +57,11 @@ pub struct SchemaVersion {
 impl SchemaVersion {
     /// Create a new schema version.
     pub fn new(major: u32, minor: u32, patch: u32) -> Self {
-        Self { major, minor, patch }
+        Self {
+            major,
+            minor,
+            patch,
+        }
     }
 
     /// Parse from string (e.g., "1.2.3").
@@ -192,7 +196,9 @@ impl Migration {
             description: description.into(),
             up_fn: Box::new(up_fn),
             down_fn: Box::new(|_| {
-                Err(NeedleError::InvalidInput("Migration is not reversible".to_string()))
+                Err(NeedleError::InvalidInput(
+                    "Migration is not reversible".to_string(),
+                ))
             }),
             reversible: false,
         }
@@ -358,19 +364,11 @@ pub enum IndexType {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum MigrationOperation {
     /// Create a new collection.
-    CreateCollection {
-        name: String,
-        dimensions: usize,
-    },
+    CreateCollection { name: String, dimensions: usize },
     /// Drop a collection.
-    DropCollection {
-        name: String,
-    },
+    DropCollection { name: String },
     /// Rename a collection.
-    RenameCollection {
-        old_name: String,
-        new_name: String,
-    },
+    RenameCollection { old_name: String, new_name: String },
     /// Create an index.
     CreateIndex {
         collection: String,
@@ -399,9 +397,7 @@ pub enum MigrationOperation {
         field_name: String,
     },
     /// Custom operation.
-    Custom {
-        command: String,
-    },
+    Custom { command: String },
 }
 
 /// Migration manager for tracking and running migrations.
@@ -761,12 +757,14 @@ impl MigrationManager {
 
         let last_applied_idx = match last_applied_idx {
             Some(idx) => idx,
-            None => return Ok(MigrationResult {
-                migrations_run: 0,
-                final_version: self.current_version,
-                operations: vec![],
-                errors: vec![],
-            }),
+            None => {
+                return Ok(MigrationResult {
+                    migrations_run: 0,
+                    final_version: self.current_version,
+                    operations: vec![],
+                    errors: vec![],
+                })
+            }
         };
 
         let migration_id = self.history[last_applied_idx].id.clone();
@@ -776,12 +774,14 @@ impl MigrationManager {
 
         let mig_idx = match mig_idx {
             Some(idx) => idx,
-            None => return Ok(MigrationResult {
-                migrations_run: 0,
-                final_version: self.current_version,
-                operations: vec![],
-                errors: vec![],
-            }),
+            None => {
+                return Ok(MigrationResult {
+                    migrations_run: 0,
+                    final_version: self.current_version,
+                    operations: vec![],
+                    errors: vec![],
+                })
+            }
         };
 
         // Check if reversible
@@ -1010,7 +1010,9 @@ impl CompatibilityResult {
         }
 
         if downgrade_needed && !compatible {
-            issues.push("Database version is newer than application - downgrade may lose data".to_string());
+            issues.push(
+                "Database version is newer than application - downgrade may lose data".to_string(),
+            );
         }
 
         Self {
@@ -1218,29 +1220,23 @@ mod tests {
     #[test]
     fn test_compatibility_check() {
         // Compatible versions
-        let result = CompatibilityResult::check(
-            SchemaVersion::new(1, 0, 0),
-            SchemaVersion::new(1, 2, 0),
-        );
+        let result =
+            CompatibilityResult::check(SchemaVersion::new(1, 0, 0), SchemaVersion::new(1, 2, 0));
         assert!(result.compatible);
         assert!(result.upgrade_needed);
         assert!(!result.downgrade_needed);
 
         // Incompatible versions
-        let result = CompatibilityResult::check(
-            SchemaVersion::new(1, 0, 0),
-            SchemaVersion::new(2, 0, 0),
-        );
+        let result =
+            CompatibilityResult::check(SchemaVersion::new(1, 0, 0), SchemaVersion::new(2, 0, 0));
         assert!(!result.compatible);
         assert!(result.upgrade_needed);
     }
 
     #[test]
     fn test_migration_context() {
-        let mut ctx = MigrationContext::new(
-            SchemaVersion::new(0, 0, 0),
-            SchemaVersion::new(1, 0, 0),
-        );
+        let mut ctx =
+            MigrationContext::new(SchemaVersion::new(0, 0, 0), SchemaVersion::new(1, 0, 0));
 
         ctx.create_collection("test", 128);
         ctx.create_index("test", IndexType::Hnsw);
@@ -1248,7 +1244,10 @@ mod tests {
         ctx.set_metadata("migrated_at", "2024-01-01");
 
         assert_eq!(ctx.operations().len(), 3);
-        assert_eq!(ctx.metadata.get("migrated_at"), Some(&"2024-01-01".to_string()));
+        assert_eq!(
+            ctx.metadata.get("migrated_at"),
+            Some(&"2024-01-01".to_string())
+        );
     }
 
     #[test]

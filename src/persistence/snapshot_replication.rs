@@ -102,19 +102,11 @@ pub enum DeltaOperation {
         has_metadata: bool,
     },
     /// Vector deleted.
-    Delete {
-        collection: String,
-        id: String,
-    },
+    Delete { collection: String, id: String },
     /// Collection created.
-    CreateCollection {
-        name: String,
-        dimension: usize,
-    },
+    CreateCollection { name: String, dimension: usize },
     /// Collection dropped.
-    DropCollection {
-        name: String,
-    },
+    DropCollection { name: String },
 }
 
 // ---------------------------------------------------------------------------
@@ -567,9 +559,7 @@ impl Default for InMemoryTransport {
 
 impl SnapshotTransport for InMemoryTransport {
     fn upload(&self, snapshot: &Snapshot, data: &[u8]) -> Result<String> {
-        self.data
-            .write()
-            .insert(snapshot.id.clone(), data.to_vec());
+        self.data.write().insert(snapshot.id.clone(), data.to_vec());
         Ok(snapshot.id.clone())
     }
 
@@ -927,7 +917,11 @@ mod tests {
 
     #[test]
     fn test_compression_type_serialization() {
-        let types = [CompressionType::None, CompressionType::Lz4, CompressionType::Zstd];
+        let types = [
+            CompressionType::None,
+            CompressionType::Lz4,
+            CompressionType::Zstd,
+        ];
         for ct in &types {
             let json = serde_json::to_string(ct).unwrap();
             let decoded: CompressionType = serde_json::from_str(&json).unwrap();
