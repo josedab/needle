@@ -61,7 +61,7 @@
 //! collection.sync().await?;
 //! ```
 
-use crate::crdt::{Delta, HLC, MergeResult, ReplicaId, VectorCRDT};
+use crate::crdt::{Delta, MergeResult, ReplicaId, VectorCRDT, HLC};
 use crate::error::{NeedleError, Result};
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
@@ -432,7 +432,10 @@ impl CollaborativeCollection {
 
     /// Add an annotation to a document.
     pub fn annotate(&self, document_id: &str, user_id: &str, content: &str) -> Result<HLC> {
-        let timestamp = self.annotations.write().add(document_id, user_id, content)?;
+        let timestamp = self
+            .annotations
+            .write()
+            .add(document_id, user_id, content)?;
 
         self.notify_subscribers(CollaborativeEvent::AnnotationAdded {
             document_id: document_id.to_string(),
@@ -774,7 +777,8 @@ impl AnnotationStore {
                 }
             }
 
-            self.operation_log.insert(timestamped.timestamp, timestamped);
+            self.operation_log
+                .insert(timestamped.timestamp, timestamped);
         }
 
         AnnotationMergeResult { applied, skipped }
@@ -980,7 +984,9 @@ impl PresenceTracker {
         let user_id = presence.user_id.clone();
         let is_new = !self.presences.read().contains_key(&user_id);
 
-        self.presences.write().insert(user_id.clone(), presence.clone());
+        self.presences
+            .write()
+            .insert(user_id.clone(), presence.clone());
 
         let event = if is_new {
             PresenceEvent::Joined(presence)
@@ -1168,7 +1174,8 @@ impl Session {
         }
         drop(access);
 
-        self.presence.set(Presence::active(user_id, "Joined session"));
+        self.presence
+            .set(Presence::active(user_id, "Joined session"));
         Ok(())
     }
 
@@ -1228,7 +1235,9 @@ impl Session {
 
     /// Set metadata.
     pub fn set_metadata(&self, key: &str, value: &str) {
-        self.metadata.write().insert(key.to_string(), value.to_string());
+        self.metadata
+            .write()
+            .insert(key.to_string(), value.to_string());
     }
 
     /// Get metadata.
@@ -1257,7 +1266,9 @@ impl SessionManager {
         let session = Arc::new(Session::new(&id, name, created_by));
         self.sessions.write().insert(id, session.clone());
         // Creator automatically joins the session
-        session.presence.set(Presence::active(created_by, "Created session"));
+        session
+            .presence
+            .set(Presence::active(created_by, "Created session"));
         session
     }
 
@@ -1494,9 +1505,15 @@ impl SyncManager {
     }
 
     /// Get delta for a collection.
-    pub fn get_delta(&self, collection_name: &str, since: Option<HLC>) -> Option<CollaborativeDelta> {
+    pub fn get_delta(
+        &self,
+        collection_name: &str,
+        since: Option<HLC>,
+    ) -> Option<CollaborativeDelta> {
         let collections = self.collections.read();
-        collections.get(collection_name).map(|c| c.delta_since(since))
+        collections
+            .get(collection_name)
+            .map(|c| c.delta_since(since))
     }
 
     /// Apply a delta to a collection.
@@ -1584,8 +1601,8 @@ fn cosine_distance(a: &[f32], b: &[f32]) -> f32 {
 
 /// Generate a unique session ID.
 fn generate_session_id() -> String {
-    use std::hash::{Hash, Hasher};
     use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
 
     let now = current_timestamp_millis();
     let mut hasher = DefaultHasher::new();
@@ -1619,9 +1636,7 @@ mod tests {
         let collection = CollaborativeCollection::new("test", 4);
         let vector = vec![1.0, 2.0, 3.0, 4.0];
 
-        collection
-            .insert("vec1", &vector, HashMap::new())
-            .unwrap();
+        collection.insert("vec1", &vector, HashMap::new()).unwrap();
 
         let retrieved = collection.get("vec1").unwrap();
         assert_eq!(retrieved.id, "vec1");
@@ -1659,9 +1674,7 @@ mod tests {
         collection
             .annotate("vec1", "user1", "This is relevant")
             .unwrap();
-        collection
-            .annotate("vec1", "user2", "I agree")
-            .unwrap();
+        collection.annotate("vec1", "user2", "I agree").unwrap();
 
         let vec = collection.get("vec1").unwrap();
         assert_eq!(vec.annotations.len(), 2);

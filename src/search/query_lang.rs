@@ -54,7 +54,11 @@ pub enum QueryError {
     /// Lexer encountered an invalid token
     InvalidToken { position: usize, found: String },
     /// Parser expected a different token
-    UnexpectedToken { expected: String, found: String, position: usize },
+    UnexpectedToken {
+        expected: String,
+        found: String,
+        position: usize,
+    },
     /// Missing required clause
     MissingClause { clause: String },
     /// Invalid identifier
@@ -81,8 +85,16 @@ impl std::fmt::Display for QueryError {
             Self::InvalidToken { position, found } => {
                 write!(f, "Invalid token '{}' at position {}", found, position)
             }
-            Self::UnexpectedToken { expected, found, position } => {
-                write!(f, "Expected {} but found '{}' at position {}", expected, found, position)
+            Self::UnexpectedToken {
+                expected,
+                found,
+                position,
+            } => {
+                write!(
+                    f,
+                    "Expected {} but found '{}' at position {}",
+                    expected, found, position
+                )
             }
             Self::MissingClause { clause } => {
                 write!(f, "Missing required clause: {}", clause)
@@ -154,26 +166,26 @@ pub enum Token {
     TimeDecay,
 
     // Operators
-    Eq,           // =
-    Ne,           // != or <>
-    Lt,           // <
-    Le,           // <=
-    Gt,           // >
-    Ge,           // >=
+    Eq, // =
+    Ne, // != or <>
+    Lt, // <
+    Le, // <=
+    Gt, // >
+    Ge, // >=
 
     // Punctuation
-    Star,         // *
-    Comma,        // ,
-    LParen,       // (
-    RParen,       // )
-    Dollar,       // $
+    Star,   // *
+    Comma,  // ,
+    LParen, // (
+    RParen, // )
+    Dollar, // $
 
     // Literals
     Identifier(String),
     StringLit(String),
     NumberLit(f64),
     BoolLit(bool),
-    Parameter(String),  // $name
+    Parameter(String), // $name
 
     // Duration literals
     Duration(u64, DurationUnit),
@@ -354,9 +366,9 @@ impl Lexer {
             }
         }
 
-        let value: f64 = num_str.parse().map_err(|_| QueryError::InvalidLiteral {
-            value: num_str,
-        })?;
+        let value: f64 = num_str
+            .parse()
+            .map_err(|_| QueryError::InvalidLiteral { value: num_str })?;
 
         Ok(Token::NumberLit(value))
     }
@@ -440,7 +452,10 @@ impl Lexer {
                 let s = self.read_string(quote)?;
                 Ok(Token::StringLit(s))
             }
-            Some(ch) if ch.is_ascii_digit() || (ch == '-' && self.peek_next().is_some_and(|c| c.is_ascii_digit())) => {
+            Some(ch)
+                if ch.is_ascii_digit()
+                    || (ch == '-' && self.peek_next().is_some_and(|c| c.is_ascii_digit())) =>
+            {
                 self.read_number()
             }
             Some(ch) if ch.is_alphabetic() || ch == '_' => {
@@ -885,7 +900,10 @@ impl QueryParser {
 
         // Optional alias
         let alias = if let Token::Identifier(name) = &self.current {
-            if !matches!(name.to_uppercase().as_str(), "WHERE" | "WITH" | "USING" | "LIMIT" | "ORDER" | "OFFSET") {
+            if !matches!(
+                name.to_uppercase().as_str(),
+                "WHERE" | "WITH" | "USING" | "LIMIT" | "ORDER" | "OFFSET"
+            ) {
                 let a = name.clone();
                 self.advance()?;
                 Some(a)
@@ -915,9 +933,7 @@ impl QueryParser {
                     "GAUSSIAN" | "GAUSS" => TimeDecayFunction::Gaussian,
                     "STEP" => TimeDecayFunction::Step,
                     _ => {
-                        return Err(QueryError::InvalidIdentifier {
-                            name: name.clone(),
-                        });
+                        return Err(QueryError::InvalidIdentifier { name: name.clone() });
                     }
                 };
                 self.advance()?;
@@ -1231,9 +1247,7 @@ impl QueryParser {
             Token::BoolLit(b) => LiteralValue::Bool(*b),
             Token::Null => LiteralValue::Null,
             Token::Parameter(name) => LiteralValue::Parameter(name.clone()),
-            Token::Duration(val, unit) => {
-                LiteralValue::Number(unit.to_seconds(*val) as f64)
-            }
+            Token::Duration(val, unit) => LiteralValue::Number(unit.to_seconds(*val) as f64),
             _ => {
                 return Err(QueryError::UnexpectedToken {
                     expected: "literal value".to_string(),
@@ -1468,11 +1482,13 @@ impl QueryExecutor {
         }
 
         // Get query vector
-        let query_vector = context.query_vector.clone().ok_or_else(|| {
-            QueryError::MissingParameter {
-                name: "query_vector".to_string(),
-            }
-        })?;
+        let query_vector =
+            context
+                .query_vector
+                .clone()
+                .ok_or_else(|| QueryError::MissingParameter {
+                    name: "query_vector".to_string(),
+                })?;
 
         // Build filter from WHERE clause
         let filter = if let Some(where_clause) = &query.where_clause {
@@ -1485,12 +1501,17 @@ impl QueryExecutor {
         let limit = query.limit.unwrap_or(10) as usize;
 
         // Run cost-based optimizer to select execution strategy
-        let collection = self.db.collection(&query.from.collection)
-            .map_err(|e| QueryError::ExecutionError { message: e.to_string() })?;
+        let collection =
+            self.db
+                .collection(&query.from.collection)
+                .map_err(|e| QueryError::ExecutionError {
+                    message: e.to_string(),
+                })?;
 
         let col_stats = {
-            let s = collection.stats()
-                .map_err(|e| QueryError::ExecutionError { message: e.to_string() })?;
+            let s = collection.stats().map_err(|e| QueryError::ExecutionError {
+                message: e.to_string(),
+            })?;
             CollectionStatistics {
                 vector_count: s.vector_count,
                 dimensions: s.dimensions,
@@ -1529,7 +1550,10 @@ impl QueryExecutor {
                     collection.search(&query_vector, limit)
                 }
             }
-        }.map_err(|e| QueryError::ExecutionError { message: e.to_string() })?;
+        }
+        .map_err(|e| QueryError::ExecutionError {
+            message: e.to_string(),
+        })?;
 
         let search_time = search_start.elapsed();
 
@@ -1582,7 +1606,9 @@ impl QueryExecutor {
                 Ok(filter)
             }
             Expression::InList(in_expr) => {
-                let values: Vec<Value> = in_expr.values.iter()
+                let values: Vec<Value> = in_expr
+                    .values
+                    .iter()
                     .map(|v| Self::resolve_value(v, context))
                     .collect::<QueryResult<_>>()?;
 
@@ -1646,9 +1672,7 @@ impl QueryExecutor {
                 let f = Self::build_filter(inner, context)?;
                 Ok(Filter::Not(Box::new(f)))
             }
-            Expression::Grouped(inner) => {
-                Self::build_filter(inner, context)
-            }
+            Expression::Grouped(inner) => Self::build_filter(inner, context),
         }
     }
 
@@ -1659,11 +1683,11 @@ impl QueryExecutor {
             LiteralValue::Number(n) => Ok(serde_json::json!(*n)),
             LiteralValue::Bool(b) => Ok(Value::Bool(*b)),
             LiteralValue::Null => Ok(Value::Null),
-            LiteralValue::Parameter(name) => {
-                context.params.get(name).cloned().ok_or_else(|| {
-                    QueryError::MissingParameter { name: name.clone() }
-                })
-            }
+            LiteralValue::Parameter(name) => context
+                .params
+                .get(name)
+                .cloned()
+                .ok_or_else(|| QueryError::MissingParameter { name: name.clone() }),
         }
     }
 
@@ -1783,10 +1807,7 @@ pub struct CostBasedOptimizer;
 
 impl CostBasedOptimizer {
     /// Estimate the cost of a query and choose the best execution strategy.
-    pub fn optimize(
-        query: &Query,
-        stats: &CollectionStatistics,
-    ) -> OptimizedPlan {
+    pub fn optimize(query: &Query, stats: &CollectionStatistics) -> OptimizedPlan {
         let n = stats.vector_count as f64;
         let d = stats.dimensions as f64;
         let k = query.limit.unwrap_or(10) as f64;
@@ -1816,7 +1837,10 @@ impl CostBasedOptimizer {
         let bf_cost = brute_cost;
 
         let (strategy, chosen_cost) = if n < 1000.0 {
-            notes.push(format!("Small collection ({} vectors): brute-force preferred", n as usize));
+            notes.push(format!(
+                "Small collection ({} vectors): brute-force preferred",
+                n as usize
+            ));
             (SearchStrategy::BruteForceScan, bf_cost)
         } else if selectivity < 0.05 && n > 10_000.0 {
             notes.push(format!(
@@ -1827,7 +1851,9 @@ impl CostBasedOptimizer {
         } else if selectivity < 0.3 && fti_cost < itf_cost {
             notes.push(format!(
                 "Selective filter ({:.1}%): filter-then-index cheaper ({:.1} vs {:.1})",
-                selectivity * 100.0, fti_cost, itf_cost
+                selectivity * 100.0,
+                fti_cost,
+                itf_cost
             ));
             (SearchStrategy::FilterThenIndex, fti_cost)
         } else {
@@ -1851,7 +1877,10 @@ impl CostBasedOptimizer {
             SearchStrategy::FilterThenIndex => {
                 steps.push(OptimizedStep {
                     step_type: "MetadataFilter".into(),
-                    description: format!("Pre-filter {} vectors to ~{}", n as usize, filtered_rows as usize),
+                    description: format!(
+                        "Pre-filter {} vectors to ~{}",
+                        n as usize, filtered_rows as usize
+                    ),
                     cost: CostEstimate {
                         cpu_cost: filter_cost,
                         io_cost: 0.0,
@@ -1954,7 +1983,8 @@ impl CostBasedOptimizer {
             Expression::Like(_) => 0.15,
             Expression::IsNull(_) => 0.05,
             Expression::And(l, r) => {
-                Self::estimate_expr_selectivity(l, stats) * Self::estimate_expr_selectivity(r, stats)
+                Self::estimate_expr_selectivity(l, stats)
+                    * Self::estimate_expr_selectivity(r, stats)
             }
             Expression::Or(l, r) => {
                 let sl = Self::estimate_expr_selectivity(l, stats);
@@ -2006,8 +2036,14 @@ mod tests {
     #[allow(clippy::approx_constant)]
     fn test_lexer_literals() {
         let mut lexer = Lexer::new("'hello' \"world\" 42 3.14 true false");
-        assert_eq!(lexer.next_token().unwrap(), Token::StringLit("hello".to_string()));
-        assert_eq!(lexer.next_token().unwrap(), Token::StringLit("world".to_string()));
+        assert_eq!(
+            lexer.next_token().unwrap(),
+            Token::StringLit("hello".to_string())
+        );
+        assert_eq!(
+            lexer.next_token().unwrap(),
+            Token::StringLit("world".to_string())
+        );
         assert_eq!(lexer.next_token().unwrap(), Token::NumberLit(42.0));
         assert_eq!(lexer.next_token().unwrap(), Token::NumberLit(3.14));
         assert_eq!(lexer.next_token().unwrap(), Token::BoolLit(true));
@@ -2017,26 +2053,56 @@ mod tests {
     #[test]
     fn test_lexer_parameters() {
         let mut lexer = Lexer::new("$query $limit $filter");
-        assert_eq!(lexer.next_token().unwrap(), Token::Parameter("query".to_string()));
-        assert_eq!(lexer.next_token().unwrap(), Token::Parameter("limit".to_string()));
-        assert_eq!(lexer.next_token().unwrap(), Token::Parameter("filter".to_string()));
+        assert_eq!(
+            lexer.next_token().unwrap(),
+            Token::Parameter("query".to_string())
+        );
+        assert_eq!(
+            lexer.next_token().unwrap(),
+            Token::Parameter("limit".to_string())
+        );
+        assert_eq!(
+            lexer.next_token().unwrap(),
+            Token::Parameter("filter".to_string())
+        );
     }
 
     #[test]
     fn test_lexer_duration() {
         let mut lexer = Lexer::new("7d 24h 60m 30s");
-        assert_eq!(lexer.next_token().unwrap(), Token::Duration(7, DurationUnit::Days));
-        assert_eq!(lexer.next_token().unwrap(), Token::Duration(24, DurationUnit::Hours));
-        assert_eq!(lexer.next_token().unwrap(), Token::Duration(60, DurationUnit::Minutes));
-        assert_eq!(lexer.next_token().unwrap(), Token::Duration(30, DurationUnit::Seconds));
+        assert_eq!(
+            lexer.next_token().unwrap(),
+            Token::Duration(7, DurationUnit::Days)
+        );
+        assert_eq!(
+            lexer.next_token().unwrap(),
+            Token::Duration(24, DurationUnit::Hours)
+        );
+        assert_eq!(
+            lexer.next_token().unwrap(),
+            Token::Duration(60, DurationUnit::Minutes)
+        );
+        assert_eq!(
+            lexer.next_token().unwrap(),
+            Token::Duration(30, DurationUnit::Seconds)
+        );
     }
 
     #[test]
     fn test_lexer_identifiers() {
         let mut lexer = Lexer::new("collection_name field1 _private");
-        assert_eq!(lexer.next_token().unwrap(), Token::Identifier("collection_name".to_string()));
-        assert_eq!(lexer.next_token().unwrap(), Token::Identifier("field1".to_string()));
-        assert_eq!(lexer.next_token().unwrap(), Token::Identifier("_private".to_string()));
+        assert_eq!(
+            lexer.next_token().unwrap(),
+            Token::Identifier("collection_name".to_string())
+        );
+        assert_eq!(
+            lexer.next_token().unwrap(),
+            Token::Identifier("field1".to_string())
+        );
+        assert_eq!(
+            lexer.next_token().unwrap(),
+            Token::Identifier("_private".to_string())
+        );
     }
 
     // Parser tests
@@ -2061,9 +2127,9 @@ mod tests {
 
     #[test]
     fn test_parse_where_similar_to() {
-        let query = QueryParser::parse(
-            "SELECT * FROM documents WHERE vector SIMILAR TO $query LIMIT 10"
-        ).unwrap();
+        let query =
+            QueryParser::parse("SELECT * FROM documents WHERE vector SIMILAR TO $query LIMIT 10")
+                .unwrap();
 
         if let Some(where_clause) = query.where_clause {
             if let Expression::SimilarTo(similar) = where_clause.expression {
@@ -2079,18 +2145,17 @@ mod tests {
 
     #[test]
     fn test_parse_where_comparison() {
-        let query = QueryParser::parse(
-            "SELECT * FROM docs WHERE category = 'science' AND score > 0.5"
-        ).unwrap();
+        let query =
+            QueryParser::parse("SELECT * FROM docs WHERE category = 'science' AND score > 0.5")
+                .unwrap();
 
         assert!(query.where_clause.is_some());
     }
 
     #[test]
     fn test_parse_where_in() {
-        let query = QueryParser::parse(
-            "SELECT * FROM docs WHERE status IN ('active', 'pending')"
-        ).unwrap();
+        let query =
+            QueryParser::parse("SELECT * FROM docs WHERE status IN ('active', 'pending')").unwrap();
 
         if let Some(where_clause) = query.where_clause {
             if let Expression::InList(in_list) = where_clause.expression {
@@ -2107,9 +2172,8 @@ mod tests {
 
     #[test]
     fn test_parse_where_between() {
-        let query = QueryParser::parse(
-            "SELECT * FROM docs WHERE score BETWEEN 0.5 AND 1.0"
-        ).unwrap();
+        let query =
+            QueryParser::parse("SELECT * FROM docs WHERE score BETWEEN 0.5 AND 1.0").unwrap();
 
         if let Some(where_clause) = query.where_clause {
             if let Expression::Between(between) = where_clause.expression {
@@ -2124,9 +2188,8 @@ mod tests {
 
     #[test]
     fn test_parse_where_like() {
-        let query = QueryParser::parse(
-            "SELECT * FROM docs WHERE title LIKE '%machine learning%'"
-        ).unwrap();
+        let query =
+            QueryParser::parse("SELECT * FROM docs WHERE title LIKE '%machine learning%'").unwrap();
 
         if let Some(where_clause) = query.where_clause {
             if let Expression::Like(like) = where_clause.expression {
@@ -2143,8 +2206,9 @@ mod tests {
     #[test]
     fn test_parse_explain_analyze() {
         let query = QueryParser::parse(
-            "EXPLAIN ANALYZE SELECT * FROM docs WHERE vector SIMILAR TO $query LIMIT 10"
-        ).unwrap();
+            "EXPLAIN ANALYZE SELECT * FROM docs WHERE vector SIMILAR TO $query LIMIT 10",
+        )
+        .unwrap();
 
         assert!(query.explain);
     }
@@ -2189,9 +2253,9 @@ mod tests {
 
     #[test]
     fn test_parse_order_by() {
-        let query = QueryParser::parse(
-            "SELECT * FROM docs ORDER BY score DESC, title ASC LIMIT 10"
-        ).unwrap();
+        let query =
+            QueryParser::parse("SELECT * FROM docs ORDER BY score DESC, title ASC LIMIT 10")
+                .unwrap();
 
         if let Some(order_by) = query.order_by {
             assert_eq!(order_by.columns.len(), 2);
@@ -2204,9 +2268,7 @@ mod tests {
 
     #[test]
     fn test_parse_offset() {
-        let query = QueryParser::parse(
-            "SELECT * FROM docs LIMIT 10 OFFSET 20"
-        ).unwrap();
+        let query = QueryParser::parse("SELECT * FROM docs LIMIT 10 OFFSET 20").unwrap();
 
         assert_eq!(query.limit, Some(10));
         assert_eq!(query.offset, Some(20));
@@ -2237,9 +2299,9 @@ mod tests {
 
     #[test]
     fn test_validate_rag_without_similar_to() {
-        let query = QueryParser::parse(
-            "SELECT * FROM docs USING RAG(top_k=5) WHERE category = 'science'"
-        ).unwrap();
+        let query =
+            QueryParser::parse("SELECT * FROM docs USING RAG(top_k=5) WHERE category = 'science'")
+                .unwrap();
 
         let result = QueryValidator::validate(&query);
         assert!(result.is_err());
@@ -2248,8 +2310,9 @@ mod tests {
     #[test]
     fn test_validate_time_decay_without_similar_to() {
         let query = QueryParser::parse(
-            "SELECT * FROM docs WITH TIME_DECAY(EXPONENTIAL) WHERE category = 'science'"
-        ).unwrap();
+            "SELECT * FROM docs WITH TIME_DECAY(EXPONENTIAL) WHERE category = 'science'",
+        )
+        .unwrap();
 
         let result = QueryValidator::validate(&query);
         assert!(result.is_err());
@@ -2257,9 +2320,9 @@ mod tests {
 
     #[test]
     fn test_validate_excessive_limit() {
-        let query = QueryParser::parse(
-            "SELECT * FROM docs WHERE vector SIMILAR TO $query LIMIT 100000"
-        ).unwrap();
+        let query =
+            QueryParser::parse("SELECT * FROM docs WHERE vector SIMILAR TO $query LIMIT 100000")
+                .unwrap();
 
         let result = QueryValidator::validate(&query);
         assert!(result.is_err());
@@ -2273,17 +2336,28 @@ mod tests {
         db.create_collection("test", 8).unwrap();
 
         let collection = db.collection("test").unwrap();
-        collection.insert("doc1", &[1.0; 8], Some(serde_json::json!({"category": "science"}))).unwrap();
-        collection.insert("doc2", &[0.5; 8], Some(serde_json::json!({"category": "tech"}))).unwrap();
+        collection
+            .insert(
+                "doc1",
+                &[1.0; 8],
+                Some(serde_json::json!({"category": "science"})),
+            )
+            .unwrap();
+        collection
+            .insert(
+                "doc2",
+                &[0.5; 8],
+                Some(serde_json::json!({"category": "tech"})),
+            )
+            .unwrap();
 
         let executor = QueryExecutor::new(db);
 
-        let query = QueryParser::parse(
-            "SELECT * FROM test WHERE vector SIMILAR TO $query LIMIT 10"
-        ).unwrap();
+        let query =
+            QueryParser::parse("SELECT * FROM test WHERE vector SIMILAR TO $query LIMIT 10")
+                .unwrap();
 
-        let context = QueryContext::new()
-            .with_query_vector(vec![1.0; 8]);
+        let context = QueryContext::new().with_query_vector(vec![1.0; 8]);
 
         let result = executor.execute(&query, &context).unwrap();
         assert!(!result.results.is_empty());
@@ -2295,17 +2369,29 @@ mod tests {
         db.create_collection("test", 8).unwrap();
 
         let collection = db.collection("test").unwrap();
-        collection.insert("doc1", &[1.0; 8], Some(serde_json::json!({"category": "science"}))).unwrap();
-        collection.insert("doc2", &[0.5; 8], Some(serde_json::json!({"category": "tech"}))).unwrap();
+        collection
+            .insert(
+                "doc1",
+                &[1.0; 8],
+                Some(serde_json::json!({"category": "science"})),
+            )
+            .unwrap();
+        collection
+            .insert(
+                "doc2",
+                &[0.5; 8],
+                Some(serde_json::json!({"category": "tech"})),
+            )
+            .unwrap();
 
         let executor = QueryExecutor::new(db);
 
         let query = QueryParser::parse(
-            "SELECT * FROM test WHERE category = 'science' AND vector SIMILAR TO $query LIMIT 10"
-        ).unwrap();
+            "SELECT * FROM test WHERE category = 'science' AND vector SIMILAR TO $query LIMIT 10",
+        )
+        .unwrap();
 
-        let context = QueryContext::new()
-            .with_query_vector(vec![1.0; 8]);
+        let context = QueryContext::new().with_query_vector(vec![1.0; 8]);
 
         let result = executor.execute(&query, &context).unwrap();
         assert_eq!(result.results.len(), 1);
@@ -2320,11 +2406,11 @@ mod tests {
         let executor = QueryExecutor::new(db);
 
         let query = QueryParser::parse(
-            "EXPLAIN ANALYZE SELECT * FROM test WHERE vector SIMILAR TO $query LIMIT 10"
-        ).unwrap();
+            "EXPLAIN ANALYZE SELECT * FROM test WHERE vector SIMILAR TO $query LIMIT 10",
+        )
+        .unwrap();
 
-        let context = QueryContext::new()
-            .with_query_vector(vec![1.0; 8]);
+        let context = QueryContext::new().with_query_vector(vec![1.0; 8]);
 
         let result = executor.execute(&query, &context).unwrap();
         assert!(result.plan.is_some());
@@ -2336,12 +2422,11 @@ mod tests {
         let db = Arc::new(Database::in_memory());
         let executor = QueryExecutor::new(db);
 
-        let query = QueryParser::parse(
-            "SELECT * FROM nonexistent WHERE vector SIMILAR TO $query LIMIT 10"
-        ).unwrap();
+        let query =
+            QueryParser::parse("SELECT * FROM nonexistent WHERE vector SIMILAR TO $query LIMIT 10")
+                .unwrap();
 
-        let context = QueryContext::new()
-            .with_query_vector(vec![1.0; 8]);
+        let context = QueryContext::new().with_query_vector(vec![1.0; 8]);
 
         let result = executor.execute(&query, &context);
         assert!(result.is_err());
@@ -2354,9 +2439,9 @@ mod tests {
 
         let executor = QueryExecutor::new(db);
 
-        let query = QueryParser::parse(
-            "SELECT * FROM test WHERE vector SIMILAR TO $query LIMIT 10"
-        ).unwrap();
+        let query =
+            QueryParser::parse("SELECT * FROM test WHERE vector SIMILAR TO $query LIMIT 10")
+                .unwrap();
 
         let context = QueryContext::new();
 
@@ -2384,7 +2469,10 @@ mod tests {
             .with_param("limit", 10)
             .with_query_vector(vec![1.0, 2.0, 3.0]);
 
-        assert_eq!(context.params.get("category"), Some(&Value::String("science".to_string())));
+        assert_eq!(
+            context.params.get("category"),
+            Some(&Value::String("science".to_string()))
+        );
         assert_eq!(context.query_vector, Some(vec![1.0, 2.0, 3.0]));
     }
 
@@ -2392,9 +2480,8 @@ mod tests {
 
     #[test]
     fn test_optimizer_small_collection_brute_force() {
-        let query = QueryParser::parse(
-            "SELECT * FROM tiny WHERE vector SIMILAR TO $query LIMIT 5"
-        ).unwrap();
+        let query = QueryParser::parse("SELECT * FROM tiny WHERE vector SIMILAR TO $query LIMIT 5")
+            .unwrap();
         let stats = CollectionStatistics {
             vector_count: 500,
             dimensions: 128,
@@ -2406,9 +2493,9 @@ mod tests {
 
     #[test]
     fn test_optimizer_large_collection_index() {
-        let query = QueryParser::parse(
-            "SELECT * FROM large WHERE vector SIMILAR TO $query LIMIT 10"
-        ).unwrap();
+        let query =
+            QueryParser::parse("SELECT * FROM large WHERE vector SIMILAR TO $query LIMIT 10")
+                .unwrap();
         let stats = CollectionStatistics {
             vector_count: 1_000_000,
             dimensions: 384,
@@ -2421,8 +2508,9 @@ mod tests {
     #[test]
     fn test_optimizer_selective_filter() {
         let query = QueryParser::parse(
-            "SELECT * FROM docs WHERE vector SIMILAR TO $query AND category = 'rare' LIMIT 10"
-        ).unwrap();
+            "SELECT * FROM docs WHERE vector SIMILAR TO $query AND category = 'rare' LIMIT 10",
+        )
+        .unwrap();
         let mut stats = CollectionStatistics {
             vector_count: 100_000,
             dimensions: 384,

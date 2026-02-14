@@ -196,7 +196,8 @@ impl QueryPlanner {
         let (strategy, selectivity) = if !has_filter {
             (PlanStrategy::VectorOnly, 1.0f64)
         } else {
-            let est_selectivity = self.estimate_selectivity(request.filter.as_ref().expect("filter is Some"));
+            let est_selectivity =
+                self.estimate_selectivity(request.filter.as_ref().expect("filter is Some"));
 
             if n < 1000 {
                 (PlanStrategy::FullScan, est_selectivity)
@@ -224,7 +225,8 @@ impl QueryPlanner {
         }
         if request.k > n / 2 {
             warnings.push(format!(
-                "k={} is more than half the collection size ({})", request.k, n
+                "k={} is more than half the collection size ({})",
+                request.k, n
             ));
         }
 
@@ -245,8 +247,14 @@ impl QueryPlanner {
 
         out.push_str("=== QUERY PLAN ===\n");
         out.push_str(&format!("Strategy: {}\n", plan.strategy));
-        out.push_str(&format!("Estimated Cost: {:.2}ms\n", plan.estimated_cost_ms));
-        out.push_str(&format!("Estimated Candidates: {}\n", plan.estimated_candidates));
+        out.push_str(&format!(
+            "Estimated Cost: {:.2}ms\n",
+            plan.estimated_cost_ms
+        ));
+        out.push_str(&format!(
+            "Estimated Candidates: {}\n",
+            plan.estimated_candidates
+        ));
         out.push_str(&format!("ef_search: {}\n", plan.ef_search));
         out.push_str(&format!(
             "Collection: {} vectors, {} dimensions\n",

@@ -206,17 +206,18 @@ impl NLFilterParser {
         ];
 
         let stopwords: std::collections::HashSet<&'static str> = [
-            "a", "an", "the", "is", "are", "was", "were", "be", "been", "being",
-            "have", "has", "had", "do", "does", "did", "will", "would", "could",
-            "should", "may", "might", "must", "shall", "can", "need", "dare",
-            "ought", "used", "to", "of", "in", "for", "on", "with", "at", "by",
-            "about", "as", "into", "through", "during", "before", "after",
-            "above", "below", "between", "under", "again", "further", "then",
-            "once", "here", "there", "when", "where", "why", "how", "all", "each",
-            "few", "more", "most", "other", "some", "such", "no", "nor", "not",
-            "only", "own", "same", "so", "than", "too", "very", "just", "also",
-            "now", "show", "me", "find", "get", "give", "search", "look",
-        ].iter().copied().collect();
+            "a", "an", "the", "is", "are", "was", "were", "be", "been", "being", "have", "has",
+            "had", "do", "does", "did", "will", "would", "could", "should", "may", "might", "must",
+            "shall", "can", "need", "dare", "ought", "used", "to", "of", "in", "for", "on", "with",
+            "at", "by", "about", "as", "into", "through", "during", "before", "after", "above",
+            "below", "between", "under", "again", "further", "then", "once", "here", "there",
+            "when", "where", "why", "how", "all", "each", "few", "more", "most", "other", "some",
+            "such", "no", "nor", "not", "only", "own", "same", "so", "than", "too", "very", "just",
+            "also", "now", "show", "me", "find", "get", "give", "search", "look",
+        ]
+        .iter()
+        .copied()
+        .collect();
 
         Self {
             patterns,
@@ -297,7 +298,8 @@ impl NLFilterParser {
         let search_text = self.build_search_text(query, &used_ranges);
 
         // Calculate confidence
-        let confidence = self.calculate_confidence(&intents, combined_filter.is_some(), temporal.is_some());
+        let confidence =
+            self.calculate_confidence(&intents, combined_filter.is_some(), temporal.is_some());
 
         ParsedQuery {
             search_text,
@@ -321,12 +323,16 @@ impl NLFilterParser {
     ) -> Option<(Filter, (usize, usize))> {
         for keyword in &pattern.keywords {
             if let Some(keyword_pos) = self.find_word_position(words, keyword) {
-                let char_start = words[..keyword_pos].iter().map(|w| w.len() + 1).sum::<usize>();
+                let char_start = words[..keyword_pos]
+                    .iter()
+                    .map(|w| w.len() + 1)
+                    .sum::<usize>();
 
                 match &pattern.extractor {
                     ValueExtractor::NextWord => {
                         if keyword_pos + 1 < words.len() {
-                            let value = words[keyword_pos + 1].trim_matches(|c: char| !c.is_alphanumeric());
+                            let value =
+                                words[keyword_pos + 1].trim_matches(|c: char| !c.is_alphanumeric());
                             if !self.stopwords.contains(value) {
                                 let char_end = char_start + keyword.len() + 1 + value.len();
                                 return Some((
@@ -337,22 +343,34 @@ impl NLFilterParser {
                         }
                     }
                     ValueExtractor::Comparison => {
-                        if let Some((op, value, extra_len)) = self.extract_comparison(words, keyword_pos) {
+                        if let Some((op, value, extra_len)) =
+                            self.extract_comparison(words, keyword_pos)
+                        {
                             let char_end = char_start + keyword.len() + extra_len;
                             let filter = match op {
-                                ">" => Filter::gt(pattern.field.to_string(), serde_json::json!(value)),
-                                ">=" => Filter::gte(pattern.field.to_string(), serde_json::json!(value)),
-                                "<" => Filter::lt(pattern.field.to_string(), serde_json::json!(value)),
-                                "<=" => Filter::lte(pattern.field.to_string(), serde_json::json!(value)),
-                                _ => Filter::eq(pattern.field.to_string(), serde_json::json!(value)),
+                                ">" => {
+                                    Filter::gt(pattern.field.to_string(), serde_json::json!(value))
+                                }
+                                ">=" => {
+                                    Filter::gte(pattern.field.to_string(), serde_json::json!(value))
+                                }
+                                "<" => {
+                                    Filter::lt(pattern.field.to_string(), serde_json::json!(value))
+                                }
+                                "<=" => {
+                                    Filter::lte(pattern.field.to_string(), serde_json::json!(value))
+                                }
+                                _ => {
+                                    Filter::eq(pattern.field.to_string(), serde_json::json!(value))
+                                }
                             };
                             return Some((filter, (char_start, char_end)));
                         }
                     }
                     ValueExtractor::Boolean => {
                         // Check for negation
-                        let is_negated = keyword_pos > 0 &&
-                            (words[keyword_pos - 1] == "not" || words[keyword_pos - 1] == "un");
+                        let is_negated = keyword_pos > 0
+                            && (words[keyword_pos - 1] == "not" || words[keyword_pos - 1] == "un");
                         let value = !is_negated;
                         let char_end = char_start + keyword.len();
                         return Some((
@@ -381,7 +399,8 @@ impl NLFilterParser {
                             }
 
                             if !values.is_empty() {
-                                let char_end = words[..end_pos].iter().map(|w| w.len() + 1).sum::<usize>();
+                                let char_end =
+                                    words[..end_pos].iter().map(|w| w.len() + 1).sum::<usize>();
                                 return Some((
                                     Filter::is_in(pattern.field.to_string(), values),
                                     (char_start, char_end),
@@ -405,9 +424,11 @@ impl NLFilterParser {
             words.iter().position(|w| w.starts_with(keyword))
         } else {
             for i in 0..words.len().saturating_sub(keyword_words.len() - 1) {
-                if keyword_words.iter().enumerate().all(|(j, kw)| {
-                    i + j < words.len() && words[i + j].starts_with(kw)
-                }) {
+                if keyword_words
+                    .iter()
+                    .enumerate()
+                    .all(|(j, kw)| i + j < words.len() && words[i + j].starts_with(kw))
+                {
                     return Some(i);
                 }
             }
@@ -415,7 +436,11 @@ impl NLFilterParser {
         }
     }
 
-    fn extract_comparison(&self, words: &[&str], keyword_pos: usize) -> Option<(&'static str, f64, usize)> {
+    fn extract_comparison(
+        &self,
+        words: &[&str],
+        keyword_pos: usize,
+    ) -> Option<(&'static str, f64, usize)> {
         // Look for patterns like "score > 0.8" or "score greater than 0.8"
         let mut pos = keyword_pos + 1;
         let mut op = "=";
@@ -512,7 +537,12 @@ impl NLFilterParser {
         words.join(" ").trim().to_string()
     }
 
-    fn calculate_confidence(&self, intents: &[QueryIntent], has_filter: bool, has_temporal: bool) -> f32 {
+    fn calculate_confidence(
+        &self,
+        intents: &[QueryIntent],
+        has_filter: bool,
+        has_temporal: bool,
+    ) -> f32 {
         let mut confidence = 0.5;
 
         if !intents.is_empty() {
@@ -563,7 +593,10 @@ impl QueryBuilder {
     }
 
     pub fn with_category(self, category: &str) -> Self {
-        self.with_filter(Filter::eq("category".to_string(), serde_json::json!(category)))
+        self.with_filter(Filter::eq(
+            "category".to_string(),
+            serde_json::json!(category),
+        ))
     }
 
     pub fn with_author(self, author: &str) -> Self {
@@ -592,7 +625,12 @@ impl QueryBuilder {
         let filter = if self.filters.is_empty() {
             None
         } else if self.filters.len() == 1 {
-            Some(self.filters.into_iter().next().expect("filters has exactly one element"))
+            Some(
+                self.filters
+                    .into_iter()
+                    .next()
+                    .expect("filters has exactly one element"),
+            )
         } else {
             Some(Filter::And(self.filters))
         };
@@ -759,48 +797,95 @@ impl ConversationalQueryParser {
             IntentPattern {
                 intent: QueryIntent::Search,
                 keywords: vec![
-                    "find", "search", "show", "get", "display", "list", "fetch",
-                    "what", "which", "where", "look for", "similar to", "like",
+                    "find",
+                    "search",
+                    "show",
+                    "get",
+                    "display",
+                    "list",
+                    "fetch",
+                    "what",
+                    "which",
+                    "where",
+                    "look for",
+                    "similar to",
+                    "like",
                 ],
                 weight: 1.0,
             },
             IntentPattern {
                 intent: QueryIntent::Filter,
                 keywords: vec![
-                    "where", "with", "having", "only", "just", "specific",
-                    "category", "type", "status", "by", "from", "to",
+                    "where", "with", "having", "only", "just", "specific", "category", "type",
+                    "status", "by", "from", "to",
                 ],
                 weight: 0.9,
             },
             IntentPattern {
                 intent: QueryIntent::Aggregate,
                 keywords: vec![
-                    "how many", "count", "total", "sum", "average", "min", "max",
-                    "statistics", "stats", "distribution", "breakdown",
+                    "how many",
+                    "count",
+                    "total",
+                    "sum",
+                    "average",
+                    "min",
+                    "max",
+                    "statistics",
+                    "stats",
+                    "distribution",
+                    "breakdown",
                 ],
                 weight: 1.0,
             },
             IntentPattern {
                 intent: QueryIntent::Compare,
                 keywords: vec![
-                    "compare", "versus", "vs", "difference", "between",
-                    "better", "worse", "more", "less", "than",
+                    "compare",
+                    "versus",
+                    "vs",
+                    "difference",
+                    "between",
+                    "better",
+                    "worse",
+                    "more",
+                    "less",
+                    "than",
                 ],
                 weight: 0.95,
             },
             IntentPattern {
                 intent: QueryIntent::Temporal,
                 keywords: vec![
-                    "when", "today", "yesterday", "week", "month", "year",
-                    "recent", "latest", "newest", "oldest", "last", "before", "after",
+                    "when",
+                    "today",
+                    "yesterday",
+                    "week",
+                    "month",
+                    "year",
+                    "recent",
+                    "latest",
+                    "newest",
+                    "oldest",
+                    "last",
+                    "before",
+                    "after",
                 ],
                 weight: 0.9,
             },
             IntentPattern {
                 intent: QueryIntent::Exclude,
                 keywords: vec![
-                    "not", "without", "except", "exclude", "excluding",
-                    "ignore", "skip", "no", "doesn't", "don't",
+                    "not",
+                    "without",
+                    "except",
+                    "exclude",
+                    "excluding",
+                    "ignore",
+                    "skip",
+                    "no",
+                    "doesn't",
+                    "don't",
                 ],
                 weight: 0.95,
             },
@@ -826,7 +911,10 @@ impl ConversationalQueryParser {
                 all_filters.push(f);
             }
             parsed.filter = Some(if all_filters.len() == 1 {
-                all_filters.into_iter().next().expect("all_filters has exactly one element")
+                all_filters
+                    .into_iter()
+                    .next()
+                    .expect("all_filters has exactly one element")
             } else {
                 Filter::And(all_filters)
             });
@@ -888,9 +976,18 @@ impl ConversationalQueryParser {
             if let Some(pos) = text_lower[i..].find(&word_lower) {
                 let abs_pos = i + pos;
                 // Check word boundaries
-                let at_start = abs_pos == 0 || !text.chars().nth(abs_pos - 1).unwrap_or(' ').is_alphanumeric();
+                let at_start = abs_pos == 0
+                    || !text
+                        .chars()
+                        .nth(abs_pos - 1)
+                        .unwrap_or(' ')
+                        .is_alphanumeric();
                 let at_end = abs_pos + word.len() >= text.len()
-                    || !text.chars().nth(abs_pos + word.len()).unwrap_or(' ').is_alphanumeric();
+                    || !text
+                        .chars()
+                        .nth(abs_pos + word.len())
+                        .unwrap_or(' ')
+                        .is_alphanumeric();
 
                 if at_start && at_end {
                     result.push_str(&text[i..abs_pos]);
@@ -952,7 +1049,10 @@ impl ConversationalQueryParser {
         let mut sorted: Vec<_> = scores.into_iter().collect();
         sorted.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
 
-        let primary_intent = sorted.first().map(|(i, _)| i.clone()).unwrap_or(QueryIntent::Search);
+        let primary_intent = sorted
+            .first()
+            .map(|(i, _)| i.clone())
+            .unwrap_or(QueryIntent::Search);
         let secondary_intents: Vec<_> = sorted
             .iter()
             .skip(1)
@@ -1122,7 +1222,10 @@ impl QuerySuggester {
         // If query is short, suggest patterns
         if partial_query.split_whitespace().count() <= 2 {
             for pattern in &self.common_patterns {
-                if pattern.to_lowercase().contains(&partial_query.to_lowercase()) {
+                if pattern
+                    .to_lowercase()
+                    .contains(&partial_query.to_lowercase())
+                {
                     suggestions.push(pattern.to_string());
                 }
             }

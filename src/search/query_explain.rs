@@ -30,7 +30,6 @@ use std::time::Duration;
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 
-
 // ---------------------------------------------------------------------------
 // Query Specification
 // ---------------------------------------------------------------------------
@@ -460,11 +459,9 @@ impl QueryExplainOptimizer {
     ) -> Vec<PlanStep> {
         match strategy {
             ExplainStrategy::HnswPostFilter => {
-                let hnsw_cost = self.cost_model.hnsw_cost(
-                    ef_search,
-                    self.config.default_m,
-                    query.dimension,
-                );
+                let hnsw_cost =
+                    self.cost_model
+                        .hnsw_cost(ef_search, self.config.default_m, query.dimension);
                 let search_step = PlanStep {
                     name: "HNSW Search".into(),
                     description: format!(
@@ -514,10 +511,7 @@ impl QueryExplainOptimizer {
                     },
                     PlanStep {
                         name: "HNSW Search (filtered)".into(),
-                        description: format!(
-                            "Search within {} filtered candidates",
-                            filtered_size
-                        ),
+                        description: format!("Search within {} filtered candidates", filtered_size),
                         estimated_cost: self.cost_model.hnsw_cost(
                             ef_search.min(filtered_size),
                             self.config.default_m,
@@ -547,7 +541,10 @@ impl QueryExplainOptimizer {
                     children: vec![
                         PlanStep {
                             name: "HNSW Traverse".into(),
-                            description: format!("ef_search={} (2x for filter overhead)", ef_search * 2),
+                            description: format!(
+                                "ef_search={} (2x for filter overhead)",
+                                ef_search * 2
+                            ),
                             estimated_cost: hnsw_cost * 0.7,
                             estimated_rows: ef_search * 2,
                             children: vec![],
@@ -563,9 +560,9 @@ impl QueryExplainOptimizer {
                 }]
             }
             ExplainStrategy::BruteForce | ExplainStrategy::ExactSearch => {
-                let cost =
-                    self.cost_model
-                        .brute_force_cost(query.collection_size, query.dimension);
+                let cost = self
+                    .cost_model
+                    .brute_force_cost(query.collection_size, query.dimension);
                 vec![PlanStep {
                     name: "Brute-Force Scan".into(),
                     description: format!(
