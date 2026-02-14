@@ -209,7 +209,10 @@ impl ConsistentHashRing {
         // Sort by hash for binary search
         ring.sort_by_key(|p| p.hash);
 
-        Self { ring, virtual_nodes }
+        Self {
+            ring,
+            virtual_nodes,
+        }
     }
 
     /// Hash a key using FNV-1a
@@ -609,10 +612,7 @@ pub trait ShardSearchable: Send + Sync {
 }
 
 /// Merge results from multiple shards, keeping top k by distance
-pub fn merge_shard_results(
-    shard_results: &[ShardSearchResult],
-    k: usize,
-) -> Vec<SearchResult> {
+pub fn merge_shard_results(shard_results: &[ShardSearchResult], k: usize) -> Vec<SearchResult> {
     // Collect all results with their distances
     let mut all_results: Vec<SearchResult> = shard_results
         .iter()
@@ -724,7 +724,10 @@ impl<C: ShardSearchable> ShardedCollection<C> {
                     if info.state != ShardState::Active && info.state != ShardState::ReadOnly {
                         return Err((
                             shard_id,
-                            format!("Shard {} is not available (state: {:?})", shard_id, info.state),
+                            format!(
+                                "Shard {} is not available (state: {:?})",
+                                shard_id, info.state
+                            ),
                         ));
                     }
                 }
@@ -1056,7 +1059,10 @@ mod tests {
             .with_min_responses(2);
 
         assert_eq!(config.k, 10);
-        assert_eq!(config.shard_timeout, Some(std::time::Duration::from_secs(1)));
+        assert_eq!(
+            config.shard_timeout,
+            Some(std::time::Duration::from_secs(1))
+        );
         assert!(!config.continue_on_failure);
         assert_eq!(config.min_shard_responses, Some(2));
     }
@@ -1143,9 +1149,7 @@ mod tests {
             ShardedCollection::new(manager.clone());
 
         // Add vectors to shard 0
-        let shard0_vectors = vec![
-            ("test_vec".to_string(), vec![1.0, 2.0, 3.0]),
-        ];
+        let shard0_vectors = vec![("test_vec".to_string(), vec![1.0, 2.0, 3.0])];
         sharded.add_shard(ShardId::new(0), MockCollection::new(shard0_vectors));
         sharded.add_shard(ShardId::new(1), MockCollection::new(vec![]));
 

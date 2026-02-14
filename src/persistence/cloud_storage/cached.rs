@@ -1,11 +1,11 @@
 //! Caching layers: simple cache and 3-tier smart cache.
 
-use crate::error::{NeedleError, Result};
 use super::config::{CacheConfig, StorageBackend};
+use crate::error::{NeedleError, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::future::Future;
+use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -44,8 +44,8 @@ impl Default for TieredCacheConfig {
             memory_max_size: 100 * 1024 * 1024, // 100MB
             ssd_max_size: 1024 * 1024 * 1024,   // 1GB
             ssd_cache_path: PathBuf::from("/tmp/needle_cache"),
-            memory_ttl: Duration::from_secs(300),  // 5 minutes
-            ssd_ttl: Duration::from_secs(3600),    // 1 hour
+            memory_ttl: Duration::from_secs(300), // 5 minutes
+            ssd_ttl: Duration::from_secs(3600),   // 1 hour
             enable_prefetch: true,
             max_prefetch_items: 10,
             promotion_threshold: 3,
@@ -167,7 +167,8 @@ impl AccessPattern {
         // Detect sequential patterns
         if self.recent_keys.len() >= 2 {
             let prev_key = &self.recent_keys[self.recent_keys.len() - 2];
-            let patterns = self.sequential_patterns
+            let patterns = self
+                .sequential_patterns
                 .entry(prev_key.clone())
                 .or_default();
             if !patterns.contains(&key.to_string()) && patterns.len() < 5 {
@@ -295,16 +296,22 @@ impl<B: StorageBackend> TieredCacheBackend<B> {
             if let Some(entry) = index.remove(&key) {
                 match entry.tier {
                     CacheTier::Memory => {
-                        self.memory_usage.fetch_sub(entry.size as u64, Ordering::Relaxed);
-                        self.stats.memory_bytes.fetch_sub(entry.size as u64, Ordering::Relaxed);
+                        self.memory_usage
+                            .fetch_sub(entry.size as u64, Ordering::Relaxed);
+                        self.stats
+                            .memory_bytes
+                            .fetch_sub(entry.size as u64, Ordering::Relaxed);
                         self.stats.memory_evictions.fetch_add(1, Ordering::Relaxed);
                     }
                     CacheTier::Ssd => {
                         if let Some(ref path) = entry.ssd_path {
                             let _ = std::fs::remove_file(path);
                         }
-                        self.ssd_usage.fetch_sub(entry.size as u64, Ordering::Relaxed);
-                        self.stats.ssd_bytes.fetch_sub(entry.size as u64, Ordering::Relaxed);
+                        self.ssd_usage
+                            .fetch_sub(entry.size as u64, Ordering::Relaxed);
+                        self.stats
+                            .ssd_bytes
+                            .fetch_sub(entry.size as u64, Ordering::Relaxed);
                         self.stats.ssd_evictions.fetch_add(1, Ordering::Relaxed);
                     }
                     CacheTier::Origin => {}
@@ -347,13 +354,17 @@ impl<B: StorageBackend> TieredCacheBackend<B> {
                         entry.data = None;
                         entry.expires_at = Instant::now() + self.config.ssd_ttl;
                         self.ssd_usage.fetch_add(size as u64, Ordering::Relaxed);
-                        self.stats.ssd_bytes.fetch_add(size as u64, Ordering::Relaxed);
+                        self.stats
+                            .ssd_bytes
+                            .fetch_add(size as u64, Ordering::Relaxed);
                         self.stats.demotions.fetch_add(1, Ordering::Relaxed);
                     }
                 }
 
                 self.memory_usage.fetch_sub(size as u64, Ordering::Relaxed);
-                self.stats.memory_bytes.fetch_sub(size as u64, Ordering::Relaxed);
+                self.stats
+                    .memory_bytes
+                    .fetch_sub(size as u64, Ordering::Relaxed);
                 self.stats.memory_evictions.fetch_add(1, Ordering::Relaxed);
                 freed += size;
             }
@@ -389,7 +400,9 @@ impl<B: StorageBackend> TieredCacheBackend<B> {
                     let _ = std::fs::remove_file(path);
                 }
                 self.ssd_usage.fetch_sub(size as u64, Ordering::Relaxed);
-                self.stats.ssd_bytes.fetch_sub(size as u64, Ordering::Relaxed);
+                self.stats
+                    .ssd_bytes
+                    .fetch_sub(size as u64, Ordering::Relaxed);
                 self.stats.ssd_evictions.fetch_add(1, Ordering::Relaxed);
                 freed += size;
             }
@@ -426,9 +439,13 @@ impl<B: StorageBackend> TieredCacheBackend<B> {
 
         // Update stats
         self.ssd_usage.fetch_sub(size as u64, Ordering::Relaxed);
-        self.stats.ssd_bytes.fetch_sub(size as u64, Ordering::Relaxed);
+        self.stats
+            .ssd_bytes
+            .fetch_sub(size as u64, Ordering::Relaxed);
         self.memory_usage.fetch_add(size as u64, Ordering::Relaxed);
-        self.stats.memory_bytes.fetch_add(size as u64, Ordering::Relaxed);
+        self.stats
+            .memory_bytes
+            .fetch_add(size as u64, Ordering::Relaxed);
         self.stats.promotions.fetch_add(1, Ordering::Relaxed);
 
         Ok(())
@@ -458,7 +475,9 @@ impl<B: StorageBackend> TieredCacheBackend<B> {
 
             index.insert(key.to_string(), entry);
             self.memory_usage.fetch_add(size as u64, Ordering::Relaxed);
-            self.stats.memory_bytes.fetch_add(size as u64, Ordering::Relaxed);
+            self.stats
+                .memory_bytes
+                .fetch_add(size as u64, Ordering::Relaxed);
         } else {
             // Write to SSD
             self.evict_ssd(size, &mut index);
@@ -481,7 +500,9 @@ impl<B: StorageBackend> TieredCacheBackend<B> {
 
                 index.insert(key.to_string(), entry);
                 self.ssd_usage.fetch_add(size as u64, Ordering::Relaxed);
-                self.stats.ssd_bytes.fetch_add(size as u64, Ordering::Relaxed);
+                self.stats
+                    .ssd_bytes
+                    .fetch_add(size as u64, Ordering::Relaxed);
             }
         }
     }
@@ -516,7 +537,10 @@ impl<B: StorageBackend> TieredCacheBackend<B> {
 }
 
 impl<B: StorageBackend> StorageBackend for TieredCacheBackend<B> {
-    fn read<'a>(&'a self, key: &'a str) -> Pin<Box<dyn Future<Output = Result<Vec<u8>>> + Send + 'a>> {
+    fn read<'a>(
+        &'a self,
+        key: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<u8>>> + Send + 'a>> {
         Box::pin(async move {
             let now = Instant::now();
 
@@ -570,10 +594,16 @@ impl<B: StorageBackend> StorageBackend for TieredCacheBackend<B> {
                                             let _ = std::fs::remove_file(&ssd_path_clone);
 
                                             // Update stats
-                                            self.ssd_usage.fetch_sub(size as u64, Ordering::Relaxed);
-                                            self.stats.ssd_bytes.fetch_sub(size as u64, Ordering::Relaxed);
-                                            self.memory_usage.fetch_add(size as u64, Ordering::Relaxed);
-                                            self.stats.memory_bytes.fetch_add(size as u64, Ordering::Relaxed);
+                                            self.ssd_usage
+                                                .fetch_sub(size as u64, Ordering::Relaxed);
+                                            self.stats
+                                                .ssd_bytes
+                                                .fetch_sub(size as u64, Ordering::Relaxed);
+                                            self.memory_usage
+                                                .fetch_add(size as u64, Ordering::Relaxed);
+                                            self.stats
+                                                .memory_bytes
+                                                .fetch_add(size as u64, Ordering::Relaxed);
                                             self.stats.promotions.fetch_add(1, Ordering::Relaxed);
                                         }
 
@@ -619,7 +649,11 @@ impl<B: StorageBackend> StorageBackend for TieredCacheBackend<B> {
         })
     }
 
-    fn write<'a>(&'a self, key: &'a str, data: &'a [u8]) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
+    fn write<'a>(
+        &'a self,
+        key: &'a str,
+        data: &'a [u8],
+    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
         Box::pin(async move {
             // Write to origin
             self.inner.write(key, data).await?;
@@ -641,15 +675,21 @@ impl<B: StorageBackend> StorageBackend for TieredCacheBackend<B> {
             if let Some(entry) = index.remove(key) {
                 match entry.tier {
                     CacheTier::Memory => {
-                        self.memory_usage.fetch_sub(entry.size as u64, Ordering::Relaxed);
-                        self.stats.memory_bytes.fetch_sub(entry.size as u64, Ordering::Relaxed);
+                        self.memory_usage
+                            .fetch_sub(entry.size as u64, Ordering::Relaxed);
+                        self.stats
+                            .memory_bytes
+                            .fetch_sub(entry.size as u64, Ordering::Relaxed);
                     }
                     CacheTier::Ssd => {
                         if let Some(ref path) = entry.ssd_path {
                             let _ = std::fs::remove_file(path);
                         }
-                        self.ssd_usage.fetch_sub(entry.size as u64, Ordering::Relaxed);
-                        self.stats.ssd_bytes.fetch_sub(entry.size as u64, Ordering::Relaxed);
+                        self.ssd_usage
+                            .fetch_sub(entry.size as u64, Ordering::Relaxed);
+                        self.stats
+                            .ssd_bytes
+                            .fetch_sub(entry.size as u64, Ordering::Relaxed);
                     }
                     CacheTier::Origin => {}
                 }
@@ -659,12 +699,18 @@ impl<B: StorageBackend> StorageBackend for TieredCacheBackend<B> {
         })
     }
 
-    fn list<'a>(&'a self, prefix: &'a str) -> Pin<Box<dyn Future<Output = Result<Vec<String>>> + Send + 'a>> {
+    fn list<'a>(
+        &'a self,
+        prefix: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<String>>> + Send + 'a>> {
         // List always goes to origin (cache may be incomplete)
         self.inner.list(prefix)
     }
 
-    fn exists<'a>(&'a self, key: &'a str) -> Pin<Box<dyn Future<Output = Result<bool>> + Send + 'a>> {
+    fn exists<'a>(
+        &'a self,
+        key: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<bool>> + Send + 'a>> {
         Box::pin(async move {
             // Check cache first
             {
@@ -826,7 +872,10 @@ impl<B: StorageBackend> CachedBackend<B> {
 }
 
 impl<B: StorageBackend> StorageBackend for CachedBackend<B> {
-    fn read<'a>(&'a self, key: &'a str) -> Pin<Box<dyn Future<Output = Result<Vec<u8>>> + Send + 'a>> {
+    fn read<'a>(
+        &'a self,
+        key: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<u8>>> + Send + 'a>> {
         Box::pin(async move {
             // Check cache first
             {
@@ -861,7 +910,11 @@ impl<B: StorageBackend> StorageBackend for CachedBackend<B> {
         })
     }
 
-    fn write<'a>(&'a self, key: &'a str, data: &'a [u8]) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
+    fn write<'a>(
+        &'a self,
+        key: &'a str,
+        data: &'a [u8],
+    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
         Box::pin(async move {
             // Write to backend
             self.inner.write(key, data).await?;
@@ -904,12 +957,18 @@ impl<B: StorageBackend> StorageBackend for CachedBackend<B> {
         })
     }
 
-    fn list<'a>(&'a self, prefix: &'a str) -> Pin<Box<dyn Future<Output = Result<Vec<String>>> + Send + 'a>> {
+    fn list<'a>(
+        &'a self,
+        prefix: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<String>>> + Send + 'a>> {
         // List is not cached - always go to backend
         self.inner.list(prefix)
     }
 
-    fn exists<'a>(&'a self, key: &'a str) -> Pin<Box<dyn Future<Output = Result<bool>> + Send + 'a>> {
+    fn exists<'a>(
+        &'a self,
+        key: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<bool>> + Send + 'a>> {
         Box::pin(async move {
             // Check cache first
             if self.is_cached(key) {

@@ -368,10 +368,7 @@ impl WalSegment {
             .open(&path)
             .map_err(|e| NeedleError::Io(e))?;
 
-        let size = file
-            .metadata()
-            .map_err(|e| NeedleError::Io(e))?
-            .len();
+        let size = file.metadata().map_err(|e| NeedleError::Io(e))?.len();
 
         Ok(Self {
             number,
@@ -390,9 +387,7 @@ impl WalSegment {
 
     fn write(&mut self, data: &[u8]) -> Result<()> {
         if let Some(ref mut writer) = self.file {
-            writer
-                .write_all(data)
-                .map_err(|e| NeedleError::Io(e))?;
+            writer.write_all(data).map_err(|e| NeedleError::Io(e))?;
             self.size += data.len() as u64;
         }
         Ok(())
@@ -400,9 +395,7 @@ impl WalSegment {
 
     fn sync(&mut self) -> Result<()> {
         if let Some(ref mut writer) = self.file {
-            writer
-                .flush()
-                .map_err(|e| NeedleError::Io(e))?;
+            writer.flush().map_err(|e| NeedleError::Io(e))?;
             writer
                 .get_ref()
                 .sync_all()
@@ -413,9 +406,7 @@ impl WalSegment {
 
     fn close(&mut self) -> Result<()> {
         if let Some(ref mut writer) = self.file.take() {
-            writer
-                .flush()
-                .map_err(|e| NeedleError::Io(e))?;
+            writer.flush().map_err(|e| NeedleError::Io(e))?;
         }
         Ok(())
     }
@@ -476,11 +467,7 @@ impl WalManager {
             .map_err(|e| NeedleError::Io(e))?
             .filter_map(|e| e.ok())
             .map(|e| e.path())
-            .filter(|p| {
-                p.extension()
-                    .map(|ext| ext == "wal")
-                    .unwrap_or(false)
-            })
+            .filter(|p| p.extension().map(|ext| ext == "wal").unwrap_or(false))
             .collect();
         segments.sort();
 
@@ -546,8 +533,8 @@ impl WalManager {
         };
 
         // Serialize the full record
-        let record_data = serde_json::to_vec(&final_record)
-            .map_err(|e| NeedleError::Serialization(e))?;
+        let record_data =
+            serde_json::to_vec(&final_record).map_err(|e| NeedleError::Serialization(e))?;
 
         // Write length prefix + record data
         let mut data = Vec::with_capacity(4 + record_data.len());
@@ -691,13 +678,13 @@ impl WalManager {
             let mut newline = [0u8; 1];
             let _ = reader.read_exact(&mut newline);
 
-            let record: WalRecord = serde_json::from_slice(&buffer)
-                .map_err(|e| NeedleError::Serialization(e))?;
+            let record: WalRecord =
+                serde_json::from_slice(&buffer).map_err(|e| NeedleError::Serialization(e))?;
 
             // Verify checksum if enabled
             if self.config.enable_checksums && record.checksum != 0 {
-                let entry_data = serde_json::to_vec(&record.entry)
-                    .map_err(|e| NeedleError::Serialization(e))?;
+                let entry_data =
+                    serde_json::to_vec(&record.entry).map_err(|e| NeedleError::Serialization(e))?;
                 let computed = crc32_checksum(&entry_data);
                 if computed != record.checksum {
                     return Err(NeedleError::Corruption(format!(
@@ -802,8 +789,7 @@ impl WalManager {
                 if let Ok(records) = self.read_segment(&oldest) {
                     if let Some(last) = records.last() {
                         if last.lsn < checkpoint_lsn {
-                            fs::remove_file(&oldest)
-                                .map_err(|e| NeedleError::Io(e))?;
+                            fs::remove_file(&oldest).map_err(|e| NeedleError::Io(e))?;
                             segments.remove(0);
                             continue;
                         }
@@ -826,9 +812,7 @@ impl WalManager {
 
         for segment_path in segments.iter().rev() {
             let file = File::open(segment_path).map_err(|e| NeedleError::Io(e))?;
-            let metadata = file
-                .metadata()
-                .map_err(|e| NeedleError::Io(e))?;
+            let metadata = file.metadata().map_err(|e| NeedleError::Io(e))?;
 
             if metadata.len() == 0 {
                 continue;

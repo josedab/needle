@@ -17,9 +17,7 @@ use crate::error::{NeedleError, Result};
 // ---------------------------------------------------------------------------
 
 /// Monotonically increasing identifier for a transaction.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct TransactionId(pub u64);
 
 impl std::fmt::Display for TransactionId {
@@ -188,12 +186,14 @@ impl Transaction {
                 self.status = TransactionStatus::Committed;
                 Ok(())
             }
-            TransactionStatus::Committed => Err(NeedleError::InvalidOperation(
-                format!("Transaction {} is already committed", self.id),
-            )),
-            TransactionStatus::Aborted => Err(NeedleError::InvalidOperation(
-                format!("Cannot commit aborted transaction {}", self.id),
-            )),
+            TransactionStatus::Committed => Err(NeedleError::InvalidOperation(format!(
+                "Transaction {} is already committed",
+                self.id
+            ))),
+            TransactionStatus::Aborted => Err(NeedleError::InvalidOperation(format!(
+                "Cannot commit aborted transaction {}",
+                self.id
+            ))),
         }
     }
 
@@ -206,12 +206,14 @@ impl Transaction {
                 self.read_set.clear();
                 Ok(())
             }
-            TransactionStatus::Committed => Err(NeedleError::InvalidOperation(
-                format!("Cannot rollback committed transaction {}", self.id),
-            )),
-            TransactionStatus::Aborted => Err(NeedleError::InvalidOperation(
-                format!("Transaction {} is already aborted", self.id),
-            )),
+            TransactionStatus::Committed => Err(NeedleError::InvalidOperation(format!(
+                "Cannot rollback committed transaction {}",
+                self.id
+            ))),
+            TransactionStatus::Aborted => Err(NeedleError::InvalidOperation(format!(
+                "Transaction {} is already aborted",
+                self.id
+            ))),
         }
     }
 
@@ -234,8 +236,7 @@ impl Transaction {
     /// Buffer a delete operation.
     pub fn delete(&mut self, id: String) -> Result<()> {
         self.ensure_active()?;
-        self.write_set
-            .push(WriteOperation::Delete { id });
+        self.write_set.push(WriteOperation::Delete { id });
         Ok(())
     }
 
@@ -347,11 +348,8 @@ impl TransactionManager {
         let tx_id = TransactionId(self.next_tx_id.fetch_add(1, Ordering::SeqCst));
 
         let mut inner = self.inner.write();
-        let visible: HashSet<TransactionId> = inner
-            .committed_log
-            .iter()
-            .map(|(id, _)| *id)
-            .collect();
+        let visible: HashSet<TransactionId> =
+            inner.committed_log.iter().map(|(id, _)| *id).collect();
 
         let snapshot = SnapshotView::new(tx_id, visible);
         let txn = Transaction::begin(tx_id, snapshot);
@@ -369,9 +367,7 @@ impl TransactionManager {
         let txn = inner
             .active_transactions
             .get(&tx_id)
-            .ok_or_else(|| {
-                NeedleError::NotFound(format!("Transaction {tx_id} not found"))
-            })?;
+            .ok_or_else(|| NeedleError::NotFound(format!("Transaction {tx_id} not found")))?;
 
         if txn.status != TransactionStatus::Active {
             return Err(NeedleError::InvalidOperation(format!(
@@ -443,9 +439,7 @@ impl TransactionManager {
         let txn = inner
             .active_transactions
             .get_mut(&tx_id)
-            .ok_or_else(|| {
-                NeedleError::NotFound(format!("Transaction {tx_id} not found"))
-            })?;
+            .ok_or_else(|| NeedleError::NotFound(format!("Transaction {tx_id} not found")))?;
 
         if txn.status != TransactionStatus::Active {
             return Err(NeedleError::InvalidOperation(format!(
@@ -470,9 +464,7 @@ impl TransactionManager {
         let txn = inner
             .active_transactions
             .get(&tx_id)
-            .ok_or_else(|| {
-                NeedleError::NotFound(format!("Transaction {tx_id} not found"))
-            })?;
+            .ok_or_else(|| NeedleError::NotFound(format!("Transaction {tx_id} not found")))?;
         Ok(txn.snapshot.clone())
     }
 
@@ -485,9 +477,7 @@ impl TransactionManager {
         let txn = inner
             .active_transactions
             .get_mut(&tx_id)
-            .ok_or_else(|| {
-                NeedleError::NotFound(format!("Transaction {tx_id} not found"))
-            })?;
+            .ok_or_else(|| NeedleError::NotFound(format!("Transaction {tx_id} not found")))?;
         f(txn)
     }
 
@@ -545,12 +535,7 @@ mod tests {
         );
         assert_eq!(log.get_operations(tx).len(), 1);
 
-        log.append(
-            tx,
-            WriteOperation::Delete {
-                id: "v2".into(),
-            },
-        );
+        log.append(tx, WriteOperation::Delete { id: "v2".into() });
         assert_eq!(log.get_operations(tx).len(), 2);
 
         log.clear(tx);
@@ -663,10 +648,8 @@ mod tests {
         let mgr = TransactionManager::new();
         let tx = mgr.begin().unwrap();
 
-        mgr.with_transaction_mut(tx, |txn| {
-            txn.insert("v1".into(), sample_vector(4), None)
-        })
-        .unwrap();
+        mgr.with_transaction_mut(tx, |txn| txn.insert("v1".into(), sample_vector(4), None))
+            .unwrap();
 
         mgr.commit(tx).unwrap();
 
@@ -681,10 +664,8 @@ mod tests {
         let mgr = TransactionManager::new();
         let tx = mgr.begin().unwrap();
 
-        mgr.with_transaction_mut(tx, |txn| {
-            txn.insert("v1".into(), sample_vector(4), None)
-        })
-        .unwrap();
+        mgr.with_transaction_mut(tx, |txn| txn.insert("v1".into(), sample_vector(4), None))
+            .unwrap();
 
         mgr.rollback(tx).unwrap();
 
@@ -703,14 +684,10 @@ mod tests {
         let tx2 = mgr.begin().unwrap();
 
         // Both write to the same ID
-        mgr.with_transaction_mut(tx1, |txn| {
-            txn.insert("shared".into(), vec![1.0], None)
-        })
-        .unwrap();
-        mgr.with_transaction_mut(tx2, |txn| {
-            txn.insert("shared".into(), vec![2.0], None)
-        })
-        .unwrap();
+        mgr.with_transaction_mut(tx1, |txn| txn.insert("shared".into(), vec![1.0], None))
+            .unwrap();
+        mgr.with_transaction_mut(tx2, |txn| txn.insert("shared".into(), vec![2.0], None))
+            .unwrap();
 
         // tx1 commits first — succeeds
         mgr.commit(tx1).unwrap();
@@ -737,14 +714,10 @@ mod tests {
         let tx1 = mgr.begin().unwrap();
         let tx2 = mgr.begin().unwrap();
 
-        mgr.with_transaction_mut(tx1, |txn| {
-            txn.insert("a".into(), vec![1.0], None)
-        })
-        .unwrap();
-        mgr.with_transaction_mut(tx2, |txn| {
-            txn.insert("b".into(), vec![2.0], None)
-        })
-        .unwrap();
+        mgr.with_transaction_mut(tx1, |txn| txn.insert("a".into(), vec![1.0], None))
+            .unwrap();
+        mgr.with_transaction_mut(tx2, |txn| txn.insert("b".into(), vec![2.0], None))
+            .unwrap();
 
         mgr.commit(tx1).unwrap();
         mgr.commit(tx2).unwrap();
@@ -760,10 +733,8 @@ mod tests {
 
         // tx1 inserts and commits
         let tx1 = mgr.begin().unwrap();
-        mgr.with_transaction_mut(tx1, |txn| {
-            txn.insert("v1".into(), vec![1.0], None)
-        })
-        .unwrap();
+        mgr.with_transaction_mut(tx1, |txn| txn.insert("v1".into(), vec![1.0], None))
+            .unwrap();
         mgr.commit(tx1).unwrap();
 
         // tx2 starts after tx1 committed — should see tx1
@@ -784,10 +755,8 @@ mod tests {
 
         // tx1 begins but does NOT commit
         let tx1 = mgr.begin().unwrap();
-        mgr.with_transaction_mut(tx1, |txn| {
-            txn.insert("v1".into(), vec![1.0], None)
-        })
-        .unwrap();
+        mgr.with_transaction_mut(tx1, |txn| txn.insert("v1".into(), vec![1.0], None))
+            .unwrap();
 
         // tx2 starts while tx1 is still active
         let tx2 = mgr.begin().unwrap();
@@ -892,10 +861,8 @@ mod tests {
 
         // Commit some initial data
         let setup = mgr.begin().unwrap();
-        mgr.with_transaction_mut(setup, |txn| {
-            txn.insert("v1".into(), vec![1.0], None)
-        })
-        .unwrap();
+        mgr.with_transaction_mut(setup, |txn| txn.insert("v1".into(), vec![1.0], None))
+            .unwrap();
         mgr.commit(setup).unwrap();
 
         // Multiple read-only transactions
@@ -983,10 +950,8 @@ mod tests {
         // tx1 deletes "x", tx2 updates "x"
         mgr.with_transaction_mut(tx1, |txn| txn.delete("x".into()))
             .unwrap();
-        mgr.with_transaction_mut(tx2, |txn| {
-            txn.update("x".into(), Some(vec![1.0]), None)
-        })
-        .unwrap();
+        mgr.with_transaction_mut(tx2, |txn| txn.update("x".into(), Some(vec![1.0]), None))
+            .unwrap();
 
         mgr.commit(tx1).unwrap();
         assert!(mgr.commit(tx2).is_err());

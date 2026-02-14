@@ -1,10 +1,10 @@
 //! Google Cloud Storage backend.
 
-use crate::error::Result;
-#[cfg(feature = "cloud-storage-gcs")]
-use crate::error::NeedleError;
 use super::common::MockStorage;
 use super::config::{ConnectionPool, RetryPolicy, StorageBackend, StorageConfig};
+#[cfg(feature = "cloud-storage-gcs")]
+use crate::error::NeedleError;
+use crate::error::Result;
 use serde::{Deserialize, Serialize};
 use std::future::Future;
 use std::pin::Pin;
@@ -13,11 +13,11 @@ use std::pin::Pin;
 use google_cloud_storage::{
     client::{Client as GcsClient, ClientConfig as GcsClientConfig},
     http::objects::{
+        delete::DeleteObjectRequest,
         download::Range as GcsRange,
         get::GetObjectRequest,
-        upload::{Media, UploadObjectRequest, UploadType},
-        delete::DeleteObjectRequest,
         list::ListObjectsRequest,
+        upload::{Media, UploadObjectRequest, UploadType},
     },
 };
 
@@ -72,10 +72,9 @@ impl GCSBackend {
     /// - GCE metadata service (when running on GCP)
     #[cfg(feature = "cloud-storage-gcs")]
     pub async fn new_with_default_credentials(config: GCSConfig) -> Result<Self> {
-        let gcs_config = GcsClientConfig::default()
-            .with_auth()
-            .await
-            .map_err(|e| NeedleError::Io(std::io::Error::other(format!("GCS auth error: {}", e))))?;
+        let gcs_config = GcsClientConfig::default().with_auth().await.map_err(|e| {
+            NeedleError::Io(std::io::Error::other(format!("GCS auth error: {}", e)))
+        })?;
 
         let client = GcsClient::new(gcs_config);
 
@@ -91,14 +90,16 @@ impl GCSBackend {
 
     /// Create a new GCS backend with service account credentials from file.
     #[cfg(feature = "cloud-storage-gcs")]
-    pub async fn new_with_credentials_file(config: GCSConfig, credentials_path: &str) -> Result<Self> {
+    pub async fn new_with_credentials_file(
+        config: GCSConfig,
+        credentials_path: &str,
+    ) -> Result<Self> {
         // Set the environment variable for the credentials file
         std::env::set_var("GOOGLE_APPLICATION_CREDENTIALS", credentials_path);
 
-        let gcs_config = GcsClientConfig::default()
-            .with_auth()
-            .await
-            .map_err(|e| NeedleError::Io(std::io::Error::other(format!("GCS auth error: {}", e))))?;
+        let gcs_config = GcsClientConfig::default().with_auth().await.map_err(|e| {
+            NeedleError::Io(std::io::Error::other(format!("GCS auth error: {}", e)))
+        })?;
 
         let client = GcsClient::new(gcs_config);
 
@@ -149,7 +150,10 @@ impl GCSBackend {
 }
 
 impl StorageBackend for GCSBackend {
-    fn read<'a>(&'a self, key: &'a str) -> Pin<Box<dyn Future<Output = Result<Vec<u8>>> + Send + 'a>> {
+    fn read<'a>(
+        &'a self,
+        key: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<u8>>> + Send + 'a>> {
         Box::pin(async move {
             let _conn = self.pool.acquire()?;
 
@@ -168,10 +172,16 @@ impl StorageBackend for GCSBackend {
                     .await
                     .map_err(|e| {
                         let err_str = e.to_string();
-                        if err_str.contains("404") || err_str.contains("not found") || err_str.contains("No such object") {
+                        if err_str.contains("404")
+                            || err_str.contains("not found")
+                            || err_str.contains("No such object")
+                        {
                             NeedleError::NotFound(format!("GCS object '{}' not found", key))
                         } else {
-                            NeedleError::Io(std::io::Error::other(format!("GCS download error: {}", e)))
+                            NeedleError::Io(std::io::Error::other(format!(
+                                "GCS download error: {}",
+                                e
+                            )))
                         }
                     })?;
 
@@ -183,7 +193,11 @@ impl StorageBackend for GCSBackend {
         })
     }
 
-    fn write<'a>(&'a self, key: &'a str, data: &'a [u8]) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
+    fn write<'a>(
+        &'a self,
+        key: &'a str,
+        data: &'a [u8],
+    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
         Box::pin(async move {
             let _conn = self.pool.acquire()?;
 
@@ -202,7 +216,9 @@ impl StorageBackend for GCSBackend {
                         &upload_type,
                     )
                     .await
-                    .map_err(|e| NeedleError::Io(std::io::Error::other(format!("GCS upload error: {}", e))))?;
+                    .map_err(|e| {
+                        NeedleError::Io(std::io::Error::other(format!("GCS upload error: {}", e)))
+                    })?;
 
                 return Ok(());
             }
@@ -235,7 +251,10 @@ impl StorageBackend for GCSBackend {
                         if err_str.contains("404") || err_str.contains("not found") {
                             return Ok(()); // Idempotent delete
                         }
-                        return Err(NeedleError::Io(std::io::Error::other(format!("GCS delete error: {}", e))));
+                        return Err(NeedleError::Io(std::io::Error::other(format!(
+                            "GCS delete error: {}",
+                            e
+                        ))));
                     }
                 }
             }
@@ -246,7 +265,10 @@ impl StorageBackend for GCSBackend {
         })
     }
 
-    fn list<'a>(&'a self, prefix: &'a str) -> Pin<Box<dyn Future<Output = Result<Vec<String>>> + Send + 'a>> {
+    fn list<'a>(
+        &'a self,
+        prefix: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<String>>> + Send + 'a>> {
         Box::pin(async move {
             let _conn = self.pool.acquire()?;
 
@@ -260,7 +282,9 @@ impl StorageBackend for GCSBackend {
                         ..Default::default()
                     })
                     .await
-                    .map_err(|e| NeedleError::Io(std::io::Error::other(format!("GCS list error: {}", e))))?;
+                    .map_err(|e| {
+                        NeedleError::Io(std::io::Error::other(format!("GCS list error: {}", e)))
+                    })?;
 
                 let keys: Vec<String> = objects
                     .items
@@ -277,7 +301,10 @@ impl StorageBackend for GCSBackend {
         })
     }
 
-    fn exists<'a>(&'a self, key: &'a str) -> Pin<Box<dyn Future<Output = Result<bool>> + Send + 'a>> {
+    fn exists<'a>(
+        &'a self,
+        key: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<bool>> + Send + 'a>> {
         Box::pin(async move {
             let _conn = self.pool.acquire()?;
 
@@ -298,7 +325,10 @@ impl StorageBackend for GCSBackend {
                         if err_str.contains("404") || err_str.contains("not found") {
                             return Ok(false);
                         }
-                        return Err(NeedleError::Io(std::io::Error::other(format!("GCS get_object error: {}", e))));
+                        return Err(NeedleError::Io(std::io::Error::other(format!(
+                            "GCS get_object error: {}",
+                            e
+                        ))));
                     }
                 }
             }

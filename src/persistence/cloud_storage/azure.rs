@@ -1,20 +1,20 @@
 //! Azure Blob Storage backend.
 
-use crate::error::Result;
-#[cfg(feature = "cloud-storage-azure")]
-use crate::error::NeedleError;
 use super::common::MockStorage;
 use super::config::{ConnectionPool, RetryPolicy, StorageBackend, StorageConfig};
+#[cfg(feature = "cloud-storage-azure")]
+use crate::error::NeedleError;
+use crate::error::Result;
 use serde::{Deserialize, Serialize};
 use std::future::Future;
 use std::pin::Pin;
 
 #[cfg(feature = "cloud-storage-azure")]
-use std::sync::Arc;
-#[cfg(feature = "cloud-storage-azure")]
 use azure_storage::StorageCredentials;
 #[cfg(feature = "cloud-storage-azure")]
 use azure_storage_blobs::prelude::*;
+#[cfg(feature = "cloud-storage-azure")]
+use std::sync::Arc;
 
 /// Azure Blob-specific configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -65,21 +65,20 @@ impl AzureBlobBackend {
     /// Create a new Azure Blob backend with account key authentication.
     #[cfg(feature = "cloud-storage-azure")]
     pub fn new_with_account_key(config: AzureBlobConfig, account_key: &str) -> Result<Self> {
-        let storage_credentials = StorageCredentials::access_key(
-            config.account_name.clone(),
-            account_key.to_string(),
-        );
+        let storage_credentials =
+            StorageCredentials::access_key(config.account_name.clone(), account_key.to_string());
 
-        let service_client = BlobServiceClient::new(
-            config.account_name.clone(),
-            storage_credentials,
-        );
+        let service_client =
+            BlobServiceClient::new(config.account_name.clone(), storage_credentials);
 
         let container_client = service_client.container_client(&config.container);
 
         let mock = MockStorage::new(
             "Azure blob",
-            format!("https://{}.blob.core.windows.net/{}/", config.account_name, config.container),
+            format!(
+                "https://{}.blob.core.windows.net/{}/",
+                config.account_name, config.container
+            ),
         );
         Ok(Self {
             pool: ConnectionPool::from_storage_config(&config.storage),
@@ -93,21 +92,20 @@ impl AzureBlobBackend {
     /// Create a new Azure Blob backend with access key.
     #[cfg(feature = "cloud-storage-azure")]
     pub fn new_with_access_key(config: AzureBlobConfig, access_key: String) -> Result<Self> {
-        let storage_credentials = StorageCredentials::access_key(
-            config.account_name.clone(),
-            access_key,
-        );
+        let storage_credentials =
+            StorageCredentials::access_key(config.account_name.clone(), access_key);
 
-        let service_client = BlobServiceClient::new(
-            config.account_name.clone(),
-            storage_credentials,
-        );
+        let service_client =
+            BlobServiceClient::new(config.account_name.clone(), storage_credentials);
 
         let container_client = service_client.container_client(&config.container);
 
         let mock = MockStorage::new(
             "Azure blob",
-            format!("https://{}.blob.core.windows.net/{}/", config.account_name, config.container),
+            format!(
+                "https://{}.blob.core.windows.net/{}/",
+                config.account_name, config.container
+            ),
         );
         Ok(Self {
             pool: ConnectionPool::from_storage_config(&config.storage),
@@ -128,20 +126,27 @@ impl AzureBlobBackend {
     pub async fn new_with_default_credentials(config: AzureBlobConfig) -> Result<Self> {
         use azure_identity::TokenCredentialOptions;
 
-        let credential = azure_identity::DefaultAzureCredential::create(TokenCredentialOptions::default())
-            .map_err(|e| NeedleError::Io(std::io::Error::other(format!("Azure credential error: {}", e))))?;
+        let credential =
+            azure_identity::DefaultAzureCredential::create(TokenCredentialOptions::default())
+                .map_err(|e| {
+                    NeedleError::Io(std::io::Error::other(format!(
+                        "Azure credential error: {}",
+                        e
+                    )))
+                })?;
         let storage_credentials = StorageCredentials::token_credential(Arc::new(credential));
 
-        let service_client = BlobServiceClient::new(
-            config.account_name.clone(),
-            storage_credentials,
-        );
+        let service_client =
+            BlobServiceClient::new(config.account_name.clone(), storage_credentials);
 
         let container_client = service_client.container_client(&config.container);
 
         let mock = MockStorage::new(
             "Azure blob",
-            format!("https://{}.blob.core.windows.net/{}/", config.account_name, config.container),
+            format!(
+                "https://{}.blob.core.windows.net/{}/",
+                config.account_name, config.container
+            ),
         );
         Ok(Self {
             pool: ConnectionPool::from_storage_config(&config.storage),
@@ -156,7 +161,10 @@ impl AzureBlobBackend {
     pub fn new(config: AzureBlobConfig) -> Self {
         let mock = MockStorage::new(
             "Azure blob",
-            format!("https://{}.blob.core.windows.net/{}/", config.account_name, config.container),
+            format!(
+                "https://{}.blob.core.windows.net/{}/",
+                config.account_name, config.container
+            ),
         );
         Self {
             pool: ConnectionPool::from_storage_config(&config.storage),
@@ -192,7 +200,10 @@ impl AzureBlobBackend {
 }
 
 impl StorageBackend for AzureBlobBackend {
-    fn read<'a>(&'a self, key: &'a str) -> Pin<Box<dyn Future<Output = Result<Vec<u8>>> + Send + 'a>> {
+    fn read<'a>(
+        &'a self,
+        key: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<u8>>> + Send + 'a>> {
         Box::pin(async move {
             let _conn = self.pool.acquire()?;
 
@@ -201,17 +212,20 @@ impl StorageBackend for AzureBlobBackend {
                 // Real Azure implementation
                 let blob_client = container_client.blob_client(key);
 
-                let response = blob_client
-                    .get_content()
-                    .await
-                    .map_err(|e| {
-                        let err_str = e.to_string();
-                        if err_str.contains("404") || err_str.contains("BlobNotFound") || err_str.contains("not found") {
-                            NeedleError::NotFound(format!("Azure blob '{}' not found", key))
-                        } else {
-                            NeedleError::Io(std::io::Error::other(format!("Azure get_content error: {}", e)))
-                        }
-                    })?;
+                let response = blob_client.get_content().await.map_err(|e| {
+                    let err_str = e.to_string();
+                    if err_str.contains("404")
+                        || err_str.contains("BlobNotFound")
+                        || err_str.contains("not found")
+                    {
+                        NeedleError::NotFound(format!("Azure blob '{}' not found", key))
+                    } else {
+                        NeedleError::Io(std::io::Error::other(format!(
+                            "Azure get_content error: {}",
+                            e
+                        )))
+                    }
+                })?;
 
                 return Ok(response);
             }
@@ -221,7 +235,11 @@ impl StorageBackend for AzureBlobBackend {
         })
     }
 
-    fn write<'a>(&'a self, key: &'a str, data: &'a [u8]) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
+    fn write<'a>(
+        &'a self,
+        key: &'a str,
+        data: &'a [u8],
+    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
         Box::pin(async move {
             let _conn = self.pool.acquire()?;
 
@@ -233,7 +251,12 @@ impl StorageBackend for AzureBlobBackend {
                 blob_client
                     .put_block_blob(data.to_vec())
                     .await
-                    .map_err(|e| NeedleError::Io(std::io::Error::other(format!("Azure put_block_blob error: {}", e))))?;
+                    .map_err(|e| {
+                        NeedleError::Io(std::io::Error::other(format!(
+                            "Azure put_block_blob error: {}",
+                            e
+                        )))
+                    })?;
 
                 return Ok(());
             }
@@ -260,7 +283,10 @@ impl StorageBackend for AzureBlobBackend {
                         if err_str.contains("404") || err_str.contains("BlobNotFound") {
                             return Ok(()); // Idempotent delete
                         }
-                        return Err(NeedleError::Io(std::io::Error::other(format!("Azure delete error: {}", e))));
+                        return Err(NeedleError::Io(std::io::Error::other(format!(
+                            "Azure delete error: {}",
+                            e
+                        ))));
                     }
                 }
             }
@@ -271,7 +297,10 @@ impl StorageBackend for AzureBlobBackend {
         })
     }
 
-    fn list<'a>(&'a self, prefix: &'a str) -> Pin<Box<dyn Future<Output = Result<Vec<String>>> + Send + 'a>> {
+    fn list<'a>(
+        &'a self,
+        prefix: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<String>>> + Send + 'a>> {
         #[cfg(feature = "cloud-storage-azure")]
         let container_client = self.container_client.clone();
         let _prefix_owned = prefix.to_string();
@@ -291,8 +320,12 @@ impl StorageBackend for AzureBlobBackend {
                     .into_stream();
 
                 while let Some(result) = stream.next().await {
-                    let response = result
-                        .map_err(|e| NeedleError::Io(std::io::Error::other(format!("Azure list_blobs error: {}", e))))?;
+                    let response = result.map_err(|e| {
+                        NeedleError::Io(std::io::Error::other(format!(
+                            "Azure list_blobs error: {}",
+                            e
+                        )))
+                    })?;
 
                     for blob in response.blobs.blobs() {
                         keys.push(blob.name.clone());
@@ -307,7 +340,10 @@ impl StorageBackend for AzureBlobBackend {
         })
     }
 
-    fn exists<'a>(&'a self, key: &'a str) -> Pin<Box<dyn Future<Output = Result<bool>> + Send + 'a>> {
+    fn exists<'a>(
+        &'a self,
+        key: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<bool>> + Send + 'a>> {
         Box::pin(async move {
             let _conn = self.pool.acquire()?;
 
@@ -323,7 +359,10 @@ impl StorageBackend for AzureBlobBackend {
                         if err_str.contains("404") || err_str.contains("BlobNotFound") {
                             return Ok(false);
                         }
-                        return Err(NeedleError::Io(std::io::Error::other(format!("Azure get_properties error: {}", e))));
+                        return Err(NeedleError::Io(std::io::Error::other(format!(
+                            "Azure get_properties error: {}",
+                            e
+                        ))));
                     }
                 }
             }

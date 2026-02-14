@@ -1,20 +1,16 @@
 //! AWS S3 storage backend.
 
-use crate::error::Result;
-#[cfg(feature = "cloud-storage-s3")]
-use crate::error::NeedleError;
 use super::common::MockStorage;
 use super::config::{ConnectionPool, RetryPolicy, StorageBackend, StorageConfig};
+#[cfg(feature = "cloud-storage-s3")]
+use crate::error::NeedleError;
+use crate::error::Result;
 use serde::{Deserialize, Serialize};
 use std::future::Future;
 use std::pin::Pin;
 
 #[cfg(feature = "cloud-storage-s3")]
-use aws_sdk_s3::{
-    config::Region,
-    primitives::ByteStream,
-    Client as S3Client,
-};
+use aws_sdk_s3::{config::Region, primitives::ByteStream, Client as S3Client};
 
 /// S3-specific configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -78,8 +74,8 @@ impl S3Backend {
     pub async fn new_with_default_credentials(config: S3Config) -> Result<Self> {
         let region = Region::new(config.region.clone());
 
-        let mut aws_config_builder = aws_config::defaults(aws_config::BehaviorVersion::latest())
-            .region(region);
+        let mut aws_config_builder =
+            aws_config::defaults(aws_config::BehaviorVersion::latest()).region(region);
 
         // Use custom endpoint if provided (for S3-compatible services like MinIO)
         if let Some(ref endpoint) = config.endpoint {
@@ -184,7 +180,10 @@ impl S3Backend {
 }
 
 impl StorageBackend for S3Backend {
-    fn read<'a>(&'a self, key: &'a str) -> Pin<Box<dyn Future<Output = Result<Vec<u8>>> + Send + 'a>> {
+    fn read<'a>(
+        &'a self,
+        key: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<u8>>> + Send + 'a>> {
         Box::pin(async move {
             let _conn = self.pool.acquire()?;
 
@@ -198,10 +197,15 @@ impl StorageBackend for S3Backend {
                     .send()
                     .await
                     .map_err(|e| {
-                        if e.to_string().contains("NoSuchKey") || e.to_string().contains("not found") {
+                        if e.to_string().contains("NoSuchKey")
+                            || e.to_string().contains("not found")
+                        {
                             NeedleError::NotFound(format!("S3 key '{}' not found", key))
                         } else {
-                            NeedleError::Io(std::io::Error::other(format!("S3 get_object error: {}", e)))
+                            NeedleError::Io(std::io::Error::other(format!(
+                                "S3 get_object error: {}",
+                                e
+                            )))
                         }
                     })?;
 
@@ -209,7 +213,9 @@ impl StorageBackend for S3Backend {
                     .body
                     .collect()
                     .await
-                    .map_err(|e| NeedleError::Io(std::io::Error::other(format!("S3 body read error: {}", e))))?
+                    .map_err(|e| {
+                        NeedleError::Io(std::io::Error::other(format!("S3 body read error: {}", e)))
+                    })?
                     .into_bytes()
                     .to_vec();
 
@@ -221,7 +227,11 @@ impl StorageBackend for S3Backend {
         })
     }
 
-    fn write<'a>(&'a self, key: &'a str, data: &'a [u8]) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
+    fn write<'a>(
+        &'a self,
+        key: &'a str,
+        data: &'a [u8],
+    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
         Box::pin(async move {
             let _conn = self.pool.acquire()?;
 
@@ -237,7 +247,12 @@ impl StorageBackend for S3Backend {
                     .body(body)
                     .send()
                     .await
-                    .map_err(|e| NeedleError::Io(std::io::Error::other(format!("S3 put_object error: {}", e))))?;
+                    .map_err(|e| {
+                        NeedleError::Io(std::io::Error::other(format!(
+                            "S3 put_object error: {}",
+                            e
+                        )))
+                    })?;
 
                 return Ok(());
             }
@@ -261,7 +276,12 @@ impl StorageBackend for S3Backend {
                     .key(key)
                     .send()
                     .await
-                    .map_err(|e| NeedleError::Io(std::io::Error::other(format!("S3 delete_object error: {}", e))))?;
+                    .map_err(|e| {
+                        NeedleError::Io(std::io::Error::other(format!(
+                            "S3 delete_object error: {}",
+                            e
+                        )))
+                    })?;
 
                 return Ok(());
             }
@@ -272,7 +292,10 @@ impl StorageBackend for S3Backend {
         })
     }
 
-    fn list<'a>(&'a self, prefix: &'a str) -> Pin<Box<dyn Future<Output = Result<Vec<String>>> + Send + 'a>> {
+    fn list<'a>(
+        &'a self,
+        prefix: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<String>>> + Send + 'a>> {
         Box::pin(async move {
             let _conn = self.pool.acquire()?;
 
@@ -292,10 +315,12 @@ impl StorageBackend for S3Backend {
                         request = request.continuation_token(token);
                     }
 
-                    let resp = request
-                        .send()
-                        .await
-                        .map_err(|e| NeedleError::Io(std::io::Error::other(format!("S3 list_objects_v2 error: {}", e))))?;
+                    let resp = request.send().await.map_err(|e| {
+                        NeedleError::Io(std::io::Error::other(format!(
+                            "S3 list_objects_v2 error: {}",
+                            e
+                        )))
+                    })?;
 
                     if let Some(contents) = resp.contents {
                         for obj in contents {
@@ -320,7 +345,10 @@ impl StorageBackend for S3Backend {
         })
     }
 
-    fn exists<'a>(&'a self, key: &'a str) -> Pin<Box<dyn Future<Output = Result<bool>> + Send + 'a>> {
+    fn exists<'a>(
+        &'a self,
+        key: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<bool>> + Send + 'a>> {
         Box::pin(async move {
             let _conn = self.pool.acquire()?;
 
@@ -338,10 +366,16 @@ impl StorageBackend for S3Backend {
                     Err(e) => {
                         // Check if it's a "not found" error
                         let err_str = e.to_string();
-                        if err_str.contains("NoSuchKey") || err_str.contains("404") || err_str.contains("not found") {
+                        if err_str.contains("NoSuchKey")
+                            || err_str.contains("404")
+                            || err_str.contains("not found")
+                        {
                             return Ok(false);
                         }
-                        return Err(NeedleError::Io(std::io::Error::other(format!("S3 head_object error: {}", e))));
+                        return Err(NeedleError::Io(std::io::Error::other(format!(
+                            "S3 head_object error: {}",
+                            e
+                        ))));
                     }
                 }
             }
