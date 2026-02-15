@@ -206,7 +206,9 @@ fn test_neg_infinity_rejection() {
 fn test_duplicate_id_rejection() {
     let mut collection = Collection::with_dimensions("test", 4);
 
-    collection.insert("dup", &[1.0, 2.0, 3.0, 4.0], None).unwrap();
+    collection
+        .insert("dup", &[1.0, 2.0, 3.0, 4.0], None)
+        .unwrap();
     let result = collection.insert("dup", &[5.0, 6.0, 7.0, 8.0], None);
     assert!(result.is_err());
 }
@@ -225,7 +227,9 @@ fn test_unicode_id() {
     let mut collection = Collection::with_dimensions("test", 4);
 
     let unicode_id = "日本語テスト🎉";
-    collection.insert(unicode_id, &[1.0, 2.0, 3.0, 4.0], None).unwrap();
+    collection
+        .insert(unicode_id, &[1.0, 2.0, 3.0, 4.0], None)
+        .unwrap();
     assert!(collection.contains(unicode_id));
 
     let (vec, _) = collection.get(unicode_id).unwrap();
@@ -237,7 +241,9 @@ fn test_very_long_id() {
     let mut collection = Collection::with_dimensions("test", 4);
 
     let long_id: String = "x".repeat(10000);
-    collection.insert(&long_id, &[1.0, 2.0, 3.0, 4.0], None).unwrap();
+    collection
+        .insert(&long_id, &[1.0, 2.0, 3.0, 4.0], None)
+        .unwrap();
     assert!(collection.contains(&long_id));
 }
 
@@ -245,14 +251,16 @@ fn test_very_long_id() {
 fn test_special_characters_in_id() {
     let mut collection = Collection::with_dimensions("test", 4);
 
-    let special_ids = ["path/to/file",
+    let special_ids = [
+        "path/to/file",
         "id with spaces",
         "id\twith\ttabs",
         "id\nwith\nnewlines",
         "id\"with\"quotes",
         "id'with'quotes",
         "id<with>brackets",
-        "id&with&ampersand"];
+        "id&with&ampersand",
+    ];
 
     for (i, id) in special_ids.iter().enumerate() {
         let vec = vec![i as f32, 0.0, 0.0, 0.0];
@@ -269,7 +277,9 @@ fn test_special_characters_in_id() {
 fn test_null_metadata() {
     let mut collection = Collection::with_dimensions("test", 4);
 
-    collection.insert("v1", &[1.0, 2.0, 3.0, 4.0], None).unwrap();
+    collection
+        .insert("v1", &[1.0, 2.0, 3.0, 4.0], None)
+        .unwrap();
     let (_, meta) = collection.get("v1").unwrap();
     assert!(meta.is_none());
 }
@@ -278,7 +288,9 @@ fn test_null_metadata() {
 fn test_empty_object_metadata() {
     let mut collection = Collection::with_dimensions("test", 4);
 
-    collection.insert("v1", &[1.0, 2.0, 3.0, 4.0], Some(json!({}))).unwrap();
+    collection
+        .insert("v1", &[1.0, 2.0, 3.0, 4.0], Some(json!({})))
+        .unwrap();
     let (_, meta) = collection.get("v1").unwrap();
     assert_eq!(meta, Some(&json!({})));
 }
@@ -297,7 +309,9 @@ fn test_nested_metadata() {
         }
     });
 
-    collection.insert("v1", &[1.0, 2.0, 3.0, 4.0], Some(nested.clone())).unwrap();
+    collection
+        .insert("v1", &[1.0, 2.0, 3.0, 4.0], Some(nested.clone()))
+        .unwrap();
     let (_, meta) = collection.get("v1").unwrap();
     assert_eq!(meta, Some(&nested));
 }
@@ -307,7 +321,9 @@ fn test_array_metadata() {
     let mut collection = Collection::with_dimensions("test", 4);
 
     let array = json!(["a", "b", "c", 1, 2, 3]);
-    collection.insert("v1", &[1.0, 2.0, 3.0, 4.0], Some(array.clone())).unwrap();
+    collection
+        .insert("v1", &[1.0, 2.0, 3.0, 4.0], Some(array.clone()))
+        .unwrap();
     let (_, meta) = collection.get("v1").unwrap();
     assert_eq!(meta, Some(&array));
 }
@@ -322,7 +338,9 @@ fn test_large_metadata() {
         "large_field": large_text
     });
 
-    collection.insert("v1", &[1.0, 2.0, 3.0, 4.0], Some(meta)).unwrap();
+    collection
+        .insert("v1", &[1.0, 2.0, 3.0, 4.0], Some(meta))
+        .unwrap();
     let (_, retrieved_meta) = collection.get("v1").unwrap();
     assert!(retrieved_meta.is_some());
 }
@@ -335,8 +353,12 @@ fn test_large_metadata() {
 fn test_search_k_larger_than_collection() {
     let mut collection = Collection::with_dimensions("test", 4);
 
-    collection.insert("v1", &[1.0, 0.0, 0.0, 0.0], None).unwrap();
-    collection.insert("v2", &[0.0, 1.0, 0.0, 0.0], None).unwrap();
+    collection
+        .insert("v1", &[1.0, 0.0, 0.0, 0.0], None)
+        .unwrap();
+    collection
+        .insert("v2", &[0.0, 1.0, 0.0, 0.0], None)
+        .unwrap();
 
     // Ask for more results than exist
     let results = collection.search(&[0.5, 0.5, 0.0, 0.0], 100).unwrap();
@@ -346,7 +368,9 @@ fn test_search_k_larger_than_collection() {
 #[test]
 fn test_search_k_zero() {
     let mut collection = Collection::with_dimensions("test", 4);
-    collection.insert("v1", &[1.0, 0.0, 0.0, 0.0], None).unwrap();
+    collection
+        .insert("v1", &[1.0, 0.0, 0.0, 0.0], None)
+        .unwrap();
 
     let results = collection.search(&[1.0, 0.0, 0.0, 0.0], 0).unwrap();
     assert!(results.is_empty());
@@ -356,9 +380,15 @@ fn test_search_k_zero() {
 fn test_search_after_delete() {
     let mut collection = Collection::with_dimensions("test", 4);
 
-    collection.insert("v1", &[1.0, 0.0, 0.0, 0.0], None).unwrap();
-    collection.insert("v2", &[0.0, 1.0, 0.0, 0.0], None).unwrap();
-    collection.insert("v3", &[0.0, 0.0, 1.0, 0.0], None).unwrap();
+    collection
+        .insert("v1", &[1.0, 0.0, 0.0, 0.0], None)
+        .unwrap();
+    collection
+        .insert("v2", &[0.0, 1.0, 0.0, 0.0], None)
+        .unwrap();
+    collection
+        .insert("v3", &[0.0, 0.0, 1.0, 0.0], None)
+        .unwrap();
 
     collection.delete("v2").unwrap();
 
@@ -381,8 +411,12 @@ fn test_all_distance_functions() {
         let config = CollectionConfig::new("test", 4).with_distance(dist);
         let mut collection = Collection::new(config);
 
-        collection.insert("v1", &[1.0, 0.0, 0.0, 0.0], None).unwrap();
-        collection.insert("v2", &[0.0, 1.0, 0.0, 0.0], None).unwrap();
+        collection
+            .insert("v1", &[1.0, 0.0, 0.0, 0.0], None)
+            .unwrap();
+        collection
+            .insert("v2", &[0.0, 1.0, 0.0, 0.0], None)
+            .unwrap();
 
         let results = collection.search(&[1.0, 0.0, 0.0, 0.0], 2).unwrap();
         assert_eq!(results.len(), 2);
@@ -424,7 +458,9 @@ fn test_batch_insert_mismatched_lengths() {
 fn test_delete_batch_with_nonexistent() {
     let mut collection = Collection::with_dimensions("test", 4);
 
-    collection.insert("v1", &[1.0, 0.0, 0.0, 0.0], None).unwrap();
+    collection
+        .insert("v1", &[1.0, 0.0, 0.0, 0.0], None)
+        .unwrap();
 
     // Delete mix of existing and non-existing
     let ids = ["v1", "nonexistent1", "nonexistent2"];
@@ -487,13 +523,19 @@ fn test_large_k_is_clamped() {
     // Insert only 5 vectors
     for i in 0..5 {
         let vector: Vec<f32> = (0..8).map(|j| ((i * 8 + j) as f32) / 40.0).collect();
-        collection.insert(format!("vec_{}", i), &vector, None).unwrap();
+        collection
+            .insert(format!("vec_{}", i), &vector, None)
+            .unwrap();
     }
 
     // Search with k=1000000 - should be clamped to 5
     let query: Vec<f32> = vec![0.5; 8];
     let results = collection.search(&query, 1_000_000).unwrap();
-    assert_eq!(results.len(), 5, "Results should be clamped to collection size");
+    assert_eq!(
+        results.len(),
+        5,
+        "Results should be clamped to collection size"
+    );
 }
 
 #[test]
@@ -502,7 +544,9 @@ fn test_k_zero_returns_empty() {
 
     for i in 0..5 {
         let vector: Vec<f32> = (0..8).map(|j| ((i * 8 + j) as f32) / 40.0).collect();
-        collection.insert(format!("vec_{}", i), &vector, None).unwrap();
+        collection
+            .insert(format!("vec_{}", i), &vector, None)
+            .unwrap();
     }
 
     let query: Vec<f32> = vec![0.5; 8];
@@ -537,7 +581,10 @@ fn test_negative_infinity_vector_rejected() {
     // Vector with -Infinity should be rejected
     let neg_inf_vector = vec![1.0, f32::NEG_INFINITY, 3.0, 4.0];
     let result = collection.insert("neg_inf_vec", &neg_inf_vector, None);
-    assert!(result.is_err(), "Negative infinity vector should be rejected");
+    assert!(
+        result.is_err(),
+        "Negative infinity vector should be rejected"
+    );
 }
 
 #[test]
@@ -561,7 +608,9 @@ fn test_batch_search_large_k_clamped() {
     // Insert 3 vectors
     for i in 0..3 {
         let vector: Vec<f32> = vec![i as f32; 4];
-        collection.insert(format!("vec_{}", i), &vector, None).unwrap();
+        collection
+            .insert(format!("vec_{}", i), &vector, None)
+            .unwrap();
     }
 
     // Batch search with k > collection size
@@ -584,17 +633,21 @@ fn test_filtered_search_large_k_clamped() {
     for i in 0..10 {
         let vector: Vec<f32> = vec![i as f32 / 10.0; 4];
         let category = if i % 2 == 0 { "even" } else { "odd" };
-        collection.insert(
-            format!("vec_{}", i),
-            &vector,
-            Some(json!({"category": category})),
-        ).unwrap();
+        collection
+            .insert(
+                format!("vec_{}", i),
+                &vector,
+                Some(json!({"category": category})),
+            )
+            .unwrap();
     }
 
     // Filtered search with very large k
     let query: Vec<f32> = vec![0.5; 4];
     let filter = Filter::eq("category", "even");
-    let results = collection.search_with_filter(&query, 1_000_000, &filter).unwrap();
+    let results = collection
+        .search_with_filter(&query, 1_000_000, &filter)
+        .unwrap();
 
     // Should only return even vectors (5 of them)
     assert!(results.len() <= 5, "Should return at most 5 even vectors");
@@ -661,7 +714,10 @@ fn test_save_to_readonly_location() {
     // Try to open read-only file - should fail (open requires write access)
     {
         let result = Database::open(&db_path);
-        assert!(result.is_err(), "Should fail to open read-only database file for writing");
+        assert!(
+            result.is_err(),
+            "Should fail to open read-only database file for writing"
+        );
     }
 
     // Restore file permissions
@@ -680,7 +736,10 @@ fn test_save_to_readonly_location() {
 
     // Try to create database in read-only directory - should fail
     let result = Database::open(&new_db_path);
-    assert!(result.is_err(), "Should fail to create database in read-only directory");
+    assert!(
+        result.is_err(),
+        "Should fail to create database in read-only directory"
+    );
 
     // Restore directory permissions for cleanup
     dir_permissions.set_mode(0o755);
@@ -745,19 +804,25 @@ fn test_hnsw_edge_case_configs() {
 
     // Test collection with edge case M using with_m()
     let db = Database::in_memory();
-    db.create_collection_with_config(
-        CollectionConfig::new("small_m", 4).with_m(2)
-    ).unwrap();
+    db.create_collection_with_config(CollectionConfig::new("small_m", 4).with_m(2))
+        .unwrap();
     let collection = db.collection("small_m").unwrap();
-    collection.insert("v1", &[1.0, 0.0, 0.0, 0.0], None).unwrap();
+    collection
+        .insert("v1", &[1.0, 0.0, 0.0, 0.0], None)
+        .unwrap();
     assert_eq!(collection.len(), 1);
 
     // Test with larger ef_construction
     db.create_collection_with_config(
-        CollectionConfig::new("large_ef", 4).with_m(16).with_ef_construction(1000)
-    ).unwrap();
+        CollectionConfig::new("large_ef", 4)
+            .with_m(16)
+            .with_ef_construction(1000),
+    )
+    .unwrap();
     let collection2 = db.collection("large_ef").unwrap();
-    collection2.insert("v1", &[1.0, 0.0, 0.0, 0.0], None).unwrap();
+    collection2
+        .insert("v1", &[1.0, 0.0, 0.0, 0.0], None)
+        .unwrap();
     assert_eq!(collection2.len(), 1);
 }
 
@@ -769,18 +834,29 @@ fn test_filter_edge_cases() {
     let mut collection = Collection::with_dimensions("test", 4);
 
     // Insert test vectors
-    collection.insert("v1", &[1.0, 0.0, 0.0, 0.0], Some(json!({"score": 10}))).unwrap();
-    collection.insert("v2", &[0.0, 1.0, 0.0, 0.0], Some(json!({"score": 20}))).unwrap();
+    collection
+        .insert("v1", &[1.0, 0.0, 0.0, 0.0], Some(json!({"score": 10})))
+        .unwrap();
+    collection
+        .insert("v2", &[0.0, 1.0, 0.0, 0.0], Some(json!({"score": 20})))
+        .unwrap();
 
     // Filter with empty array for $in
     let filter = Filter::parse(&json!({"score": {"$in": []}})).unwrap();
-    let results = collection.search_with_filter(&[1.0, 0.0, 0.0, 0.0], 10, &filter).unwrap();
+    let results = collection
+        .search_with_filter(&[1.0, 0.0, 0.0, 0.0], 10, &filter)
+        .unwrap();
     assert!(results.is_empty(), "Empty $in should match nothing");
 
     // Filter with non-existent field
     let filter2 = Filter::eq("nonexistent_field", "value");
-    let results2 = collection.search_with_filter(&[1.0, 0.0, 0.0, 0.0], 10, &filter2).unwrap();
-    assert!(results2.is_empty(), "Non-existent field should match nothing");
+    let results2 = collection
+        .search_with_filter(&[1.0, 0.0, 0.0, 0.0], 10, &filter2)
+        .unwrap();
+    assert!(
+        results2.is_empty(),
+        "Non-existent field should match nothing"
+    );
 }
 
 /// Test concurrent operations edge case
@@ -810,11 +886,7 @@ fn test_concurrent_operations() {
     handles.push(thread::spawn(move || {
         let collection = db_writer.collection("concurrent").unwrap();
         for i in 0..20 {
-            let _ = collection.insert(
-                format!("vec_{}", i),
-                &[i as f32, 0.0, 0.0, 0.0],
-                None,
-            );
+            let _ = collection.insert(format!("vec_{}", i), &[i as f32, 0.0, 0.0, 0.0], None);
         }
     }));
 
@@ -825,7 +897,10 @@ fn test_concurrent_operations() {
 
     // Verify some data was inserted
     let collection = db.collection("concurrent").unwrap();
-    assert!(!collection.is_empty(), "Some vectors should have been inserted");
+    assert!(
+        !collection.is_empty(),
+        "Some vectors should have been inserted"
+    );
 }
 
 /// Test update with dimension mismatch
@@ -833,7 +908,9 @@ fn test_concurrent_operations() {
 fn test_update_dimension_mismatch() {
     let mut collection = Collection::with_dimensions("test", 4);
 
-    collection.insert("v1", &[1.0, 2.0, 3.0, 4.0], None).unwrap();
+    collection
+        .insert("v1", &[1.0, 2.0, 3.0, 4.0], None)
+        .unwrap();
 
     // Update with wrong dimensions
     let wrong_vec = vec![1.0, 2.0]; // Only 2 dimensions
@@ -913,11 +990,9 @@ fn test_search_result_consistency() {
 
     // Insert vectors
     for i in 0..10 {
-        collection.insert(
-            format!("v{}", i),
-            &[i as f32 / 10.0, 0.0, 0.0, 0.0],
-            None,
-        ).unwrap();
+        collection
+            .insert(format!("v{}", i), &[i as f32 / 10.0, 0.0, 0.0, 0.0], None)
+            .unwrap();
     }
 
     let query = vec![0.5, 0.0, 0.0, 0.0];
@@ -932,8 +1007,14 @@ fn test_search_result_consistency() {
     assert_eq!(results2.len(), results3.len());
 
     for i in 0..results1.len() {
-        assert_eq!(results1[i].id, results2[i].id, "Results should be consistent");
-        assert_eq!(results2[i].id, results3[i].id, "Results should be consistent");
+        assert_eq!(
+            results1[i].id, results2[i].id,
+            "Results should be consistent"
+        );
+        assert_eq!(
+            results2[i].id, results3[i].id,
+            "Results should be consistent"
+        );
     }
 }
 
@@ -944,11 +1025,9 @@ fn test_compact_after_heavy_operations() {
 
     // Insert many vectors
     for i in 0..100 {
-        collection.insert(
-            format!("v{}", i),
-            &[i as f32, 0.0, 0.0, 0.0],
-            None,
-        ).unwrap();
+        collection
+            .insert(format!("v{}", i), &[i as f32, 0.0, 0.0, 0.0], None)
+            .unwrap();
     }
 
     // Delete many vectors
@@ -975,25 +1054,43 @@ fn test_metadata_all_json_types() {
     let mut collection = Collection::with_dimensions("test", 4);
 
     // String
-    collection.insert("str", &[1.0, 0.0, 0.0, 0.0], Some(json!("hello"))).unwrap();
+    collection
+        .insert("str", &[1.0, 0.0, 0.0, 0.0], Some(json!("hello")))
+        .unwrap();
 
     // Number (integer)
-    collection.insert("int", &[2.0, 0.0, 0.0, 0.0], Some(json!(42))).unwrap();
+    collection
+        .insert("int", &[2.0, 0.0, 0.0, 0.0], Some(json!(42)))
+        .unwrap();
 
     // Number (float)
-    collection.insert("float", &[3.0, 0.0, 0.0, 0.0], Some(json!(3.14))).unwrap();
+    collection
+        .insert("float", &[3.0, 0.0, 0.0, 0.0], Some(json!(3.14)))
+        .unwrap();
 
     // Boolean
-    collection.insert("bool", &[4.0, 0.0, 0.0, 0.0], Some(json!(true))).unwrap();
+    collection
+        .insert("bool", &[4.0, 0.0, 0.0, 0.0], Some(json!(true)))
+        .unwrap();
 
     // Null
-    collection.insert("null", &[5.0, 0.0, 0.0, 0.0], Some(json!(null))).unwrap();
+    collection
+        .insert("null", &[5.0, 0.0, 0.0, 0.0], Some(json!(null)))
+        .unwrap();
 
     // Array
-    collection.insert("array", &[6.0, 0.0, 0.0, 0.0], Some(json!([1, 2, 3]))).unwrap();
+    collection
+        .insert("array", &[6.0, 0.0, 0.0, 0.0], Some(json!([1, 2, 3])))
+        .unwrap();
 
     // Object
-    collection.insert("object", &[7.0, 0.0, 0.0, 0.0], Some(json!({"key": "value"}))).unwrap();
+    collection
+        .insert(
+            "object",
+            &[7.0, 0.0, 0.0, 0.0],
+            Some(json!({"key": "value"})),
+        )
+        .unwrap();
 
     // Verify all stored correctly
     assert_eq!(collection.len(), 7);
@@ -1016,11 +1113,21 @@ fn test_export_import_edge_cases() {
     let collection = db.collection("edge").unwrap();
 
     // Insert edge case vectors
-    collection.insert("zero", &[0.0, 0.0, 0.0, 0.0], None).unwrap();
-    collection.insert("negative", &[-1.0, -2.0, -3.0, -4.0], None).unwrap();
-    collection.insert("small", &[1e-38, 1e-38, 1e-38, 1e-38], None).unwrap();
-    collection.insert("unicode_id_こんにちは", &[1.0, 2.0, 3.0, 4.0], None).unwrap();
-    collection.insert("meta", &[5.0, 6.0, 7.0, 8.0], Some(json!({"emoji": "🎉"}))).unwrap();
+    collection
+        .insert("zero", &[0.0, 0.0, 0.0, 0.0], None)
+        .unwrap();
+    collection
+        .insert("negative", &[-1.0, -2.0, -3.0, -4.0], None)
+        .unwrap();
+    collection
+        .insert("small", &[1e-38, 1e-38, 1e-38, 1e-38], None)
+        .unwrap();
+    collection
+        .insert("unicode_id_こんにちは", &[1.0, 2.0, 3.0, 4.0], None)
+        .unwrap();
+    collection
+        .insert("meta", &[5.0, 6.0, 7.0, 8.0], Some(json!({"emoji": "🎉"})))
+        .unwrap();
 
     // Export using export_all() on CollectionRef
     // ExportEntry is a tuple: (String, Vec<f32>, Option<Value>)
@@ -1058,7 +1165,9 @@ fn test_export_import_edge_cases() {
 #[test]
 fn test_search_radius_dimension_mismatch() {
     let mut collection = Collection::with_dimensions("test", 4);
-    collection.insert("v1", &[1.0, 0.0, 0.0, 0.0], None).unwrap();
+    collection
+        .insert("v1", &[1.0, 0.0, 0.0, 0.0], None)
+        .unwrap();
 
     // Wrong dimension query
     let wrong_query = vec![1.0, 0.0]; // 2 dimensions
@@ -1070,7 +1179,9 @@ fn test_search_radius_dimension_mismatch() {
 #[test]
 fn test_search_radius_nan_query() {
     let mut collection = Collection::with_dimensions("test", 4);
-    collection.insert("v1", &[1.0, 0.0, 0.0, 0.0], None).unwrap();
+    collection
+        .insert("v1", &[1.0, 0.0, 0.0, 0.0], None)
+        .unwrap();
 
     let nan_query = vec![1.0, f32::NAN, 0.0, 0.0];
     let result = collection.search_radius(&nan_query, 0.5, 10);
@@ -1081,18 +1192,25 @@ fn test_search_radius_nan_query() {
 #[test]
 fn test_search_radius_negative_distance() {
     let mut collection = Collection::with_dimensions("test", 4);
-    collection.insert("v1", &[1.0, 0.0, 0.0, 0.0], None).unwrap();
+    collection
+        .insert("v1", &[1.0, 0.0, 0.0, 0.0], None)
+        .unwrap();
 
     let query = vec![1.0, 0.0, 0.0, 0.0];
     let results = collection.search_radius(&query, -1.0, 10).unwrap();
-    assert!(results.is_empty(), "Negative distance should return no results");
+    assert!(
+        results.is_empty(),
+        "Negative distance should return no results"
+    );
 }
 
 /// Test search_radius with zero limit
 #[test]
 fn test_search_radius_zero_limit() {
     let mut collection = Collection::with_dimensions("test", 4);
-    collection.insert("v1", &[1.0, 0.0, 0.0, 0.0], None).unwrap();
+    collection
+        .insert("v1", &[1.0, 0.0, 0.0, 0.0], None)
+        .unwrap();
 
     let query = vec![1.0, 0.0, 0.0, 0.0];
     let results = collection.search_radius(&query, 0.5, 0).unwrap();
@@ -1115,12 +1233,17 @@ fn test_search_radius_with_filter_nan() {
     use needle::Filter;
 
     let mut collection = Collection::with_dimensions("test", 4);
-    collection.insert("v1", &[1.0, 0.0, 0.0, 0.0], Some(json!({"type": "a"}))).unwrap();
+    collection
+        .insert("v1", &[1.0, 0.0, 0.0, 0.0], Some(json!({"type": "a"})))
+        .unwrap();
 
     let nan_query = vec![f32::NAN, 0.0, 0.0, 0.0];
     let filter = Filter::eq("type", "a");
     let result = collection.search_radius_with_filter(&nan_query, 0.5, 10, &filter);
-    assert!(result.is_err(), "Should reject NaN query in filtered search");
+    assert!(
+        result.is_err(),
+        "Should reject NaN query in filtered search"
+    );
 }
 
 // ============================================================================
@@ -1131,7 +1254,9 @@ fn test_search_radius_with_filter_nan() {
 #[test]
 fn test_search_builder_nan_query() {
     let mut collection = Collection::with_dimensions("test", 4);
-    collection.insert("v1", &[1.0, 0.0, 0.0, 0.0], None).unwrap();
+    collection
+        .insert("v1", &[1.0, 0.0, 0.0, 0.0], None)
+        .unwrap();
 
     let nan_query = vec![1.0, f32::NAN, 0.0, 0.0];
     let result = collection.search_builder(&nan_query).k(10).execute();
@@ -1142,11 +1267,16 @@ fn test_search_builder_nan_query() {
 #[test]
 fn test_search_builder_dimension_mismatch() {
     let mut collection = Collection::with_dimensions("test", 4);
-    collection.insert("v1", &[1.0, 0.0, 0.0, 0.0], None).unwrap();
+    collection
+        .insert("v1", &[1.0, 0.0, 0.0, 0.0], None)
+        .unwrap();
 
     let wrong_query = vec![1.0, 0.0]; // 2 dimensions
     let result = collection.search_builder(&wrong_query).k(10).execute();
-    assert!(result.is_err(), "SearchBuilder should reject wrong dimensions");
+    assert!(
+        result.is_err(),
+        "SearchBuilder should reject wrong dimensions"
+    );
 }
 
 /// Test SearchBuilder with post_filter_factor of 0 (should be clamped to 1)
@@ -1156,11 +1286,13 @@ fn test_search_builder_zero_post_filter_factor() {
 
     let mut collection = Collection::with_dimensions("test", 4);
     for i in 0..10 {
-        collection.insert(
-            format!("v{}", i),
-            &[i as f32 / 10.0, 0.0, 0.0, 0.0],
-            Some(json!({"score": i})),
-        ).unwrap();
+        collection
+            .insert(
+                format!("v{}", i),
+                &[i as f32 / 10.0, 0.0, 0.0, 0.0],
+                Some(json!({"score": i})),
+            )
+            .unwrap();
     }
 
     let query = vec![0.5, 0.0, 0.0, 0.0];
@@ -1185,8 +1317,12 @@ fn test_post_filter_nonexistent_field() {
     use needle::Filter;
 
     let mut collection = Collection::with_dimensions("test", 4);
-    collection.insert("v1", &[1.0, 0.0, 0.0, 0.0], Some(json!({"type": "a"}))).unwrap();
-    collection.insert("v2", &[0.9, 0.1, 0.0, 0.0], Some(json!({"type": "b"}))).unwrap();
+    collection
+        .insert("v1", &[1.0, 0.0, 0.0, 0.0], Some(json!({"type": "a"})))
+        .unwrap();
+    collection
+        .insert("v2", &[0.9, 0.1, 0.0, 0.0], Some(json!({"type": "b"})))
+        .unwrap();
 
     let query = vec![1.0, 0.0, 0.0, 0.0];
     let post_filter = Filter::eq("nonexistent_field", "value");
@@ -1198,7 +1334,10 @@ fn test_post_filter_nonexistent_field() {
         .execute()
         .unwrap();
 
-    assert!(results.is_empty(), "Filter on non-existent field should match nothing");
+    assert!(
+        results.is_empty(),
+        "Filter on non-existent field should match nothing"
+    );
 }
 
 // ============================================================================
@@ -1209,7 +1348,9 @@ fn test_post_filter_nonexistent_field() {
 #[test]
 fn test_search_explain_nan_query() {
     let mut collection = Collection::with_dimensions("test", 4);
-    collection.insert("v1", &[1.0, 0.0, 0.0, 0.0], None).unwrap();
+    collection
+        .insert("v1", &[1.0, 0.0, 0.0, 0.0], None)
+        .unwrap();
 
     let nan_query = vec![1.0, f32::NAN, 0.0, 0.0];
     let result = collection.search_explain(&nan_query, 10);
@@ -1220,18 +1361,25 @@ fn test_search_explain_nan_query() {
 #[test]
 fn test_search_explain_dimension_mismatch() {
     let mut collection = Collection::with_dimensions("test", 4);
-    collection.insert("v1", &[1.0, 0.0, 0.0, 0.0], None).unwrap();
+    collection
+        .insert("v1", &[1.0, 0.0, 0.0, 0.0], None)
+        .unwrap();
 
     let wrong_query = vec![1.0]; // 1 dimension
     let result = collection.search_explain(&wrong_query, 10);
-    assert!(result.is_err(), "search_explain should reject wrong dimensions");
+    assert!(
+        result.is_err(),
+        "search_explain should reject wrong dimensions"
+    );
 }
 
 /// Test search_explain with k=0
 #[test]
 fn test_search_explain_k_zero() {
     let mut collection = Collection::with_dimensions("test", 4);
-    collection.insert("v1", &[1.0, 0.0, 0.0, 0.0], None).unwrap();
+    collection
+        .insert("v1", &[1.0, 0.0, 0.0, 0.0], None)
+        .unwrap();
 
     let query = vec![1.0, 0.0, 0.0, 0.0];
     let (results, explain) = collection.search_explain(&query, 0).unwrap();
@@ -1259,12 +1407,17 @@ fn test_search_with_filter_explain_nan() {
     use needle::Filter;
 
     let mut collection = Collection::with_dimensions("test", 4);
-    collection.insert("v1", &[1.0, 0.0, 0.0, 0.0], Some(json!({"type": "a"}))).unwrap();
+    collection
+        .insert("v1", &[1.0, 0.0, 0.0, 0.0], Some(json!({"type": "a"})))
+        .unwrap();
 
     let nan_query = vec![1.0, f32::NAN, 0.0, 0.0];
     let filter = Filter::eq("type", "a");
     let result = collection.search_with_filter_explain(&nan_query, 10, &filter);
-    assert!(result.is_err(), "search_with_filter_explain should reject NaN query");
+    assert!(
+        result.is_err(),
+        "search_with_filter_explain should reject NaN query"
+    );
 }
 
 // ============================================================================
@@ -1285,13 +1438,22 @@ fn test_collection_ref_after_drop() {
 
     // Operations should fail gracefully
     let search_result = coll_ref.search(&[1.0, 0.0, 0.0, 0.0], 10);
-    assert!(search_result.is_err(), "Search on dropped collection should fail");
+    assert!(
+        search_result.is_err(),
+        "Search on dropped collection should fail"
+    );
 
     let insert_result = coll_ref.insert("v2", &[0.0, 1.0, 0.0, 0.0], None);
-    assert!(insert_result.is_err(), "Insert on dropped collection should fail");
+    assert!(
+        insert_result.is_err(),
+        "Insert on dropped collection should fail"
+    );
 
     let delete_result = coll_ref.delete("v1");
-    assert!(delete_result.is_err(), "Delete on dropped collection should fail");
+    assert!(
+        delete_result.is_err(),
+        "Delete on dropped collection should fail"
+    );
 }
 
 /// Test CollectionRef search_with_post_filter with invalid input
@@ -1302,13 +1464,17 @@ fn test_collection_ref_search_with_post_filter_nan() {
     let db = Database::in_memory();
     db.create_collection("test", 4).unwrap();
     let coll = db.collection("test").unwrap();
-    coll.insert("v1", &[1.0, 0.0, 0.0, 0.0], Some(json!({"score": 10}))).unwrap();
+    coll.insert("v1", &[1.0, 0.0, 0.0, 0.0], Some(json!({"score": 10})))
+        .unwrap();
 
     let nan_query = vec![1.0, f32::NAN, 0.0, 0.0];
     let post_filter = Filter::gt("score", 5);
 
     let result = coll.search_with_post_filter(&nan_query, 10, None, &post_filter, 3);
-    assert!(result.is_err(), "search_with_post_filter should reject NaN query");
+    assert!(
+        result.is_err(),
+        "search_with_post_filter should reject NaN query"
+    );
 }
 
 /// Test CollectionRef search_radius with NaN
@@ -1340,9 +1506,13 @@ fn test_filter_unknown_operator() {
         Ok(filter) => {
             // If parsed, should not match anything when applied
             let mut collection = Collection::with_dimensions("test", 4);
-            collection.insert("v1", &[1.0, 0.0, 0.0, 0.0], Some(json!({"field": "value"}))).unwrap();
+            collection
+                .insert("v1", &[1.0, 0.0, 0.0, 0.0], Some(json!({"field": "value"})))
+                .unwrap();
 
-            let results = collection.search_with_filter(&[1.0, 0.0, 0.0, 0.0], 10, &filter).unwrap();
+            let results = collection
+                .search_with_filter(&[1.0, 0.0, 0.0, 0.0], 10, &filter)
+                .unwrap();
             // May or may not match depending on implementation
             assert!(results.len() <= 1);
         }
@@ -1358,12 +1528,18 @@ fn test_filter_type_mismatch() {
     use needle::Filter;
 
     let mut collection = Collection::with_dimensions("test", 4);
-    collection.insert("v1", &[1.0, 0.0, 0.0, 0.0], Some(json!({"score": 10}))).unwrap();
-    collection.insert("v2", &[0.0, 1.0, 0.0, 0.0], Some(json!({"score": "high"}))).unwrap();
+    collection
+        .insert("v1", &[1.0, 0.0, 0.0, 0.0], Some(json!({"score": 10})))
+        .unwrap();
+    collection
+        .insert("v2", &[0.0, 1.0, 0.0, 0.0], Some(json!({"score": "high"})))
+        .unwrap();
 
     // Filter comparing number with string should handle gracefully
     let filter = Filter::gt("score", 5);
-    let results = collection.search_with_filter(&[1.0, 0.0, 0.0, 0.0], 10, &filter).unwrap();
+    let results = collection
+        .search_with_filter(&[1.0, 0.0, 0.0, 0.0], 10, &filter)
+        .unwrap();
 
     // v1 should match (10 > 5), v2 might not (string vs number)
     assert!(results.iter().any(|r| r.id == "v1"));
@@ -1375,13 +1551,21 @@ fn test_filter_in_mixed_types() {
     use needle::Filter;
 
     let mut collection = Collection::with_dimensions("test", 4);
-    collection.insert("v1", &[1.0, 0.0, 0.0, 0.0], Some(json!({"val": 1}))).unwrap();
-    collection.insert("v2", &[0.0, 1.0, 0.0, 0.0], Some(json!({"val": "one"}))).unwrap();
-    collection.insert("v3", &[0.0, 0.0, 1.0, 0.0], Some(json!({"val": true}))).unwrap();
+    collection
+        .insert("v1", &[1.0, 0.0, 0.0, 0.0], Some(json!({"val": 1})))
+        .unwrap();
+    collection
+        .insert("v2", &[0.0, 1.0, 0.0, 0.0], Some(json!({"val": "one"})))
+        .unwrap();
+    collection
+        .insert("v3", &[0.0, 0.0, 1.0, 0.0], Some(json!({"val": true})))
+        .unwrap();
 
     // $in with mixed types
     let filter = Filter::parse(&json!({"val": {"$in": [1, "one", true]}})).unwrap();
-    let results = collection.search_with_filter(&[0.5, 0.5, 0.5, 0.0], 10, &filter).unwrap();
+    let results = collection
+        .search_with_filter(&[0.5, 0.5, 0.5, 0.0], 10, &filter)
+        .unwrap();
 
     // All should match since each value is in the list
     assert_eq!(results.len(), 3);
@@ -1421,17 +1605,24 @@ fn test_update_metadata_nonexistent() {
     let mut collection = Collection::with_dimensions("test", 4);
 
     let result = collection.update_metadata("nonexistent", Some(json!({"key": "value"})));
-    assert!(result.is_err(), "update_metadata on non-existent vector should fail");
+    assert!(
+        result.is_err(),
+        "update_metadata on non-existent vector should fail"
+    );
 }
 
 /// Test update_metadata on existing vector
 #[test]
 fn test_update_metadata_existing() {
     let mut collection = Collection::with_dimensions("test", 4);
-    collection.insert("v1", &[1.0, 0.0, 0.0, 0.0], Some(json!({"old": "value"}))).unwrap();
+    collection
+        .insert("v1", &[1.0, 0.0, 0.0, 0.0], Some(json!({"old": "value"})))
+        .unwrap();
 
     // Update metadata
-    collection.update_metadata("v1", Some(json!({"new": "value"}))).unwrap();
+    collection
+        .update_metadata("v1", Some(json!({"new": "value"})))
+        .unwrap();
 
     let (_, meta) = collection.get("v1").unwrap();
     assert_eq!(meta.unwrap()["new"], "value");
@@ -1446,7 +1637,9 @@ fn test_update_metadata_existing() {
 #[test]
 fn test_batch_search_nan_in_queries() {
     let mut collection = Collection::with_dimensions("test", 4);
-    collection.insert("v1", &[1.0, 0.0, 0.0, 0.0], None).unwrap();
+    collection
+        .insert("v1", &[1.0, 0.0, 0.0, 0.0], None)
+        .unwrap();
 
     let queries = vec![
         vec![1.0, 0.0, 0.0, 0.0],
@@ -1454,14 +1647,19 @@ fn test_batch_search_nan_in_queries() {
     ];
 
     let result = collection.batch_search(&queries, 10);
-    assert!(result.is_err(), "batch_search should reject queries with NaN");
+    assert!(
+        result.is_err(),
+        "batch_search should reject queries with NaN"
+    );
 }
 
 /// Test batch_search with dimension mismatch
 #[test]
 fn test_batch_search_dimension_mismatch() {
     let mut collection = Collection::with_dimensions("test", 4);
-    collection.insert("v1", &[1.0, 0.0, 0.0, 0.0], None).unwrap();
+    collection
+        .insert("v1", &[1.0, 0.0, 0.0, 0.0], None)
+        .unwrap();
 
     let queries = vec![
         vec![1.0, 0.0, 0.0, 0.0],
@@ -1469,7 +1667,10 @@ fn test_batch_search_dimension_mismatch() {
     ];
 
     let result = collection.batch_search(&queries, 10);
-    assert!(result.is_err(), "batch_search should reject queries with wrong dimensions");
+    assert!(
+        result.is_err(),
+        "batch_search should reject queries with wrong dimensions"
+    );
 }
 
 /// Test batch_search_with_filter with NaN
@@ -1478,7 +1679,9 @@ fn test_batch_search_with_filter_nan() {
     use needle::Filter;
 
     let mut collection = Collection::with_dimensions("test", 4);
-    collection.insert("v1", &[1.0, 0.0, 0.0, 0.0], Some(json!({"type": "a"}))).unwrap();
+    collection
+        .insert("v1", &[1.0, 0.0, 0.0, 0.0], Some(json!({"type": "a"})))
+        .unwrap();
 
     let queries = vec![
         vec![1.0, f32::NAN, 0.0, 0.0], // NaN
@@ -1486,7 +1689,10 @@ fn test_batch_search_with_filter_nan() {
     let filter = Filter::eq("type", "a");
 
     let result = collection.batch_search_with_filter(&queries, 10, &filter);
-    assert!(result.is_err(), "batch_search_with_filter should reject NaN queries");
+    assert!(
+        result.is_err(),
+        "batch_search_with_filter should reject NaN queries"
+    );
 }
 
 // ============================================================================
@@ -1496,7 +1702,9 @@ fn test_batch_search_with_filter_nan() {
 /// Test recommend_index with edge case inputs
 #[test]
 fn test_recommend_index_edge_cases() {
-    use needle::tuning::{quick_recommend_index, recommend_index, IndexSelectionConstraints, RecommendedIndex};
+    use needle::tuning::{
+        quick_recommend_index, recommend_index, IndexSelectionConstraints, RecommendedIndex,
+    };
 
     // Very small dataset
     assert_eq!(quick_recommend_index(10, 128), RecommendedIndex::Hnsw);
@@ -1508,7 +1716,10 @@ fn test_recommend_index_edge_cases() {
     assert_eq!(quick_recommend_index(5_000_000, 768), RecommendedIndex::Ivf);
 
     // Very large dataset
-    assert_eq!(quick_recommend_index(50_000_000, 128), RecommendedIndex::DiskAnn);
+    assert_eq!(
+        quick_recommend_index(50_000_000, 128),
+        RecommendedIndex::DiskAnn
+    );
 
     // Edge case: exactly at boundary
     assert_eq!(quick_recommend_index(100_000, 128), RecommendedIndex::Hnsw);
@@ -1516,7 +1727,10 @@ fn test_recommend_index_edge_cases() {
     // High dimensions
     let recommendation = quick_recommend_index(100_000, 4096);
     // With high dimensions, memory might push towards IVF/DiskANN
-    assert!(matches!(recommendation, RecommendedIndex::Hnsw | RecommendedIndex::Ivf | RecommendedIndex::DiskAnn));
+    assert!(matches!(
+        recommendation,
+        RecommendedIndex::Hnsw | RecommendedIndex::Ivf | RecommendedIndex::DiskAnn
+    ));
 
     // Test with constraints
     let constraints = IndexSelectionConstraints {
@@ -1531,7 +1745,13 @@ fn test_recommend_index_edge_cases() {
 
     let rec = recommend_index(&constraints);
     // With limited memory, should recommend IVF or DiskANN
-    assert!(rec.fits_in_memory || matches!(rec.recommended, RecommendedIndex::Ivf | RecommendedIndex::DiskAnn));
+    assert!(
+        rec.fits_in_memory
+            || matches!(
+                rec.recommended,
+                RecommendedIndex::Ivf | RecommendedIndex::DiskAnn
+            )
+    );
 }
 
 // ============================================================================
@@ -1551,7 +1771,9 @@ fn test_backup_to_invalid_path() {
     let mut db = Database::open(&db_path).unwrap();
     db.create_collection("test", 4).unwrap();
     let collection = db.collection("test").unwrap();
-    collection.insert("v1", &[1.0, 2.0, 3.0, 4.0], None).unwrap();
+    collection
+        .insert("v1", &[1.0, 2.0, 3.0, 4.0], None)
+        .unwrap();
     db.save().unwrap();
 
     // Try backup to non-existent nested path
@@ -1572,8 +1794,16 @@ fn test_export_collection_valid() {
     let db = Database::in_memory();
     db.create_collection("test", 4).unwrap();
     let collection = db.collection("test").unwrap();
-    collection.insert("v1", &[1.0, 2.0, 3.0, 4.0], Some(serde_json::json!({"a": 1}))).unwrap();
-    collection.insert("v2", &[5.0, 6.0, 7.0, 8.0], None).unwrap();
+    collection
+        .insert(
+            "v1",
+            &[1.0, 2.0, 3.0, 4.0],
+            Some(serde_json::json!({"a": 1})),
+        )
+        .unwrap();
+    collection
+        .insert("v2", &[5.0, 6.0, 7.0, 8.0], None)
+        .unwrap();
 
     // Export should work via CollectionRef
     let entries = collection.export_all().unwrap();
@@ -1593,7 +1823,9 @@ fn test_database_reopen_cycle() {
         let mut db = Database::open(&db_path).unwrap();
         db.create_collection("test", 4).unwrap();
         let collection = db.collection("test").unwrap();
-        collection.insert("v1", &[1.0, 2.0, 3.0, 4.0], None).unwrap();
+        collection
+            .insert("v1", &[1.0, 2.0, 3.0, 4.0], None)
+            .unwrap();
         db.save().unwrap();
     }
 
@@ -1601,7 +1833,9 @@ fn test_database_reopen_cycle() {
     {
         let mut db = Database::open(&db_path).unwrap();
         let collection = db.collection("test").unwrap();
-        collection.insert("v2", &[5.0, 6.0, 7.0, 8.0], None).unwrap();
+        collection
+            .insert("v2", &[5.0, 6.0, 7.0, 8.0], None)
+            .unwrap();
         db.save().unwrap();
     }
 
@@ -1618,8 +1852,8 @@ fn test_database_reopen_cycle() {
 /// Test database open with empty file
 #[test]
 fn test_open_empty_file() {
-    use tempfile::tempdir;
     use std::fs::File;
+    use tempfile::tempdir;
 
     let dir = tempdir().unwrap();
     let db_path = dir.path().join("empty.needle");
@@ -1636,8 +1870,8 @@ fn test_open_empty_file() {
 /// Test concurrent read operations don't interfere
 #[test]
 fn test_concurrent_reads() {
-    use std::thread;
     use std::sync::Arc;
+    use std::thread;
 
     let db = Arc::new(Database::in_memory());
     db.create_collection("test", 4).unwrap();
@@ -1645,7 +1879,9 @@ fn test_concurrent_reads() {
     // Insert some data
     let collection = db.collection("test").unwrap();
     for i in 0..100 {
-        collection.insert(format!("v{}", i), &[i as f32; 4], None).unwrap();
+        collection
+            .insert(format!("v{}", i), &[i as f32; 4], None)
+            .unwrap();
     }
 
     // Spawn multiple reader threads
@@ -1677,7 +1913,9 @@ fn test_iteration_safety() {
 
     let collection = db.collection("test").unwrap();
     for i in 0..50 {
-        collection.insert(format!("v{}", i), &[i as f32; 4], None).unwrap();
+        collection
+            .insert(format!("v{}", i), &[i as f32; 4], None)
+            .unwrap();
     }
 
     // Get IDs first (to avoid holding iterator across mutation)
@@ -1716,7 +1954,9 @@ fn test_serialization_roundtrip_integrity() {
         let mut db = Database::open(&db_path).unwrap();
         db.create_collection("test", 128).unwrap();
         let collection = db.collection("test").unwrap();
-        collection.insert("complex", &original_vector, Some(original_metadata.clone())).unwrap();
+        collection
+            .insert("complex", &original_vector, Some(original_metadata.clone()))
+            .unwrap();
         db.save().unwrap();
     }
 
@@ -1729,7 +1969,12 @@ fn test_serialization_roundtrip_integrity() {
         // Verify vector
         assert_eq!(loaded_vector.len(), 128);
         for (orig, loaded) in original_vector.iter().zip(loaded_vector.iter()) {
-            assert!((orig - loaded).abs() < 1e-6, "Vector mismatch: {} vs {}", orig, loaded);
+            assert!(
+                (orig - loaded).abs() < 1e-6,
+                "Vector mismatch: {} vs {}",
+                orig,
+                loaded
+            );
         }
 
         // Verify metadata
@@ -1769,7 +2014,9 @@ fn test_state_after_failed_insert() {
     let collection = db.collection("test").unwrap();
 
     // Insert valid vector
-    collection.insert("v1", &[1.0, 2.0, 3.0, 4.0], None).unwrap();
+    collection
+        .insert("v1", &[1.0, 2.0, 3.0, 4.0], None)
+        .unwrap();
     assert_eq!(collection.count(None).unwrap(), 1);
 
     // Try to insert invalid vector (wrong dimension)
@@ -1821,10 +2068,7 @@ fn test_multiple_searches_empty_collection() {
     let collection = db.collection("test").unwrap();
 
     // Multiple searches on empty collection should all return empty
-    let queries: Vec<Vec<f32>> = vec![
-        vec![1.0, 2.0, 3.0, 4.0],
-        vec![5.0, 6.0, 7.0, 8.0],
-    ];
+    let queries: Vec<Vec<f32>> = vec![vec![1.0, 2.0, 3.0, 4.0], vec![5.0, 6.0, 7.0, 8.0]];
 
     for query in &queries {
         let results = collection.search(query, 10).unwrap();
@@ -1861,7 +2105,9 @@ fn test_delete_all_then_search() {
 
     // Insert vectors
     for i in 0..10 {
-        collection.insert(format!("v{}", i), &[i as f32; 4], None).unwrap();
+        collection
+            .insert(format!("v{}", i), &[i as f32; 4], None)
+            .unwrap();
     }
     assert_eq!(collection.count(None).unwrap(), 10);
 
@@ -1885,7 +2131,9 @@ fn test_compact_after_delete_all() {
 
     // Insert and delete
     for i in 0..50 {
-        collection.insert(format!("v{}", i), &[i as f32; 4], None).unwrap();
+        collection
+            .insert(format!("v{}", i), &[i as f32; 4], None)
+            .unwrap();
     }
     for i in 0..50 {
         collection.delete(&format!("v{}", i)).unwrap();
@@ -1908,7 +2156,9 @@ fn test_search_k_one() {
     let collection = db.collection("test").unwrap();
 
     for i in 0..100 {
-        collection.insert(format!("v{}", i), &[i as f32; 4], None).unwrap();
+        collection
+            .insert(format!("v{}", i), &[i as f32; 4], None)
+            .unwrap();
     }
 
     let query = vec![50.0; 4];
@@ -1924,7 +2174,9 @@ fn test_search_k_exceeds_size() {
     let collection = db.collection("test").unwrap();
 
     for i in 0..5 {
-        collection.insert(format!("v{}", i), &[i as f32; 4], None).unwrap();
+        collection
+            .insert(format!("v{}", i), &[i as f32; 4], None)
+            .unwrap();
     }
 
     let query = vec![2.0; 4];
@@ -1940,22 +2192,40 @@ fn test_metadata_edge_values() {
     let collection = db.collection("test").unwrap();
 
     // Empty string
-    collection.insert("v1", &[1.0; 4], Some(serde_json::json!({"key": ""}))).unwrap();
+    collection
+        .insert("v1", &[1.0; 4], Some(serde_json::json!({"key": ""})))
+        .unwrap();
 
     // Very long string
     let long_string = "x".repeat(10000);
-    collection.insert("v2", &[2.0; 4], Some(serde_json::json!({"key": long_string}))).unwrap();
+    collection
+        .insert(
+            "v2",
+            &[2.0; 4],
+            Some(serde_json::json!({"key": long_string})),
+        )
+        .unwrap();
 
     // Empty object
-    collection.insert("v3", &[3.0; 4], Some(serde_json::json!({}))).unwrap();
+    collection
+        .insert("v3", &[3.0; 4], Some(serde_json::json!({})))
+        .unwrap();
 
     // Empty array
-    collection.insert("v4", &[4.0; 4], Some(serde_json::json!({"arr": []}))).unwrap();
+    collection
+        .insert("v4", &[4.0; 4], Some(serde_json::json!({"arr": []})))
+        .unwrap();
 
     // Deeply nested
-    collection.insert("v5", &[5.0; 4], Some(serde_json::json!({
-        "a": {"b": {"c": {"d": {"e": 1}}}}
-    }))).unwrap();
+    collection
+        .insert(
+            "v5",
+            &[5.0; 4],
+            Some(serde_json::json!({
+                "a": {"b": {"c": {"d": {"e": 1}}}}
+            })),
+        )
+        .unwrap();
 
     // Verify all inserted
     assert_eq!(collection.count(None).unwrap(), 5);
@@ -1992,7 +2262,9 @@ fn test_ids_consistency() {
 
     // Insert in specific order
     for i in 0..20 {
-        collection.insert(format!("vec_{:02}", i), &[i as f32; 4], None).unwrap();
+        collection
+            .insert(format!("vec_{:02}", i), &[i as f32; 4], None)
+            .unwrap();
     }
 
     // Get IDs multiple times, should be consistent
@@ -2012,7 +2284,9 @@ fn test_search_results_sorted_by_distance() {
 
     // Insert vectors at known distances
     for i in 0..50 {
-        collection.insert(format!("v{}", i), &[i as f32; 4], None).unwrap();
+        collection
+            .insert(format!("v{}", i), &[i as f32; 4], None)
+            .unwrap();
     }
 
     let query = vec![25.0; 4]; // Middle value
@@ -2020,9 +2294,13 @@ fn test_search_results_sorted_by_distance() {
 
     // Verify sorted by distance (ascending)
     for i in 1..results.len() {
-        assert!(results[i - 1].distance <= results[i].distance,
+        assert!(
+            results[i - 1].distance <= results[i].distance,
             "Results not sorted: {} > {} at index {}",
-            results[i - 1].distance, results[i].distance, i);
+            results[i - 1].distance,
+            results[i].distance,
+            i
+        );
     }
 }
 
@@ -2045,15 +2323,19 @@ fn test_search_identical_vectors() {
 
     // All distances should be 0 (or very close for cosine)
     for result in &results {
-        assert!(result.distance < 0.0001, "Expected near-zero distance, got {}", result.distance);
+        assert!(
+            result.distance < 0.0001,
+            "Expected near-zero distance, got {}",
+            result.distance
+        );
     }
 }
 
 /// Test concurrent inserts don't lose data
 #[test]
 fn test_concurrent_inserts() {
-    use std::thread;
     use std::sync::Arc;
+    use std::thread;
 
     let db = Arc::new(Database::in_memory());
     db.create_collection("test", 4).unwrap();
@@ -2110,10 +2392,12 @@ fn test_wal_basic_persistence() {
     {
         let manager = WalManager::open(&wal_dir, config).unwrap();
         let mut count = 0;
-        manager.replay(0, |_record| {
-            count += 1;
-            Ok(())
-        }).unwrap();
+        manager
+            .replay(0, |_record| {
+                count += 1;
+                Ok(())
+            })
+            .unwrap();
         assert!(count > 0, "Should have replayed WAL entries");
     }
 }

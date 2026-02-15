@@ -3,10 +3,10 @@
 //! Tests for database corruption detection and handling,
 //! including WAL crash-recovery scenarios.
 
-use needle::{Database, CollectionConfig, DistanceFunction};
 use needle::wal::{WalConfig, WalEntry, WalManager};
+use needle::{CollectionConfig, Database, DistanceFunction};
 use std::fs;
-use std::io::{Write, Seek, SeekFrom};
+use std::io::{Seek, SeekFrom, Write};
 use tempfile::tempdir;
 
 /// Test that corrupted database files are detected
@@ -58,7 +58,9 @@ fn test_truncated_file_detection() {
         let collection = db.collection("test").unwrap();
         for i in 0..10 {
             let vector: Vec<f32> = (0..128).map(|j| ((i * 128 + j) as f32) / 1280.0).collect();
-            collection.insert(format!("vec_{}", i), &vector, None).unwrap();
+            collection
+                .insert(format!("vec_{}", i), &vector, None)
+                .unwrap();
         }
         db.save().unwrap();
     }
@@ -67,10 +69,7 @@ fn test_truncated_file_detection() {
 
     // Truncate the file to half its size
     {
-        let file = fs::OpenOptions::new()
-            .write(true)
-            .open(&db_path)
-            .unwrap();
+        let file = fs::OpenOptions::new().write(true).open(&db_path).unwrap();
         file.set_len(original_size / 2).unwrap();
     }
 
@@ -126,10 +125,7 @@ fn test_partial_write_recovery() {
 
     // Simulate partial write by appending garbage
     {
-        let mut file = fs::OpenOptions::new()
-            .append(true)
-            .open(&db_path)
-            .unwrap();
+        let mut file = fs::OpenOptions::new().append(true).open(&db_path).unwrap();
         // Append some garbage at the end (simulating interrupted write)
         file.write_all(&[0xFF; 100]).unwrap();
     }
@@ -151,14 +147,16 @@ fn test_partial_write_recovery() {
 /// Test that collections with corrupted vectors are detected
 #[test]
 fn test_in_memory_collection_integrity() {
-    let config = CollectionConfig::new("integrity_test", 16)
-        .with_distance(DistanceFunction::Cosine);
+    let config =
+        CollectionConfig::new("integrity_test", 16).with_distance(DistanceFunction::Cosine);
     let mut collection = needle::Collection::new(config);
 
     // Insert valid data
     for i in 0..5 {
         let vector: Vec<f32> = (0..16).map(|j| ((i * 16 + j) as f32) / 80.0).collect();
-        collection.insert(format!("vec_{}", i), &vector, None).unwrap();
+        collection
+            .insert(format!("vec_{}", i), &vector, None)
+            .unwrap();
     }
 
     // Serialize and deserialize
@@ -190,10 +188,22 @@ fn test_serialization_roundtrip_integrity() {
     let test_cases = vec![
         ("vec_null_meta", vec![1.0; 8], None),
         ("vec_empty_meta", vec![2.0; 8], Some(json!({}))),
-        ("vec_string_meta", vec![3.0; 8], Some(json!({"key": "value"}))),
+        (
+            "vec_string_meta",
+            vec![3.0; 8],
+            Some(json!({"key": "value"})),
+        ),
         ("vec_number_meta", vec![4.0; 8], Some(json!({"num": 42.5}))),
-        ("vec_array_meta", vec![5.0; 8], Some(json!({"arr": [1, 2, 3]}))),
-        ("vec_nested_meta", vec![6.0; 8], Some(json!({"nested": {"a": {"b": "c"}}}))),
+        (
+            "vec_array_meta",
+            vec![5.0; 8],
+            Some(json!({"arr": [1, 2, 3]})),
+        ),
+        (
+            "vec_nested_meta",
+            vec![6.0; 8],
+            Some(json!({"nested": {"a": {"b": "c"}}})),
+        ),
     ];
 
     for (id, vec, meta) in &test_cases {
@@ -238,7 +248,9 @@ fn test_multiple_save_load_cycles() {
         let collection = db.collection("cycle_test").unwrap();
         for i in 0..5 {
             let vector: Vec<f32> = (0..16).map(|j| ((i * 16 + j) as f32) / 80.0).collect();
-            collection.insert(format!("cycle1_vec_{}", i), &vector, None).unwrap();
+            collection
+                .insert(format!("cycle1_vec_{}", i), &vector, None)
+                .unwrap();
         }
         db.save().unwrap();
     }
@@ -249,8 +261,12 @@ fn test_multiple_save_load_cycles() {
         let collection = db.collection("cycle_test").unwrap();
         assert_eq!(collection.len(), 5);
         for i in 0..5 {
-            let vector: Vec<f32> = (0..16).map(|j| ((i * 16 + j) as f32) / 80.0 + 0.5).collect();
-            collection.insert(format!("cycle2_vec_{}", i), &vector, None).unwrap();
+            let vector: Vec<f32> = (0..16)
+                .map(|j| ((i * 16 + j) as f32) / 80.0 + 0.5)
+                .collect();
+            collection
+                .insert(format!("cycle2_vec_{}", i), &vector, None)
+                .unwrap();
         }
         db.save().unwrap();
     }
@@ -264,13 +280,21 @@ fn test_multiple_save_load_cycles() {
         // Verify cycle1 vectors
         for i in 0..5 {
             let id = format!("cycle1_vec_{}", i);
-            assert!(collection.get(&id).is_some(), "Cycle 1 vector {} should exist", i);
+            assert!(
+                collection.get(&id).is_some(),
+                "Cycle 1 vector {} should exist",
+                i
+            );
         }
 
         // Verify cycle2 vectors
         for i in 0..5 {
             let id = format!("cycle2_vec_{}", i);
-            assert!(collection.get(&id).is_some(), "Cycle 2 vector {} should exist", i);
+            assert!(
+                collection.get(&id).is_some(),
+                "Cycle 2 vector {} should exist",
+                i
+            );
         }
     }
 }
@@ -288,7 +312,13 @@ fn test_state_checksum_validation() {
         let collection = db.collection("checksum_test").unwrap();
         for i in 0..20 {
             let vector: Vec<f32> = (0..128).map(|j| ((i * 128 + j) as f32) / 2560.0).collect();
-            collection.insert(format!("vec_{}", i), &vector, Some(serde_json::json!({"idx": i}))).unwrap();
+            collection
+                .insert(
+                    format!("vec_{}", i),
+                    &vector,
+                    Some(serde_json::json!({"idx": i})),
+                )
+                .unwrap();
         }
         db.save().unwrap();
     }
@@ -308,7 +338,8 @@ fn test_state_checksum_validation() {
         for offset in [300, 500, 1000, file_size / 2, file_size - 100] {
             if offset < file_size - 10 {
                 file.seek(SeekFrom::Start(offset)).unwrap();
-                file.write_all(&[0xDE, 0xAD, 0xBE, 0xEF, 0xCA, 0xFE]).unwrap();
+                file.write_all(&[0xDE, 0xAD, 0xBE, 0xEF, 0xCA, 0xFE])
+                    .unwrap();
             }
         }
     }
@@ -419,10 +450,18 @@ fn test_wal_recovery_truncated_segment() {
     let segment_files: Vec<_> = fs::read_dir(&wal_dir)
         .unwrap()
         .filter_map(|e| e.ok())
-        .filter(|e| e.path().extension().map(|ext| ext == "wal").unwrap_or(false))
+        .filter(|e| {
+            e.path()
+                .extension()
+                .map(|ext| ext == "wal")
+                .unwrap_or(false)
+        })
         .collect();
 
-    assert!(!segment_files.is_empty(), "Should have at least one segment file");
+    assert!(
+        !segment_files.is_empty(),
+        "Should have at least one segment file"
+    );
 
     let segment_path = &segment_files[0].path();
     let original_size = fs::metadata(segment_path).unwrap().len();
@@ -462,7 +501,10 @@ fn test_wal_recovery_corrupted_checksum() {
 
     // Write entries with checksums enabled
     let config = WalConfig::default();
-    assert!(config.enable_checksums, "Checksums should be enabled by default");
+    assert!(
+        config.enable_checksums,
+        "Checksums should be enabled by default"
+    );
 
     {
         let wal = WalManager::open(&wal_dir, config.clone()).unwrap();
@@ -485,7 +527,12 @@ fn test_wal_recovery_corrupted_checksum() {
     let segment_files: Vec<_> = fs::read_dir(&wal_dir)
         .unwrap()
         .filter_map(|e| e.ok())
-        .filter(|e| e.path().extension().map(|ext| ext == "wal").unwrap_or(false))
+        .filter(|e| {
+            e.path()
+                .extension()
+                .map(|ext| ext == "wal")
+                .unwrap_or(false)
+        })
         .collect();
 
     if !segment_files.is_empty() {
@@ -548,7 +595,12 @@ fn test_wal_recovery_multiple_segments() {
     let segment_count = fs::read_dir(&wal_dir)
         .unwrap()
         .filter_map(|e| e.ok())
-        .filter(|e| e.path().extension().map(|ext| ext == "wal").unwrap_or(false))
+        .filter(|e| {
+            e.path()
+                .extension()
+                .map(|ext| ext == "wal")
+                .unwrap_or(false)
+        })
         .count();
     assert!(segment_count >= 1, "Should have at least one segment");
 
@@ -640,7 +692,8 @@ fn test_wal_recovery_transactions() {
             metadata: None,
         })
         .unwrap();
-        wal.append(WalEntry::TxnCommit { txn_id: txn_id_1 }).unwrap();
+        wal.append(WalEntry::TxnCommit { txn_id: txn_id_1 })
+            .unwrap();
 
         // Write a rolled-back transaction
         let txn_id_2 = 1002;
@@ -652,7 +705,8 @@ fn test_wal_recovery_transactions() {
             metadata: None,
         })
         .unwrap();
-        wal.append(WalEntry::TxnRollback { txn_id: txn_id_2 }).unwrap();
+        wal.append(WalEntry::TxnRollback { txn_id: txn_id_2 })
+            .unwrap();
 
         wal.sync().unwrap();
         wal.close().unwrap();
@@ -765,7 +819,10 @@ fn test_wal_stats_after_recovery() {
         );
 
         let stats = wal.stats().unwrap();
-        assert_eq!(stats.entries_written, 3, "Should have written 3 new entries");
+        assert_eq!(
+            stats.entries_written, 3,
+            "Should have written 3 new entries"
+        );
     }
 }
 
@@ -799,7 +856,12 @@ fn test_wal_recovery_random_corruption() {
     let segment_files: Vec<_> = fs::read_dir(&wal_dir)
         .unwrap()
         .filter_map(|e| e.ok())
-        .filter(|e| e.path().extension().map(|ext| ext == "wal").unwrap_or(false))
+        .filter(|e| {
+            e.path()
+                .extension()
+                .map(|ext| ext == "wal")
+                .unwrap_or(false)
+        })
         .collect();
 
     if !segment_files.is_empty() {
@@ -864,7 +926,8 @@ fn test_pitr_basic_checkpoint_recovery() {
                 id: format!("doc_{}", i),
                 vector: vec![i as f32; 4],
                 metadata: None,
-            }).unwrap();
+            })
+            .unwrap();
         }
 
         // Create checkpoint
@@ -882,7 +945,8 @@ fn test_pitr_basic_checkpoint_recovery() {
                 id: format!("doc_{}", i),
                 vector: vec![i as f32; 4],
                 metadata: None,
-            }).unwrap();
+            })
+            .unwrap();
         }
     }
 
@@ -902,7 +966,11 @@ fn test_pitr_basic_checkpoint_recovery() {
         // Should successfully replay entries after checkpoint
         assert!(result.is_ok());
         // We should have 5 entries added after checkpoint
-        assert!(recovered_count >= 5, "Expected at least 5 entries after checkpoint, got {}", recovered_count);
+        assert!(
+            recovered_count >= 5,
+            "Expected at least 5 entries after checkpoint, got {}",
+            recovered_count
+        );
     }
 }
 
@@ -927,7 +995,8 @@ fn test_pitr_multiple_checkpoints() {
                 id: format!("batch1_doc_{}", i),
                 vector: vec![i as f32; 4],
                 metadata: None,
-            }).unwrap();
+            })
+            .unwrap();
         }
         checkpoints.push(wal.checkpoint().unwrap());
 
@@ -938,7 +1007,8 @@ fn test_pitr_multiple_checkpoints() {
                 id: format!("batch2_doc_{}", i),
                 vector: vec![i as f32; 4],
                 metadata: None,
-            }).unwrap();
+            })
+            .unwrap();
         }
         checkpoints.push(wal.checkpoint().unwrap());
 
@@ -949,13 +1019,17 @@ fn test_pitr_multiple_checkpoints() {
                 id: format!("batch3_doc_{}", i),
                 vector: vec![i as f32; 4],
                 metadata: None,
-            }).unwrap();
+            })
+            .unwrap();
         }
     }
 
     // Verify we have multiple checkpoints
     assert_eq!(checkpoints.len(), 2);
-    assert!(checkpoints[1] > checkpoints[0], "Checkpoints should be increasing");
+    assert!(
+        checkpoints[1] > checkpoints[0],
+        "Checkpoints should be increasing"
+    );
 
     // Replay from first checkpoint - should get batch2 + batch3
     {
@@ -966,8 +1040,13 @@ fn test_pitr_multiple_checkpoints() {
                 count += 1;
             }
             Ok(())
-        }).unwrap();
-        assert!(count >= 6, "Expected at least 6 entries from first checkpoint, got {}", count);
+        })
+        .unwrap();
+        assert!(
+            count >= 6,
+            "Expected at least 6 entries from first checkpoint, got {}",
+            count
+        );
     }
 
     // Replay from second checkpoint - should get only batch3
@@ -979,8 +1058,13 @@ fn test_pitr_multiple_checkpoints() {
                 count += 1;
             }
             Ok(())
-        }).unwrap();
-        assert!(count >= 3, "Expected at least 3 entries from second checkpoint, got {}", count);
+        })
+        .unwrap();
+        assert!(
+            count >= 3,
+            "Expected at least 3 entries from second checkpoint, got {}",
+            count
+        );
     }
 }
 
@@ -1004,7 +1088,8 @@ fn test_pitr_mixed_operations() {
                 id: format!("doc_{}", i),
                 vector: vec![i as f32; 4],
                 metadata: Some(serde_json::json!({"idx": i})),
-            }).unwrap();
+            })
+            .unwrap();
         }
 
         // Create checkpoint
@@ -1014,7 +1099,8 @@ fn test_pitr_mixed_operations() {
         wal.append(WalEntry::Delete {
             collection: "test".to_string(),
             id: "doc_0".to_string(),
-        }).unwrap();
+        })
+        .unwrap();
 
         // Update operation
         wal.append(WalEntry::Update {
@@ -1022,7 +1108,8 @@ fn test_pitr_mixed_operations() {
             id: "doc_1".to_string(),
             vector: vec![100.0; 4],
             metadata: Some(serde_json::json!({"updated": true})),
-        }).unwrap();
+        })
+        .unwrap();
 
         // Another insert
         wal.append(WalEntry::Insert {
@@ -1030,7 +1117,8 @@ fn test_pitr_mixed_operations() {
             id: "doc_new".to_string(),
             vector: vec![999.0; 4],
             metadata: None,
-        }).unwrap();
+        })
+        .unwrap();
     }
 
     // Replay from checkpoint and verify we see the mixed operations
@@ -1048,7 +1136,8 @@ fn test_pitr_mixed_operations() {
                 _ => {}
             }
             Ok(())
-        }).unwrap();
+        })
+        .unwrap();
 
         assert!(inserts >= 1, "Expected at least 1 insert after checkpoint");
         assert!(deletes >= 1, "Expected at least 1 delete after checkpoint");
@@ -1076,7 +1165,8 @@ fn test_pitr_with_transactions() {
             id: "txn1_doc".to_string(),
             vector: vec![1.0; 4],
             metadata: None,
-        }).unwrap();
+        })
+        .unwrap();
         wal.append(WalEntry::TxnCommit { txn_id: 1 }).unwrap();
 
         // Checkpoint
@@ -1089,7 +1179,8 @@ fn test_pitr_with_transactions() {
             id: "txn2_doc".to_string(),
             vector: vec![2.0; 4],
             metadata: None,
-        }).unwrap();
+        })
+        .unwrap();
         wal.append(WalEntry::TxnCommit { txn_id: 2 }).unwrap();
 
         // Uncommitted transaction (simulating crash before commit)
@@ -1099,7 +1190,8 @@ fn test_pitr_with_transactions() {
             id: "txn3_doc".to_string(),
             vector: vec![3.0; 4],
             metadata: None,
-        }).unwrap();
+        })
+        .unwrap();
         // No commit!
     }
 
@@ -1118,7 +1210,8 @@ fn test_pitr_with_transactions() {
                 _ => {}
             }
             Ok(())
-        }).unwrap();
+        })
+        .unwrap();
 
         // Should see 2 transactions started (txn2 and txn3), but only 1 committed
         assert!(txn_begins >= 2, "Expected at least 2 transaction begins");
@@ -1147,7 +1240,8 @@ fn test_pitr_checkpoint_lsn_persistence() {
                 id: format!("doc_{}", i),
                 vector: vec![i as f32; 4],
                 metadata: None,
-            }).unwrap();
+            })
+            .unwrap();
         }
 
         checkpoint_lsn = wal.checkpoint().unwrap();
@@ -1164,9 +1258,13 @@ fn test_pitr_checkpoint_lsn_persistence() {
                 found_checkpoint = true;
             }
             Ok(())
-        }).unwrap();
+        })
+        .unwrap();
 
-        assert!(found_checkpoint, "Should find checkpoint entry during full replay");
+        assert!(
+            found_checkpoint,
+            "Should find checkpoint entry during full replay"
+        );
     }
 }
 
@@ -1191,7 +1289,8 @@ fn test_pitr_empty_wal() {
             count += 1;
         }
         Ok(())
-    }).unwrap();
+    })
+    .unwrap();
 
     // Only checkpoint entry, no actual data
     assert_eq!(count, 0, "Empty WAL should have no data entries");
@@ -1216,7 +1315,8 @@ fn test_pitr_recovery_ordering() {
                 id: format!("doc_{:02}", i),
                 vector: vec![i as f32; 4],
                 metadata: None,
-            }).unwrap();
+            })
+            .unwrap();
         }
     }
 
@@ -1228,11 +1328,17 @@ fn test_pitr_recovery_ordering() {
         wal.replay(0, |record| {
             if let WalEntry::Insert { id, .. } = record.entry {
                 let idx: i32 = id.split('_').next_back().unwrap().parse().unwrap();
-                assert!(idx > last_idx, "Entries not in order: {} should come after {}", idx, last_idx);
+                assert!(
+                    idx > last_idx,
+                    "Entries not in order: {} should come after {}",
+                    idx,
+                    last_idx
+                );
                 last_idx = idx;
             }
             Ok(())
-        }).unwrap();
+        })
+        .unwrap();
 
         assert_eq!(last_idx, 9, "Should have replayed all 10 entries");
     }
