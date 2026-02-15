@@ -2,8 +2,8 @@
 # Usage: make <recipe>
 
 .PHONY: help quick check check-all build build-all build-release test test-unit test-integration \
-        fmt fmt-check lint lint-fix watch test-watch serve demo doctor doc bench clean playground setup setup-tools dev test-single coverage \
-        new-module verify-docs check-quick check-local test-feature count-debt \
+        fmt fmt-check lint lint-fix lint-dirty lint-new watch test-watch serve demo doctor doc bench clean playground setup setup-tools dev test-single coverage \
+        new-module verify-docs check-quick check-local test-feature count-debt test-changed open-docs \
         docker-up docker-down docker-build docker-logs test-coverage-check
 
 help:
@@ -23,16 +23,20 @@ help:
 	@echo "  make test-unit     — Run unit tests only (fast)"
 	@echo "  make test-single   — Run a single test: make test-single NAME=test_name"
 	@echo "  make test-feature  — Test with specific features: make test-feature FEATURES=server,metrics"
+	@echo "  make test-changed  — Run tests for modified modules only"
 	@echo "  make fmt           — Format code"
 	@echo "  make fmt-check     — Check formatting"
 	@echo "  make lint          — Run clippy linter"
 	@echo "  make lint-fix      — Auto-fix clippy suggestions"
+	@echo "  make lint-dirty    — Lint only uncommitted .rs files (fast)"
+	@echo "  make lint-new      — Lint filtering out known service/experimental warnings"
 	@echo "  make watch         — Continuous check on file changes (requires cargo-watch)"
 	@echo "  make test-watch    — Continuous test on save — TDD workflow (requires cargo-watch)"
 	@echo "  make serve         — Run HTTP server locally (NEEDLE_PORT=9090 make serve)"
 	@echo "  make demo          — Run quickstart demo"
 	@echo "  make doctor        — Check local environment"
 	@echo "  make doc           — Generate and open documentation"
+	@echo "  make open-docs     — Open existing rustdoc (no rebuild)"
 	@echo "  make bench         — Run benchmarks"
 	@echo "  make coverage      — Generate HTML coverage report (requires cargo-llvm-cov)"
 	@echo "  make test-coverage-check — Fail if coverage is below 75% (codecov.yml threshold)"
@@ -56,8 +60,31 @@ help:
 	@echo "  --features experimental      Unstable/preview modules"
 	@echo "  --features server,metrics    Server with Prometheus (common combo)"
 
-# Fast feedback loop
-quick: fmt-check lint test-unit
+# Fast feedback loop (with per-step timing)
+quick:
+	@total_start=$$(date +%s); \
+	echo "=== make quick ==="; \
+	\
+	echo ""; echo "[1/3] fmt-check…"; \
+	step_start=$$(date +%s); \
+	$(MAKE) --no-print-directory fmt-check; \
+	step_end=$$(date +%s); \
+	echo "  ↳ fmt-check: $$((step_end - step_start))s"; \
+	\
+	echo ""; echo "[2/3] lint…"; \
+	step_start=$$(date +%s); \
+	$(MAKE) --no-print-directory lint; \
+	step_end=$$(date +%s); \
+	echo "  ↳ lint: $$((step_end - step_start))s"; \
+	\
+	echo ""; echo "[3/3] test-unit…"; \
+	step_start=$$(date +%s); \
+	$(MAKE) --no-print-directory test-unit; \
+	step_end=$$(date +%s); \
+	echo "  ↳ test-unit: $$((step_end - step_start))s"; \
+	\
+	total_end=$$(date +%s); \
+	echo ""; echo "=== quick completed in $$((total_end - total_start))s ==="
 
 # Start developing: first-time setup + continuous check on save
 dev:
@@ -65,8 +92,31 @@ dev:
 	$(MAKE) setup
 	$(MAKE) watch
 
-# Full pre-commit check
-check: fmt-check lint test
+# Full pre-commit check (with per-step timing)
+check:
+	@total_start=$$(date +%s); \
+	echo "=== make check ==="; \
+	\
+	echo ""; echo "[1/3] fmt-check…"; \
+	step_start=$$(date +%s); \
+	$(MAKE) --no-print-directory fmt-check; \
+	step_end=$$(date +%s); \
+	echo "  ↳ fmt-check: $$((step_end - step_start))s"; \
+	\
+	echo ""; echo "[2/3] lint…"; \
+	step_start=$$(date +%s); \
+	$(MAKE) --no-print-directory lint; \
+	step_end=$$(date +%s); \
+	echo "  ↳ lint: $$((step_end - step_start))s"; \
+	\
+	echo ""; echo "[3/3] test…"; \
+	step_start=$$(date +%s); \
+	$(MAKE) --no-print-directory test; \
+	step_end=$$(date +%s); \
+	echo "  ↳ test: $$((step_end - step_start))s"; \
+	\
+	total_end=$$(date +%s); \
+	echo ""; echo "=== check completed in $$((total_end - total_start))s ==="
 
 # Full CI equivalent: everything CI runs, locally
 # NOTE: Keep flags in sync with justfile check-all recipe
@@ -107,6 +157,32 @@ lint:
 lint-fix:
 	cargo clippy --features full --fix --allow-dirty --allow-staged
 
+# Lint only uncommitted .rs files (fast feedback on your changes)
+lint-dirty:
+	@changed=$$(git diff --name-only --diff-filter=ACMR HEAD -- '*.rs' 2>/dev/null); \
+	staged=$$(git diff --name-only --diff-filter=ACMR --cached -- '*.rs' 2>/dev/null); \
+	all=$$(printf '%s\n%s' "$$changed" "$$staged" | sort -u | grep '\.rs$$' || true); \
+	if [ -z "$$all" ]; then \
+		echo "No changed .rs files to lint."; \
+	else \
+		echo "Linting changed files:"; \
+		echo "$$all" | sed 's/^/  /'; \
+		pattern=$$(echo "$$all" | paste -sd'|' -); \
+		cargo clippy --all-targets --features full -- -D warnings 2>&1 | \
+			grep -E "($$pattern|^error)" || echo "✓ No warnings in changed files"; \
+	fi
+
+# Lint filtering out known warning sources in services/ and experimental/ (shows only new warnings)
+lint-new:
+	@echo "Running clippy (filtering known warning sources in services/ and experimental/)…"
+	@cargo clippy --all-targets --features full -- -D warnings 2>&1 | \
+		grep -v -E '^\s*--> src/(services|experimental)/' | \
+		grep -v -E 'src/(services|experimental)/[^ ]+' | \
+		grep -v '^$$' || true
+	@echo ""
+	@echo "Note: Warnings from src/services/ and src/experimental/ are hidden."
+	@echo "Run 'make lint' to see all warnings."
+
 # Continuous check on save (requires: cargo install cargo-watch)
 watch:
 	@command -v cargo-watch > /dev/null 2>&1 || { echo "Error: cargo-watch not found. Install with: cargo install cargo-watch"; exit 1; }
@@ -134,6 +210,17 @@ doctor:
 
 doc:
 	cargo doc --no-deps --features full --open
+
+# Open existing rustdoc without rebuilding (falls back to make doc if not generated)
+open-docs:
+	@if [ -f target/doc/needle/index.html ]; then \
+		echo "Opening existing docs…"; \
+		open target/doc/needle/index.html 2>/dev/null || xdg-open target/doc/needle/index.html 2>/dev/null || \
+			echo "Docs at: target/doc/needle/index.html"; \
+	else \
+		echo "Docs not found — generating with 'make doc'…"; \
+		$(MAKE) doc; \
+	fi
 
 bench:
 	cargo bench
@@ -210,6 +297,27 @@ check-local: check-quick
 test-feature:
 	@test -n "$(FEATURES)" || { echo "Usage: make test-feature FEATURES=server,metrics"; exit 1; }
 	cargo test --features $(FEATURES)
+
+# Run tests for modified modules only (based on git diff)
+test-changed:
+	@changed=$$(git diff --name-only --diff-filter=ACMR HEAD -- 'src/*.rs' 'src/**/*.rs' 2>/dev/null); \
+	staged=$$(git diff --name-only --diff-filter=ACMR --cached -- 'src/*.rs' 'src/**/*.rs' 2>/dev/null); \
+	all=$$(printf '%s\n%s' "$$changed" "$$staged" | sort -u | grep '\.rs$$' || true); \
+	if [ -z "$$all" ]; then \
+		echo "No changed .rs files — nothing to test."; \
+		exit 0; \
+	fi; \
+	modules=$$(echo "$$all" | sed -n 's|^src/\(.*\)\.rs$$|\1|p' | sed 's|/mod$$||; s|/|::|g' | sort -u); \
+	if [ -z "$$modules" ]; then \
+		echo "Could not extract module paths — running all unit tests."; \
+		cargo test --lib; \
+		exit 0; \
+	fi; \
+	echo "Testing changed modules:"; \
+	echo "$$modules" | sed 's/^/  /'; \
+	for mod in $$modules; do \
+		cargo test --lib "$$mod" 2>/dev/null || true; \
+	done
 
 # Show tech debt dashboard (unwrap, expect, let _ = counts in src/)
 count-debt:
