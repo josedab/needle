@@ -1,16 +1,16 @@
 //! Benchmarks for Needle Vector Database
-use criterion::{black_box, criterion_group, criterion_main, Criterion, BenchmarkId};
 use criterion::Throughput;
-use needle::{Collection, Database, DistanceFunction, HnswConfig, HnswIndex, Filter};
-use needle::{IvfConfig, IvfIndex, DiskAnnConfig, DiskAnnIndex};
+use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
+use needle::encryption::{EncryptionConfig, KeyManager, VectorEncryptor};
 use needle::quantization::{BinaryQuantizer, ProductQuantizer, ScalarQuantizer};
-use needle::rag::{RagPipeline, RagConfig, ChunkingStrategy, MockEmbedder};
-use needle::temporal::{TemporalIndex, TemporalConfig, DecayFunction};
-use needle::encryption::{VectorEncryptor, EncryptionConfig, KeyManager};
-use needle::{QueryAnalyzer, VisualQueryBuilder, CollectionProfile};
-use needle::{Federation, FederationConfig, InstanceConfig, RoutingStrategy, MergeStrategy};
-use needle::{DriftDetector, DriftConfig};
-use needle::{BackupManager, BackupConfig};
+use needle::rag::{ChunkingStrategy, MockEmbedder, RagConfig, RagPipeline};
+use needle::temporal::{DecayFunction, TemporalConfig, TemporalIndex};
+use needle::{BackupConfig, BackupManager};
+use needle::{Collection, Database, DistanceFunction, Filter, HnswConfig, HnswIndex};
+use needle::{CollectionProfile, QueryAnalyzer, VisualQueryBuilder};
+use needle::{DiskAnnConfig, DiskAnnIndex, IvfConfig, IvfIndex};
+use needle::{DriftConfig, DriftDetector};
+use needle::{Federation, FederationConfig, InstanceConfig, MergeStrategy, RoutingStrategy};
 use rand::Rng;
 use serde_json::json;
 use std::collections::HashMap;
@@ -60,13 +60,9 @@ fn bench_search_latency_by_size(c: &mut Criterion) {
         let query = random_vector(dim);
 
         group.throughput(Throughput::Elements(1));
-        group.bench_with_input(
-            BenchmarkId::new("vectors", n),
-            &n,
-            |bencher, _| {
-                bencher.iter(|| collection.search(black_box(&query), 10))
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("vectors", n), &n, |bencher, _| {
+            bencher.iter(|| collection.search(black_box(&query), 10))
+        });
     }
 
     group.finish();
@@ -124,9 +120,7 @@ fn bench_batch_search_throughput(c: &mut Criterion) {
         group.bench_with_input(
             BenchmarkId::new("batch_size", batch_size),
             &batch_size,
-            |bencher, _| {
-                bencher.iter(|| collection.batch_search(black_box(&queries), 10))
-            },
+            |bencher, _| bencher.iter(|| collection.batch_search(black_box(&queries), 10)),
         );
     }
 
@@ -152,7 +146,9 @@ fn bench_filtered_search_performance(c: &mut Criterion) {
             "type": if i % 2 == 0 { "even" } else { "odd" },
             "region": regions[i % 3],
         });
-        collection.insert(format!("doc{}", i), vec, Some(metadata)).unwrap();
+        collection
+            .insert(format!("doc{}", i), vec, Some(metadata))
+            .unwrap();
     }
 
     let query = random_vector(dim);
@@ -266,9 +262,7 @@ fn bench_single_insert_latency(c: &mut Criterion) {
                 let vector = random_vector(dim);
                 (collection, vector)
             },
-            |(mut collection, vector)| {
-                collection.insert("doc0", black_box(&vector), None).unwrap()
-            },
+            |(mut collection, vector)| collection.insert("doc0", black_box(&vector), None).unwrap(),
             criterion::BatchSize::SmallInput,
         )
     });
@@ -286,7 +280,9 @@ fn bench_single_insert_latency(c: &mut Criterion) {
                 (collection, vector)
             },
             |(mut collection, vector)| {
-                collection.insert("new_doc", black_box(&vector), None).unwrap()
+                collection
+                    .insert("new_doc", black_box(&vector), None)
+                    .unwrap()
             },
             criterion::BatchSize::SmallInput,
         )
@@ -305,7 +301,9 @@ fn bench_single_insert_latency(c: &mut Criterion) {
                 (collection, vector)
             },
             |(mut collection, vector)| {
-                collection.insert("new_doc", black_box(&vector), None).unwrap()
+                collection
+                    .insert("new_doc", black_box(&vector), None)
+                    .unwrap()
             },
             criterion::BatchSize::SmallInput,
         )
@@ -334,7 +332,9 @@ fn bench_batch_insert_throughput(c: &mut Criterion) {
                 bencher.iter(|| {
                     let mut collection = Collection::with_dimensions("bench", dim);
                     for (i, vec) in vectors.iter().take(size).enumerate() {
-                        collection.insert(format!("doc{}", i), black_box(vec), None).unwrap();
+                        collection
+                            .insert(format!("doc{}", i), black_box(vec), None)
+                            .unwrap();
                     }
                 })
             },
@@ -368,7 +368,9 @@ fn bench_update_performance(c: &mut Criterion) {
             |(mut collection, new_vector)| {
                 // Update by delete + insert
                 collection.delete("doc5000").unwrap();
-                collection.insert("doc5000", black_box(&new_vector), None).unwrap()
+                collection
+                    .insert("doc5000", black_box(&new_vector), None)
+                    .unwrap()
             },
             criterion::BatchSize::SmallInput,
         )
@@ -397,9 +399,7 @@ fn bench_delete_performance(c: &mut Criterion) {
                 }
                 collection
             },
-            |mut collection| {
-                collection.delete(black_box("doc5000")).unwrap()
-            },
+            |mut collection| collection.delete(black_box("doc5000")).unwrap(),
             criterion::BatchSize::SmallInput,
         )
     });
@@ -439,18 +439,14 @@ fn bench_hnsw_build_time(c: &mut Criterion) {
         let vectors = random_vectors(n, dim);
 
         group.throughput(Throughput::Elements(n as u64));
-        group.bench_with_input(
-            BenchmarkId::new("vectors", n),
-            &n,
-            |bencher, _| {
-                bencher.iter(|| {
-                    let mut index = HnswIndex::with_distance(DistanceFunction::Euclidean);
-                    for (id, vec) in vectors.iter().enumerate() {
-                        index.insert(id, vec, &vectors).unwrap();
-                    }
-                })
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("vectors", n), &n, |bencher, _| {
+            bencher.iter(|| {
+                let mut index = HnswIndex::with_distance(DistanceFunction::Euclidean);
+                for (id, vec) in vectors.iter().enumerate() {
+                    index.insert(id, vec, &vectors).unwrap();
+                }
+            })
+        });
     }
 
     group.finish();
@@ -466,19 +462,15 @@ fn bench_hnsw_build_parameters(c: &mut Criterion) {
 
     // Different M values
     for &m in &[8, 16, 32, 48] {
-        group.bench_with_input(
-            BenchmarkId::new("M", m),
-            &m,
-            |bencher, &m_val| {
-                bencher.iter(|| {
-                    let config = HnswConfig::with_m(m_val);
-                    let mut index = HnswIndex::new(config, DistanceFunction::Euclidean);
-                    for (id, vec) in vectors.iter().enumerate() {
-                        index.insert(id, vec, &vectors).unwrap();
-                    }
-                })
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("M", m), &m, |bencher, &m_val| {
+            bencher.iter(|| {
+                let config = HnswConfig::with_m(m_val);
+                let mut index = HnswIndex::new(config, DistanceFunction::Euclidean);
+                for (id, vec) in vectors.iter().enumerate() {
+                    index.insert(id, vec, &vectors).unwrap();
+                }
+            })
+        });
     }
 
     group.finish();
@@ -498,18 +490,14 @@ fn bench_index_memory_efficiency(c: &mut Criterion) {
         let vectors = random_vectors(n, dim);
 
         group.throughput(Throughput::Bytes((n * dim * 4) as u64));
-        group.bench_with_input(
-            BenchmarkId::new("dimensions", dim),
-            &dim,
-            |bencher, _| {
-                bencher.iter(|| {
-                    let mut collection = Collection::with_dimensions("bench", dim);
-                    for (i, vec) in vectors.iter().enumerate() {
-                        collection.insert(format!("doc{}", i), vec, None).unwrap();
-                    }
-                })
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("dimensions", dim), &dim, |bencher, _| {
+            bencher.iter(|| {
+                let mut collection = Collection::with_dimensions("bench", dim);
+                for (i, vec) in vectors.iter().enumerate() {
+                    collection.insert(format!("doc{}", i), vec, None).unwrap();
+                }
+            })
+        });
     }
 
     group.finish();
@@ -578,7 +566,9 @@ fn bench_rag_pipeline(c: &mut Criterion) {
     ];
 
     for (i, doc) in documents.iter().enumerate() {
-        pipeline.ingest_document(&format!("doc{}", i), doc, None, &embedder).unwrap();
+        pipeline
+            .ingest_document(&format!("doc{}", i), doc, None, &embedder)
+            .unwrap();
     }
 
     group.bench_function("query_latency", |bencher| {
@@ -587,11 +577,17 @@ fn bench_rag_pipeline(c: &mut Criterion) {
 
     // Chunking strategies
     group.bench_function("chunking_fixed_size", |bencher| {
-        let strategy = ChunkingStrategy::FixedSize { chunk_size: 100, overlap: 20 };
+        let strategy = ChunkingStrategy::FixedSize {
+            chunk_size: 100,
+            overlap: 20,
+        };
         let text = "A ".repeat(500);
         bencher.iter(|| {
             let db = Arc::new(Database::in_memory());
-            let config = RagConfig { dimensions: dim, ..Default::default() };
+            let config = RagConfig {
+                dimensions: dim,
+                ..Default::default()
+            };
             let mut p = RagPipeline::new(db, config).unwrap();
             p.ingest_with_strategy("test", black_box(&text), None, &strategy, &embedder)
         })
@@ -632,7 +628,9 @@ fn bench_temporal_search(c: &mut Criterion) {
     let vectors = random_vectors(n, dim);
     for (i, vec) in vectors.iter().enumerate() {
         let timestamp = base_time + (i as u64 * 3600); // 1 hour apart
-        index.insert(&format!("doc{}", i), vec, timestamp, None).unwrap();
+        index
+            .insert(&format!("doc{}", i), vec, timestamp, None)
+            .unwrap();
     }
 
     let query = random_vector(dim);
@@ -657,9 +655,24 @@ fn bench_temporal_search(c: &mut Criterion) {
 
     // Different decay functions
     for decay in [
-        ("exponential", DecayFunction::Exponential { half_life_seconds: 86400 }),
-        ("linear", DecayFunction::Linear { max_age_seconds: 604800 }),
-        ("gaussian", DecayFunction::Gaussian { scale_seconds: 172800 }),
+        (
+            "exponential",
+            DecayFunction::Exponential {
+                half_life_seconds: 86400,
+            },
+        ),
+        (
+            "linear",
+            DecayFunction::Linear {
+                max_age_seconds: 604800,
+            },
+        ),
+        (
+            "gaussian",
+            DecayFunction::Gaussian {
+                scale_seconds: 172800,
+            },
+        ),
     ] {
         let decay_config = TemporalConfig {
             decay: decay.1,
@@ -691,7 +704,9 @@ fn bench_encryption_overhead(c: &mut Criterion) {
         bencher.iter(|| {
             let mut collection = Collection::with_dimensions("bench", dim);
             for (i, vec) in vectors.iter().enumerate() {
-                collection.insert(format!("doc{}", i), black_box(vec), None).unwrap();
+                collection
+                    .insert(format!("doc{}", i), black_box(vec), None)
+                    .unwrap();
             }
         })
     });
@@ -708,7 +723,9 @@ fn bench_encryption_overhead(c: &mut Criterion) {
             encryptor.initialize(dim);
 
             for (i, vec) in vectors.iter().enumerate() {
-                encryptor.encrypt(&format!("doc{}", i), black_box(vec), HashMap::new()).unwrap();
+                encryptor
+                    .encrypt(&format!("doc{}", i), black_box(vec), HashMap::new())
+                    .unwrap();
             }
         })
     });
@@ -716,9 +733,14 @@ fn bench_encryption_overhead(c: &mut Criterion) {
     // Encrypt + Decrypt cycle
     let mut encryptor = VectorEncryptor::new(config.clone(), key_manager);
     encryptor.initialize(dim);
-    let encrypted: Vec<_> = vectors.iter()
+    let encrypted: Vec<_> = vectors
+        .iter()
         .enumerate()
-        .map(|(i, v)| encryptor.encrypt(&format!("doc{}", i), v, HashMap::new()).unwrap())
+        .map(|(i, v)| {
+            encryptor
+                .encrypt(&format!("doc{}", i), v, HashMap::new())
+                .unwrap()
+        })
         .collect();
 
     group.bench_function("decrypt_batch", |bencher| {
@@ -732,9 +754,7 @@ fn bench_encryption_overhead(c: &mut Criterion) {
     // Encrypted search
     let query = random_vector(dim);
     group.bench_function("encrypted_search", |bencher| {
-        bencher.iter(|| {
-            encryptor.search_encrypted(black_box(&query), &encrypted, 10)
-        })
+        bencher.iter(|| encryptor.search_encrypted(black_box(&query), &encrypted, 10))
     });
 
     // Compare searchable vs non-searchable encryption
@@ -748,7 +768,8 @@ fn bench_encryption_overhead(c: &mut Criterion) {
             let km = KeyManager::new(&key).unwrap();
             let mut enc = VectorEncryptor::new(non_searchable_config.clone(), km);
             for (i, vec) in vectors.iter().take(100).enumerate() {
-                enc.encrypt(&format!("doc{}", i), black_box(vec), HashMap::new()).unwrap();
+                enc.encrypt(&format!("doc{}", i), black_box(vec), HashMap::new())
+                    .unwrap();
             }
         })
     });
@@ -759,7 +780,8 @@ fn bench_encryption_overhead(c: &mut Criterion) {
             let mut enc = VectorEncryptor::new(config.clone(), km);
             enc.initialize(dim);
             for (i, vec) in vectors.iter().take(100).enumerate() {
-                enc.encrypt(&format!("doc{}", i), black_box(vec), HashMap::new()).unwrap();
+                enc.encrypt(&format!("doc{}", i), black_box(vec), HashMap::new())
+                    .unwrap();
             }
         })
     });
@@ -778,7 +800,8 @@ fn bench_query_builder(c: &mut Criterion) {
     let analyzer = QueryAnalyzer::new();
 
     group.bench_function("analyze_semantic_query", |bencher| {
-        bencher.iter(|| analyzer.analyze(black_box("find similar documents about machine learning")))
+        bencher
+            .iter(|| analyzer.analyze(black_box("find similar documents about machine learning")))
     });
 
     group.bench_function("analyze_filter_query", |bencher| {
@@ -786,7 +809,11 @@ fn bench_query_builder(c: &mut Criterion) {
     });
 
     group.bench_function("analyze_hybrid_query", |bencher| {
-        bencher.iter(|| analyzer.analyze(black_box("search for AI documents where category = 'tech' AND year > 2020")))
+        bencher.iter(|| {
+            analyzer.analyze(black_box(
+                "search for AI documents where category = 'tech' AND year > 2020",
+            ))
+        })
     });
 
     group.bench_function("analyze_complex_query", |bencher| {
@@ -813,7 +840,11 @@ fn bench_query_builder(c: &mut Criterion) {
     });
 
     group.bench_function("build_filtered_query", |bencher| {
-        bencher.iter(|| medium_builder.build(black_box("find products where price < 100 AND category = 'electronics'")))
+        bencher.iter(|| {
+            medium_builder.build(black_box(
+                "find products where price < 100 AND category = 'electronics'",
+            ))
+        })
     });
 
     group.bench_function("build_complex_query", |bencher| {
@@ -860,7 +891,7 @@ fn bench_federated_search(c: &mut Criterion) {
             i += 1;
             federation.register_instance(InstanceConfig::new(
                 format!("instance-{}", i),
-                format!("http://localhost:{}", 8080 + i)
+                format!("http://localhost:{}", 8080 + i),
             ))
         })
     });
@@ -871,16 +902,14 @@ fn bench_federated_search(c: &mut Criterion) {
         for i in 0..count {
             fed.register_instance(InstanceConfig::new(
                 format!("inst-{}", i),
-                format!("http://localhost:{}", 9000 + i)
+                format!("http://localhost:{}", 9000 + i),
             ));
         }
 
         group.bench_with_input(
             BenchmarkId::new("health_check", count),
             &count,
-            |bencher, _| {
-                bencher.iter(|| fed.health())
-            },
+            |bencher, _| bencher.iter(|| fed.health()),
         );
     }
 
@@ -890,7 +919,7 @@ fn bench_federated_search(c: &mut Criterion) {
         for i in 0..10 {
             fed.register_instance(InstanceConfig::new(
                 format!("stats-inst-{}", i),
-                format!("http://localhost:{}", 7000 + i)
+                format!("http://localhost:{}", 7000 + i),
             ));
         }
         bencher.iter(|| fed.stats())
@@ -965,9 +994,7 @@ fn bench_drift_detection(c: &mut Criterion) {
         group.bench_with_input(
             BenchmarkId::new("check_by_dimension", d),
             &d,
-            |bencher, _| {
-                bencher.iter(|| det.check(black_box(&query)))
-            },
+            |bencher, _| bencher.iter(|| det.check(black_box(&query))),
         );
     }
 
@@ -1000,16 +1027,15 @@ fn bench_backup_restore(c: &mut Criterion) {
                         let coll = db.collection("bench").unwrap();
 
                         for i in 0..size {
-                            coll.insert(format!("vec_{}", i), &random_vector(dim), None).unwrap();
+                            coll.insert(format!("vec_{}", i), &random_vector(dim), None)
+                                .unwrap();
                         }
 
                         let config = BackupConfig::default();
                         let manager = BackupManager::new(&backup_dir, config);
                         (db, manager, temp_dir)
                     },
-                    |(db, manager, _temp)| {
-                        manager.create_backup(black_box(&db)).unwrap()
-                    },
+                    |(db, manager, _temp)| manager.create_backup(black_box(&db)).unwrap(),
                     criterion::BatchSize::SmallInput,
                 )
             },
@@ -1029,16 +1055,18 @@ fn bench_backup_restore(c: &mut Criterion) {
                 let coll = db.collection("bench").unwrap();
 
                 for i in 0..n {
-                    coll.insert(format!("vec_{}", i), &random_vector(dim), None).unwrap();
+                    coll.insert(format!("vec_{}", i), &random_vector(dim), None)
+                        .unwrap();
                 }
 
-                let config = BackupConfig { compression: false, ..Default::default() };
+                let config = BackupConfig {
+                    compression: false,
+                    ..Default::default()
+                };
                 let manager = BackupManager::new(&backup_dir, config);
                 (db, manager, temp_dir)
             },
-            |(db, manager, _temp)| {
-                manager.create_backup(black_box(&db)).unwrap()
-            },
+            |(db, manager, _temp)| manager.create_backup(black_box(&db)).unwrap(),
             criterion::BatchSize::SmallInput,
         )
     });
@@ -1054,16 +1082,18 @@ fn bench_backup_restore(c: &mut Criterion) {
                 let coll = db.collection("bench").unwrap();
 
                 for i in 0..n {
-                    coll.insert(format!("vec_{}", i), &random_vector(dim), None).unwrap();
+                    coll.insert(format!("vec_{}", i), &random_vector(dim), None)
+                        .unwrap();
                 }
 
-                let config = BackupConfig { compression: true, ..Default::default() };
+                let config = BackupConfig {
+                    compression: true,
+                    ..Default::default()
+                };
                 let manager = BackupManager::new(&backup_dir, config);
                 (db, manager, temp_dir)
             },
-            |(db, manager, _temp)| {
-                manager.create_backup(black_box(&db)).unwrap()
-            },
+            |(db, manager, _temp)| manager.create_backup(black_box(&db)).unwrap(),
             criterion::BatchSize::SmallInput,
         )
     });
@@ -1080,17 +1110,19 @@ fn bench_backup_restore(c: &mut Criterion) {
                 let coll = db.collection("bench").unwrap();
 
                 for i in 0..500 {
-                    coll.insert(format!("vec_{}", i), &random_vector(dim), None).unwrap();
+                    coll.insert(format!("vec_{}", i), &random_vector(dim), None)
+                        .unwrap();
                 }
 
-                let config = BackupConfig { verify: true, ..Default::default() };
+                let config = BackupConfig {
+                    verify: true,
+                    ..Default::default()
+                };
                 let manager = BackupManager::new(&backup_dir, config);
                 let metadata = manager.create_backup(&db).unwrap();
                 (manager, metadata.id, temp_dir)
             },
-            |(manager, backup_id, _temp)| {
-                manager.verify_backup(black_box(&backup_id)).unwrap()
-            },
+            |(manager, backup_id, _temp)| manager.verify_backup(black_box(&backup_id)).unwrap(),
             criterion::BatchSize::SmallInput,
         )
     });
@@ -1107,7 +1139,8 @@ fn bench_backup_restore(c: &mut Criterion) {
                 let coll = db.collection("bench").unwrap();
 
                 for i in 0..1000 {
-                    coll.insert(format!("vec_{}", i), &random_vector(dim), None).unwrap();
+                    coll.insert(format!("vec_{}", i), &random_vector(dim), None)
+                        .unwrap();
                 }
 
                 let config = BackupConfig::default();
@@ -1115,9 +1148,7 @@ fn bench_backup_restore(c: &mut Criterion) {
                 let metadata = manager.create_backup(&db).unwrap();
                 (manager, metadata.id, temp_dir)
             },
-            |(manager, backup_id, _temp)| {
-                manager.restore_backup(black_box(&backup_id)).unwrap()
-            },
+            |(manager, backup_id, _temp)| manager.restore_backup(black_box(&backup_id)).unwrap(),
             criterion::BatchSize::SmallInput,
         )
     });
@@ -1134,7 +1165,8 @@ fn bench_backup_restore(c: &mut Criterion) {
                 let coll = db.collection("bench").unwrap();
 
                 for i in 0..100 {
-                    coll.insert(format!("vec_{}", i), &random_vector(dim), None).unwrap();
+                    coll.insert(format!("vec_{}", i), &random_vector(dim), None)
+                        .unwrap();
                 }
 
                 let config = BackupConfig::default();
@@ -1147,9 +1179,7 @@ fn bench_backup_restore(c: &mut Criterion) {
 
                 (manager, temp_dir)
             },
-            |(manager, _temp)| {
-                manager.list_backups().unwrap()
-            },
+            |(manager, _temp)| manager.list_backups().unwrap(),
             criterion::BatchSize::SmallInput,
         )
     });
@@ -1222,29 +1252,17 @@ fn bench_distance_by_dimension(c: &mut Criterion) {
         let a = random_vector(dim);
         let b = random_vector(dim);
 
-        group.bench_with_input(
-            BenchmarkId::new("cosine", dim),
-            &dim,
-            |bencher, _| {
-                bencher.iter(|| DistanceFunction::Cosine.compute(black_box(&a), black_box(&b)))
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("cosine", dim), &dim, |bencher, _| {
+            bencher.iter(|| DistanceFunction::Cosine.compute(black_box(&a), black_box(&b)))
+        });
 
-        group.bench_with_input(
-            BenchmarkId::new("euclidean", dim),
-            &dim,
-            |bencher, _| {
-                bencher.iter(|| DistanceFunction::Euclidean.compute(black_box(&a), black_box(&b)))
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("euclidean", dim), &dim, |bencher, _| {
+            bencher.iter(|| DistanceFunction::Euclidean.compute(black_box(&a), black_box(&b)))
+        });
 
-        group.bench_with_input(
-            BenchmarkId::new("dot_product", dim),
-            &dim,
-            |bencher, _| {
-                bencher.iter(|| DistanceFunction::DotProduct.compute(black_box(&a), black_box(&b)))
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("dot_product", dim), &dim, |bencher, _| {
+            bencher.iter(|| DistanceFunction::DotProduct.compute(black_box(&a), black_box(&b)))
+        });
     }
 
     group.finish();
@@ -1263,21 +1281,18 @@ fn bench_brute_force_baseline(c: &mut Criterion) {
         let query = random_vector(dim);
 
         // Brute force search
-        group.bench_with_input(
-            BenchmarkId::new("brute_force", n),
-            &n,
-            |bencher, _| {
-                bencher.iter(|| {
-                    let mut distances: Vec<(usize, f32)> = vectors.iter()
-                        .enumerate()
-                        .map(|(i, v)| (i, DistanceFunction::Euclidean.compute(&query, v)))
-                        .collect();
-                    distances.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
-                    distances.truncate(10);
-                    distances
-                })
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("brute_force", n), &n, |bencher, _| {
+            bencher.iter(|| {
+                let mut distances: Vec<(usize, f32)> = vectors
+                    .iter()
+                    .enumerate()
+                    .map(|(i, v)| (i, DistanceFunction::Euclidean.compute(&query, v)))
+                    .collect();
+                distances.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+                distances.truncate(10);
+                distances
+            })
+        });
 
         // HNSW search
         let mut index = HnswIndex::with_distance(DistanceFunction::Euclidean);
@@ -1285,13 +1300,9 @@ fn bench_brute_force_baseline(c: &mut Criterion) {
             index.insert(id, vec, &vectors).unwrap();
         }
 
-        group.bench_with_input(
-            BenchmarkId::new("hnsw", n),
-            &n,
-            |bencher, _| {
-                bencher.iter(|| index.search(black_box(&query), 10, &vectors))
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("hnsw", n), &n, |bencher, _| {
+            bencher.iter(|| index.search(black_box(&query), 10, &vectors))
+        });
     }
 
     group.finish();
@@ -1334,9 +1345,7 @@ fn bench_optimization_validation(c: &mut Criterion) {
                 }
                 (idx, random_vector(dim))
             },
-            |(mut idx, new_vec)| {
-                idx.insert(n, black_box(&new_vec), &vectors).unwrap()
-            },
+            |(mut idx, new_vec)| idx.insert(n, black_box(&new_vec), &vectors).unwrap(),
             criterion::BatchSize::SmallInput,
         )
     });
@@ -1348,7 +1357,7 @@ fn bench_optimization_validation(c: &mut Criterion) {
         bencher.iter(|| {
             let mut idx = HnswIndex::new(
                 HnswConfig::with_m(32), // Higher M = more neighbor selection
-                DistanceFunction::Euclidean
+                DistanceFunction::Euclidean,
             );
             for (id, vec) in dense_vectors.iter().enumerate() {
                 idx.insert(id, vec, &dense_vectors).unwrap();
@@ -1371,9 +1380,7 @@ fn bench_optimization_validation(c: &mut Criterion) {
                 }
                 (db, tmp)
             },
-            |(mut db, _tmp)| {
-                db.save().unwrap()
-            },
+            |(mut db, _tmp)| db.save().unwrap(),
             criterion::BatchSize::SmallInput,
         )
     });
@@ -1401,55 +1408,43 @@ fn bench_index_build_comparison(c: &mut Criterion) {
 
         // HNSW build time
         group.throughput(Throughput::Elements(n as u64));
-        group.bench_with_input(
-            BenchmarkId::new("hnsw", n),
-            &n,
-            |bencher, _| {
-                bencher.iter(|| {
-                    let mut index = HnswIndex::with_distance(DistanceFunction::Euclidean);
-                    for (id, vec) in vectors.iter().enumerate() {
-                        index.insert(id, vec, &vectors).unwrap();
-                    }
-                })
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("hnsw", n), &n, |bencher, _| {
+            bencher.iter(|| {
+                let mut index = HnswIndex::with_distance(DistanceFunction::Euclidean);
+                for (id, vec) in vectors.iter().enumerate() {
+                    index.insert(id, vec, &vectors).unwrap();
+                }
+            })
+        });
 
         // IVF build time (train + insert)
         let n_clusters = ((n as f64).sqrt() as usize).max(4);
-        group.bench_with_input(
-            BenchmarkId::new("ivf", n),
-            &n,
-            |bencher, _| {
-                bencher.iter(|| {
-                    let config = IvfConfig::new(n_clusters);
-                    let mut index = IvfIndex::new(dim, config);
-                    index.train(&refs).unwrap();
-                    for (id, vec) in vectors.iter().enumerate() {
-                        index.insert(id, vec).unwrap();
-                    }
-                })
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("ivf", n), &n, |bencher, _| {
+            bencher.iter(|| {
+                let config = IvfConfig::new(n_clusters);
+                let mut index = IvfIndex::new(dim, config);
+                index.train(&refs).unwrap();
+                for (id, vec) in vectors.iter().enumerate() {
+                    index.insert(id, vec).unwrap();
+                }
+            })
+        });
 
         // DiskANN build time (includes filesystem I/O)
-        group.bench_with_input(
-            BenchmarkId::new("diskann", n),
-            &n,
-            |bencher, _| {
-                bencher.iter_batched(
-                    || tempfile::tempdir().unwrap(),
-                    |tmp_dir| {
-                        let config = DiskAnnConfig::default();
-                        let mut index = DiskAnnIndex::create(tmp_dir.path(), dim, config).unwrap();
-                        for (id, vec) in vectors.iter().enumerate() {
-                            index.add(&format!("v{}", id), vec).unwrap();
-                        }
-                        index.build().unwrap();
-                    },
-                    criterion::BatchSize::SmallInput,
-                )
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("diskann", n), &n, |bencher, _| {
+            bencher.iter_batched(
+                || tempfile::tempdir().unwrap(),
+                |tmp_dir| {
+                    let config = DiskAnnConfig::default();
+                    let mut index = DiskAnnIndex::create(tmp_dir.path(), dim, config).unwrap();
+                    for (id, vec) in vectors.iter().enumerate() {
+                        index.add(&format!("v{}", id), vec).unwrap();
+                    }
+                    index.build().unwrap();
+                },
+                criterion::BatchSize::SmallInput,
+            )
+        });
     }
 
     group.finish();
@@ -1502,17 +1497,13 @@ fn bench_index_search_comparison(c: &mut Criterion) {
         group.bench_with_input(
             BenchmarkId::new(format!("ivf_k{}", k), n),
             &k,
-            |bencher, &k_val| {
-                bencher.iter(|| ivf_index.search(black_box(&query), k_val))
-            },
+            |bencher, &k_val| bencher.iter(|| ivf_index.search(black_box(&query), k_val)),
         );
 
         group.bench_with_input(
             BenchmarkId::new(format!("diskann_k{}", k), n),
             &k,
-            |bencher, &k_val| {
-                bencher.iter(|| diskann_index.search(black_box(&query), k_val))
-            },
+            |bencher, &k_val| bencher.iter(|| diskann_index.search(black_box(&query), k_val)),
         );
     }
 
@@ -1549,35 +1540,24 @@ fn bench_index_scalability_comparison(c: &mut Criterion) {
         // Build DiskANN
         let diskann_dir = tempfile::tempdir().unwrap();
         let diskann_config = DiskAnnConfig::default();
-        let mut diskann_index = DiskAnnIndex::create(diskann_dir.path(), dim, diskann_config).unwrap();
+        let mut diskann_index =
+            DiskAnnIndex::create(diskann_dir.path(), dim, diskann_config).unwrap();
         for (id, vec) in vectors.iter().enumerate() {
             diskann_index.add(&format!("v{}", id), vec).unwrap();
         }
         diskann_index.build().unwrap();
 
-        group.bench_with_input(
-            BenchmarkId::new("hnsw", n),
-            &n,
-            |bencher, _| {
-                bencher.iter(|| hnsw_index.search(black_box(&query), 10, &vectors))
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("hnsw", n), &n, |bencher, _| {
+            bencher.iter(|| hnsw_index.search(black_box(&query), 10, &vectors))
+        });
 
-        group.bench_with_input(
-            BenchmarkId::new("ivf", n),
-            &n,
-            |bencher, _| {
-                bencher.iter(|| ivf_index.search(black_box(&query), 10))
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("ivf", n), &n, |bencher, _| {
+            bencher.iter(|| ivf_index.search(black_box(&query), 10))
+        });
 
-        group.bench_with_input(
-            BenchmarkId::new("diskann", n),
-            &n,
-            |bencher, _| {
-                bencher.iter(|| diskann_index.search(black_box(&query), 10))
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("diskann", n), &n, |bencher, _| {
+            bencher.iter(|| diskann_index.search(black_box(&query), 10))
+        });
     }
 
     group.finish();
@@ -1613,35 +1593,24 @@ fn bench_index_dimension_comparison(c: &mut Criterion) {
         // Build DiskANN
         let diskann_dir = tempfile::tempdir().unwrap();
         let diskann_config = DiskAnnConfig::default();
-        let mut diskann_index = DiskAnnIndex::create(diskann_dir.path(), dim, diskann_config).unwrap();
+        let mut diskann_index =
+            DiskAnnIndex::create(diskann_dir.path(), dim, diskann_config).unwrap();
         for (id, vec) in vectors.iter().enumerate() {
             diskann_index.add(&format!("v{}", id), vec).unwrap();
         }
         diskann_index.build().unwrap();
 
-        group.bench_with_input(
-            BenchmarkId::new("hnsw", dim),
-            &dim,
-            |bencher, _| {
-                bencher.iter(|| hnsw_index.search(black_box(&query), 10, &vectors))
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("hnsw", dim), &dim, |bencher, _| {
+            bencher.iter(|| hnsw_index.search(black_box(&query), 10, &vectors))
+        });
 
-        group.bench_with_input(
-            BenchmarkId::new("ivf", dim),
-            &dim,
-            |bencher, _| {
-                bencher.iter(|| ivf_index.search(black_box(&query), 10))
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("ivf", dim), &dim, |bencher, _| {
+            bencher.iter(|| ivf_index.search(black_box(&query), 10))
+        });
 
-        group.bench_with_input(
-            BenchmarkId::new("diskann", dim),
-            &dim,
-            |bencher, _| {
-                bencher.iter(|| diskann_index.search(black_box(&query), 10))
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("diskann", dim), &dim, |bencher, _| {
+            bencher.iter(|| diskann_index.search(black_box(&query), 10))
+        });
     }
 
     group.finish();
@@ -1697,10 +1666,7 @@ criterion_group!(
     bench_brute_force_baseline,
 );
 
-criterion_group!(
-    optimization_benches,
-    bench_optimization_validation,
-);
+criterion_group!(optimization_benches, bench_optimization_validation,);
 
 criterion_group!(
     index_comparison_benches,
