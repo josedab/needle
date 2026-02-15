@@ -9,14 +9,15 @@ use serde_json::json;
 /// Test that Collection can be used in a way compatible with bindings
 #[test]
 fn test_collection_binding_compatibility() {
-    let config = CollectionConfig::new("test", 128)
-        .with_distance(DistanceFunction::Cosine);
+    let config = CollectionConfig::new("test", 128).with_distance(DistanceFunction::Cosine);
     let mut collection = Collection::new(config);
 
     // Insert with metadata (as bindings would)
     let vector: Vec<f32> = (0..128).map(|i| (i as f32) / 128.0).collect();
     let metadata = json!({"key": "value", "number": 42});
-    collection.insert("test_id", &vector, Some(metadata)).unwrap();
+    collection
+        .insert("test_id", &vector, Some(metadata))
+        .unwrap();
 
     // Search (as bindings would)
     let query: Vec<f32> = (0..128).map(|i| (i as f32) / 128.0).collect();
@@ -45,9 +46,8 @@ fn test_batch_operations_binding_compatibility() {
     let vectors: Vec<Vec<f32>> = (0..10)
         .map(|i| (0..64).map(|j| ((i * 64 + j) as f32) / 640.0).collect())
         .collect();
-    let metadata: Vec<Option<serde_json::Value>> = (0..10)
-        .map(|i| Some(json!({"index": i})))
-        .collect();
+    let metadata: Vec<Option<serde_json::Value>> =
+        (0..10).map(|i| Some(json!({"index": i}))).collect();
 
     collection.insert_batch(ids, vectors, metadata).unwrap();
     assert_eq!(collection.len(), 10);
@@ -72,7 +72,9 @@ fn test_serialization_binding_compatibility() {
     // Add data
     for i in 0..5 {
         let vector: Vec<f32> = (0..32).map(|j| ((i * 32 + j) as f32) / 160.0).collect();
-        collection.insert(format!("vec_{}", i), &vector, None).unwrap();
+        collection
+            .insert(format!("vec_{}", i), &vector, None)
+            .unwrap();
     }
 
     // Serialize
@@ -211,7 +213,9 @@ fn test_stats_binding_compatibility() {
     // Add some vectors
     for i in 0..10 {
         let vector: Vec<f32> = (0..64).map(|j| ((i * 64 + j) as f32) / 640.0).collect();
-        collection.insert(format!("vec_{}", i), &vector, None).unwrap();
+        collection
+            .insert(format!("vec_{}", i), &vector, None)
+            .unwrap();
     }
 
     // Check updated state
@@ -236,11 +240,8 @@ mod uniffi_tests {
 
     #[test]
     fn test_uniffi_collection() {
-        let collection = NeedleCollection::new(
-            "test".to_string(),
-            128,
-            "cosine".to_string()
-        ).unwrap();
+        let collection =
+            NeedleCollection::new("test".to_string(), 128, "cosine".to_string()).unwrap();
 
         assert_eq!(collection.name(), "test");
         assert_eq!(collection.dimensions(), 128);

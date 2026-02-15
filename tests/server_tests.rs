@@ -10,7 +10,9 @@
 use axum::body::Body;
 use axum::http::{header, Method, Request, StatusCode};
 use needle::database::Database;
-use needle::server::{AppState, CorsConfig, RateLimitConfig, ServerConfig, create_router_with_config};
+use needle::server::{
+    create_router_with_config, AppState, CorsConfig, RateLimitConfig, ServerConfig,
+};
 use serde_json::{json, Value};
 use std::sync::Arc;
 use tower::ServiceExt;

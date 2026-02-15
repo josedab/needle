@@ -336,12 +336,14 @@ fn test_distance_symmetry() {
 
     let mut runner = TestRunner::default();
 
-    runner.run(&(arb_vector(32), arb_vector(32)), |(v1, v2)| {
-        let dist1 = DistanceFunction::Euclidean.compute(&v1, &v2);
-        let dist2 = DistanceFunction::Euclidean.compute(&v2, &v1);
-        prop_assert!((dist1 - dist2).abs() < 1e-6, "Distance should be symmetric");
-        Ok(())
-    }).unwrap();
+    runner
+        .run(&(arb_vector(32), arb_vector(32)), |(v1, v2)| {
+            let dist1 = DistanceFunction::Euclidean.compute(&v1, &v2);
+            let dist2 = DistanceFunction::Euclidean.compute(&v2, &v1);
+            prop_assert!((dist1 - dist2).abs() < 1e-6, "Distance should be symmetric");
+            Ok(())
+        })
+        .unwrap();
 }
 
 /// HNSW recall vs brute force - tests algorithmic correctness
@@ -350,80 +352,85 @@ fn test_distance_symmetry() {
 /// be easily met in normal cases while allowing for edge cases with unusual vector distributions
 #[test]
 fn test_hnsw_recall_vs_bruteforce() {
-    use proptest::test_runner::{TestRunner, Config};
+    use proptest::test_runner::{Config, TestRunner};
 
     let config = Config {
-        cases: 20,  // Fewer cases due to computational cost
+        cases: 20, // Fewer cases due to computational cost
         ..Config::default()
     };
     let mut runner = TestRunner::new(config);
 
-    runner.run(
-        &(
-            prop::collection::vec(arb_vector(32), 100..200),  // Larger dataset for more stable recall
-            arb_vector(32),
-            10usize..=20,  // Larger k for more stable recall measurement
-        ),
-        |(vectors, query, k)| {
-            let db = Database::in_memory();
-            db.create_collection("test", 32).unwrap();
-            let coll = db.collection("test").unwrap();
+    runner
+        .run(
+            &(
+                prop::collection::vec(arb_vector(32), 100..200), // Larger dataset for more stable recall
+                arb_vector(32),
+                10usize..=20, // Larger k for more stable recall measurement
+            ),
+            |(vectors, query, k)| {
+                let db = Database::in_memory();
+                db.create_collection("test", 32).unwrap();
+                let coll = db.collection("test").unwrap();
 
-            // Insert all vectors (skip all-zero vectors which can cause edge cases)
-            let mut inserted_count = 0;
-            for (i, vec) in vectors.iter().enumerate() {
-                let norm: f32 = vec.iter().map(|x| x * x).sum();
-                if norm > 1e-6 {  // Skip near-zero vectors
-                    coll.insert(format!("vec_{}", i), vec, None).unwrap();
-                    inserted_count += 1;
+                // Insert all vectors (skip all-zero vectors which can cause edge cases)
+                let mut inserted_count = 0;
+                for (i, vec) in vectors.iter().enumerate() {
+                    let norm: f32 = vec.iter().map(|x| x * x).sum();
+                    if norm > 1e-6 {
+                        // Skip near-zero vectors
+                        coll.insert(format!("vec_{}", i), vec, None).unwrap();
+                        inserted_count += 1;
+                    }
                 }
-            }
 
-            // Need at least k+10 vectors for meaningful test
-            if inserted_count < k + 10 {
-                return Ok(());  // Skip this test case
-            }
+                // Need at least k+10 vectors for meaningful test
+                if inserted_count < k + 10 {
+                    return Ok(()); // Skip this test case
+                }
 
-            // Get HNSW results
-            let hnsw_results: std::collections::HashSet<String> = coll
-                .search(&query, k)
-                .unwrap()
-                .into_iter()
-                .map(|r| r.id)
-                .collect();
+                // Get HNSW results
+                let hnsw_results: std::collections::HashSet<String> = coll
+                    .search(&query, k)
+                    .unwrap()
+                    .into_iter()
+                    .map(|r| r.id)
+                    .collect();
 
-            // Compute brute force results (only for inserted vectors)
-            let mut brute_force: Vec<(usize, f32)> = vectors
-                .iter()
-                .enumerate()
-                .filter(|(_, v)| {
-                    let norm: f32 = v.iter().map(|x| x * x).sum();
-                    norm > 1e-6
-                })
-                .map(|(id, v)| (id, DistanceFunction::Euclidean.compute(&query, v)))
-                .collect();
-            brute_force.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
-            let brute_force_results: std::collections::HashSet<String> = brute_force
-                .iter()
-                .take(k)
-                .map(|(id, _)| format!("vec_{}", id))
-                .collect();
+                // Compute brute force results (only for inserted vectors)
+                let mut brute_force: Vec<(usize, f32)> = vectors
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, v)| {
+                        let norm: f32 = v.iter().map(|x| x * x).sum();
+                        norm > 1e-6
+                    })
+                    .map(|(id, v)| (id, DistanceFunction::Euclidean.compute(&query, v)))
+                    .collect();
+                brute_force.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+                let brute_force_results: std::collections::HashSet<String> = brute_force
+                    .iter()
+                    .take(k)
+                    .map(|(id, _)| format!("vec_{}", id))
+                    .collect();
 
-            // Calculate recall
-            let intersection = hnsw_results.intersection(&brute_force_results).count();
-            let recall = intersection as f64 / k as f64;
+                // Calculate recall
+                let intersection = hnsw_results.intersection(&brute_force_results).count();
+                let recall = intersection as f64 / k as f64;
 
-            // HNSW should achieve at least 50% recall on normal datasets
-            // This is a conservative threshold that should pass on almost all cases
-            // while still catching major algorithmic issues
-            prop_assert!(
-                recall >= 0.5,
-                "HNSW recall {} is below threshold 0.5 (found {} of {} correct results)",
-                recall, intersection, k
-            );
-            Ok(())
-        },
-    ).unwrap();
+                // HNSW should achieve at least 50% recall on normal datasets
+                // This is a conservative threshold that should pass on almost all cases
+                // while still catching major algorithmic issues
+                prop_assert!(
+                    recall >= 0.5,
+                    "HNSW recall {} is below threshold 0.5 (found {} of {} correct results)",
+                    recall,
+                    intersection,
+                    k
+                );
+                Ok(())
+            },
+        )
+        .unwrap();
 }
 
 /// Test concurrent read access doesn't cause issues
@@ -502,7 +509,9 @@ fn test_concurrent_insert_search() {
     let writer = thread::spawn(move || {
         let coll = db_writer.collection("test").unwrap();
         for i in 0..20 {
-            let vec: Vec<f32> = (0..16).map(|j| ((i * 16 + j + 1000) as f32) / 1000.0).collect();
+            let vec: Vec<f32> = (0..16)
+                .map(|j| ((i * 16 + j + 1000) as f32) / 1000.0)
+                .collect();
             coll.insert(format!("new_{}", i), &vec, None).unwrap();
             thread::sleep(Duration::from_micros(100));
         }
@@ -515,7 +524,10 @@ fn test_concurrent_insert_search() {
         for _ in 0..50 {
             let query: Vec<f32> = (0..16).map(|i| i as f32 / 100.0).collect();
             let results = coll.search(&query, 10);
-            assert!(results.is_ok(), "Search should not fail during concurrent access");
+            assert!(
+                results.is_ok(),
+                "Search should not fail during concurrent access"
+            );
             search_count += 1;
             thread::sleep(Duration::from_micros(50));
         }
