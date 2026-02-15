@@ -89,8 +89,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 /// Performance profile for auto-tuning
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum PerformanceProfile {
     /// Optimize for lowest latency (may sacrifice some recall)
     LowLatency,
@@ -102,7 +101,6 @@ pub enum PerformanceProfile {
     /// Optimize for minimum memory usage
     LowMemory,
 }
-
 
 /// Constraints for auto-tuning
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -292,7 +290,12 @@ pub fn auto_tune(constraints: &TuningConstraints) -> TuningResult {
 
     // Estimate recall based on parameters
     // This is a rough approximation based on empirical observations
-    let estimated_recall = estimate_recall(final_m, final_ef_construction, ef_search, constraints.expected_vectors);
+    let estimated_recall = estimate_recall(
+        final_m,
+        final_ef_construction,
+        ef_search,
+        constraints.expected_vectors,
+    );
 
     // Estimate latency based on parameters
     // Rough model: latency ~= log(N) * ef_search * 0.001 ms
@@ -558,7 +561,8 @@ pub fn recommend_index(constraints: &IndexSelectionConstraints) -> IndexRecommen
     // Decision logic
     let recommended = if constraints.expected_vectors < 100_000 {
         // Small dataset: HNSW is always best
-        explanation.push("Small dataset (<100K): HNSW provides best recall and latency".to_string());
+        explanation
+            .push("Small dataset (<100K): HNSW provides best recall and latency".to_string());
         alternatives.push(RecommendedIndex::Ivf);
         RecommendedIndex::Hnsw
     } else if constraints.expected_vectors < 1_000_000 {
@@ -568,7 +572,8 @@ pub fn recommend_index(constraints: &IndexSelectionConstraints) -> IndexRecommen
             alternatives.push(RecommendedIndex::Ivf);
             RecommendedIndex::Hnsw
         } else {
-            explanation.push("Medium dataset (<1M) with memory constraints: IVF recommended".to_string());
+            explanation
+                .push("Medium dataset (<1M) with memory constraints: IVF recommended".to_string());
             alternatives.push(RecommendedIndex::Hnsw);
             alternatives.push(RecommendedIndex::DiskAnn);
             RecommendedIndex::Ivf
@@ -576,16 +581,23 @@ pub fn recommend_index(constraints: &IndexSelectionConstraints) -> IndexRecommen
     } else if constraints.expected_vectors < 10_000_000 {
         // Large dataset: IVF unless memory is abundant
         if fits_in_memory && constraints.low_latency_critical {
-            explanation.push("Large dataset (1-10M) with abundant memory and latency critical: HNSW recommended".to_string());
+            explanation.push(
+                "Large dataset (1-10M) with abundant memory and latency critical: HNSW recommended"
+                    .to_string(),
+            );
             alternatives.push(RecommendedIndex::Ivf);
             RecommendedIndex::Hnsw
-        } else if fits_in_memory || ivf_total_memory <= constraints.available_memory_bytes.unwrap_or(usize::MAX) {
-            explanation.push("Large dataset (1-10M): IVF recommended for memory efficiency".to_string());
+        } else if fits_in_memory
+            || ivf_total_memory <= constraints.available_memory_bytes.unwrap_or(usize::MAX)
+        {
+            explanation
+                .push("Large dataset (1-10M): IVF recommended for memory efficiency".to_string());
             alternatives.push(RecommendedIndex::Hnsw);
             alternatives.push(RecommendedIndex::DiskAnn);
             RecommendedIndex::Ivf
         } else {
-            explanation.push("Large dataset (1-10M) exceeds memory: DiskANN recommended".to_string());
+            explanation
+                .push("Large dataset (1-10M) exceeds memory: DiskANN recommended".to_string());
             alternatives.push(RecommendedIndex::Ivf);
             RecommendedIndex::DiskAnn
         }
@@ -597,11 +609,13 @@ pub fn recommend_index(constraints: &IndexSelectionConstraints) -> IndexRecommen
             .unwrap_or(false);
 
         if has_abundant_memory && constraints.low_latency_critical {
-            explanation.push("Massive dataset (>10M) with abundant memory: IVF recommended".to_string());
+            explanation
+                .push("Massive dataset (>10M) with abundant memory: IVF recommended".to_string());
             alternatives.push(RecommendedIndex::DiskAnn);
             RecommendedIndex::Ivf
         } else {
-            explanation.push("Massive dataset (>10M): DiskANN recommended for scalability".to_string());
+            explanation
+                .push("Massive dataset (>10M): DiskANN recommended for scalability".to_string());
             alternatives.push(RecommendedIndex::Ivf);
             RecommendedIndex::DiskAnn
         }
@@ -669,8 +683,8 @@ mod tests {
 
     #[test]
     fn test_auto_tune_memory_constrained() {
-        let constraints = TuningConstraints::new(100_000, 384)
-            .with_memory_budget(200 * 1024 * 1024); // 200MB
+        let constraints =
+            TuningConstraints::new(100_000, 384).with_memory_budget(200 * 1024 * 1024); // 200MB
 
         let result = auto_tune(&constraints);
         println!("Memory constrained: {:?}", result);
@@ -747,7 +761,10 @@ mod tests {
         let rec = recommend_index(&constraints);
 
         // Should not fit HNSW, recommend IVF or DiskANN
-        assert!(rec.recommended == RecommendedIndex::Ivf || rec.recommended == RecommendedIndex::DiskAnn);
+        assert!(
+            rec.recommended == RecommendedIndex::Ivf
+                || rec.recommended == RecommendedIndex::DiskAnn
+        );
     }
 
     #[test]
@@ -764,8 +781,8 @@ mod tests {
 
     #[test]
     fn test_recommend_index_frequent_updates() {
-        let constraints = IndexSelectionConstraints::new(50_000_000, 128)
-            .with_frequent_updates(true);
+        let constraints =
+            IndexSelectionConstraints::new(50_000_000, 128).with_frequent_updates(true);
 
         let rec = recommend_index(&constraints);
 
@@ -777,7 +794,10 @@ mod tests {
     #[test]
     fn test_quick_recommend_index() {
         assert_eq!(quick_recommend_index(1_000, 128), RecommendedIndex::Hnsw);
-        assert_eq!(quick_recommend_index(50_000_000, 768), RecommendedIndex::DiskAnn);
+        assert_eq!(
+            quick_recommend_index(50_000_000, 768),
+            RecommendedIndex::DiskAnn
+        );
     }
 
     #[test]
@@ -791,11 +811,9 @@ mod tests {
     fn test_data_profiler() {
         // Create sample vectors with known characteristics
         let vectors: Vec<Vec<f32>> = (0..100)
-            .map(|i| {
-                (0..64).map(|j| (i * j) as f32 / 1000.0).collect()
-            })
+            .map(|i| (0..64).map(|j| (i * j) as f32 / 1000.0).collect())
             .collect();
-        
+
         let profile = DataProfiler::profile(&vectors);
         assert_eq!(profile.dimensions, 64);
         assert_eq!(profile.sample_size, 100);
@@ -805,11 +823,9 @@ mod tests {
     #[test]
     fn test_smart_index_selector() {
         let vectors: Vec<Vec<f32>> = (0..1000)
-            .map(|i| {
-                (0..128).map(|j| ((i * j) as f32).sin()).collect()
-            })
+            .map(|i| (0..128).map(|j| ((i * j) as f32).sin()).collect())
             .collect();
-        
+
         let selection = SmartIndexSelector::select(&vectors, None);
         assert_eq!(selection.recommended, RecommendedIndex::Hnsw); // Small dataset
         assert!(!selection.reasoning.is_empty());
@@ -885,7 +901,7 @@ impl DataProfiler {
         let max_pairs = 1000.min(sample_size * (sample_size - 1) / 2);
         let mut distances = Vec::with_capacity(max_pairs);
         let step = (sample_size * (sample_size - 1) / 2 / max_pairs).max(1);
-        
+
         let mut pair_idx = 0;
         'outer: for i in 0..sample_size {
             for j in (i + 1)..sample_size {
@@ -976,7 +992,7 @@ impl DataProfiler {
         // Simple heuristic: count modes in distance histogram
         let min_d = distances.iter().cloned().fold(f32::INFINITY, f32::min);
         let max_d = distances.iter().cloned().fold(0.0_f32, f32::max);
-        
+
         if (max_d - min_d) < 0.001 {
             return 1;
         }
@@ -1059,7 +1075,8 @@ impl SmartIndexSelector {
                 "High intrinsic dimensionality ({:.1}) suggests HNSW for better recall",
                 profile.intrinsic_dimensionality
             ));
-            if recommended == RecommendedIndex::Ivf && base_constraints.expected_vectors < 5_000_000 {
+            if recommended == RecommendedIndex::Ivf && base_constraints.expected_vectors < 5_000_000
+            {
                 recommended = RecommendedIndex::Hnsw;
                 confidence *= 0.9;
             }
@@ -1071,7 +1088,8 @@ impl SmartIndexSelector {
                 "Data appears clustered (~{} clusters): IVF could be efficient",
                 profile.estimated_clusters
             ));
-            if recommended == RecommendedIndex::Hnsw && base_constraints.expected_vectors > 500_000 {
+            if recommended == RecommendedIndex::Hnsw && base_constraints.expected_vectors > 500_000
+            {
                 // Don't switch, just note it's competitive
                 confidence *= 0.95;
             }
@@ -1092,8 +1110,9 @@ impl SmartIndexSelector {
 
         // Generate HNSW config if recommended
         let hnsw_config = if recommended == RecommendedIndex::Hnsw {
-            let tuning = TuningConstraints::new(base_constraints.expected_vectors, profile.dimensions)
-                .with_min_recall(base_constraints.target_recall);
+            let tuning =
+                TuningConstraints::new(base_constraints.expected_vectors, profile.dimensions)
+                    .with_min_recall(base_constraints.target_recall);
             Some(auto_tune(&tuning).config)
         } else {
             None
@@ -1259,7 +1278,12 @@ impl AdaptiveTuner {
             None => {
                 return AdaptiveRecommendation {
                     recommended: RecommendedIndex::Hnsw,
-                    scores: [(RecommendedIndex::Hnsw, 0.7), (RecommendedIndex::Ivf, 0.4), (RecommendedIndex::DiskAnn, 0.2)].into(),
+                    scores: [
+                        (RecommendedIndex::Hnsw, 0.7),
+                        (RecommendedIndex::Ivf, 0.4),
+                        (RecommendedIndex::DiskAnn, 0.2),
+                    ]
+                    .into(),
                     suggested_config: None,
                     should_migrate: false,
                     confidence: 0.5,
@@ -1421,7 +1445,9 @@ impl OnlineMigrationManager {
         to: RecommendedIndex,
         total_vectors: usize,
     ) -> String {
-        let seq = self.counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let seq = self
+            .counter
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let id = format!("migration_{:08x}", seq);
 
         let now = std::time::SystemTime::now()

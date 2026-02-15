@@ -330,7 +330,9 @@ impl LineageTracker {
         user: Option<&str>,
         notes: Option<&str>,
     ) -> Result<()> {
-        let lineage = self.lineages.get_mut(vector_id)
+        let lineage = self
+            .lineages
+            .get_mut(vector_id)
             .ok_or_else(|| NeedleError::NotFound(format!("Vector '{}' not found", vector_id)))?;
 
         lineage.transformations.push(TransformationEvent {
@@ -346,7 +348,9 @@ impl LineageTracker {
 
     /// Add a tag to a vector.
     pub fn add_tag(&mut self, vector_id: &str, tag: &str) -> Result<()> {
-        let lineage = self.lineages.get_mut(vector_id)
+        let lineage = self
+            .lineages
+            .get_mut(vector_id)
             .ok_or_else(|| NeedleError::NotFound(format!("Vector '{}' not found", vector_id)))?;
 
         lineage.tags.insert(tag.to_string());
@@ -362,7 +366,9 @@ impl LineageTracker {
 
     /// Remove a tag from a vector.
     pub fn remove_tag(&mut self, vector_id: &str, tag: &str) -> Result<()> {
-        let lineage = self.lineages.get_mut(vector_id)
+        let lineage = self
+            .lineages
+            .get_mut(vector_id)
             .ok_or_else(|| NeedleError::NotFound(format!("Vector '{}' not found", vector_id)))?;
 
         lineage.tags.remove(tag);
@@ -377,7 +383,9 @@ impl LineageTracker {
 
     /// Set quality score for a vector.
     pub fn set_quality_score(&mut self, vector_id: &str, score: f32) -> Result<()> {
-        let lineage = self.lineages.get_mut(vector_id)
+        let lineage = self
+            .lineages
+            .get_mut(vector_id)
             .ok_or_else(|| NeedleError::NotFound(format!("Vector '{}' not found", vector_id)))?;
 
         lineage.quality_score = Some(score.clamp(0.0, 1.0));
@@ -389,11 +397,7 @@ impl LineageTracker {
     pub fn find_by_source(&self, source_id: &str) -> Vec<&VectorLineage> {
         self.source_index
             .get(source_id)
-            .map(|ids| {
-                ids.iter()
-                    .filter_map(|id| self.lineages.get(id))
-                    .collect()
-            })
+            .map(|ids| ids.iter().filter_map(|id| self.lineages.get(id)).collect())
             .unwrap_or_default()
     }
 
@@ -401,11 +405,7 @@ impl LineageTracker {
     pub fn find_by_model(&self, model: &str) -> Vec<&VectorLineage> {
         self.model_index
             .get(model)
-            .map(|ids| {
-                ids.iter()
-                    .filter_map(|id| self.lineages.get(id))
-                    .collect()
-            })
+            .map(|ids| ids.iter().filter_map(|id| self.lineages.get(id)).collect())
             .unwrap_or_default()
     }
 
@@ -413,11 +413,7 @@ impl LineageTracker {
     pub fn find_by_tag(&self, tag: &str) -> Vec<&VectorLineage> {
         self.tag_index
             .get(tag)
-            .map(|ids| {
-                ids.iter()
-                    .filter_map(|id| self.lineages.get(id))
-                    .collect()
-            })
+            .map(|ids| ids.iter().filter_map(|id| self.lineages.get(id)).collect())
             .unwrap_or_default()
     }
 
@@ -490,7 +486,8 @@ impl LineageTracker {
         for lineage in &direct {
             let descendants = self.get_descendants(&lineage.vector_id);
             for desc in descendants {
-                if !direct_ids.contains(&desc.vector_id) && !indirect_ids.contains(&desc.vector_id) {
+                if !direct_ids.contains(&desc.vector_id) && !indirect_ids.contains(&desc.vector_id)
+                {
                     indirect_ids.insert(desc.vector_id.clone());
                     indirect.push(desc.vector_id.clone());
                 }
@@ -507,7 +504,9 @@ impl LineageTracker {
 
     /// Export lineage as a dependency graph.
     pub fn export_graph(&self) -> LineageGraph {
-        let nodes: Vec<GraphNode> = self.lineages.values()
+        let nodes: Vec<GraphNode> = self
+            .lineages
+            .values()
             .map(|l| GraphNode {
                 id: l.vector_id.clone(),
                 source_type: self.source_type_name(&l.source),
@@ -545,7 +544,9 @@ impl LineageTracker {
 
     /// Delete lineage for a vector.
     pub fn delete(&mut self, vector_id: &str) -> Result<()> {
-        let lineage = self.lineages.remove(vector_id)
+        let lineage = self
+            .lineages
+            .remove(vector_id)
             .ok_or_else(|| NeedleError::NotFound(format!("Vector '{}' not found", vector_id)))?;
 
         // Update indices
@@ -1037,8 +1038,11 @@ impl<'a> LineageGraphExplorer<'a> {
             let current = path.last().expect("path is non-empty");
 
             if let Some(lineage) = self.tracker.get(current) {
-                let neighbors: Vec<&String> =
-                    lineage.parents.iter().chain(lineage.children.iter()).collect();
+                let neighbors: Vec<&String> = lineage
+                    .parents
+                    .iter()
+                    .chain(lineage.children.iter())
+                    .collect();
 
                 for neighbor in neighbors {
                     if neighbor == to {
@@ -1091,7 +1095,9 @@ impl ThreadSafeLineageTracker {
         vector_id: &str,
         transformation: Transformation,
     ) -> Result<()> {
-        self.inner.write().add_transformation(vector_id, transformation)
+        self.inner
+            .write()
+            .add_transformation(vector_id, transformation)
     }
 
     /// Add a transformation with details.
@@ -1309,12 +1315,19 @@ mod tests {
             .build();
         tracker.register("vec1", lineage).unwrap();
 
-        tracker.add_transformation("vec1", Transformation::Normalize).unwrap();
-        tracker.add_transformation("vec1", Transformation::DimensionReduction {
-            from_dims: 1536,
-            to_dims: 384,
-            method: "PCA".to_string(),
-        }).unwrap();
+        tracker
+            .add_transformation("vec1", Transformation::Normalize)
+            .unwrap();
+        tracker
+            .add_transformation(
+                "vec1",
+                Transformation::DimensionReduction {
+                    from_dims: 1536,
+                    to_dims: 384,
+                    method: "PCA".to_string(),
+                },
+            )
+            .unwrap();
 
         let lineage = tracker.get("vec1").unwrap();
         assert_eq!(lineage.transformations.len(), 3); // Created + 2 transformations
@@ -1339,7 +1352,10 @@ mod tests {
 
         // Register derived vector
         let derived = LineageBuilder::new("derived")
-            .derived_from(vec!["parent1".to_string(), "parent2".to_string()], "average")
+            .derived_from(
+                vec!["parent1".to_string(), "parent2".to_string()],
+                "average",
+            )
             .model("model1", "1.0")
             .build();
         tracker.register("derived", derived).unwrap();
