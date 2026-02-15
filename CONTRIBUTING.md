@@ -194,16 +194,20 @@ make doctor        # Check local environment setup
 | `make test-unit` | Run unit tests only (fast) |
 | `make test-single NAME=x` | Run a single test by name |
 | `make test-feature FEATURES=x` | Test with specific feature flags |
+| `make test-changed` | Run tests for modified modules only |
 | `make fmt` | Format code |
 | `make fmt-check` | Check formatting |
 | `make lint` | Run clippy linter |
 | `make lint-fix` | Auto-fix clippy suggestions |
+| `make lint-dirty` | Lint only uncommitted .rs files (fast) |
+| `make lint-new` | Lint filtering out known service/experimental warnings |
 | `make watch` | Continuous check on file changes (requires cargo-watch) |
 | `make test-watch` | Continuous test on save — TDD workflow (requires cargo-watch) |
 | `make serve` | Run HTTP server locally (`NEEDLE_PORT=9090 make serve`) |
 | `make demo` | Run quickstart demo |
 | `make doctor` | Check local environment |
 | `make doc` | Generate and open documentation |
+| `make open-docs` | Open existing rustdoc (no rebuild) |
 | `make bench` | Run benchmarks |
 | `make coverage` | Generate HTML coverage report (requires cargo-llvm-cov) |
 | `make outdated` | Check for outdated dependencies (requires cargo-outdated) |
@@ -608,6 +612,20 @@ let mut guard = self.inner.write();
 ---
 
 ## CI Architecture
+
+### Workflow Reference
+
+| Workflow | File | Trigger | Purpose |
+|----------|------|---------|---------|
+| CI | `ci.yml` | push/PR to main | Primary pipeline: fmt, lint, unit tests → test matrix, coverage, docs |
+| Benchmarks | `bench.yml` | push/PR to main | Criterion benchmarks and performance regression checks |
+| Feature Matrix | `feature-matrix.yml` | push/PR (src changes) | Test 8+ feature flag combinations and cross-compile targets |
+| Fuzz | `fuzz.yml` | push/PR + nightly cron | cargo-fuzz targets to detect crashes and undefined behavior |
+| Security | `security.yml` | push/PR + weekly cron | cargo-audit, cargo-deny, semver checks (advisory until v1.0) |
+| Documentation | `docs.yml` | push to main | Build and deploy Docusaurus site to GitHub Pages |
+| Docker | `docker.yml` | push to main + tags | Build and push Docker images to GHCR |
+| Playground | `playground.yml` | push to main (playground changes) | Deploy WASM interactive playground to GitHub Pages |
+| Release | `release.yml` | version tags (`v*`) | Build release binaries and publish to GitHub Releases |
 
 Our CI pipeline is structured in stages so fast checks gate slower ones:
 
