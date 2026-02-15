@@ -5,8 +5,8 @@
 //!
 //! Run with: cargo run --example multi_tenant
 
-use needle::{Database, Filter, CollectionConfig, DistanceFunction};
 use needle::namespace::{Namespace, NamespaceManager, TenantConfig};
+use needle::{CollectionConfig, Database, DistanceFunction, Filter};
 use serde_json::json;
 use std::collections::HashMap;
 
@@ -83,9 +83,13 @@ impl MultiTenantVectorDB {
             return Err(format!("Tenant {} already exists", tenant.id));
         }
 
-        println!("Registered tenant: {} ({:?} plan)", tenant.name, tenant.plan);
+        println!(
+            "Registered tenant: {} ({:?} plan)",
+            tenant.name, tenant.plan
+        );
         self.tenants.insert(tenant.id.clone(), tenant.clone());
-        self.tenant_stats.insert(tenant.id.clone(), TenantStats::default());
+        self.tenant_stats
+            .insert(tenant.id.clone(), TenantStats::default());
 
         Ok(())
     }
@@ -102,32 +106,37 @@ impl MultiTenantVectorDB {
         name: &str,
         dimensions: usize,
     ) -> needle::Result<()> {
-        let tenant = self.tenants.get(tenant_id)
-            .ok_or_else(|| needle::NeedleError::NotFound(format!("Tenant {} not found", tenant_id)))?;
+        let tenant = self.tenants.get(tenant_id).ok_or_else(|| {
+            needle::NeedleError::NotFound(format!("Tenant {} not found", tenant_id))
+        })?;
 
-        let stats = self.tenant_stats.get(tenant_id)
+        let stats = self
+            .tenant_stats
+            .get(tenant_id)
             .ok_or_else(|| needle::NeedleError::NotFound("Tenant stats not found".to_string()))?;
 
         // Check plan limits
         if stats.total_collections >= tenant.plan.max_collections() {
             return Err(needle::NeedleError::QuotaExceeded(format!(
                 "Collection limit reached for {:?} plan ({} max)",
-                tenant.plan, tenant.plan.max_collections()
+                tenant.plan,
+                tenant.plan.max_collections()
             )));
         }
 
         if dimensions > tenant.plan.max_dimensions() {
             return Err(needle::NeedleError::QuotaExceeded(format!(
                 "Dimension limit exceeded for {:?} plan ({} max)",
-                tenant.plan, tenant.plan.max_dimensions()
+                tenant.plan,
+                tenant.plan.max_dimensions()
             )));
         }
 
         // Create tenant-prefixed collection name
         let full_name = format!("{}_{}", tenant_id, name);
 
-        let config = CollectionConfig::new(&full_name, dimensions)
-            .with_distance(DistanceFunction::Cosine);
+        let config =
+            CollectionConfig::new(&full_name, dimensions).with_distance(DistanceFunction::Cosine);
 
         self.db.create_collection_with_config(config)?;
 
@@ -149,17 +158,21 @@ impl MultiTenantVectorDB {
         vector: &[f32],
         metadata: Option<serde_json::Value>,
     ) -> needle::Result<()> {
-        let tenant = self.tenants.get(tenant_id)
-            .ok_or_else(|| needle::NeedleError::NotFound(format!("Tenant {} not found", tenant_id)))?;
+        let tenant = self.tenants.get(tenant_id).ok_or_else(|| {
+            needle::NeedleError::NotFound(format!("Tenant {} not found", tenant_id))
+        })?;
 
-        let stats = self.tenant_stats.get(tenant_id)
+        let stats = self
+            .tenant_stats
+            .get(tenant_id)
             .ok_or_else(|| needle::NeedleError::NotFound("Tenant stats not found".to_string()))?;
 
         // Check vector limit
         if stats.total_vectors >= tenant.plan.max_vectors() {
             return Err(needle::NeedleError::QuotaExceeded(format!(
                 "Vector limit reached for {:?} plan ({} max)",
-                tenant.plan, tenant.plan.max_vectors()
+                tenant.plan,
+                tenant.plan.max_vectors()
             )));
         }
 
@@ -194,7 +207,10 @@ impl MultiTenantVectorDB {
         filter: Option<Filter>,
     ) -> needle::Result<Vec<TenantSearchResult>> {
         if !self.tenants.contains_key(tenant_id) {
-            return Err(needle::NeedleError::NotFound(format!("Tenant {} not found", tenant_id)));
+            return Err(needle::NeedleError::NotFound(format!(
+                "Tenant {} not found",
+                tenant_id
+            )));
         }
 
         let full_name = format!("{}_{}", tenant_id, collection);
@@ -242,7 +258,10 @@ impl MultiTenantVectorDB {
     #[allow(dead_code)] // Example method for tenant cleanup
     fn delete_tenant(&mut self, tenant_id: &str) -> needle::Result<()> {
         if !self.tenants.contains_key(tenant_id) {
-            return Err(needle::NeedleError::NotFound(format!("Tenant {} not found", tenant_id)));
+            return Err(needle::NeedleError::NotFound(format!(
+                "Tenant {} not found",
+                tenant_id
+            )));
         }
 
         // Delete all collections
@@ -325,19 +344,22 @@ fn main() -> needle::Result<()> {
         id: "acme".to_string(),
         name: "Acme Corporation".to_string(),
         plan: TenantPlan::Enterprise,
-    }).unwrap();
+    })
+    .unwrap();
 
     mtdb.register_tenant(Tenant {
         id: "startup".to_string(),
         name: "Cool Startup Inc".to_string(),
         plan: TenantPlan::Pro,
-    }).unwrap();
+    })
+    .unwrap();
 
     mtdb.register_tenant(Tenant {
         id: "hobbyist".to_string(),
         name: "Hobbyist User".to_string(),
         plan: TenantPlan::Free,
-    }).unwrap();
+    })
+    .unwrap();
 
     println!();
 
@@ -407,8 +429,11 @@ fn main() -> needle::Result<()> {
     println!("\nAcme searching products:");
     let results = mtdb.search("acme", "products", &query, 3, None)?;
     for r in &results {
-        println!("  {} (distance: {:.4}) - {:?}",
-            r.id, r.distance, r.metadata.as_ref().and_then(|m| m.get("name"))
+        println!(
+            "  {} (distance: {:.4}) - {:?}",
+            r.id,
+            r.distance,
+            r.metadata.as_ref().and_then(|m| m.get("name"))
         );
     }
 
@@ -423,8 +448,11 @@ fn main() -> needle::Result<()> {
     let filter = Filter::eq("category", "electronics");
     let results = mtdb.search("acme", "products", &query, 5, Some(filter))?;
     for r in &results {
-        println!("  {} (distance: {:.4}) - {:?}",
-            r.id, r.distance, r.metadata.as_ref().and_then(|m| m.get("category"))
+        println!(
+            "  {} (distance: {:.4}) - {:?}",
+            r.id,
+            r.distance,
+            r.metadata.as_ref().and_then(|m| m.get("category"))
         );
     }
 
@@ -434,12 +462,22 @@ fn main() -> needle::Result<()> {
     println!("=== Tenant Statistics ===");
 
     for tenant_id in &["acme", "startup", "hobbyist"] {
-        if let (Some(tenant), Some(stats)) = (mtdb.get_tenant(tenant_id), mtdb.get_stats(tenant_id)) {
+        if let (Some(tenant), Some(stats)) = (mtdb.get_tenant(tenant_id), mtdb.get_stats(tenant_id))
+        {
             println!("\n{} ({:?} plan):", tenant.name, tenant.plan);
-            println!("  Collections: {}/{}", stats.total_collections, tenant.plan.max_collections());
-            println!("  Vectors: {}/{}", stats.total_vectors,
-                if tenant.plan.max_vectors() == usize::MAX { "unlimited".to_string() }
-                else { tenant.plan.max_vectors().to_string() }
+            println!(
+                "  Collections: {}/{}",
+                stats.total_collections,
+                tenant.plan.max_collections()
+            );
+            println!(
+                "  Vectors: {}/{}",
+                stats.total_vectors,
+                if tenant.plan.max_vectors() == usize::MAX {
+                    "unlimited".to_string()
+                } else {
+                    tenant.plan.max_vectors().to_string()
+                }
             );
             println!("  Queries: {}", stats.total_queries);
         }

@@ -38,7 +38,11 @@ fn main() {
 
     let pq_error = compute_error(test_vec, &pq_dequantized);
     println!("Original size: {} bytes", test_vec.len() * 4);
-    println!("Quantized size: {} bytes ({}x compression)", pq_codes.len(), test_vec.len() * 4 / pq_codes.len());
+    println!(
+        "Quantized size: {} bytes ({}x compression)",
+        pq_codes.len(),
+        test_vec.len() * 4 / pq_codes.len()
+    );
     println!("Reconstruction error: {:.6}\n", pq_error);
 
     // Binary Quantization (32x compression)
@@ -49,7 +53,11 @@ fn main() {
     // Binary quantization is lossy and doesn't support full reconstruction
     // Just measure the size reduction
     println!("Original size: {} bytes", test_vec.len() * 4);
-    println!("Quantized size: {} bytes ({}x compression)", binary.len(), test_vec.len() * 4 / binary.len());
+    println!(
+        "Quantized size: {} bytes ({}x compression)",
+        binary.len(),
+        test_vec.len() * 4 / binary.len()
+    );
     println!("Note: Binary quantization uses Hamming distance, not reconstruction\n");
 
     // Compare all methods
@@ -58,7 +66,10 @@ fn main() {
     println!("{:-<55}", "");
     println!("{:<20} {:>15} {:>20.6}", "Scalar (8-bit)", "4x", sq_error);
     println!("{:<20} {:>15} {:>20.6}", "Product (8 sub)", "64x", pq_error);
-    println!("{:<20} {:>15} {:>20}", "Binary (1-bit)", "32x", "N/A (Hamming)");
+    println!(
+        "{:<20} {:>15} {:>20}",
+        "Binary (1-bit)", "32x", "N/A (Hamming)"
+    );
 
     println!("\n=== Quantization Example Complete ===");
 }

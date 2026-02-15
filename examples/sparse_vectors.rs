@@ -5,7 +5,7 @@
 //!
 //! Run with: cargo run --example sparse_vectors
 
-use needle::sparse::{SparseVector, SparseIndex, SparseDistance};
+use needle::sparse::{SparseDistance, SparseIndex, SparseVector};
 use std::collections::HashMap;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -18,27 +18,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Document 1: "machine learning"
     let doc1 = SparseVector::new(
-        vec![0, 1],           // term indices
-        vec![0.8, 0.9],       // TF-IDF weights
+        vec![0, 1],     // term indices
+        vec![0.8, 0.9], // TF-IDF weights
     );
 
     // Document 2: "deep learning neural network"
-    let doc2 = SparseVector::new(
-        vec![1, 2, 3, 4],
-        vec![0.6, 0.7, 0.8, 0.75],
-    );
+    let doc2 = SparseVector::new(vec![1, 2, 3, 4], vec![0.6, 0.7, 0.8, 0.75]);
 
     // Document 3: "computer vision neural network"
-    let doc3 = SparseVector::new(
-        vec![3, 4, 5, 6],
-        vec![0.65, 0.7, 0.8, 0.85],
-    );
+    let doc3 = SparseVector::new(vec![3, 4, 5, 6], vec![0.65, 0.7, 0.8, 0.85]);
 
     // Document 4: "deep machine learning"
-    let doc4 = SparseVector::new(
-        vec![0, 1, 2],
-        vec![0.7, 0.8, 0.6],
-    );
+    let doc4 = SparseVector::new(vec![0, 1, 2], vec![0.7, 0.8, 0.6]);
 
     // Insert documents with specific IDs
     index.insert_with_id(1, doc1);
@@ -49,10 +40,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Indexed {} documents", index.len());
 
     // Query: "machine learning"
-    let query = SparseVector::new(
-        vec![0, 1],
-        vec![1.0, 1.0],
-    );
+    let query = SparseVector::new(vec![0, 1], vec![1.0, 1.0]);
 
     // Dot product search (faster, good for normalized vectors)
     let results = index.search(&query, 3);
@@ -70,8 +58,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Create sparse vector from HashMap (useful for term frequency counting)
     let mut term_weights: HashMap<u32, f32> = HashMap::new();
-    term_weights.insert(2, 0.9);  // "deep"
-    term_weights.insert(3, 0.8);  // "neural"
+    term_weights.insert(2, 0.9); // "deep"
+    term_weights.insert(3, 0.8); // "neural"
     let query2 = SparseVector::from_hashmap(&term_weights);
 
     let results = index.search(&query2, 3);
