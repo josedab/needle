@@ -70,9 +70,13 @@ fn main() -> needle::Result<()> {
     println!("\n=== Persistence Example Complete ===");
 
     println!("\n\u{1f4a1} Next steps:");
-    println!("  cargo run --example quantization                          \u{2014} Compress vectors");
+    println!(
+        "  cargo run --example quantization                          \u{2014} Compress vectors"
+    );
     println!("  cargo run --example hybrid_search --features hybrid       \u{2014} Vector + keyword search");
-    println!("  cargo run --example rag_chatbot                           \u{2014} Build a RAG pipeline");
+    println!(
+        "  cargo run --example rag_chatbot                           \u{2014} Build a RAG pipeline"
+    );
     println!("  See all examples: examples/README.md");
 
     Ok(())

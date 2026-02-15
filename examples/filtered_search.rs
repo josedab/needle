@@ -5,52 +5,71 @@
 //!
 //! Run with: cargo run --example filtered_search
 
-use needle::{Collection, CollectionConfig, Filter, DistanceFunction};
+use needle::{Collection, CollectionConfig, DistanceFunction, Filter};
 use serde_json::json;
 
 fn main() -> needle::Result<()> {
     // Create a collection for product embeddings
-    let config = CollectionConfig::new("products", 4)
-        .with_distance(DistanceFunction::Cosine);
+    let config = CollectionConfig::new("products", 4).with_distance(DistanceFunction::Cosine);
     let mut collection = Collection::new(config);
 
     // Insert products with rich metadata
     let products = vec![
-        ("prod1", vec![0.9, 0.1, 0.0, 0.0], json!({
-            "name": "Laptop Pro",
-            "category": "electronics",
-            "price": 999.99,
-            "in_stock": true,
-            "tags": ["computer", "portable"]
-        })),
-        ("prod2", vec![0.8, 0.2, 0.1, 0.0], json!({
-            "name": "Wireless Mouse",
-            "category": "electronics",
-            "price": 29.99,
-            "in_stock": true,
-            "tags": ["computer", "accessory"]
-        })),
-        ("prod3", vec![0.2, 0.8, 0.1, 0.0], json!({
-            "name": "Running Shoes",
-            "category": "sports",
-            "price": 89.99,
-            "in_stock": false,
-            "tags": ["footwear", "running"]
-        })),
-        ("prod4", vec![0.1, 0.9, 0.2, 0.0], json!({
-            "name": "Yoga Mat",
-            "category": "sports",
-            "price": 39.99,
-            "in_stock": true,
-            "tags": ["fitness", "yoga"]
-        })),
-        ("prod5", vec![0.5, 0.5, 0.3, 0.0], json!({
-            "name": "Smart Watch",
-            "category": "electronics",
-            "price": 299.99,
-            "in_stock": true,
-            "tags": ["wearable", "fitness"]
-        })),
+        (
+            "prod1",
+            vec![0.9, 0.1, 0.0, 0.0],
+            json!({
+                "name": "Laptop Pro",
+                "category": "electronics",
+                "price": 999.99,
+                "in_stock": true,
+                "tags": ["computer", "portable"]
+            }),
+        ),
+        (
+            "prod2",
+            vec![0.8, 0.2, 0.1, 0.0],
+            json!({
+                "name": "Wireless Mouse",
+                "category": "electronics",
+                "price": 29.99,
+                "in_stock": true,
+                "tags": ["computer", "accessory"]
+            }),
+        ),
+        (
+            "prod3",
+            vec![0.2, 0.8, 0.1, 0.0],
+            json!({
+                "name": "Running Shoes",
+                "category": "sports",
+                "price": 89.99,
+                "in_stock": false,
+                "tags": ["footwear", "running"]
+            }),
+        ),
+        (
+            "prod4",
+            vec![0.1, 0.9, 0.2, 0.0],
+            json!({
+                "name": "Yoga Mat",
+                "category": "sports",
+                "price": 39.99,
+                "in_stock": true,
+                "tags": ["fitness", "yoga"]
+            }),
+        ),
+        (
+            "prod5",
+            vec![0.5, 0.5, 0.3, 0.0],
+            json!({
+                "name": "Smart Watch",
+                "category": "electronics",
+                "price": 299.99,
+                "in_stock": true,
+                "tags": ["wearable", "fitness"]
+            }),
+        ),
     ];
 
     for (id, embedding, metadata) in products {
@@ -120,7 +139,8 @@ fn main() -> needle::Result<()> {
     println!("\n=== Parsed from JSON: price $30-$100 ===");
     let filter = Filter::parse(&json!({
         "price": { "$gte": 30, "$lte": 100 }
-    })).map_err(needle::NeedleError::InvalidInput)?;
+    }))
+    .map_err(needle::NeedleError::InvalidInput)?;
     let results = collection.search_with_filter(&query, 5, &filter)?;
     for r in &results {
         let name = r.metadata.as_ref().unwrap()["name"].as_str().unwrap();

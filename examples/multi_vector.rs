@@ -6,7 +6,7 @@
 //!
 //! Run with: cargo run --example multi_vector
 
-use needle::multivec::{MultiVector, MultiVectorIndex, MultiVectorConfig};
+use needle::multivec::{MultiVector, MultiVectorConfig, MultiVectorIndex};
 use needle::DistanceFunction;
 
 fn main() {
@@ -20,23 +20,32 @@ fn main() {
     let mut index = MultiVectorIndex::new(config);
 
     // Document 1: "machine learning" - 2 token embeddings
-    let doc1 = MultiVector::new("doc1", vec![
-        vec![0.9, 0.1, 0.0, 0.0],  // "machine"
-        vec![0.8, 0.3, 0.1, 0.0],  // "learning"
-    ]);
+    let doc1 = MultiVector::new(
+        "doc1",
+        vec![
+            vec![0.9, 0.1, 0.0, 0.0], // "machine"
+            vec![0.8, 0.3, 0.1, 0.0], // "learning"
+        ],
+    );
 
     // Document 2: "deep learning models" - 3 token embeddings
-    let doc2 = MultiVector::new("doc2", vec![
-        vec![0.7, 0.4, 0.2, 0.0],  // "deep"
-        vec![0.8, 0.3, 0.1, 0.0],  // "learning"
-        vec![0.5, 0.5, 0.3, 0.0],  // "models"
-    ]);
+    let doc2 = MultiVector::new(
+        "doc2",
+        vec![
+            vec![0.7, 0.4, 0.2, 0.0], // "deep"
+            vec![0.8, 0.3, 0.1, 0.0], // "learning"
+            vec![0.5, 0.5, 0.3, 0.0], // "models"
+        ],
+    );
 
     // Document 3: "computer vision" - 2 token embeddings
-    let doc3 = MultiVector::new("doc3", vec![
-        vec![0.2, 0.8, 0.1, 0.0],  // "computer"
-        vec![0.1, 0.9, 0.2, 0.0],  // "vision"
-    ]);
+    let doc3 = MultiVector::new(
+        "doc3",
+        vec![
+            vec![0.2, 0.8, 0.1, 0.0], // "computer"
+            vec![0.1, 0.9, 0.2, 0.0], // "vision"
+        ],
+    );
 
     // Insert documents
     index.insert(doc1).expect("Failed to insert doc1");
@@ -47,8 +56,8 @@ fn main() {
 
     // Query: "learning algorithms" - 2 token embeddings
     let query = vec![
-        vec![0.85, 0.25, 0.1, 0.0],  // "learning"
-        vec![0.6, 0.4, 0.2, 0.0],    // "algorithms"
+        vec![0.85, 0.25, 0.1, 0.0], // "learning"
+        vec![0.6, 0.4, 0.2, 0.0],   // "algorithms"
     ];
 
     // Search using MaxSim aggregation
@@ -58,7 +67,10 @@ fn main() {
 
     println!("\nSearch Results (MaxSim):");
     for result in &results {
-        println!("  {}: score={:.4}, tokens={}", result.id, result.score, result.num_tokens);
+        println!(
+            "  {}: score={:.4}, tokens={}",
+            result.id, result.score, result.num_tokens
+        );
     }
 
     // Get a specific document

@@ -9,33 +9,48 @@ use needle::{Collection, CollectionConfig, DistanceFunction};
 use serde_json::json;
 
 #[cfg(feature = "hybrid")]
-use needle::{Bm25Index, reciprocal_rank_fusion};
-#[cfg(feature = "hybrid")]
 use needle::hybrid::RrfConfig;
+#[cfg(feature = "hybrid")]
+use needle::{reciprocal_rank_fusion, Bm25Index};
 
 fn main() -> needle::Result<()> {
     // Create a collection for semantic search
-    let config = CollectionConfig::new("documents", 4)
-        .with_distance(DistanceFunction::Cosine);
+    let config = CollectionConfig::new("documents", 4).with_distance(DistanceFunction::Cosine);
     let mut collection = Collection::new(config);
 
     // Sample documents with both text and embeddings
     // In practice, embeddings would come from a model like sentence-transformers
     let documents = vec![
-        ("doc1", "Machine learning is transforming industries", vec![0.8, 0.2, 0.1, 0.0]),
-        ("doc2", "Deep learning models require large datasets", vec![0.7, 0.3, 0.2, 0.1]),
-        ("doc3", "Natural language processing enables chatbots", vec![0.6, 0.5, 0.3, 0.2]),
-        ("doc4", "Computer vision detects objects in images", vec![0.2, 0.8, 0.1, 0.0]),
-        ("doc5", "Reinforcement learning trains game-playing agents", vec![0.5, 0.4, 0.3, 0.2]),
+        (
+            "doc1",
+            "Machine learning is transforming industries",
+            vec![0.8, 0.2, 0.1, 0.0],
+        ),
+        (
+            "doc2",
+            "Deep learning models require large datasets",
+            vec![0.7, 0.3, 0.2, 0.1],
+        ),
+        (
+            "doc3",
+            "Natural language processing enables chatbots",
+            vec![0.6, 0.5, 0.3, 0.2],
+        ),
+        (
+            "doc4",
+            "Computer vision detects objects in images",
+            vec![0.2, 0.8, 0.1, 0.0],
+        ),
+        (
+            "doc5",
+            "Reinforcement learning trains game-playing agents",
+            vec![0.5, 0.4, 0.3, 0.2],
+        ),
     ];
 
     // Insert documents with text as metadata
     for (id, text, embedding) in &documents {
-        collection.insert(
-            *id,
-            embedding,
-            Some(json!({ "text": text })),
-        )?;
+        collection.insert(*id, embedding, Some(json!({ "text": text })))?;
     }
 
     // Perform vector search
@@ -70,12 +85,7 @@ fn main() -> needle::Result<()> {
 
         // Fuse results using Reciprocal Rank Fusion
         let config = RrfConfig::default();
-        let hybrid_results = reciprocal_rank_fusion(
-            &vector_for_rrf,
-            &bm25_results,
-            &config,
-            5,
-        );
+        let hybrid_results = reciprocal_rank_fusion(&vector_for_rrf, &bm25_results, &config, 5);
 
         println!("\nHybrid Search Results (RRF):");
         for result in &hybrid_results {

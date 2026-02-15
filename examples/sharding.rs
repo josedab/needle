@@ -6,7 +6,7 @@
 //!
 //! Run with: cargo run --example sharding
 
-use needle::shard::{ShardManager, ShardConfig, ShardId, ShardedCollection};
+use needle::shard::{ShardConfig, ShardId, ShardManager, ShardedCollection};
 use needle::{Collection, CollectionConfig, DistanceFunction};
 use std::sync::Arc;
 
@@ -14,7 +14,7 @@ fn main() -> needle::Result<()> {
     // Create shard configuration
     let config = ShardConfig::new(4)  // 4 shards
         .with_virtual_nodes(100)       // 100 virtual nodes for distribution
-        .with_replication(1);          // Replication factor 1
+        .with_replication(1); // Replication factor 1
 
     // Create the shard manager
     let manager = Arc::new(ShardManager::new(config));

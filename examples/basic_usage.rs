@@ -44,10 +44,7 @@ fn main() -> needle::Result<()> {
 
     println!("Top 5 nearest neighbors to doc_42:");
     for result in &results {
-        println!(
-            "  ID: {}, Distance: {:.4}",
-            result.id, result.distance
-        );
+        println!("  ID: {}, Distance: {:.4}", result.id, result.distance);
     }
     println!();
 
@@ -83,7 +80,10 @@ fn main() -> needle::Result<()> {
     // Delete a vector
     let deleted = collection.delete("doc_50")?;
     println!("Deleted doc_50: {}", deleted);
-    println!("doc_50 exists after delete: {}", collection.get("doc_50").is_some());
+    println!(
+        "doc_50 exists after delete: {}",
+        collection.get("doc_50").is_some()
+    );
 
     println!("\n=== Example Complete ===");
 
