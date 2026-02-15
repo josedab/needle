@@ -33,6 +33,8 @@ cd needle
 cargo run --example basic_usage
 ```
 
+> ⏱️ First build takes ~2–3 minutes (compiling dependencies). Subsequent builds are ~5 seconds.
+
 <details>
 <summary><strong>More ways to run</strong></summary>
 
@@ -136,8 +138,13 @@ Memory usage: ~1.7GB for 1M vectors (384 dims) with HNSW index.
 - **CRDT Support**: Conflict-free replicated data types for eventual consistency
 
 ### Experimental
-- **GPU Acceleration**: CUDA/Metal/OpenCL support for distance computation *(scaffolding only - CPU fallback)*
-- **Cloud Storage**: S3, Azure Blob, and GCS backends *(interface only - not production-ready)*
+- **GPU Acceleration**: CUDA/Metal/OpenCL support for distance computation *(scaffolding only — CPU fallback)*
+- **Cloud Storage**: S3, Azure Blob, and GCS backends *(interface only — not production-ready)*
+
+### Known Issues
+- **GPU & Cloud Storage**: Scaffolding/interface only. These features compile but fall back to in-memory/CPU at runtime. Do not use in production.
+- **Embeddings feature**: Depends on a pre-release `ort` crate. Not included in `--features full`.
+- **CDC connectors** (Kafka, Pulsar, MongoDB, Postgres): Require their respective feature flags and external services to function.
 
 ## Installation
 
