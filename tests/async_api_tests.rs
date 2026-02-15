@@ -92,8 +92,7 @@ async fn test_create_collection() {
 async fn test_create_collection_with_config() {
     let db = AsyncDatabase::in_memory();
 
-    let config = CollectionConfig::new("documents", 768)
-        .with_distance(DistanceFunction::Euclidean);
+    let config = CollectionConfig::new("documents", 768).with_distance(DistanceFunction::Euclidean);
 
     db.create_collection_with_config(config).await.unwrap();
 
@@ -182,7 +181,9 @@ async fn test_insert_without_metadata() {
     db.create_collection("test", 64).await.unwrap();
 
     let vector = vec![0.5; 64];
-    db.insert("test", "simple", vector.clone(), None).await.unwrap();
+    db.insert("test", "simple", vector.clone(), None)
+        .await
+        .unwrap();
 
     let (retrieved_vec, retrieved_meta) = db.get("test", "simple").await.unwrap();
     assert_eq!(retrieved_vec.len(), 64);
@@ -217,7 +218,9 @@ async fn test_delete_vector() {
     let db = AsyncDatabase::in_memory();
     db.create_collection("test", 64).await.unwrap();
 
-    db.insert("test", "doc1", vec![0.1; 64], None).await.unwrap();
+    db.insert("test", "doc1", vec![0.1; 64], None)
+        .await
+        .unwrap();
     assert_eq!(db.count("test").await, 1);
 
     let deleted = db.delete("test", "doc1").await.unwrap();
@@ -251,7 +254,9 @@ async fn test_basic_search() {
     for i in 0..10 {
         let mut vec = vec![0.0; 64];
         vec[0] = i as f32 / 10.0;
-        db.insert("test", &format!("doc{}", i), vec, None).await.unwrap();
+        db.insert("test", &format!("doc{}", i), vec, None)
+            .await
+            .unwrap();
     }
 
     // Search for vectors similar to [0.5, 0, 0, ...]
@@ -290,7 +295,10 @@ async fn test_search_with_filter() {
     let query = random_vector(64);
     let filter = Filter::parse(&json!({"category": "even"})).unwrap();
 
-    let results = db.search_with_filter("test", query, 5, filter).await.unwrap();
+    let results = db
+        .search_with_filter("test", query, 5, filter)
+        .await
+        .unwrap();
 
     assert!(!results.is_empty());
     for result in results {

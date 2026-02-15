@@ -28,7 +28,11 @@ fn test_cli_create_database() {
         .output()
         .expect("Failed to execute command");
 
-    assert!(output.status.success(), "Create command failed: {:?}", String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "Create command failed: {:?}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     assert!(db_path.exists(), "Database file was not created");
 }
 
@@ -49,9 +53,16 @@ fn test_cli_info_command() {
         .output()
         .expect("Failed to execute command");
 
-    assert!(output.status.success(), "Info command failed: {:?}", String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "Info command failed: {:?}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("Collections:"), "Info output should contain 'Collections:'");
+    assert!(
+        stdout.contains("Collections:"),
+        "Info output should contain 'Collections:'"
+    );
 }
 
 #[test]
@@ -70,14 +81,21 @@ fn test_cli_create_collection() {
         .args([
             "create-collection",
             db_path.to_str().unwrap(),
-            "-n", "test_collection",
-            "-d", "128",
-            "--distance", "cosine"
+            "-n",
+            "test_collection",
+            "-d",
+            "128",
+            "--distance",
+            "cosine",
         ])
         .output()
         .expect("Failed to execute command");
 
-    assert!(output.status.success(), "Create collection failed: {:?}", String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "Create collection failed: {:?}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 
     // Verify with collections command
     let output = Command::new(needle_bin())
@@ -86,7 +104,10 @@ fn test_cli_create_collection() {
         .expect("Failed to execute command");
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("test_collection"), "Collection should be listed");
+    assert!(
+        stdout.contains("test_collection"),
+        "Collection should be listed"
+    );
 }
 
 #[test]
@@ -104,8 +125,10 @@ fn test_cli_count_empty_collection() {
         .args([
             "create-collection",
             db_path.to_str().unwrap(),
-            "-n", "test",
-            "-d", "64"
+            "-n",
+            "test",
+            "-d",
+            "64",
         ])
         .output()
         .expect("Failed to create collection");
@@ -116,9 +139,16 @@ fn test_cli_count_empty_collection() {
         .output()
         .expect("Failed to execute command");
 
-    assert!(output.status.success(), "Count command failed: {:?}", String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "Count command failed: {:?}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("0"), "Empty collection should have 0 vectors");
+    assert!(
+        stdout.contains("0"),
+        "Empty collection should have 0 vectors"
+    );
 }
 
 #[test]
@@ -136,8 +166,10 @@ fn test_cli_insert_and_search() {
         .args([
             "create-collection",
             db_path.to_str().unwrap(),
-            "-n", "vectors",
-            "-d", "4"
+            "-n",
+            "vectors",
+            "-d",
+            "4",
         ])
         .output()
         .expect("Failed to create collection");
@@ -158,24 +190,40 @@ fn test_cli_insert_and_search() {
     } // stdin ref dropped here, but we also take ownership to close it
     drop(insert.stdin.take());
 
-    let output = insert.wait_with_output().expect("Failed to wait for insert");
-    assert!(output.status.success(), "Insert failed: {:?}", String::from_utf8_lossy(&output.stderr));
+    let output = insert
+        .wait_with_output()
+        .expect("Failed to wait for insert");
+    assert!(
+        output.status.success(),
+        "Insert failed: {:?}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 
     // Search
     let output = Command::new(needle_bin())
         .args([
             "search",
             db_path.to_str().unwrap(),
-            "-c", "vectors",
-            "-q", "1.0,0.0,0.0,0.0",
-            "-k", "2"
+            "-c",
+            "vectors",
+            "-q",
+            "1.0,0.0,0.0,0.0",
+            "-k",
+            "2",
         ])
         .output()
         .expect("Failed to execute search");
 
-    assert!(output.status.success(), "Search failed: {:?}", String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "Search failed: {:?}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("vec1"), "Search results should contain vec1");
+    assert!(
+        stdout.contains("vec1"),
+        "Search results should contain vec1"
+    );
 }
 
 #[test]
@@ -190,7 +238,14 @@ fn test_cli_get_vector() {
         .unwrap();
 
     Command::new(needle_bin())
-        .args(["create-collection", db_path.to_str().unwrap(), "-n", "test", "-d", "4"])
+        .args([
+            "create-collection",
+            db_path.to_str().unwrap(),
+            "-n",
+            "test",
+            "-d",
+            "4",
+        ])
         .output()
         .unwrap();
 
@@ -211,13 +266,27 @@ fn test_cli_get_vector() {
 
     // Get the vector
     let output = Command::new(needle_bin())
-        .args(["get", db_path.to_str().unwrap(), "-c", "test", "-i", "test_vec"])
+        .args([
+            "get",
+            db_path.to_str().unwrap(),
+            "-c",
+            "test",
+            "-i",
+            "test_vec",
+        ])
         .output()
         .expect("Failed to execute get");
 
-    assert!(output.status.success(), "Get failed: {:?}", String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "Get failed: {:?}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("test_vec"), "Output should contain vector ID");
+    assert!(
+        stdout.contains("test_vec"),
+        "Output should contain vector ID"
+    );
 }
 
 #[test]
@@ -232,7 +301,14 @@ fn test_cli_delete_vector() {
         .unwrap();
 
     Command::new(needle_bin())
-        .args(["create-collection", db_path.to_str().unwrap(), "-n", "test", "-d", "4"])
+        .args([
+            "create-collection",
+            db_path.to_str().unwrap(),
+            "-n",
+            "test",
+            "-d",
+            "4",
+        ])
         .output()
         .unwrap();
 
@@ -246,7 +322,11 @@ fn test_cli_delete_vector() {
     use std::io::Write;
     {
         let stdin = insert.stdin.as_mut().unwrap();
-        writeln!(stdin, r#"{{"id": "to_delete", "vector": [1.0, 2.0, 3.0, 4.0]}}"#).unwrap();
+        writeln!(
+            stdin,
+            r#"{{"id": "to_delete", "vector": [1.0, 2.0, 3.0, 4.0]}}"#
+        )
+        .unwrap();
     }
     drop(insert.stdin.take());
     insert.wait().unwrap();
@@ -261,11 +341,22 @@ fn test_cli_delete_vector() {
 
     // Delete the vector
     let output = Command::new(needle_bin())
-        .args(["delete", db_path.to_str().unwrap(), "-c", "test", "-i", "to_delete"])
+        .args([
+            "delete",
+            db_path.to_str().unwrap(),
+            "-c",
+            "test",
+            "-i",
+            "to_delete",
+        ])
         .output()
         .expect("Failed to execute delete");
 
-    assert!(output.status.success(), "Delete failed: {:?}", String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "Delete failed: {:?}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 
     // Verify count is 0
     let output = Command::new(needle_bin())
@@ -288,7 +379,14 @@ fn test_cli_stats_command() {
         .unwrap();
 
     Command::new(needle_bin())
-        .args(["create-collection", db_path.to_str().unwrap(), "-n", "stats_test", "-d", "128"])
+        .args([
+            "create-collection",
+            db_path.to_str().unwrap(),
+            "-n",
+            "stats_test",
+            "-d",
+            "128",
+        ])
         .output()
         .unwrap();
 
@@ -298,26 +396,35 @@ fn test_cli_stats_command() {
         .output()
         .expect("Failed to execute stats");
 
-    assert!(output.status.success(), "Stats failed: {:?}", String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "Stats failed: {:?}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("128") || stdout.contains("Dimensions"), "Stats should show dimensions");
+    assert!(
+        stdout.contains("128") || stdout.contains("Dimensions"),
+        "Stats should show dimensions"
+    );
 }
 
 #[test]
 fn test_cli_tune_command() {
     let output = Command::new(needle_bin())
-        .args([
-            "tune",
-            "-v", "100000",
-            "-d", "384",
-            "-p", "balanced"
-        ])
+        .args(["tune", "-v", "100000", "-d", "384", "-p", "balanced"])
         .output()
         .expect("Failed to execute tune");
 
-    assert!(output.status.success(), "Tune failed: {:?}", String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "Tune failed: {:?}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("M:") || stdout.contains("ef_construction"), "Tune output should contain HNSW parameters");
+    assert!(
+        stdout.contains("M:") || stdout.contains("ef_construction"),
+        "Tune output should contain HNSW parameters"
+    );
 }
 
 #[test]
@@ -333,7 +440,14 @@ fn test_cli_export_import() {
         .unwrap();
 
     Command::new(needle_bin())
-        .args(["create-collection", db_path.to_str().unwrap(), "-n", "export_test", "-d", "4"])
+        .args([
+            "create-collection",
+            db_path.to_str().unwrap(),
+            "-n",
+            "export_test",
+            "-d",
+            "4",
+        ])
         .output()
         .unwrap();
 
@@ -359,7 +473,11 @@ fn test_cli_export_import() {
         .output()
         .expect("Failed to execute export");
 
-    assert!(output.status.success(), "Export failed: {:?}", String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "Export failed: {:?}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 
     // Save export to file
     std::fs::write(&export_file, &output.stdout).unwrap();
@@ -372,7 +490,14 @@ fn test_cli_export_import() {
         .unwrap();
 
     Command::new(needle_bin())
-        .args(["create-collection", db_path2.to_str().unwrap(), "-n", "export_test", "-d", "4"])
+        .args([
+            "create-collection",
+            db_path2.to_str().unwrap(),
+            "-n",
+            "export_test",
+            "-d",
+            "4",
+        ])
         .output()
         .unwrap();
 
@@ -381,13 +506,19 @@ fn test_cli_export_import() {
         .args([
             "import",
             db_path2.to_str().unwrap(),
-            "-c", "export_test",
-            "-f", export_file.to_str().unwrap()
+            "-c",
+            "export_test",
+            "-f",
+            export_file.to_str().unwrap(),
         ])
         .output()
         .expect("Failed to execute import");
 
-    assert!(output.status.success(), "Import failed: {:?}", String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "Import failed: {:?}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 
     // Verify count
     let output = Command::new(needle_bin())
@@ -396,7 +527,10 @@ fn test_cli_export_import() {
         .unwrap();
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("2"), "Imported collection should have 2 vectors");
+    assert!(
+        stdout.contains("2"),
+        "Imported collection should have 2 vectors"
+    );
 }
 
 #[test]
@@ -416,7 +550,11 @@ fn test_cli_compact_command() {
         .output()
         .expect("Failed to execute compact");
 
-    assert!(output.status.success(), "Compact failed: {:?}", String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "Compact failed: {:?}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 #[test]
@@ -427,8 +565,10 @@ fn test_cli_nonexistent_database_error() {
         .expect("Failed to execute command");
 
     // Should fail gracefully
-    assert!(!output.status.success() || !String::from_utf8_lossy(&output.stderr).is_empty(),
-        "Should error on nonexistent database");
+    assert!(
+        !output.status.success() || !String::from_utf8_lossy(&output.stderr).is_empty(),
+        "Should error on nonexistent database"
+    );
 }
 
 #[test]
@@ -446,7 +586,10 @@ fn test_cli_nonexistent_collection_error() {
         .output()
         .expect("Failed to execute command");
 
-    assert!(!output.status.success(), "Should error on nonexistent collection");
+    assert!(
+        !output.status.success(),
+        "Should error on nonexistent collection"
+    );
 }
 
 #[test]
@@ -465,15 +608,21 @@ fn test_cli_distance_functions() {
             .args([
                 "create-collection",
                 db_path.to_str().unwrap(),
-                "-n", &format!("col_{}", distance),
-                "-d", "64",
-                "--distance", distance
+                "-n",
+                &format!("col_{}", distance),
+                "-d",
+                "64",
+                "--distance",
+                distance,
             ])
             .output()
             .expect("Failed to create collection");
 
-        assert!(output.status.success(),
+        assert!(
+            output.status.success(),
             "Failed to create collection with {} distance: {:?}",
-            distance, String::from_utf8_lossy(&output.stderr));
+            distance,
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 }

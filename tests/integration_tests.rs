@@ -232,10 +232,11 @@ mod module_combinations {
         for i in 0..100 {
             let id = format!("vec_{}", i);
             let vector = seeded_vector(64, i as u64);
-            let metadata: HashMap<String, String> = HashMap::from([
-                ("category".to_string(), format!("cat_{}", i % 5)),
-            ]);
-            tiered.put(&id, &vector, metadata).expect("Tiered put failed");
+            let metadata: HashMap<String, String> =
+                HashMap::from([("category".to_string(), format!("cat_{}", i % 5))]);
+            tiered
+                .put(&id, &vector, metadata)
+                .expect("Tiered put failed");
         }
 
         // Add cold tier vectors to DiskANN
@@ -283,7 +284,12 @@ mod module_combinations {
 
         // Create test vectors
         let vectors: Vec<_> = (0..10)
-            .map(|i| (format!("doc_{}", i), normalize(&seeded_vector(64, i as u64))))
+            .map(|i| {
+                (
+                    format!("doc_{}", i),
+                    normalize(&seeded_vector(64, i as u64)),
+                )
+            })
             .collect();
 
         // Encrypt vectors
@@ -291,7 +297,9 @@ mod module_combinations {
             .iter()
             .map(|(id, v)| {
                 let metadata: HashMap<String, String> = HashMap::new();
-                let enc = encryptor.encrypt(id, v, metadata).expect("Encryption failed");
+                let enc = encryptor
+                    .encrypt(id, v, metadata)
+                    .expect("Encryption failed");
                 (id.clone(), enc)
             })
             .collect();
@@ -326,7 +334,10 @@ mod module_combinations {
         let results = encryptor
             .search_encrypted(&query, &encrypted_vecs, 3)
             .expect("Encrypted search failed");
-        assert!(!results.is_empty(), "Encrypted search should return results");
+        assert!(
+            !results.is_empty(),
+            "Encrypted search should return results"
+        );
     }
 
     #[test]
@@ -347,7 +358,9 @@ mod module_combinations {
                 "category": format!("cat_{}", i % 10),
                 "year": 2020 + (i % 5)
             });
-            collection.insert(&id, &vector, Some(metadata)).expect("Insert failed");
+            collection
+                .insert(&id, &vector, Some(metadata))
+                .expect("Insert failed");
         }
 
         // Create optimizer from collection
@@ -447,7 +460,10 @@ mod end_to_end_scenarios {
         assert_eq!(collection.len(), 4, "Should have 4 documents after delete");
 
         // Verify deleted document is gone
-        assert!(collection.get("doc4").is_none(), "Deleted document should not exist");
+        assert!(
+            collection.get("doc4").is_none(),
+            "Deleted document should not exist"
+        );
     }
 
     #[test]
@@ -472,7 +488,9 @@ mod end_to_end_scenarios {
             for j in 0..10 {
                 let id = format!("{}_{}", name, j);
                 let vector = seeded_vector(dim, (i * 10 + j) as u64);
-                collection.insert(&id, &vector, None).expect("Insert failed");
+                collection
+                    .insert(&id, &vector, None)
+                    .expect("Insert failed");
             }
         }
 
@@ -499,11 +517,7 @@ mod end_to_end_scenarios {
         db.drop_collection("reviews")
             .expect("Failed to drop collection");
         let collections = db.list_collections();
-        assert_eq!(
-            collections.len(),
-            2,
-            "Should have 2 collections after drop"
-        );
+        assert_eq!(collections.len(), 2, "Should have 2 collections after drop");
     }
 
     #[test]
@@ -523,7 +537,9 @@ mod end_to_end_scenarios {
                 for i in 0..25 {
                     let id = format!("thread{}_{}", thread_id, i);
                     let vector = seeded_vector(dim, (thread_id * 100 + i) as u64);
-                    collection.insert(&id, &vector, None).expect("Insert failed");
+                    collection
+                        .insert(&id, &vector, None)
+                        .expect("Insert failed");
                 }
             });
             handles.push(handle);
@@ -566,7 +582,9 @@ mod end_to_end_scenarios {
                 for i in 0..25 {
                     let id = format!("thread{}_{}", thread_id, i);
                     let vector = seeded_vector(dim, (thread_id * 100 + i) as u64);
-                    collection.insert(&id, &vector, None).expect("Insert failed");
+                    collection
+                        .insert(&id, &vector, None)
+                        .expect("Insert failed");
                 }
             });
             handles.push(handle);
@@ -600,7 +618,9 @@ mod end_to_end_scenarios {
         for i in 0..50 {
             let id = format!("doc_{}", i);
             let vector = seeded_vector(dim, i as u64);
-            collection.insert(&id, &vector, None).expect("Insert failed");
+            collection
+                .insert(&id, &vector, None)
+                .expect("Insert failed");
         }
 
         // Simulate partial failure during batch insert
@@ -659,7 +679,9 @@ mod performance_validation {
         for i in 0..1000 {
             let id = format!("vec_{}", i);
             let vector = seeded_vector(dim, i as u64);
-            collection.insert(&id, &vector, None).expect("Insert failed");
+            collection
+                .insert(&id, &vector, None)
+                .expect("Insert failed");
         }
         let insert_duration = insert_start.elapsed();
 
@@ -675,9 +697,8 @@ mod performance_validation {
         let query = random_vector(dim);
         let search_times: Vec<_> = (0..100)
             .map(|_| {
-                let (_, duration) = measure_time(|| {
-                    collection.search(&query, 10).expect("Search failed")
-                });
+                let (_, duration) =
+                    measure_time(|| collection.search(&query, 10).expect("Search failed"));
                 duration
             })
             .collect();
@@ -724,7 +745,9 @@ mod performance_validation {
             for i in 0..100 {
                 let id = format!("vec_{}_{}", batch, i);
                 let vector = seeded_vector(dim, (batch * 100 + i) as u64);
-                collection.insert(&id, &vector, None).expect("Insert failed");
+                collection
+                    .insert(&id, &vector, None)
+                    .expect("Insert failed");
             }
 
             // Record current size
@@ -771,7 +794,9 @@ mod performance_validation {
         for i in 0..1000 {
             let id = format!("vec_{}", i);
             let vector = seeded_vector(dim, i as u64);
-            collection.insert(&id, &vector, None).expect("Insert failed");
+            collection
+                .insert(&id, &vector, None)
+                .expect("Insert failed");
         }
 
         // Measure read throughput with multiple threads
@@ -868,7 +893,9 @@ mod performance_validation {
         for i in 0..1000 {
             let id = format!("vec_{}", i);
             let vector = seeded_vector(dim, i as u64);
-            collection.insert(&id, &vector, None).expect("Insert failed");
+            collection
+                .insert(&id, &vector, None)
+                .expect("Insert failed");
         }
 
         // Prepare queries
@@ -894,10 +921,15 @@ mod performance_validation {
         }
         let parallel_duration = start.elapsed();
 
-        assert_eq!(all_results.len(), 50, "Should return results for all queries");
+        assert_eq!(
+            all_results.len(),
+            50,
+            "Should return results for all queries"
+        );
 
         // Parallel should be faster than sequential
-        let parallel_per_query_ms = parallel_duration.as_micros() as f64 / queries.len() as f64 / 1000.0;
+        let parallel_per_query_ms =
+            parallel_duration.as_micros() as f64 / queries.len() as f64 / 1000.0;
 
         // Measure sequential query time for comparison
         let sequential_start = Instant::now();
@@ -1004,7 +1036,9 @@ mod smoke_tests {
             for i in 0..10 {
                 let id = format!("vec_{}", i);
                 let vector = normalize(&seeded_vector(dim, i as u64));
-                collection.insert(&id, &vector, None).expect("Insert failed");
+                collection
+                    .insert(&id, &vector, None)
+                    .expect("Insert failed");
             }
         }
 
@@ -1013,7 +1047,11 @@ mod smoke_tests {
         for (name, _) in &distances {
             let collection = db.collection(name).expect("Collection not found");
             let results = collection.search(&query, 5).expect("Search failed");
-            assert!(!results.is_empty(), "Search should return results for {}", name);
+            assert!(
+                !results.is_empty(),
+                "Search should return results for {}",
+                name
+            );
 
             // Closest should be vec_5 (same vector)
             assert_eq!(

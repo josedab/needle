@@ -69,7 +69,9 @@ fn test_wasm_collection_with_metadata() {
 fn test_wasm_collection_delete() {
     let collection = WasmCollection::new("test", 4, None).unwrap();
 
-    collection.insert("vec1", vec![1.0, 0.0, 0.0, 0.0], None).unwrap();
+    collection
+        .insert("vec1", vec![1.0, 0.0, 0.0, 0.0], None)
+        .unwrap();
     assert_eq!(collection.length(), 1);
 
     let deleted = collection.delete("vec1").unwrap();
@@ -84,7 +86,9 @@ fn test_wasm_collection_delete() {
 fn test_wasm_collection_contains() {
     let collection = WasmCollection::new("test", 4, None).unwrap();
 
-    collection.insert("vec1", vec![1.0, 0.0, 0.0, 0.0], None).unwrap();
+    collection
+        .insert("vec1", vec![1.0, 0.0, 0.0, 0.0], None)
+        .unwrap();
 
     assert!(collection.contains("vec1"));
     assert!(!collection.contains("vec2"));
@@ -94,8 +98,12 @@ fn test_wasm_collection_contains() {
 fn test_wasm_serialization_roundtrip() {
     let collection = WasmCollection::new("test", 4, None).unwrap();
 
-    collection.insert("vec1", vec![1.0, 0.0, 0.0, 0.0], None).unwrap();
-    collection.insert("vec2", vec![0.0, 1.0, 0.0, 0.0], None).unwrap();
+    collection
+        .insert("vec1", vec![1.0, 0.0, 0.0, 0.0], None)
+        .unwrap();
+    collection
+        .insert("vec2", vec![0.0, 1.0, 0.0, 0.0], None)
+        .unwrap();
 
     // Serialize to bytes
     let bytes = collection.to_bytes().expect("Should serialize");
@@ -112,14 +120,17 @@ fn test_wasm_serialization_roundtrip() {
 fn test_wasm_base64_roundtrip() {
     let collection = WasmCollection::new("test", 4, None).unwrap();
 
-    collection.insert("vec1", vec![1.0, 2.0, 3.0, 4.0], None).unwrap();
+    collection
+        .insert("vec1", vec![1.0, 2.0, 3.0, 4.0], None)
+        .unwrap();
 
     // Serialize to base64
     let base64_str = collection.to_base64().expect("Should serialize to base64");
     assert!(!base64_str.is_empty());
 
     // Deserialize
-    let restored = WasmCollection::from_base64(&base64_str).expect("Should deserialize from base64");
+    let restored =
+        WasmCollection::from_base64(&base64_str).expect("Should deserialize from base64");
     assert_eq!(restored.length(), 1);
     assert!(restored.contains("vec1"));
 }
@@ -135,7 +146,9 @@ fn test_wasm_memory_stats() {
             .unwrap();
     }
 
-    let stats = collection.get_memory_stats().expect("Should get memory stats");
+    let stats = collection
+        .get_memory_stats()
+        .expect("Should get memory stats");
     assert_eq!(stats.vectors_count(), 100);
     assert_eq!(stats.dimensions(), 128);
     assert!(stats.total_bytes() > 0);
@@ -145,8 +158,12 @@ fn test_wasm_memory_stats() {
 fn test_wasm_clear() {
     let collection = WasmCollection::new("test", 4, None).unwrap();
 
-    collection.insert("vec1", vec![1.0, 0.0, 0.0, 0.0], None).unwrap();
-    collection.insert("vec2", vec![0.0, 1.0, 0.0, 0.0], None).unwrap();
+    collection
+        .insert("vec1", vec![1.0, 0.0, 0.0, 0.0], None)
+        .unwrap();
+    collection
+        .insert("vec2", vec![0.0, 1.0, 0.0, 0.0], None)
+        .unwrap();
     assert_eq!(collection.length(), 2);
 
     collection.clear().unwrap();
@@ -176,7 +193,9 @@ fn test_persistent_collection() {
 
     assert!(!collection.is_dirty());
 
-    collection.insert("vec1", vec![1.0, 0.0, 0.0, 0.0], None).unwrap();
+    collection
+        .insert("vec1", vec![1.0, 0.0, 0.0, 0.0], None)
+        .unwrap();
     assert!(collection.is_dirty());
 
     // Get serialized data (for IndexedDB storage)
@@ -198,8 +217,12 @@ fn test_persistent_collection_restore() {
     let config1 = IndexedDbConfig::new("test_db", "test_store");
     let mut collection1 = PersistentCollection::new("test", 4, None, config1).unwrap();
 
-    collection1.insert("vec1", vec![1.0, 2.0, 3.0, 4.0], None).unwrap();
-    collection1.insert("vec2", vec![5.0, 6.0, 7.0, 8.0], None).unwrap();
+    collection1
+        .insert("vec1", vec![1.0, 2.0, 3.0, 4.0], None)
+        .unwrap();
+    collection1
+        .insert("vec2", vec![5.0, 6.0, 7.0, 8.0], None)
+        .unwrap();
 
     let data = collection1.get_serialized_data().unwrap();
 
@@ -238,7 +261,7 @@ fn test_sync_status() {
 #[test]
 fn test_indexed_db_helpers_generation() {
     let helpers = get_indexed_db_helpers();
-    
+
     // Verify JavaScript code is generated
     assert!(helpers.contains("NeedleIndexedDb"));
     assert!(helpers.contains("openDatabase"));
@@ -251,7 +274,7 @@ fn test_indexed_db_helpers_generation() {
 #[test]
 fn test_service_worker_helpers_generation() {
     let helpers = get_service_worker_helpers();
-    
+
     // Verify JavaScript code is generated
     assert!(helpers.contains("NeedleServiceWorker"));
     assert!(helpers.contains("register"));
@@ -264,16 +287,23 @@ fn test_service_worker_helpers_generation() {
 fn test_distance_functions() {
     // Test with cosine distance
     let cosine_collection = WasmCollection::new("test", 4, Some("cosine".to_string())).unwrap();
-    cosine_collection.insert("vec1", vec![1.0, 0.0, 0.0, 0.0], None).unwrap();
-    
+    cosine_collection
+        .insert("vec1", vec![1.0, 0.0, 0.0, 0.0], None)
+        .unwrap();
+
     // Test with euclidean distance
-    let euclidean_collection = WasmCollection::new("test", 4, Some("euclidean".to_string())).unwrap();
-    euclidean_collection.insert("vec1", vec![1.0, 0.0, 0.0, 0.0], None).unwrap();
-    
+    let euclidean_collection =
+        WasmCollection::new("test", 4, Some("euclidean".to_string())).unwrap();
+    euclidean_collection
+        .insert("vec1", vec![1.0, 0.0, 0.0, 0.0], None)
+        .unwrap();
+
     // Test with dot product
     let dot_collection = WasmCollection::new("test", 4, Some("dot".to_string())).unwrap();
-    dot_collection.insert("vec1", vec![1.0, 0.0, 0.0, 0.0], None).unwrap();
-    
+    dot_collection
+        .insert("vec1", vec![1.0, 0.0, 0.0, 0.0], None)
+        .unwrap();
+
     // All should work
     assert_eq!(cosine_collection.length(), 1);
     assert_eq!(euclidean_collection.length(), 1);
@@ -287,16 +317,18 @@ fn test_distance_functions() {
 #[test]
 fn test_ef_search_parameter() {
     let collection = WasmCollection::new("test", 4, None).unwrap();
-    
+
     // Insert vectors
     for i in 0..100 {
         let vector = vec![(i as f32) / 100.0, 0.0, 0.0, 0.0];
-        collection.insert(&format!("vec{}", i), vector, None).unwrap();
+        collection
+            .insert(&format!("vec{}", i), vector, None)
+            .unwrap();
     }
-    
+
     // Should be able to set ef_search
     collection.set_ef_search(100).expect("Should set ef_search");
-    
+
     // Search should still work
     let results = collection.search(vec![0.5, 0.0, 0.0, 0.0], 10).unwrap();
     assert_eq!(results.len(), 10);

@@ -24,7 +24,8 @@ fn test_concurrent_readers() {
     {
         let coll = db.collection("test").unwrap();
         for i in 0..100 {
-            coll.insert(format!("v{}", i), &random_vector(128), None).unwrap();
+            coll.insert(format!("v{}", i), &random_vector(128), None)
+                .unwrap();
         }
     }
 
@@ -82,7 +83,8 @@ fn test_mixed_read_write() {
     {
         let coll = db.collection("test").unwrap();
         for i in 0..50 {
-            coll.insert(format!("initial_{}", i), &random_vector(64), None).unwrap();
+            coll.insert(format!("initial_{}", i), &random_vector(64), None)
+                .unwrap();
         }
     }
 
@@ -132,7 +134,8 @@ fn test_concurrent_delete_during_search() {
     {
         let coll = db.collection("test").unwrap();
         for i in 0..200 {
-            coll.insert(format!("v{}", i), &random_vector(32), None).unwrap();
+            coll.insert(format!("v{}", i), &random_vector(32), None)
+                .unwrap();
         }
     }
 
@@ -226,7 +229,8 @@ fn test_multiple_collections_no_contention() {
             let coll = db_clone.collection(&coll_name).unwrap();
 
             for i in 0..100 {
-                coll.insert(format!("v{}", i), &random_vector(32), None).unwrap();
+                coll.insert(format!("v{}", i), &random_vector(32), None)
+                    .unwrap();
             }
 
             for _ in 0..10 {
@@ -260,7 +264,8 @@ fn test_concurrent_multiple_searches() {
     {
         let coll = db.collection("test").unwrap();
         for i in 0..500 {
-            coll.insert(format!("v{}", i), &random_vector(64), None).unwrap();
+            coll.insert(format!("v{}", i), &random_vector(64), None)
+                .unwrap();
         }
     }
 
@@ -362,7 +367,8 @@ fn test_concurrent_collection_deletion() {
 
     // Create collections first
     for i in 0..50 {
-        db.create_collection(format!("to_delete_{}", i), 16).unwrap();
+        db.create_collection(format!("to_delete_{}", i), 16)
+            .unwrap();
     }
 
     let mut handles = vec![];
@@ -404,7 +410,8 @@ fn test_operations_during_dirty_state() {
         handles.push(thread::spawn(move || {
             for i in 0..20 {
                 let coll = db_clone.collection("test").unwrap();
-                coll.insert(format!("t{}_i{}", t, i), &random_vector(32), None).unwrap();
+                coll.insert(format!("t{}_i{}", t, i), &random_vector(32), None)
+                    .unwrap();
             }
         }));
     }
