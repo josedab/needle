@@ -1,3 +1,4 @@
+# Purpose: Primary CI pipeline — fast gate (fmt + lint + unit tests), then test matrix, coverage, docs, and examples.
 name: CI
 
 on:

@@ -1,3 +1,4 @@
+# Purpose: Run Criterion benchmarks and check for performance regressions on main and PRs.
 name: Benchmarks
 
 on:

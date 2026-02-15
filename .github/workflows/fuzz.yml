@@ -1,3 +1,4 @@
+# Purpose: Run cargo-fuzz targets on PRs and nightly to detect crashes and undefined behavior.
 name: Fuzz
 
 on:

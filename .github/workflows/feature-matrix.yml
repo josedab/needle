@@ -1,3 +1,4 @@
+# Purpose: Test key feature flag combinations and cross-compile targets to catch flag interaction bugs.
 # Feature Matrix CI — Tests key feature flag combinations
 name: Feature Matrix
 

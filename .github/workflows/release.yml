@@ -1,3 +1,4 @@
+# Purpose: Build release binaries for all targets and publish to GitHub Releases on version tags.
 name: Release
 
 on:

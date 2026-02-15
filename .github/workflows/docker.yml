@@ -1,3 +1,4 @@
+# Purpose: Build and push Docker images to GHCR on main pushes and version tags.
 # Docker build and push workflow
 name: Docker
 

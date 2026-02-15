@@ -1,3 +1,4 @@
+# Purpose: Deploy the WASM-based interactive playground to GitHub Pages.
 name: Deploy Playground
 
 on:

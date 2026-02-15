@@ -1,3 +1,4 @@
+# Purpose: Run cargo-audit, cargo-deny, and semver checks for vulnerability and license compliance.
 # Security scanning workflow for Needle
 name: Security
 
