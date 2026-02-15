@@ -4,7 +4,7 @@
 .PHONY: help quick check check-all build build-all build-release test test-unit test-integration \
         fmt fmt-check lint lint-fix watch test-watch serve demo doctor doc bench clean playground setup setup-tools dev test-single coverage \
         new-module verify-docs check-quick check-local test-feature count-debt \
-        docker-up docker-down docker-build docker-logs
+        docker-up docker-down docker-build docker-logs test-coverage-check
 
 help:
 	@echo "Available recipes:"
@@ -35,6 +35,7 @@ help:
 	@echo "  make doc           — Generate and open documentation"
 	@echo "  make bench         — Run benchmarks"
 	@echo "  make coverage      — Generate HTML coverage report (requires cargo-llvm-cov)"
+	@echo "  make test-coverage-check — Fail if coverage is below 75% (codecov.yml threshold)"
 	@echo "  make outdated      — Check for outdated dependencies (requires cargo-outdated)"
 	@echo "  make count-debt    — Show tech debt & module size dashboard"
 	@echo "  make verify-docs   — Check that all markdown links resolve"
@@ -140,6 +141,17 @@ bench:
 # Coverage report (requires: cargo install cargo-llvm-cov)
 coverage:
 	cargo llvm-cov --features full --html --open
+
+# Check coverage meets thresholds from codecov.yml (75% project, 80% patch)
+# Requires: cargo install cargo-llvm-cov
+test-coverage-check:
+	@command -v cargo-llvm-cov > /dev/null 2>&1 || { echo "Error: cargo-llvm-cov not found. Install with: cargo install cargo-llvm-cov"; exit 1; }
+	@echo "Running coverage check (project threshold: 75%)…"
+	@cargo llvm-cov --features full --json 2>/dev/null | \
+		python3 -c "import sys,json; d=json.load(sys.stdin); pct=d['data'][0]['totals']['lines']['percent']; \
+		print(f'Coverage: {pct:.2f}%'); sys.exit(0 if pct >= 75.0 else 1)" \
+		|| { echo '✗ Coverage is below the 75% project threshold (see codecov.yml)'; exit 1; }
+	@echo "✓ Coverage meets the 75% project threshold"
 
 # Check for outdated dependencies (requires: cargo install cargo-outdated)
 outdated:
