@@ -69,8 +69,13 @@ fn validate_backup_id(id: &str) -> Result<()> {
 /// Verify that a path is safely contained within a base directory.
 /// Returns the canonicalized path if valid, or an error if the path escapes.
 fn ensure_path_contained(base: &Path, path: &Path) -> Result<PathBuf> {
-    // Canonicalize both paths for comparison
-    let canonical_base = base.canonicalize().unwrap_or_else(|_| base.to_path_buf());
+    // Canonicalize base — fail if it doesn't exist
+    let canonical_base = base.canonicalize().map_err(|e| {
+        NeedleError::InvalidInput(format!(
+            "Base directory cannot be resolved: {}: {e}",
+            base.display()
+        ))
+    })?;
 
     // For paths that don't exist yet, we check the parent
     let canonical_path = if path.exists() {
@@ -80,9 +85,12 @@ fn ensure_path_contained(base: &Path, path: &Path) -> Result<PathBuf> {
         let parent = path.parent().ok_or_else(|| {
             NeedleError::InvalidInput("Invalid path: no parent directory".to_string())
         })?;
-        let canonical_parent = parent
-            .canonicalize()
-            .unwrap_or_else(|_| parent.to_path_buf());
+        let canonical_parent = parent.canonicalize().map_err(|e| {
+            NeedleError::InvalidInput(format!(
+                "Parent directory cannot be resolved: {}: {e}",
+                parent.display()
+            ))
+        })?;
 
         // Construct the full path with the filename
         let filename = path
