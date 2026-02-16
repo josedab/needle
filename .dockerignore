@@ -13,6 +13,10 @@ target/
 .git/
 .gitignore
 
+# Node.js
+node_modules/
+npm-debug.log
+
 # Documentation
 docs/
 *.md
