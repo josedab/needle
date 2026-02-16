@@ -978,10 +978,17 @@ mod tests {
 
     #[test]
     fn test_key_to_filename() {
-        assert_eq!(key_to_filename("simple"), "simple");
-        assert_eq!(key_to_filename("path/to/file"), "path_to_file");
-        assert_eq!(key_to_filename("a\\b:c*d?e"), "a_b_c_d_e");
-        assert_eq!(key_to_filename("<test>|file"), "_test__file");
+        assert_eq!(key_to_filename("simple").unwrap(), "simple");
+        assert_eq!(key_to_filename("path/to/file").unwrap(), "path_to_file");
+        assert_eq!(key_to_filename("a\\b:c*d?e").unwrap(), "a_b_c_d_e");
+        assert_eq!(key_to_filename("<test>|file").unwrap(), "_test__file");
+    }
+
+    #[test]
+    fn test_key_to_filename_rejects_path_traversal() {
+        assert!(key_to_filename("..").is_err());
+        assert!(key_to_filename("../etc/passwd").is_err());
+        assert!(key_to_filename("foo/../../bar").is_err());
     }
 
     #[test]

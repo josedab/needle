@@ -267,12 +267,14 @@ impl<B: StorageBackend> TieredCacheBackend<B> {
             if entry.tier == CacheTier::Memory {
                 // Demote to SSD
                 if let Some(ref data) = entry.data {
-                    let ssd_path = self.config.ssd_cache_path.join(key_to_filename(key));
-                    if std::fs::write(&ssd_path, data).is_ok() {
-                        entry.tier = CacheTier::Ssd;
-                        entry.ssd_path = Some(ssd_path);
-                        entry.data = None;
-                        self.stats.demotions.fetch_add(1, Ordering::Relaxed);
+                    if let Ok(filename) = key_to_filename(key) {
+                        let ssd_path = self.config.ssd_cache_path.join(filename);
+                        if std::fs::write(&ssd_path, data).is_ok() {
+                            entry.tier = CacheTier::Ssd;
+                            entry.ssd_path = Some(ssd_path);
+                            entry.data = None;
+                            self.stats.demotions.fetch_add(1, Ordering::Relaxed);
+                        }
                     }
                 }
             }
@@ -352,7 +354,8 @@ impl<B: StorageBackend> TieredCacheBackend<B> {
             if let Some(entry) = index.get_mut(&key) {
                 // Try to demote to SSD
                 if let Some(ref data) = entry.data {
-                    let ssd_path = self.config.ssd_cache_path.join(key_to_filename(&key));
+                    let Ok(filename) = key_to_filename(&key) else { continue; };
+                    let ssd_path = self.config.ssd_cache_path.join(filename);
                     if std::fs::write(&ssd_path, data).is_ok() {
                         entry.tier = CacheTier::Ssd;
                         entry.ssd_path = Some(ssd_path);
@@ -447,7 +450,8 @@ impl<B: StorageBackend> TieredCacheBackend<B> {
             // Write to SSD
             self.evict_ssd(size, &mut index);
 
-            let ssd_path = self.config.ssd_cache_path.join(key_to_filename(key));
+            let Ok(filename) = key_to_filename(key) else { return; };
+            let ssd_path = self.config.ssd_cache_path.join(filename);
             if let Some(parent) = ssd_path.parent() {
                 if let Err(e) = std::fs::create_dir_all(parent) {
                     warn!("Failed to create SSD cache directory {:?}: {}", parent, e);
@@ -700,14 +704,24 @@ impl<B: StorageBackend> StorageBackend for TieredCacheBackend<B> {
 }
 
 /// Convert a key to a valid filename for SSD caching.
-pub(super) fn key_to_filename(key: &str) -> String {
+///
+/// # Errors
+/// Returns an error if the key contains path traversal components (`..`).
+pub(super) fn key_to_filename(key: &str) -> Result<String> {
+    // Reject path traversal attempts before any sanitization
+    if key.contains("..") {
+        return Err(NeedleError::InvalidInput(
+            "Key contains path traversal component '..'".to_string(),
+        ));
+    }
+
     // Replace path separators and other problematic characters
     // Using a loop for clarity on which characters are replaced
     let mut result = key.to_string();
     for c in ['/', '\\', ':', '*', '?', '"', '<', '>', '|'] {
         result = result.replace(c, "_");
     }
-    result
+    Ok(result)
 }
 
 // ============================================================================
