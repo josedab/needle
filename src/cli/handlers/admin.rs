@@ -177,6 +177,13 @@ pub fn init_command(directory: &str, database: &str, dimensions: usize) -> Resul
     use std::fs;
     use std::path::Path;
 
+    // Validate database name contains no path separators or traversal components
+    if database.contains('/') || database.contains('\\') || database.contains("..") {
+        return Err(NeedleError::InvalidInput(
+            "Database name must not contain path separators or '..'".to_string(),
+        ));
+    }
+
     let dir = Path::new(directory);
     if !dir.exists() {
         fs::create_dir_all(dir).map_err(NeedleError::Io)?;
