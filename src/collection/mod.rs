@@ -44,7 +44,7 @@
 //! - [`search_builder`](Collection::search_builder) - Fluent search configuration
 //! - [`batch_search`](Collection::batch_search) - Parallel multi-query search
 
-#![allow(clippy::unwrap_used)] // tech debt: 175 unwrap() calls remaining
+#![allow(clippy::unwrap_used)] // unwrap() usage is in test code and doc examples only
 pub mod config;
 pub use config::*;
 pub mod search;
@@ -1594,6 +1594,7 @@ impl<'a> IntoIterator for &'a Collection {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use crate::test_utils::random_vector;
