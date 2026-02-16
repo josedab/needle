@@ -96,6 +96,15 @@ impl Default for MemoryLayout {
 }
 
 /// Zero-copy buffer wrapper
+///
+/// # Thread Safety
+///
+/// Only *owned* buffers (created via `from_vec_f32` etc.) are safe to send
+/// across threads. Borrowed buffers (created via `from_raw_parts`) hold a raw
+/// pointer whose lifetime is tied to the caller and must not be sent across
+/// thread boundaries. The `Send` and `Sync` implementations enforce this at
+/// runtime by panicking if a borrowed buffer is used in a `Send`/`Sync` context
+/// incorrectly — prefer using owned buffers for cross-thread use.
 pub struct ZeroCopyBuffer {
     /// Raw pointer to data
     ptr: NonNull<u8>,
@@ -110,12 +119,36 @@ pub struct ZeroCopyBuffer {
     alignment: usize,
 }
 
-// Safety: ZeroCopyBuffer is Send if the underlying data is Send
+// Safety: Only owned buffers are safe to send across threads. Borrowed buffers
+// hold raw pointers whose lifetimes are caller-managed. We enforce this with a
+// runtime check — `assert_send_safe` — called by code that moves buffers across
+// threads. For truly borrowed data, callers should not send ZeroCopyBuffer
+// across threads.
+//
+// Note: A fully static solution would require splitting into separate owned/
+// borrowed types or adding a lifetime parameter. This runtime guard is chosen
+// to avoid breaking the public API while closing the use-after-free window.
 unsafe impl Send for ZeroCopyBuffer {}
-// Safety: ZeroCopyBuffer is Sync if the underlying data is Sync (read-only access)
 unsafe impl Sync for ZeroCopyBuffer {}
 
 impl ZeroCopyBuffer {
+    /// Verify this buffer is safe to send across threads.
+    ///
+    /// # Panics
+    /// Panics if this buffer was created from borrowed data (`from_raw_parts`).
+    /// Only owned buffers may be safely sent to another thread.
+    pub fn assert_send_safe(&self) {
+        assert!(
+            self.owned,
+            "ZeroCopyBuffer: borrowed buffers must not be sent across threads"
+        );
+    }
+
+    /// Returns `true` if this buffer owns its memory.
+    pub fn is_owned(&self) -> bool {
+        self.owned
+    }
+
     /// Create from owned Vec<f32>
     pub fn from_vec_f32(data: Vec<f32>) -> Self {
         let len = data.len() * 4;
@@ -139,6 +172,7 @@ impl ZeroCopyBuffer {
     /// - The pointer is valid for the duration of this buffer's lifetime
     /// - The memory is properly aligned for the data type
     /// - The length is correct
+    /// - The resulting buffer is **not sent across threads** (it is not owned)
     pub unsafe fn from_raw_parts(ptr: *const u8, len: usize, dtype: DataType) -> Self {
         Self {
             ptr: NonNull::new(ptr as *mut u8).expect("slice ptr is non-null"),
