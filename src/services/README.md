@@ -20,6 +20,32 @@ This directory contains 100+ high-level service modules organized by domain into
 | `storage/` | Storage backends, snapshots, and compaction | `tiered_service`, `snapshot_manager`, `hnsw_compactor` |
 | `sync/` | Replication, sync, and federation | `sync_engine`, `live_replication`, `distributed_federation` |
 
+## Maturity Matrix
+
+The table below shows the maturity status of each service domain. **All 14 domains currently carry `#[allow(clippy::unwrap_used)]` overrides** and should be treated as scaffolding until those are removed.
+
+| Domain | Files | Tests | Status | Notes |
+|--------|------:|------:|--------|-------|
+| `ai/` | 10 | 9 | Scaffold | LLM integration, semantic cache, GraphRAG; heavy `unwrap()` usage |
+| `client/` | 8 | 7 | Scaffold | SDK stubs for Python, gRPC, WebSocket |
+| `collection/` | 11 | 10 | Scaffold | Text collections, PITR, RBAC; some stable modules (see below) |
+| `compute/` | 7 | 6 | Scaffold | Adaptive optimizer, GPU kernels, vector transactions |
+| `embedding/` | 10 | 9 | Scaffold | Inference engine, embedding router |
+| `governance/` | 9 | 8 | Scaffold | Compliance, audit tooling, API stability |
+| `infrastructure/` | 11 | 10 | Scaffold | Cloud service, cluster bootstrap, tenant router |
+| `observability/` | 9 | 8 | Scaffold | Drift monitor, benchmarks, vector lineage |
+| `pipeline/` | 9 | 8 | Scaffold | Ingestion service, streaming ingest, CDC framework |
+| `plugin/` | 8 | 7 | Scaffold | Plugin API, WASM runtime |
+| `search/` | 7 | 6 | Scaffold | Query optimizer, NeedleQL, encrypted search |
+| `storage/` | 7 | 6 | Scaffold | Tiered storage, snapshot manager, HNSW compactor |
+| `sync/` | 9 | 8 | Scaffold | Sync engine, live replication, federation |
+| **Total** | **125** | **112** | | |
+
+**Status definitions:**
+- **Stable** — Production-ready, no `#[allow(clippy::unwrap_used)]`, full test coverage
+- **Scaffold** — Structure in place, has `#[allow(clippy::unwrap_used)]` override, needs error-handling cleanup
+- **Draft** — Experimental API, subject to breaking changes
+
 ## Stable vs Experimental
 
 Most service modules are gated behind `#[cfg(feature = "experimental")]`. The stable services (available with default features) are:
