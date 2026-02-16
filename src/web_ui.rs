@@ -2366,25 +2366,25 @@ impl LatencyHeatmap {
         if self.total_ops == 0 {
             return;
         }
-        let targets = [
-            (0.50, &mut self.p50_ms as *mut f64),
-            (0.95, &mut self.p95_ms as *mut f64),
-            (0.99, &mut self.p99_ms as *mut f64),
-        ];
-        for (pct, dest) in targets {
+
+        let percentiles = [0.50, 0.95, 0.99];
+        let mut results = [0.0f64; 3];
+
+        for (i, &pct) in percentiles.iter().enumerate() {
             let target_count = (self.total_ops as f64 * pct).ceil() as u64;
             let mut running = 0u64;
             for bucket in &self.buckets {
                 running += bucket.count;
                 if running >= target_count {
-                    // Safety: we're writing to our own fields through raw pointers
-                    // to work around multiple mutable borrows in the loop
-                    #[allow(unsafe_code)]
-                    unsafe { *dest = bucket.upper_bound_ms; }
+                    results[i] = bucket.upper_bound_ms;
                     break;
                 }
             }
         }
+
+        self.p50_ms = results[0];
+        self.p95_ms = results[1];
+        self.p99_ms = results[2];
     }
 }
 
