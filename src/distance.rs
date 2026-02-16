@@ -359,10 +359,12 @@ mod simd_x86 {
     #[cfg(target_feature = "avx2")]
     pub unsafe fn dot_product_avx2(a: &[f32], b: &[f32]) -> f32 {
         debug_assert_eq!(a.len(), b.len(), "vectors must have equal length");
+        debug_assert!(!a.is_empty(), "SIMD operation on empty slices");
         let mut sum = _mm256_setzero_ps();
         let chunks = a.len() / 8;
 
         for i in 0..chunks {
+            debug_assert!(i * 8 + 8 <= a.len(), "AVX2 load would exceed slice bounds");
             let va = _mm256_loadu_ps(a.as_ptr().add(i * 8));
             let vb = _mm256_loadu_ps(b.as_ptr().add(i * 8));
             sum = _mm256_fmadd_ps(va, vb, sum);
@@ -387,10 +389,12 @@ mod simd_x86 {
     #[cfg(target_feature = "avx2")]
     pub unsafe fn euclidean_squared_avx2(a: &[f32], b: &[f32]) -> f32 {
         debug_assert_eq!(a.len(), b.len(), "vectors must have equal length");
+        debug_assert!(!a.is_empty(), "SIMD operation on empty slices");
         let mut sum = _mm256_setzero_ps();
         let chunks = a.len() / 8;
 
         for i in 0..chunks {
+            debug_assert!(i * 8 + 8 <= a.len(), "AVX2 load would exceed slice bounds");
             let va = _mm256_loadu_ps(a.as_ptr().add(i * 8));
             let vb = _mm256_loadu_ps(b.as_ptr().add(i * 8));
             let diff = _mm256_sub_ps(va, vb);
@@ -417,11 +421,13 @@ mod simd_x86 {
     #[cfg(target_feature = "avx2")]
     pub unsafe fn manhattan_avx2(a: &[f32], b: &[f32]) -> f32 {
         debug_assert_eq!(a.len(), b.len(), "vectors must have equal length");
+        debug_assert!(!a.is_empty(), "SIMD operation on empty slices");
         let sign_mask = _mm256_set1_ps(-0.0);
         let mut sum = _mm256_setzero_ps();
         let chunks = a.len() / 8;
 
         for i in 0..chunks {
+            debug_assert!(i * 8 + 8 <= a.len(), "AVX2 load would exceed slice bounds");
             let va = _mm256_loadu_ps(a.as_ptr().add(i * 8));
             let vb = _mm256_loadu_ps(b.as_ptr().add(i * 8));
             let diff = _mm256_sub_ps(va, vb);
@@ -446,6 +452,7 @@ mod simd_x86 {
         let chunks = vector.len() / 8;
 
         for i in 0..chunks {
+            debug_assert!(i * 8 + 8 <= vector.len(), "AVX2 store would exceed slice bounds");
             let ptr = vector.as_mut_ptr().add(i * 8);
             let v = _mm256_loadu_ps(ptr);
             let scaled = _mm256_mul_ps(v, scale_vec);
@@ -472,10 +479,12 @@ mod simd_arm {
     #[target_feature(enable = "neon")]
     pub unsafe fn dot_product_neon(a: &[f32], b: &[f32]) -> f32 {
         debug_assert_eq!(a.len(), b.len(), "vectors must have equal length");
+        debug_assert!(!a.is_empty(), "SIMD operation on empty slices");
         let mut sum = vdupq_n_f32(0.0);
         let chunks = a.len() / 4;
 
         for i in 0..chunks {
+            debug_assert!(i * 4 + 4 <= a.len(), "NEON load would exceed slice bounds");
             let va = vld1q_f32(a.as_ptr().add(i * 4));
             let vb = vld1q_f32(b.as_ptr().add(i * 4));
             sum = vfmaq_f32(sum, va, vb);
@@ -499,10 +508,12 @@ mod simd_arm {
     #[target_feature(enable = "neon")]
     pub unsafe fn euclidean_squared_neon(a: &[f32], b: &[f32]) -> f32 {
         debug_assert_eq!(a.len(), b.len(), "vectors must have equal length");
+        debug_assert!(!a.is_empty(), "SIMD operation on empty slices");
         let mut sum = vdupq_n_f32(0.0);
         let chunks = a.len() / 4;
 
         for i in 0..chunks {
+            debug_assert!(i * 4 + 4 <= a.len(), "NEON load would exceed slice bounds");
             let va = vld1q_f32(a.as_ptr().add(i * 4));
             let vb = vld1q_f32(b.as_ptr().add(i * 4));
             let diff = vsubq_f32(va, vb);
@@ -528,10 +539,12 @@ mod simd_arm {
     #[target_feature(enable = "neon")]
     pub unsafe fn manhattan_neon(a: &[f32], b: &[f32]) -> f32 {
         debug_assert_eq!(a.len(), b.len(), "vectors must have equal length");
+        debug_assert!(!a.is_empty(), "SIMD operation on empty slices");
         let mut sum = vdupq_n_f32(0.0);
         let chunks = a.len() / 4;
 
         for i in 0..chunks {
+            debug_assert!(i * 4 + 4 <= a.len(), "NEON load would exceed slice bounds");
             let va = vld1q_f32(a.as_ptr().add(i * 4));
             let vb = vld1q_f32(b.as_ptr().add(i * 4));
             let diff = vsubq_f32(va, vb);
@@ -556,6 +569,7 @@ mod simd_arm {
         let chunks = vector.len() / 4;
 
         for i in 0..chunks {
+            debug_assert!(i * 4 + 4 <= vector.len(), "NEON store would exceed slice bounds");
             let ptr = vector.as_mut_ptr().add(i * 4);
             let v = vld1q_f32(ptr);
             let scaled = vmulq_f32(v, scale_vec);
