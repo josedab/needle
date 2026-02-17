@@ -28,6 +28,15 @@ const MAX_EXPORT_VECTORS: usize = 100_000;
 const MAX_DIMENSIONS: usize = 65_536;
 /// Maximum allowed k for search operations.
 const MAX_SEARCH_K: usize = 10_000;
+
+/// HTML-escape a string to prevent XSS when interpolating into HTML.
+fn html_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#x27;")
+}
 /// Maximum metadata size per vector in bytes (64KB).
 const MAX_METADATA_BYTES: usize = 64 * 1024;
 /// Maximum metadata JSON nesting depth.
@@ -1126,6 +1135,7 @@ pub(super) async fn serve_dashboard(State(state): State<Arc<AppState>>) -> impl 
             total_vectors += count;
             collection_rows.push_str(&format!(
                 "<tr><td>{name}</td><td>{count}</td><td>{dims}</td><td>{snapshots}</td></tr>",
+                name = html_escape(name),
                 snapshots = db.list_snapshots(name).len()
             ));
         }
@@ -1470,7 +1480,10 @@ pub(super) async fn serve_playground(State(state): State<Arc<AppState>>) -> impl
 
     let options_html: String = collections
         .iter()
-        .map(|c| format!("<option value=\"{c}\">{c}</option>"))
+        .map(|c| {
+            let escaped = html_escape(c);
+            format!("<option value=\"{escaped}\">{escaped}</option>")
+        })
         .collect::<Vec<_>>()
         .join("\n");
 
