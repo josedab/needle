@@ -2,23 +2,76 @@
 members = [".", "crates/needle-core", "crates/needle-cli", "crates/needle-python"]
 default-members = [".", "crates/needle-core", "crates/needle-cli"]
 
-[package]
-name = "needle"
+[workspace.package]
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.85"
 authors = ["Anthropic <support@anthropic.com>"]
-description = "An embedded vector database - SQLite for vectors"
 license = "MIT"
+repository = "https://github.com/anthropics/needle"
+
+[workspace.dependencies]
+thiserror = "2.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+[workspace.lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+# Allow common pedantic lints that are too strict for this codebase
+module_name_repetitions = "allow"
+must_use_candidate = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+doc_markdown = "allow"
+return_self_not_must_use = "allow"
+struct_excessive_bools = "allow"
+too_many_lines = "allow"
+cast_possible_truncation = "allow"
+cast_precision_loss = "allow"
+cast_sign_loss = "allow"
+cast_lossless = "allow"
+if_not_else = "allow"
+items_after_statements = "allow"
+similar_names = "allow"
+unreadable_literal = "allow"
+wildcard_imports = "allow"
+implicit_hasher = "allow"
+unnecessary_wraps = "allow"
+used_underscore_binding = "allow"
+needless_pass_by_value = "allow"
+option_if_let_else = "allow"
+struct_field_names = "allow"
+redundant_closure_for_method_calls = "allow"
+uninlined_format_args = "allow"
+
+[package]
+name = "needle"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "An embedded vector database - SQLite for vectors"
+license.workspace = true
 keywords = ["vector", "database", "embedding", "hnsw", "similarity-search"]
 categories = ["database", "algorithms", "science"]
-repository = "https://github.com/anthropics/needle"
+repository.workspace = true
 readme = "README.md"
 default-run = "needle"
+include = [
+  "src/**/*.rs",
+  "Cargo.toml",
+  "LICENSE",
+  "README.md",
+  "CHANGELOG.md",
+]
 
 [package.metadata.binstall]
 pkg-url = "{ repo }/releases/download/v{ version }/needle-{ target }{ archive-suffix }"
 bin-dir = "needle-{ target }/{ bin }{ binary-ext }"
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
 
 [lib]
 name = "needle"
@@ -30,11 +83,11 @@ crate-type = ["rlib"]
 needle-core = { path = "crates/needle-core" }
 
 # Error handling
-thiserror = "2.0"
+thiserror.workspace = true
 
 # Serialization
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
+serde.workspace = true
+serde_json.workspace = true
 
 # Memory mapping
 memmap2 = "0.9"
@@ -211,9 +264,16 @@ cdc-postgres = ["async", "tokio-postgres"]
 cdc-mongodb = ["async", "mongodb"]
 cdc = ["cdc-kafka", "cdc-pulsar", "cdc-postgres", "cdc-mongodb"]
 
+[lints]
+workspace = true
+
+[profile.dev]
+opt-level = 1
+
 [profile.release]
 lto = true
 codegen-units = 1
+strip = true
 
 [profile.release-wasm]
 inherits = "release"
