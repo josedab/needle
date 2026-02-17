@@ -406,8 +406,7 @@ impl VectorCRDT {
                         let should_update = entry
                             .metadata
                             .get(&key)
-                            .map(|(_, ts)| timestamp > *ts)
-                            .unwrap_or(true);
+                            .map_or(true, |(_, ts)| timestamp > *ts);
 
                         if should_update {
                             if let Some(v) = value {
@@ -423,7 +422,7 @@ impl VectorCRDT {
             Operation::Delete { id } => {
                 if let Some(entry) = self.vectors.get_mut(&id) {
                     // Only delete if timestamp is newer
-                    if entry.deleted.map(|d| timestamp > d).unwrap_or(true)
+                    if entry.deleted.map_or(true, |d| timestamp > d)
                         && timestamp > entry.updated_at
                     {
                         entry.deleted = Some(timestamp);
@@ -930,7 +929,7 @@ impl MerkleTree {
 
     /// Get the root hash of the tree
     pub fn root_hash(&self) -> u64 {
-        self.nodes.last().map(|n| n.hash).unwrap_or(0)
+        self.nodes.last().map_or(0, |n| n.hash)
     }
 
     /// Compare two Merkle trees and return bucket indices that differ
@@ -972,7 +971,7 @@ impl MerkleTree {
 
     /// Get total entry count
     pub fn total_count(&self) -> usize {
-        self.nodes.last().map(|n| n.count).unwrap_or(0)
+        self.nodes.last().map_or(0, |n| n.count)
     }
 
     fn hash_bucket(entries: &[(String, u64)]) -> u64 {
@@ -997,10 +996,10 @@ impl VectorCRDT {
             .filter(|(_, v)| !v.is_deleted())
             .map(|(id, v)| {
                 // Hash the vector content + timestamp for change detection
-                let mut hash = v.timestamp.physical;
+                let mut hash = v.updated_at.physical;
                 hash = hash
                     .wrapping_mul(31)
-                    .wrapping_add(v.timestamp.logical as u64);
+                    .wrapping_add(v.updated_at.logical as u64);
                 for &val in &v.vector {
                     hash = hash.wrapping_mul(17).wrapping_add(val.to_bits() as u64);
                 }
