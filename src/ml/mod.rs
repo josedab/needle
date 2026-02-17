@@ -1,4 +1,5 @@
 //! Embedding generation, models, fine-tuning, RAG.
+#![allow(missing_docs)]
 #![allow(clippy::unwrap_used)] // tech debt: 232 unwrap() calls remaining
 pub mod auto_embed;
 pub mod dimreduce;

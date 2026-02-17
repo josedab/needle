@@ -1,5 +1,6 @@
 //! Framework integrations: LangChain, LlamaIndex, Haystack, Semantic Kernel.
 
+#![allow(missing_docs)]
 #![allow(clippy::unwrap_used)] // tech debt: 100 unwrap() calls remaining
 pub(crate) mod framework_common;
 pub mod haystack;

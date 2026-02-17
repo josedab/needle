@@ -16,6 +16,8 @@
 //! - **`storage/`** — backup_command, hnsw_compactor, snapshot_manager, ...
 //! - **`sync/`** — change_stream, crdt_sync, distributed_federation, ...
 
+#![allow(missing_docs)]
+
 #[cfg(feature = "experimental")]
 pub mod ai;
 #[cfg(feature = "experimental")]

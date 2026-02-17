@@ -31,6 +31,7 @@
 
 use std::collections::VecDeque;
 use std::fmt;
+use std::sync::Arc;
 use std::time::Instant;
 
 use parking_lot::RwLock;
