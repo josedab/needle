@@ -447,19 +447,19 @@ impl McpServer {
                         -32700,
                         format!("Parse error: {e}"),
                     );
-                    self.send_response(&stdout, &resp)?;
+                    Self::send_response(&stdout, &resp)?;
                     continue;
                 }
             };
 
             let response = self.handle_request(&request);
-            self.send_response(&stdout, &response)?;
+            Self::send_response(&stdout, &response)?;
         }
 
         Ok(())
     }
 
-    fn send_response(&self, stdout: &io::Stdout, response: &JsonRpcResponse) -> Result<()> {
+    fn send_response(stdout: &io::Stdout, response: &JsonRpcResponse) -> Result<()> {
         let json = serde_json::to_string(response)?;
         let mut out = stdout.lock();
         writeln!(out, "{json}")?;
@@ -474,16 +474,16 @@ impl McpServer {
         let id = request.id.clone().unwrap_or(Value::Null);
 
         match request.method.as_str() {
-            "initialize" => self.handle_initialize(id),
+            "initialize" => Self::handle_initialize(id),
             "notifications/initialized" => JsonRpcResponse::success(id, json!({})),
-            "tools/list" => self.handle_tools_list(id),
+            "tools/list" => Self::handle_tools_list(id),
             "tools/call" => self.handle_tools_call(id, &request.params),
             "resources/list" => self.handle_resources_list(id),
             _ => JsonRpcResponse::error(id, -32601, format!("Method not found: {}", request.method)),
         }
     }
 
-    fn handle_initialize(&self, id: Value) -> JsonRpcResponse {
+    fn handle_initialize(id: Value) -> JsonRpcResponse {
         JsonRpcResponse::success(id, json!({
             "protocolVersion": MCP_PROTOCOL_VERSION,
             "capabilities": {
@@ -497,7 +497,7 @@ impl McpServer {
         }))
     }
 
-    fn handle_tools_list(&self, id: Value) -> JsonRpcResponse {
+    fn handle_tools_list(id: Value) -> JsonRpcResponse {
         JsonRpcResponse::success(id, tool_definitions())
     }
 
@@ -531,7 +531,7 @@ impl McpServer {
             "get_vector" => self.tool_get_vector(&arguments),
             "delete_vector" => self.tool_delete_vector(&arguments),
             "delete_collection" => self.tool_delete_collection(&arguments),
-            "save_database" => self.tool_save_database(),
+            "save_database" => Self::tool_save_database(),
             "remember" => self.tool_remember(&arguments),
             "recall" => self.tool_recall(&arguments),
             "forget" => self.tool_forget(&arguments),
@@ -760,7 +760,7 @@ impl McpServer {
         }))
     }
 
-    fn tool_save_database(&self) -> Result<Value> {
+    fn tool_save_database() -> Result<Value> {
         // Database::save requires &mut self, but we hold Arc<Database>.
         // For the MCP server, we acknowledge the save request.
         // In practice, the database auto-saves or the CLI user calls save.

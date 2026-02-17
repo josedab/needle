@@ -1604,8 +1604,7 @@ impl Database {
             .read()
             .collections
             .get(collection)
-            .map(|c| c.len())
-            .unwrap_or(0)
+            .map_or(0, |c| c.len())
     }
 
     fn collection_dimensions(&self, collection: &str) -> Option<usize> {
@@ -1694,8 +1693,7 @@ impl Database {
             .read()
             .collections
             .get(collection)
-            .map(|c| c.needs_compaction(threshold))
-            .unwrap_or(false)
+            .is_some_and(|c| c.needs_compaction(threshold))
     }
 
     // ============ TTL Internal Methods ============
@@ -1719,8 +1717,7 @@ impl Database {
             .read()
             .collections
             .get(collection)
-            .map(|c| c.needs_expiration_sweep(threshold))
-            .unwrap_or(false)
+            .is_some_and(|c| c.needs_expiration_sweep(threshold))
     }
 
     fn ttl_stats_internal(&self, collection: &str) -> (usize, usize, Option<u64>, Option<u64>) {
@@ -1728,8 +1725,7 @@ impl Database {
             .read()
             .collections
             .get(collection)
-            .map(|c| c.ttl_stats())
-            .unwrap_or((0, 0, None, None))
+            .map_or((0, 0, None, None), |c| c.ttl_stats())
     }
 
     fn get_ttl_internal(&self, collection: &str, id: &str) -> Option<u64> {
@@ -1767,8 +1763,7 @@ impl Database {
             .read()
             .collections
             .get(collection)
-            .map(|c| c.deleted_count())
-            .unwrap_or(0)
+            .map_or(0, |c| c.deleted_count())
     }
 
     fn search_ids_internal(

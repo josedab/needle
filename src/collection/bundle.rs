@@ -126,8 +126,7 @@ impl Collection {
             // Reciprocal Rank
             let rr = retrieved_ids.iter()
                 .position(|id| relevant_set.contains(*id))
-                .map(|pos| 1.0 / (pos + 1) as f64)
-                .unwrap_or(0.0);
+                .map_or(0.0, |pos| 1.0 / (pos + 1) as f64);
 
             // NDCG@k
             let dcg: f64 = retrieved_ids.iter().enumerate()
