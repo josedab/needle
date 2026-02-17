@@ -7,14 +7,14 @@ use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use sha2::Sha256;
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use subtle::ConstantTimeEq;
 
 /// Default clock skew leeway for JWT expiration checks (in seconds).
 const JWT_CLOCK_LEEWAY_SECS: u64 = 60;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct ApiKey {
     /// The API key value (should be kept secret)
     pub key: String,
@@ -103,6 +103,18 @@ impl ApiKey {
     }
 }
 
+impl std::fmt::Debug for ApiKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ApiKey")
+            .field("key", &"[REDACTED]")
+            .field("name", &self.name)
+            .field("roles", &self.roles)
+            .field("active", &self.active)
+            .field("expires_at", &self.expires_at)
+            .finish()
+    }
+}
+
 /// JWT claims for token validation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JwtClaims {
@@ -167,7 +179,7 @@ impl JwtClaims {
 }
 
 /// Authentication configuration for the server.
-#[derive(Debug, Clone, Default)]
+#[derive(Clone, Default)]
 pub struct AuthConfig {
     /// Whether authentication is required for all endpoints
     pub require_auth: bool,
@@ -177,6 +189,17 @@ pub struct AuthConfig {
     pub jwt_secret: Option<String>,
     /// Endpoints that don't require authentication (e.g., "/health")
     pub public_endpoints: Vec<String>,
+}
+
+impl std::fmt::Debug for AuthConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AuthConfig")
+            .field("require_auth", &self.require_auth)
+            .field("api_keys", &format!("[{} keys]", self.api_keys.len()))
+            .field("jwt_secret", &self.jwt_secret.as_ref().map(|_| "[REDACTED]"))
+            .field("public_endpoints", &self.public_endpoints)
+            .finish()
+    }
 }
 
 impl AuthConfig {
@@ -249,10 +272,17 @@ impl AuthConfig {
     }
 
     /// Validate an API key and return the associated user.
+    ///
+    /// Keys are hashed before comparison to ensure constant-time equality
+    /// regardless of input length differences.
     pub fn validate_api_key(&self, key: &str) -> Option<User> {
+        let input_hash = Sha256::digest(key.as_bytes());
         self.api_keys
             .iter()
-            .find(|k| k.key.as_bytes().ct_eq(key.as_bytes()).into() && k.is_valid())
+            .find(|k| {
+                let stored_hash = Sha256::digest(k.key.as_bytes());
+                stored_hash.ct_eq(&input_hash).into() && k.is_valid()
+            })
             .map(|k| k.to_user())
     }
 
