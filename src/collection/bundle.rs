@@ -1,5 +1,8 @@
 use super::*;
 
+/// Maximum bundle import file size (1 GB).
+const MAX_BUNDLE_FILE_SIZE: u64 = 1024 * 1024 * 1024;
+
 impl Collection {
     /// Serialize the collection to bytes
     pub fn to_bytes(&self) -> Result<Vec<u8>> {
@@ -250,6 +253,15 @@ impl Collection {
     /// # Errors
     /// Returns an error if the bundle format is invalid, incompatible, or I/O fails.
     pub fn import_bundle(path: &std::path::Path) -> Result<Self> {
+        let file_size = std::fs::metadata(path)
+            .map_err(NeedleError::Io)?
+            .len();
+        if file_size > MAX_BUNDLE_FILE_SIZE {
+            return Err(NeedleError::InvalidInput(format!(
+                "Bundle file too large ({} bytes). Maximum allowed size is {} bytes",
+                file_size, MAX_BUNDLE_FILE_SIZE
+            )));
+        }
         let bundle_bytes = std::fs::read(path).map_err(NeedleError::Io)?;
         let bundle: serde_json::Value = serde_json::from_slice(&bundle_bytes)
             .map_err(|e| NeedleError::Serialization(e))?;
