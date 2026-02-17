@@ -626,7 +626,7 @@ pub trait KekProvider: Send + Sync {
 
 /// Local file-based KEK provider (for development / air-gapped environments).
 pub struct LocalKekProvider {
-    kek: Vec<u8>,
+    kek: Zeroizing<Vec<u8>>,
     kek_id: String,
 }
 
@@ -639,7 +639,7 @@ impl LocalKekProvider {
             ));
         }
         Ok(Self {
-            kek: kek_bytes.to_vec(),
+            kek: Zeroizing::new(kek_bytes.to_vec()),
             kek_id: kek_id.into(),
         })
     }
