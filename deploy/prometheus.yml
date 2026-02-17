@@ -17,6 +17,8 @@ scrape_configs:
       - targets: ['localhost:9090']
 
   # Needle Vector Database
+  # NOTE: 'needle' hostname assumes Docker Compose or Kubernetes service discovery.
+  # For local development, replace with 'localhost:8080'.
   - job_name: 'needle'
     static_configs:
       - targets: ['needle:8080']
