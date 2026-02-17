@@ -279,10 +279,10 @@ impl AclEngine {
             if !policy.actions.contains(action) {
                 continue;
             }
-            if !self.matches_principal(&policy.principal, ctx) {
+            if !Self::matches_principal(&policy.principal, ctx) {
                 continue;
             }
-            if !self.matches_resource(&policy.resource, vector_id, metadata) {
+            if !Self::matches_resource(&policy.resource, vector_id, metadata) {
                 continue;
             }
 
@@ -342,7 +342,7 @@ impl AclEngine {
             if policy.effect != Effect::Allow {
                 continue;
             }
-            if !self.matches_principal(&policy.principal, ctx) {
+            if !Self::matches_principal(&policy.principal, ctx) {
                 continue;
             }
             if let ResourceMatcher::MetadataField(ref field, ref value) = policy.resource {
@@ -364,7 +364,7 @@ impl AclEngine {
 
     // -- Matching helpers --
 
-    fn matches_principal(&self, matcher: &PrincipalMatcher, ctx: &RequestContext) -> bool {
+    fn matches_principal(matcher: &PrincipalMatcher, ctx: &RequestContext) -> bool {
         match matcher {
             PrincipalMatcher::Any => true,
             PrincipalMatcher::UserId(id) => ctx.user_id == *id,
@@ -375,7 +375,7 @@ impl AclEngine {
         }
     }
 
-    fn matches_resource(&self, matcher: &ResourceMatcher, vector_id: &str, metadata: &Value) -> bool {
+    fn matches_resource(matcher: &ResourceMatcher, vector_id: &str, metadata: &Value) -> bool {
         match matcher {
             ResourceMatcher::Any => true,
             ResourceMatcher::VectorId(pattern) => {

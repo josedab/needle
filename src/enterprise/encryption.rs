@@ -172,7 +172,7 @@ impl KeyManager {
             for j in 0..input_dims {
                 // Deterministic random based on master key via HMAC-SHA256
                 let msg = format!("projection:{}:{}", i, j);
-                let mut mac = HmacSha256::new_from_slice(&self.master_key.bytes)
+                let mut mac = <HmacSha256 as Mac>::new_from_slice(&self.master_key.bytes)
                     .expect("HMAC accepts any key length");
                 mac.update(msg.as_bytes());
                 let result = mac.finalize().into_bytes();
@@ -246,7 +246,7 @@ impl VectorEncryptor {
         metadata: HashMap<String, String>,
     ) -> Result<EncryptedVector> {
         // Generate nonce
-        let nonce = self.generate_nonce();
+        let nonce = Self::generate_nonce();
 
         // Get encryption key
         let key = self.key_manager.derive_key("vectors")?;
@@ -256,7 +256,7 @@ impl VectorEncryptor {
         // Encrypt vector data
         let plaintext: Vec<u8> = vector.iter().flat_map(|f| f.to_le_bytes()).collect();
 
-        let (ciphertext, auth_tag) = self.encrypt_data(&plaintext, &nonce, &key_bytes)?;
+        let (ciphertext, auth_tag) = Self::encrypt_data(&plaintext, &nonce, &key_bytes)?;
 
         // Generate searchable embedding
         let search_embedding = if self.config.searchable {
@@ -284,7 +284,7 @@ impl VectorEncryptor {
             .bytes()
             .to_vec();
 
-        let plaintext = self.decrypt_data(
+        let plaintext = Self::decrypt_data(
             &encrypted.ciphertext,
             &encrypted.nonce,
             &key_bytes,
@@ -321,7 +321,7 @@ impl VectorEncryptor {
             .iter()
             .filter_map(|ev| {
                 ev.search_embedding.as_ref().map(|emb| {
-                    let distance = self.compute_distance(&query_embedding, emb);
+                    let distance = Self::compute_distance(&query_embedding, emb);
                     EncryptedSearchResult {
                         encrypted_vector: ev.clone(),
                         approximate_distance: distance,
@@ -342,7 +342,7 @@ impl VectorEncryptor {
 
     /// Generate a cryptographically secure random nonce.
     /// ChaCha20Poly1305 uses 96-bit (12-byte) nonces.
-    fn generate_nonce(&self) -> Vec<u8> {
+    fn generate_nonce() -> Vec<u8> {
         let mut nonce = vec![0u8; 12]; // 96-bit nonce for ChaCha20Poly1305
         rand::thread_rng().fill_bytes(&mut nonce);
         nonce
@@ -351,7 +351,6 @@ impl VectorEncryptor {
     /// Encrypt data using ChaCha20Poly1305 AEAD.
     /// Returns (ciphertext, auth_tag) where auth_tag is the 16-byte Poly1305 tag.
     fn encrypt_data(
-        &self,
         plaintext: &[u8],
         nonce: &[u8],
         key: &[u8],
@@ -393,7 +392,6 @@ impl VectorEncryptor {
     /// Decrypt data using ChaCha20Poly1305 AEAD.
     /// Verifies the auth_tag before returning plaintext.
     fn decrypt_data(
-        &self,
         ciphertext: &[u8],
         nonce: &[u8],
         key: &[u8],
@@ -486,7 +484,7 @@ impl VectorEncryptor {
     }
 
     /// Compute distance between vectors.
-    fn compute_distance(&self, a: &[f32], b: &[f32]) -> f32 {
+    fn compute_distance(a: &[f32], b: &[f32]) -> f32 {
         a.iter()
             .zip(b.iter())
             .map(|(x, y)| (x - y).powi(2))
@@ -552,8 +550,7 @@ impl EncryptedMetadataStore {
         rand::thread_rng().fill_bytes(&mut nonce);
 
         let (ciphertext, auth_tag) =
-            self.encryptor
-                .encrypt_data(value.as_bytes(), &nonce, &enc_key_bytes)?;
+            VectorEncryptor::encrypt_data(value.as_bytes(), &nonce, &enc_key_bytes)?;
 
         self.data.insert(
             key.to_string(),
@@ -581,7 +578,7 @@ impl EncryptedMetadataStore {
             .bytes()
             .to_vec();
 
-        let plaintext = self.encryptor.decrypt_data(
+        let plaintext = VectorEncryptor::decrypt_data(
             &encrypted.ciphertext,
             &encrypted.nonce,
             &enc_key_bytes,

@@ -720,12 +720,12 @@ impl RaftNode {
 
     /// Get last log index.
     fn last_log_index(&self) -> LogIndex {
-        self.log.last().map(|e| e.index).unwrap_or(0)
+        self.log.last().map_or(0, |e| e.index)
     }
 
     /// Get last log term.
     fn last_log_term(&self) -> Term {
-        self.log.last().map(|e| e.term).unwrap_or(0)
+        self.log.last().map_or(0, |e| e.term)
     }
 
     /// Get term at specific index.
@@ -736,8 +736,7 @@ impl RaftNode {
         self.log
             .iter()
             .find(|e| e.index == index)
-            .map(|e| e.term)
-            .unwrap_or(0)
+            .map_or(0, |e| e.term)
     }
 
     /// Check if candidate's log is at least as up-to-date.
@@ -926,7 +925,7 @@ impl RaftStorage for MemoryStorage {
 
     fn last_log_index(&self) -> Result<LogIndex> {
         let log = self.log.read().map_err(|_| NeedleError::LockError)?;
-        Ok(log.last().map(|e| e.index).unwrap_or(0))
+        Ok(log.last().map_or(0, |e| e.index))
     }
 
     fn save_snapshot(&self, snapshot: &Snapshot) -> Result<()> {
@@ -1082,7 +1081,7 @@ impl FileStorage {
         Ok(())
     }
 
-    fn read_segment(&self, path: &Path) -> Result<Vec<LogEntry>> {
+    fn read_segment(path: &Path) -> Result<Vec<LogEntry>> {
         if !path.exists() {
             return Ok(Vec::new());
         }
@@ -1127,7 +1126,7 @@ impl FileStorage {
                 Err(err) => { warn!("Failed to read raft segment dir entry: {err}"); None }
             }) {
                 let path = entry.path();
-                if path.extension().map(|e| e == "log").unwrap_or(false) {
+                if path.extension().is_some_and(|e| e == "log") {
                     paths.push(path);
                 }
             }
@@ -1200,7 +1199,7 @@ impl RaftStorage for FileStorage {
         let paths = self.all_segment_paths()?;
 
         for path in paths {
-            let entries = self.read_segment(&path)?;
+            let entries = Self::read_segment(&path)?;
             all_entries.extend(entries);
         }
 
@@ -1266,7 +1265,7 @@ impl RaftStorage for FileStorage {
         // Otherwise read from files
         let paths = self.all_segment_paths()?;
         if let Some(last_path) = paths.last() {
-            let entries = self.read_segment(last_path)?;
+            let entries = Self::read_segment(last_path)?;
             if let Some(last) = entries.last() {
                 return Ok(last.index);
             }
@@ -1299,7 +1298,7 @@ impl RaftStorage for FileStorage {
                 Err(err) => { warn!("Failed to read raft snapshot dir entry: {err}"); None }
             }) {
                 let path = entry.path();
-                if path.extension().map(|e| e == "snap").unwrap_or(false) {
+                if path.extension().is_some_and(|e| e == "snap") {
                     snapshots.push(path);
                 }
             }
@@ -1364,7 +1363,7 @@ impl RaftStorage for FileStorage {
                 Err(err) => { warn!("Failed to read raft snapshot cleanup dir entry: {err}"); None }
             }) {
                 let path = entry.path();
-                if path.extension().map(|e| e == "snap").unwrap_or(false) {
+                if path.extension().is_some_and(|e| e == "snap") {
                     snapshots.push(path);
                 }
             }
@@ -1576,7 +1575,7 @@ impl RaftNode {
     pub fn follower_needs_snapshot(&self, peer: NodeId, snapshot_index: LogIndex) -> bool {
         if let Some(&next_idx) = self.next_index.get(&peer) {
             // If the follower needs entries we don't have (compacted), send snapshot
-            let first_log_idx = self.log.first().map(|e| e.index).unwrap_or(1);
+            let first_log_idx = self.log.first().map_or(1, |e| e.index);
             next_idx < first_log_idx && snapshot_index >= next_idx
         } else {
             false

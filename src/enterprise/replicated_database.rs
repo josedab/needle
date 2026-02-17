@@ -59,14 +59,14 @@ impl ReplicatedCommand {
         metadata.insert("cmd".to_string(), serialized);
 
         RaftCommand::Insert {
-            id: self.command_id(),
+            id: Self::command_id(),
             vector: Vec::new(),
             metadata,
         }
     }
 
     /// Generate a unique command ID for deduplication.
-    fn command_id(&self) -> String {
+    fn command_id() -> String {
         let mut hasher = DefaultHasher::new();
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)

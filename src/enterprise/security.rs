@@ -723,14 +723,12 @@ impl FileAuditLog {
             .config
             .base_path
             .extension()
-            .map(|e| e.to_string_lossy().to_string())
-            .unwrap_or_else(|| "log".into());
+            .map_or_else(|| "log".into(), |e| e.to_string_lossy().to_string());
         let stem = self
             .config
             .base_path
             .file_stem()
-            .map(|s| s.to_string_lossy().to_string())
-            .unwrap_or_else(|| "audit".into());
+            .map_or_else(|| "audit".into(), |s| s.to_string_lossy().to_string());
         self.config
             .base_path
             .with_file_name(format!("{}.{}.{}", stem, i, ext))
