@@ -261,7 +261,14 @@ impl SemanticCache {
             return None;
         }
 
-        let results = self.hnsw_index.search(query_embedding, 1, &self.vectors);
+        let results = match self.hnsw_index.search(query_embedding, 1, &self.vectors) {
+            Ok(r) => r,
+            Err(_) => {
+                self.misses += 1;
+                self.record_lookup(start);
+                return None;
+            }
+        };
 
         if let Some(&(vid, distance)) = results.first() {
             // Cosine distance: 0 = identical. similarity = 1 - distance.
@@ -383,7 +390,10 @@ impl SemanticCache {
         if k == 0 {
             return;
         }
-        let results = self.hnsw_index.search(embedding, k, &self.vectors);
+        let results = match self.hnsw_index.search(embedding, k, &self.vectors) {
+            Ok(r) => r,
+            Err(_) => return,
+        };
 
         let keys_to_remove: Vec<String> = results
             .iter()
@@ -582,7 +592,7 @@ where
         // Try cache lookup
         if let Some(entry) = self.cache.lookup(&embedding) {
             let similarity = {
-                let dist = DistanceFunction::Cosine.compute(&embedding, &entry.embedding);
+                let dist = DistanceFunction::Cosine.compute(&embedding, &entry.embedding).unwrap_or(1.0);
                 1.0 - dist
             };
             return CachedResponse {
