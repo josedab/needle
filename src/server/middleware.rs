@@ -25,10 +25,12 @@ static SECURITY_HEADER_XFO: (header::HeaderName, &str) = (header::X_FRAME_OPTION
 #[cfg(feature = "metrics")]
 use crate::metrics::{http_metrics, metrics};
 
-pub(super) fn build_cors_layer(config: &CorsConfig) -> CorsLayer {
+pub(super) fn build_cors_layer(config: &CorsConfig) -> std::result::Result<CorsLayer, String> {
     if !config.enabled {
-        return CorsLayer::new();
+        return Ok(CorsLayer::new());
     }
+
+    config.validate()?;
 
     let mut cors = CorsLayer::new()
         .allow_methods([
@@ -42,7 +44,6 @@ pub(super) fn build_cors_layer(config: &CorsConfig) -> CorsLayer {
         .max_age(std::time::Duration::from_secs(config.max_age_secs));
 
     // Set allowed origins
-    let is_wildcard_origin = config.allowed_origins.is_none();
     cors = match &config.allowed_origins {
         None => cors.allow_origin(AllowOrigin::any()),
         Some(origins) if origins.is_empty() => cors,
@@ -53,13 +54,10 @@ pub(super) fn build_cors_layer(config: &CorsConfig) -> CorsLayer {
     };
 
     if config.allow_credentials {
-        if is_wildcard_origin {
-            warn!("CORS: allow_credentials with wildcard origin is insecure and will be rejected by browsers");
-        }
         cors = cors.allow_credentials(true);
     }
 
-    cors
+    Ok(cors)
 }
 
 

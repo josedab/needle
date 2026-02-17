@@ -190,6 +190,19 @@ impl CorsConfig {
         origins.push(origin.into());
         self
     }
+
+    /// Validate the CORS configuration.
+    pub fn validate(&self) -> std::result::Result<(), String> {
+        if self.allow_credentials && self.allowed_origins.is_none() {
+            return Err(
+                "CORS: allow_credentials cannot be combined with wildcard origins — \
+                 this is insecure and rejected by browsers. \
+                 Specify explicit allowed_origins instead."
+                    .to_string(),
+            );
+        }
+        Ok(())
+    }
 }
 
 /// Rate limiting configuration
@@ -377,8 +390,8 @@ impl AppState {
 
 /// Build the router with configuration
 #[allow(deprecated)]
-pub fn create_router_with_config(state: Arc<AppState>, config: &ServerConfig) -> Router {
-    let cors_layer = build_cors_layer(&config.cors_config);
+pub fn create_router_with_config(state: Arc<AppState>, config: &ServerConfig) -> std::result::Result<Router, String> {
+    let cors_layer = build_cors_layer(&config.cors_config)?;
     let timeout_layer = TimeoutLayer::new(Duration::from_secs(config.request_timeout_secs));
 
     #[allow(unused_mut)]
@@ -498,13 +511,13 @@ pub fn create_router_with_config(state: Arc<AppState>, config: &ServerConfig) ->
     #[cfg(feature = "metrics")]
     let router = router.layer(axum::middleware::from_fn(metrics_middleware));
 
-    router
+    Ok(router
         .layer(axum::middleware::from_fn(api_stability_middleware))
         .layer(axum::middleware::from_fn(security_headers_middleware))
         .layer(TraceLayer::new_for_http())
         .layer(timeout_layer)
         .layer(RequestBodyLimitLayer::new(config.max_body_size))
-        .layer(cors_layer)
+        .layer(cors_layer))
 }
 
 /// Build the router (legacy, uses permissive CORS for backwards compatibility)
@@ -515,7 +528,7 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         cors_config: CorsConfig::permissive(),
         ..Default::default()
     };
-    create_router_with_config(state, &config)
+    create_router_with_config(state, &config).expect("default permissive CORS config is valid")
 }
 
 
@@ -549,7 +562,7 @@ pub async fn serve(config: ServerConfig) -> Result<(), Box<dyn std::error::Error
     };
 
     let state = Arc::new(AppState::with_config(db, &config));
-    let app = create_router_with_config(state.clone(), &config);
+    let app = create_router_with_config(state.clone(), &config)?;
 
     info!("Listening on http://{}", config.addr);
 

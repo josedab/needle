@@ -25,7 +25,7 @@ fn create_test_state() -> Arc<AppState> {
 /// Create test router with default config
 fn create_test_router(state: Arc<AppState>) -> axum::Router {
     let config = ServerConfig::default();
-    create_router_with_config(state, &config)
+    create_router_with_config(state, &config).expect("default config is valid")
 }
 
 /// Helper to make JSON POST request
@@ -948,7 +948,7 @@ async fn test_save_database() {
     let state = Arc::new(AppState::new(db));
 
     let config = ServerConfig::default().with_db_path(db_path.to_str().unwrap());
-    let router = create_router_with_config(state, &config);
+    let router = create_router_with_config(state, &config).expect("default config is valid");
 
     // Create collection
     let _ = post_json(
