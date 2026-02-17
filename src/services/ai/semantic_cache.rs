@@ -699,7 +699,7 @@ impl NamespacedCache {
         model: Option<&str>,
     ) -> Result<Option<CacheHit>> {
         let cache = self.namespace(namespace);
-        let result = cache.get(embedding, model)?;
+        let result = cache.get(embedding, None)?;
         if result.is_some() {
             self.cost_tracker.completion_calls_saved += 1;
         }

@@ -987,13 +987,13 @@ impl<'a> GraphRagService<'a> {
         let mut all_relations: Vec<(String, String, String)> = Vec::new();
 
         for result in &search_results {
-            all_entity_ids.push(result.entity_id.clone());
+            all_entity_ids.push(result.id.clone());
 
             // Add entity info
-            if let Some(entity) = self.entities.get(&result.entity_id) {
+            if let Some(entity) = self.entities.get(&result.id) {
                 context_parts.push(format!(
                     "[{}: {}]",
-                    entity.label, result.entity_id
+                    entity.label, result.id
                 ));
             }
 
@@ -1002,19 +1002,17 @@ impl<'a> GraphRagService<'a> {
                 if hop_idx > 0 {
                     let prev = &result.path[hop_idx - 1];
                     // Find the relation between prev and hop_id
-                    for rel in &self.relations {
-                        if (&rel.source == prev && &rel.target == hop_id)
-                            || (&rel.target == prev && &rel.source == hop_id)
-                        {
+                    for (neighbor, rel_type, _weight) in self.adjacency.neighbors(prev, true) {
+                        if &neighbor == hop_id {
                             let triple = (
-                                rel.source.clone(),
-                                rel.relation_type.clone(),
-                                rel.target.clone(),
+                                prev.clone(),
+                                rel_type.clone(),
+                                neighbor.clone(),
                             );
                             if !all_relations.contains(&triple) {
                                 context_parts.push(format!(
                                     "{} --[{}]--> {}",
-                                    rel.source, rel.relation_type, rel.target
+                                    prev, rel_type, neighbor
                                 ));
                                 all_relations.push(triple);
                             }
@@ -1105,7 +1103,7 @@ impl<'a> GraphRagService<'a> {
 
         // Boost scores by PageRank
         for result in &mut results {
-            let pr = pr_scores.get(&result.entity_id).copied().unwrap_or(0.0);
+            let pr = pr_scores.get(&result.id).copied().unwrap_or(0.0);
             result.score = result.score * (1.0 - pagerank_weight) + pr * pagerank_weight;
         }
 
@@ -1132,12 +1130,12 @@ pub fn extract_entities_from_text(text: &str) -> Vec<String> {
         let word = words[i].trim_matches(|c: char| !c.is_alphanumeric());
 
         // Check for consecutive capitalized words (multi-word entities)
-        if !word.is_empty() && word.chars().next().map(|c| c.is_uppercase()).unwrap_or(false) {
+        if !word.is_empty() && word.chars().next().is_some_and(|c| c.is_uppercase()) {
             let mut entity_parts = vec![word.to_string()];
             let mut j = i + 1;
             while j < words.len() {
                 let next = words[j].trim_matches(|c: char| !c.is_alphanumeric());
-                if !next.is_empty() && next.chars().next().map(|c| c.is_uppercase()).unwrap_or(false) {
+                if !next.is_empty() && next.chars().next().is_some_and(|c| c.is_uppercase()) {
                     entity_parts.push(next.to_string());
                     j += 1;
                 } else {

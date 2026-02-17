@@ -275,7 +275,7 @@ impl<'a> ProviderCacheWrapper<'a> {
     }
 
     /// Check cache for a prompt. Returns cached response if found.
-    pub fn check(&mut self, prompt_embedding: &[f32], prompt: &str) -> Result<Option<String>> {
+    pub fn check(&mut self, prompt_embedding: &[f32], prompt: &str) -> Result<Option<CacheHit>> {
         self.middleware.check(&self.model, prompt_embedding, prompt)
     }
 
@@ -285,7 +285,7 @@ impl<'a> ProviderCacheWrapper<'a> {
         prompt_embedding: &[f32],
         prompt: &str,
         response: &str,
-    ) -> Result<()> {
+    ) -> Result<String> {
         self.middleware
             .store(&self.model, prompt_embedding, prompt, response)
     }
@@ -336,18 +336,18 @@ impl CacheMiddleware {
             .into_iter()
             .map(|ns| {
                 let analytics = self.analytics(&ns.model);
-                let total = analytics.hits + analytics.misses;
+                let total = analytics.total_hits + analytics.total_misses;
                 ModelCacheStats {
                     model: ns.model,
                     entries: ns.entries,
-                    hits: analytics.hits,
-                    misses: analytics.misses,
+                    hits: analytics.total_hits,
+                    misses: analytics.total_misses,
                     hit_rate: if total > 0 {
-                        analytics.hits as f32 / total as f32
+                        analytics.total_hits as f32 / total as f32
                     } else {
                         0.0
                     },
-                    savings: analytics.hits as f32 * self.config.cost_per_query,
+                    savings: analytics.total_hits as f32 * self.config.cost_per_query,
                 }
             })
             .collect();
