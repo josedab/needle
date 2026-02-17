@@ -736,6 +736,7 @@ pub fn dedup_command(
 // Feature: Vector Health Score & Anomaly Detection (health)
 // ============================================================================
 
+#[allow(clippy::too_many_lines)]
 pub fn health_command(
     path: &str,
     collection_name: &str,
@@ -920,6 +921,7 @@ pub fn health_command(
 // Feature: Embedded Vector Playground (playground)
 // ============================================================================
 
+#[allow(clippy::too_many_lines)]
 pub fn playground_command(database: Option<&str>) -> Result<()> {
     let db = if let Some(path) = database {
         Database::open(path)?

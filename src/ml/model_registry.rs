@@ -309,6 +309,7 @@ impl ModelRegistry {
     }
 
     /// Create a new model registry with custom configuration
+    #[allow(clippy::too_many_lines)]
     pub fn with_config(config: RegistryConfig) -> Self {
         let mut models = HashMap::new();
 

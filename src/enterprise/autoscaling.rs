@@ -719,6 +719,7 @@ impl AutoScaler {
     }
 
     /// Make scaling decision based on analysis
+    #[allow(clippy::too_many_lines)]
     fn make_decision(
         &self,
         current: MetricAnalysis,

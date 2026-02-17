@@ -108,6 +108,7 @@ impl JsonRpcResponse {
 
 // ── Tool Definitions ────────────────────────────────────────────────────────
 
+#[allow(clippy::too_many_lines)]
 fn tool_definitions() -> Value {
     json!({
         "tools": [

@@ -66,6 +66,7 @@ impl DebeziumParser {
     }
 
     /// Parse a Debezium JSON value
+    #[allow(clippy::too_many_lines)]
     pub fn parse_value(&self, value: &serde_json::Value) -> StreamResult<ChangeEvent> {
         // Extract payload (Debezium wraps in "payload" for Kafka Connect)
         let payload = value.get("payload").unwrap_or(value);

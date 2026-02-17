@@ -266,6 +266,7 @@ pub fn mcp_command(database: &str, read_only: bool) -> Result<()> {
 }
 
 /// Handler for the `merge` CLI command.
+#[allow(clippy::too_many_lines)]
 pub fn merge_command(
     path: &str,
     source: &str,

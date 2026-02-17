@@ -451,6 +451,7 @@ impl QueryExplainOptimizer {
     }
 
     /// Build the plan step tree.
+    #[allow(clippy::too_many_lines)]
     fn build_plan_steps(
         &self,
         query: &QuerySpec,

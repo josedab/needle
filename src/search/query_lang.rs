@@ -374,6 +374,7 @@ impl Lexer {
     }
 
     /// Get the next token
+    #[allow(clippy::too_many_lines)]
     pub fn next_token(&mut self) -> QueryResult<Token> {
         self.skip_whitespace();
 
@@ -1075,6 +1076,7 @@ impl QueryParser {
     }
 
     /// Parse primary expression
+    #[allow(clippy::too_many_lines)]
     fn parse_primary_expression(&mut self) -> QueryResult<Expression> {
         // Handle parentheses
         if self.current == Token::LParen {
@@ -1842,6 +1844,7 @@ pub struct CostBasedOptimizer;
 
 impl CostBasedOptimizer {
     /// Estimate the cost of a query and choose the best execution strategy.
+    #[allow(clippy::too_many_lines)]
     pub fn optimize(query: &Query, stats: &CollectionStatistics) -> OptimizedPlan {
         let n = stats.vector_count as f64;
         let d = stats.dimensions as f64;

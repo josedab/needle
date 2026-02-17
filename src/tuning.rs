@@ -187,6 +187,7 @@ pub struct TuningResult {
 }
 
 /// Auto-tune HNSW parameters based on constraints
+#[allow(clippy::too_many_lines)]
 pub fn auto_tune(constraints: &TuningConstraints) -> TuningResult {
     let mut explanation = Vec::new();
 
@@ -530,6 +531,7 @@ impl IndexSelectionConstraints {
 /// let rec = recommend_index(&large);
 /// println!("Recommended: {}", rec.recommended);
 /// ```
+#[allow(clippy::too_many_lines)]
 pub fn recommend_index(constraints: &IndexSelectionConstraints) -> IndexRecommendation {
     let mut explanation = Vec::new();
     let mut alternatives = Vec::new();

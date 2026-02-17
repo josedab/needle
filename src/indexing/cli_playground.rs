@@ -319,6 +319,7 @@ impl Repl {
     }
 
     /// Execute a command and return the output string.
+    #[allow(clippy::too_many_lines)]
     pub fn execute(&mut self, input: &str) -> Result<String> {
         self.history.push(input.to_string());
         if self.history.len() > self.config.history_size {

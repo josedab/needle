@@ -404,6 +404,7 @@ impl Recoverable for NeedleError {
         }
     }
 
+    #[allow(clippy::too_many_lines)]
     fn recovery_hints(&self) -> Vec<RecoveryHint> {
         match self {
             NeedleError::Io(source) => {

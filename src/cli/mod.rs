@@ -38,6 +38,7 @@ pub fn print_error(err: &NeedleError) {
     }
 }
 
+#[allow(clippy::too_many_lines)]
 pub fn run(cli: Cli) -> Result<()> {
     match cli.command {
         Commands::Info { database } => info_command(&database),
