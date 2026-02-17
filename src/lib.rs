@@ -186,9 +186,12 @@ pub use integrations::{langchain, llamaindex};
 /// `infrastructure/`, `observability/`, `pipeline/`, `plugin/`, `search/`,
 /// `storage/`, `sync/`. All modules are re-exported at the `services::` level
 /// for backward compatibility.
+#[doc(hidden)]
 pub mod services;
+#[doc(hidden)]
 #[cfg(feature = "experimental")]
 pub use services::{adaptive_service, ingestion_pipeline, plugin_runtime};
+#[doc(hidden)]
 pub use services::{
     ingestion_service, multimodal_service, pitr_service, text_collection, tiered_service,
     live_migration_service, vector_namespace,
@@ -198,6 +201,7 @@ pub use services::{
 // Experimental service modules grouped by domain. Requires: --features experimental
 
 // AI & LLM integration
+#[doc(hidden)]
 #[cfg(feature = "experimental")]
 pub use services::{
     agentic_memory_protocol, agentic_workflow, graph_knowledge_service, graph_query,
@@ -205,6 +209,7 @@ pub use services::{
 };
 
 // Embedding & model management
+#[doc(hidden)]
 #[cfg(feature = "experimental")]
 pub use services::{
     auto_embed_endpoint, embedding_router, managed_embeddings,
@@ -212,19 +217,24 @@ pub use services::{
 };
 
 // Search & query
+#[doc(hidden)]
 #[cfg(feature = "experimental")]
 pub use search::{needleql_executor, needleql_lsp};
+#[doc(hidden)]
 #[cfg(feature = "experimental")]
 pub use services::{
     adaptive_index_selector, encrypted_search, nl_filter_parser,
     query_cache_middleware, query_optimizer, query_replay,
 };
+#[doc(hidden)]
 #[cfg(feature = "experimental")]
 pub use search::cost_estimator;
+#[doc(hidden)]
 #[cfg(feature = "experimental")]
 pub use indexing::{graph_vector_fusion, multimodal_fusion};
 
 // Pipeline & ingestion
+#[doc(hidden)]
 #[cfg(feature = "experimental")]
 pub use services::{
     cdc_framework, pipeline_manager, realtime_streaming, streaming_ingest, streaming_protocol,
@@ -232,6 +242,7 @@ pub use services::{
 };
 
 // Sync & replication
+#[doc(hidden)]
 #[cfg(feature = "experimental")]
 pub use services::{
     change_stream, crdt_sync, distributed_federation, incremental_sync, live_replication,
@@ -239,6 +250,7 @@ pub use services::{
 };
 
 // Collection management
+#[doc(hidden)]
 #[cfg(feature = "experimental")]
 pub use services::{
     collection_bundle, collection_federation, collection_rbac, materialized_views,
@@ -246,12 +258,14 @@ pub use services::{
 };
 
 // Compute & transactions
+#[doc(hidden)]
 #[cfg(feature = "experimental")]
 pub use services::{
     adaptive_optimizer, gpu_kernels, time_travel_query, transactional_api, vector_transactions,
 };
 
 // Infrastructure & deployment
+#[doc(hidden)]
 #[cfg(feature = "experimental")]
 pub use services::{
     cloud_deploy, cloud_service, cluster_bootstrap, edge_runtime, edge_serverless, managed_cloud,
@@ -259,18 +273,21 @@ pub use services::{
 };
 
 // Plugin & WASM
+#[doc(hidden)]
 #[cfg(feature = "experimental")]
 pub use services::{
     plugin_api, plugin_ecosystem, wasm_browser, wasm_persistence, wasm_plugin_runtime, wasm_sdk,
 };
 
 // Client SDKs & protocols
+#[doc(hidden)]
 #[cfg(feature = "experimental")]
 pub use services::{
     client_sdk, grpc_schema, notebook, python_sdk, vscode_extension, webhook_delivery, ws_protocol,
 };
 
 // Observability & benchmarking
+#[doc(hidden)]
 #[cfg(feature = "experimental")]
 pub use services::{
     ann_benchmark, benchmark_runner, benchmark_suite, drift_monitor, evidence_collector,
@@ -278,6 +295,7 @@ pub use services::{
 };
 
 // Governance & compliance
+#[doc(hidden)]
 #[cfg(feature = "experimental")]
 pub use services::{
     api_stability, community, compliance, format_spec, format_validator, module_audit,
@@ -285,6 +303,7 @@ pub use services::{
 };
 
 // Storage
+#[doc(hidden)]
 #[cfg(feature = "experimental")]
 pub use services::{
     backup_command, hnsw_compactor, snapshot_manager, storage_backends,
