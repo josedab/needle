@@ -553,6 +553,11 @@ pub async fn serve(config: ServerConfig) -> Result<(), Box<dyn std::error::Error
         "Starting Needle server"
     );
 
+    if !config.auth.require_auth {
+        warn!("⚠️  Authentication is DISABLED — all API endpoints are exposed without authentication. \
+               Set require_auth=true and configure API keys or JWT for production use.");
+    }
+
     let db = if let Some(path) = &config.db_path {
         info!(path = %path, "Opening database file");
         Database::open(path)?
