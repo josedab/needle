@@ -598,8 +598,8 @@ pub(in crate::server) async fn index_status_handler(
             "deleted": deleted,
             "fragmentation_ratio": fragmentation,
             "needs_compaction": fragmentation > 0.2,
-            "memory_bytes": stats.as_ref().map(|s| s.total_memory_bytes).unwrap_or(0),
-            "index_memory_bytes": stats.as_ref().map(|s| s.index_memory_bytes).unwrap_or(0),
+            "memory_bytes": stats.as_ref().map_or(0, |s| s.total_memory_bytes),
+            "index_memory_bytes": stats.as_ref().map_or(0, |s| s.index_memory_bytes),
         },
         "wal": {
             "status": "available",
@@ -625,7 +625,7 @@ pub(in crate::server) async fn cluster_status_handler(
             "collection": name,
             "shard_id": i,
             "node": "local",
-            "vectors": coll.as_ref().map(|c| c.len()).unwrap_or(0),
+            "vectors": coll.as_ref().map_or(0, |c| c.len()),
             "status": "active",
         })
     }).collect();

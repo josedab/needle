@@ -183,8 +183,7 @@ pub(in crate::server) async fn search(
         // Extract distance metric before moving profiling_data
         let distance_metric = profiling_data
             .as_ref()
-            .map(|p| p.distance_function.clone())
-            .unwrap_or_else(|| "cosine".to_string());
+            .map_or_else(|| "cosine".to_string(), |p| p.distance_function.clone());
 
         // Convert profiling data if available
         let profiling = profiling_data.map(|p| ProfilingData {

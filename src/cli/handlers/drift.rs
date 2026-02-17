@@ -134,12 +134,11 @@ fn drift_detect(
 
     let baseline_variance: Vec<f32> = baseline_data["variance"]
         .as_array()
-        .map(|arr| {
+        .map_or_else(|| vec![0.1; dimensions], |arr| {
             arr.iter()
                 .filter_map(|v| v.as_f64().map(|f| f as f32))
                 .collect()
-        })
-        .unwrap_or_else(|| vec![0.1; dimensions]);
+        });
 
     let mut baseline_vectors = Vec::new();
     for _ in 0..100 {
@@ -222,12 +221,11 @@ fn drift_report(
 
     let baseline_variance: Vec<f32> = baseline_data["variance"]
         .as_array()
-        .map(|arr| {
+        .map_or_else(|| vec![0.1; dimensions], |arr| {
             arr.iter()
                 .filter_map(|v| v.as_f64().map(|f| f as f32))
                 .collect()
-        })
-        .unwrap_or_else(|| vec![0.1; dimensions]);
+        });
 
     let vectors = coll.export_all()?;
     let current_vecs: Vec<Vec<f32>> = vectors.iter().map(|(_, v, _)| v.clone()).collect();

@@ -312,8 +312,7 @@ pub fn merge_command(
                 let target_vec = coll_target.get(id);
 
                 let source_changed = in_base
-                    .map(|(bv, _)| bv != vector)
-                    .unwrap_or(true);
+                    .map_or(true, |(bv, _)| bv != vector);
                 let target_changed = match (&in_base, &target_vec) {
                     (Some((bv, _)), Some((tv, _))) => bv != tv,
                     (None, Some(_)) => true,

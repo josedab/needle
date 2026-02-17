@@ -89,8 +89,7 @@ pub(super) fn extract_client_ip(request: &Request<Body>, trusted_proxies: &[IpAd
         .get::<ConnectInfo<SocketAddr>>()
         .map(|info| info.0.ip());
     let trust_headers = remote_ip
-        .map(|ip| trusted_proxies.contains(&ip))
-        .unwrap_or(false);
+        .is_some_and(|ip| trusted_proxies.contains(&ip));
 
     if trust_headers {
         // Check X-Forwarded-For header first (for proxied requests)

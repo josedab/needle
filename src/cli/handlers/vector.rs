@@ -91,8 +91,7 @@ pub fn search_command(
             let meta = result
                 .metadata
                 .as_ref()
-                .map(|m| m.to_string())
-                .unwrap_or_else(|| "null".to_string());
+                .map_or_else(|| "null".to_string(), |m| m.to_string());
             println!(
                 "  ID: {}, Distance: {:.6}, Metadata: {}",
                 result.id, result.distance, meta
@@ -143,8 +142,7 @@ pub fn search_command(
             let meta = result
                 .metadata
                 .as_ref()
-                .map(|m| m.to_string())
-                .unwrap_or_else(|| "null".to_string());
+                .map_or_else(|| "null".to_string(), |m| m.to_string());
             println!(
                 "  ID: {}, Distance: {:.6}, Metadata: {}",
                 result.id, result.distance, meta
