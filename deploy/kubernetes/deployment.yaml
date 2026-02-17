@@ -341,4 +341,4 @@ metadata:
   annotations:
     # For AWS IAM roles for service accounts (IRSA)
     # eks.amazonaws.com/role-arn: arn:aws:iam::ACCOUNT_ID:role/needle-api-role
-automountServiceAccountToken: true
+automountServiceAccountToken: false

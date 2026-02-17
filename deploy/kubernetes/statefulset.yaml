@@ -472,7 +472,7 @@ metadata:
   labels:
     app: needle
     component: storage
-automountServiceAccountToken: true
+automountServiceAccountToken: false
 
 ---
 # Role for Storage pods
