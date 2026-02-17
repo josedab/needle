@@ -872,7 +872,7 @@ mod tests {
     }
 
     #[test]
-    fn test_worker_request_handling() {
+    fn test_worker_request_handling() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let mut coll = make_collection(4);
 
         // Insert
@@ -899,7 +899,7 @@ mod tests {
             assert_eq!(results.len(), 1);
             assert_eq!(results[0].id, "v1");
         } else {
-            panic!("Expected SearchResults");
+            return Err("Expected SearchResults".into())
         }
 
         // Stats
@@ -907,7 +907,7 @@ mod tests {
         if let WorkerResponse::Stats(stats) = resp {
             assert_eq!(stats.vector_count, 1);
         } else {
-            panic!("Expected Stats");
+            return Err("Expected Stats".into())
         }
 
         // Delete
@@ -918,5 +918,7 @@ mod tests {
             },
         );
         assert!(matches!(resp, WorkerResponse::Deleted { found: true }));
+
+        Ok(())
     }
 }

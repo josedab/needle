@@ -1533,7 +1533,7 @@ mod tests {
     }
 
     #[test]
-    fn test_websocket_source_builder() {
+    fn test_websocket_source_builder() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let config = StreamingIngestConfig::builder()
             .collection("test")
             .websocket("ws://localhost:8080/vectors")
@@ -1544,12 +1544,14 @@ mod tests {
                 assert_eq!(ws.url, "ws://localhost:8080/vectors");
                 assert_eq!(ws.message_format, WebSocketMessageFormat::Json);
             }
-            other => panic!("Expected WebSocket source, got {other:?}"),
+            other => return Err(format!("Expected WebSocket source, got {other:?}").into()),
         }
+
+        Ok(())
     }
 
     #[test]
-    fn test_websocket_source_custom_config() {
+    fn test_websocket_source_custom_config() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let ws_config = WebSocketSourceConfig {
             url: "wss://stream.example.com/ingest".into(),
             reconnect_interval_ms: 5000,
@@ -1575,10 +1577,12 @@ mod tests {
                 assert_eq!(ws.message_format, WebSocketMessageFormat::NdJson);
                 assert_eq!(ws.auth_token.as_deref(), Some("bearer-token-123"));
             }
-            other => panic!("Expected WebSocket source, got {other:?}"),
+            other => return Err(format!("Expected WebSocket source, got {other:?}").into()),
         }
         assert_eq!(config.batch_size, 64);
         assert_eq!(config.delivery, DeliveryGuarantee::ExactlyOnce);
+
+        Ok(())
     }
 
     #[test]

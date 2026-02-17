@@ -669,7 +669,7 @@ mod tests {
     }
 
     #[test]
-    fn test_rag_with_llm_stream() {
+    fn test_rag_with_llm_stream() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let db = Arc::new(Database::in_memory());
         let config = RagConfig {
             dimensions: 64,
@@ -694,11 +694,13 @@ mod tests {
             match token {
                 StreamToken::Token(t) => tokens.push(t),
                 StreamToken::Done { .. } => break,
-                StreamToken::Error(e) => panic!("Stream error: {e}"),
+                StreamToken::Error(e) => return Err(format!("Stream error: {e}").into()),
             }
         }
         assert!(!tokens.is_empty());
         assert!(!chunks.is_empty());
+
+        Ok(())
     }
 
     #[test]

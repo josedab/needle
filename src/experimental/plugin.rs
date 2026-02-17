@@ -1196,12 +1196,14 @@ mod tests {
     }
 
     #[test]
-    fn test_unregister_not_found() {
+    fn test_unregister_not_found() -> Result<(), Box<dyn std::error::Error>> {
         let manager = PluginManager::new();
         match manager.unregister("nonexistent") {
             Err(PluginError::NotFound(_)) => {}
-            other => panic!("expected NotFound, got {:?}", other.err()),
+            other => return Err(format!("expected NotFound, got {:?}", other.err()).into()),
         }
+
+        Ok(())
     }
 
     #[test]

@@ -1150,7 +1150,7 @@ mod tests {
     }
 
     #[test]
-    fn test_worker_protocol() {
+    fn test_worker_protocol() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let mut db = WasmDatabase::new(WasmConfig::default());
 
         // Create collection via message
@@ -1159,7 +1159,7 @@ mod tests {
                 name: "docs".into(),
                 dimensions: 4,
             })
-            .unwrap();
+            ?;
         assert!(matches!(resp, WorkerResponse::Ok));
 
         // Insert via message
@@ -1170,7 +1170,7 @@ mod tests {
                 vector: vec![1.0; 4],
                 metadata: None,
             })
-            .unwrap();
+            ?;
         assert!(matches!(resp, WorkerResponse::Ok));
 
         // Search via message
@@ -1180,14 +1180,16 @@ mod tests {
                 query: vec![1.0; 4],
                 k: 5,
             })
-            .unwrap();
+            ?;
         match resp {
             WorkerResponse::SearchResults(results) => {
                 assert_eq!(results.len(), 1);
                 assert_eq!(results[0].id, "d1");
             }
-            _ => panic!("Expected SearchResults"),
+            _ => return Err("Expected SearchResults".into()),
         }
+
+        Ok(())
     }
 
     #[test]
@@ -1211,9 +1213,9 @@ mod tests {
     }
 
     #[test]
-    fn test_batch_insert() {
+    fn test_batch_insert() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let mut db = WasmDatabase::new(WasmConfig::default());
-        db.create_collection("test", 4).unwrap();
+        db.create_collection("test", 4)?;
 
         let resp = db
             .handle_message(WorkerMessage::BatchInsert {
@@ -1231,35 +1233,39 @@ mod tests {
                     },
                 ],
             })
-            .unwrap();
+            ?;
 
         match resp {
             WorkerResponse::BatchResult { inserted, failed } => {
                 assert_eq!(inserted, 2);
                 assert_eq!(failed, 0);
             }
-            _ => panic!("Expected BatchResult"),
+            _ => return Err("Expected BatchResult".into()),
         }
+
+        Ok(())
     }
 
     #[test]
-    fn test_export() {
+    fn test_export() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let mut db = WasmDatabase::new(WasmConfig::default());
-        db.create_collection("test", 4).unwrap();
-        db.insert("test", "v1", &[1.0; 4], None).unwrap();
+        db.create_collection("test", 4)?;
+        db.insert("test", "v1", &[1.0; 4], None)?;
 
         let resp = db
             .handle_message(WorkerMessage::Export {
                 collection: "test".into(),
             })
-            .unwrap();
+            ?;
 
         match resp {
             WorkerResponse::ExportData(entries) => {
                 assert_eq!(entries.len(), 1);
             }
-            _ => panic!("Expected ExportData"),
+            _ => return Err("Expected ExportData".into()),
         }
+
+        Ok(())
     }
 
     #[test]

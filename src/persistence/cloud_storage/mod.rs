@@ -421,7 +421,7 @@ mod tests {
     }
 
     #[test]
-    fn test_local_backend_read_nonexistent() {
+    fn test_local_backend_read_nonexistent() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let (_temp_dir, backend) = create_test_backend();
 
         let read_future = backend.read("nonexistent_key");
@@ -430,8 +430,10 @@ mod tests {
         assert!(result.is_err());
         match result {
             Err(NeedleError::NotFound(_)) => {}
-            _ => panic!("Expected NotFound error"),
+            _ => return Err("Expected NotFound error".into()),
         }
+
+        Ok(())
     }
 
     #[test]

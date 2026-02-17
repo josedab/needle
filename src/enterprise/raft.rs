@@ -1644,7 +1644,7 @@ mod tests {
     }
 
     #[test]
-    fn test_request_vote() {
+    fn test_request_vote() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let mut node = RaftNode::new(NodeId(1), RaftConfig::default());
         node.initialize(vec![NodeId(2)]);
 
@@ -1663,8 +1663,10 @@ mod tests {
         if let RaftMessage::RequestVoteResponse(resp) = &messages[0].message {
             assert!(resp.vote_granted);
         } else {
-            panic!("Expected RequestVoteResponse");
+            return Err("Expected RequestVoteResponse".into())
         }
+
+        Ok(())
     }
 
     #[test]

@@ -1103,7 +1103,7 @@ mod tests {
     }
 
     #[test]
-    fn test_config_defaults() {
+    fn test_config_defaults() -> std::result::Result<(), Box<dyn std::error::Error>> {
         match ProjectionMethod::default_tsne() {
             ProjectionMethod::TSNE {
                 perplexity,
@@ -1114,7 +1114,7 @@ mod tests {
                 assert_eq!(learning_rate, 200.0);
                 assert_eq!(iterations, 1000);
             }
-            _ => panic!("Expected TSNE"),
+            _ => return Err("Expected TSNE".into()),
         }
 
         match ProjectionMethod::default_umap() {
@@ -1125,10 +1125,12 @@ mod tests {
                 assert_eq!(n_neighbors, 15);
                 assert!((min_dist - 0.1).abs() < f32::EPSILON);
             }
-            _ => panic!("Expected UMAP"),
+            _ => return Err("Expected UMAP".into()),
         }
 
         assert!(matches!(ProjectionMethod::default(), ProjectionMethod::PCA));
+
+        Ok(())
     }
 
     #[test]

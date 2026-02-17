@@ -2686,7 +2686,7 @@ mod tests {
     }
 
     #[test]
-    fn test_gossip_create_ping() {
+    fn test_gossip_create_ping() -> Result<(), Box<dyn std::error::Error>> {
         let registry = Arc::new(InstanceRegistry::new());
         let gossip = GossipProtocol::new("local", "http://localhost:8080", registry, GossipConfig::default());
         gossip.add_seed("peer1", "http://peer1:8080");
@@ -2697,8 +2697,10 @@ mod tests {
                 assert_eq!(sender, "local");
                 assert!(members.len() >= 1); // at least peer1 + self
             }
-            _ => panic!("Expected Ping"),
+            _ => return Err("Expected Ping".into()),
         }
+
+        Ok(())
     }
 
     #[test]

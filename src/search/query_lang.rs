@@ -2382,31 +2382,35 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_select_columns() {
-        let query = QueryParser::parse("SELECT id, title, score FROM docs").unwrap();
+    fn test_parse_select_columns() -> Result<(), Box<dyn std::error::Error>> {
+        let query = QueryParser::parse("SELECT id, title, score FROM docs")?;
         if let SelectClause::Columns(cols) = query.select {
             assert_eq!(cols, vec!["id", "title", "score"]);
         } else {
-            panic!("Expected SelectClause::Columns, got {:?}", query.select);
+            return Err(format!("Expected SelectClause::Columns, got {:?}", query.select).into())
         }
+
+        Ok(())
     }
 
     #[test]
-    fn test_parse_where_similar_to() {
+    fn test_parse_where_similar_to() -> Result<(), Box<dyn std::error::Error>> {
         let query =
             QueryParser::parse("SELECT * FROM documents WHERE vector SIMILAR TO $query LIMIT 10")
-                .unwrap();
+                ?;
 
         if let Some(where_clause) = query.where_clause {
             if let Expression::SimilarTo(similar) = where_clause.expression {
                 assert_eq!(similar.column, "vector");
                 assert_eq!(similar.query_param, "query");
             } else {
-                panic!("Expected SimilarTo expression, got {:?}", where_clause.expression);
+                return Err(format!("Expected SimilarTo expression, got {:?}", where_clause.expression).into())
             }
         } else {
-            panic!("Expected WHERE clause, got None");
+            return Err("Expected WHERE clause, got None".into())
         }
+
+        Ok(())
     }
 
     #[test]
@@ -2419,9 +2423,9 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_where_in() {
+    fn test_parse_where_in() -> Result<(), Box<dyn std::error::Error>> {
         let query =
-            QueryParser::parse("SELECT * FROM docs WHERE status IN ('active', 'pending')").unwrap();
+            QueryParser::parse("SELECT * FROM docs WHERE status IN ('active', 'pending')")?;
 
         if let Some(where_clause) = query.where_clause {
             if let Expression::InList(in_list) = where_clause.expression {
@@ -2429,44 +2433,50 @@ mod tests {
                 assert_eq!(in_list.values.len(), 2);
                 assert!(!in_list.negated);
             } else {
-                panic!("Expected InList expression, got {:?}", where_clause.expression);
+                return Err(format!("Expected InList expression, got {:?}", where_clause.expression).into())
             }
         } else {
-            panic!("Expected WHERE clause, got None");
+            return Err("Expected WHERE clause, got None".into())
         }
+
+        Ok(())
     }
 
     #[test]
-    fn test_parse_where_between() {
+    fn test_parse_where_between() -> Result<(), Box<dyn std::error::Error>> {
         let query =
-            QueryParser::parse("SELECT * FROM docs WHERE score BETWEEN 0.5 AND 1.0").unwrap();
+            QueryParser::parse("SELECT * FROM docs WHERE score BETWEEN 0.5 AND 1.0")?;
 
         if let Some(where_clause) = query.where_clause {
             if let Expression::Between(between) = where_clause.expression {
                 assert_eq!(between.column, "score");
             } else {
-                panic!("Expected Between expression, got {:?}", where_clause.expression);
+                return Err(format!("Expected Between expression, got {:?}", where_clause.expression).into())
             }
         } else {
-            panic!("Expected WHERE clause, got None");
+            return Err("Expected WHERE clause, got None".into())
         }
+
+        Ok(())
     }
 
     #[test]
-    fn test_parse_where_like() {
+    fn test_parse_where_like() -> Result<(), Box<dyn std::error::Error>> {
         let query =
-            QueryParser::parse("SELECT * FROM docs WHERE title LIKE '%machine learning%'").unwrap();
+            QueryParser::parse("SELECT * FROM docs WHERE title LIKE '%machine learning%'")?;
 
         if let Some(where_clause) = query.where_clause {
             if let Expression::Like(like) = where_clause.expression {
                 assert_eq!(like.column, "title");
                 assert_eq!(like.pattern, "%machine learning%");
             } else {
-                panic!("Expected Like expression, got {:?}", where_clause.expression);
+                return Err(format!("Expected Like expression, got {:?}", where_clause.expression).into())
             }
         } else {
-            panic!("Expected WHERE clause, got None");
+            return Err("Expected WHERE clause, got None".into())
         }
+
+        Ok(())
     }
 
     #[test]
@@ -2480,31 +2490,35 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_with_time_decay() {
+    fn test_parse_with_time_decay() -> Result<(), Box<dyn std::error::Error>> {
         let query = QueryParser::parse(
             "SELECT * FROM articles WITH TIME_DECAY(EXPONENTIAL, half_life=7d) WHERE vector SIMILAR TO $query LIMIT 10"
-        ).unwrap();
+        )?;
 
         if let Some(WithClause::TimeDecay(config)) = query.with_clause {
             assert_eq!(config.function, TimeDecayFunction::Exponential);
             assert!(config.params.contains_key("half_life"));
         } else {
-            panic!("Expected TIME_DECAY clause, got {:?}", query.with_clause);
+            return Err(format!("Expected TIME_DECAY clause, got {:?}", query.with_clause).into())
         }
+
+        Ok(())
     }
 
     #[test]
-    fn test_parse_using_rag() {
+    fn test_parse_using_rag() -> Result<(), Box<dyn std::error::Error>> {
         let query = QueryParser::parse(
             "SELECT * FROM knowledge_base USING RAG(top_k=5, rerank=true) WHERE vector SIMILAR TO $query"
-        ).unwrap();
+        )?;
 
         if let Some(using) = query.using_clause {
             assert_eq!(using.rag.top_k, Some(5));
             assert_eq!(using.rag.rerank, Some(true));
         } else {
-            panic!("Expected USING RAG clause, got None");
+            return Err("Expected USING RAG clause, got None".into())
         }
+
+        Ok(())
     }
 
     #[test]
@@ -2518,18 +2532,20 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_order_by() {
+    fn test_parse_order_by() -> Result<(), Box<dyn std::error::Error>> {
         let query =
             QueryParser::parse("SELECT * FROM docs ORDER BY score DESC, title ASC LIMIT 10")
-                .unwrap();
+                ?;
 
         if let Some(order_by) = query.order_by {
             assert_eq!(order_by.columns.len(), 2);
             assert_eq!(order_by.columns[0], ("score".to_string(), SortOrder::Desc));
             assert_eq!(order_by.columns[1], ("title".to_string(), SortOrder::Asc));
         } else {
-            panic!("Expected ORDER BY clause, got None");
+            return Err("Expected ORDER BY clause, got None".into())
         }
+
+        Ok(())
     }
 
     #[test]

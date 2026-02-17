@@ -518,6 +518,8 @@ fn normalize_whitespace(text: &str) -> String {
 mod tests {
     use super::*;
 
+    const TEST_API_KEY: &str = "test-api-key";
+
     fn test_db() -> Database {
         let db = Database::in_memory();
         db.create_collection("test", 384).unwrap();
@@ -648,13 +650,13 @@ mod tests {
     #[test]
     fn test_provider_dimensions() {
         let openai = EmbeddingProvider::OpenAI {
-            api_key: "k".into(),
+            api_key: TEST_API_KEY.into(),
             model: "text-embedding-3-small".into(),
         };
         assert_eq!(openai.dimensions(), 1536);
 
         let cohere = EmbeddingProvider::Cohere {
-            api_key: "k".into(),
+            api_key: TEST_API_KEY.into(),
             model: "embed-english-light-v3.0".into(),
         };
         assert_eq!(cohere.dimensions(), 384);

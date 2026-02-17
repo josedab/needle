@@ -1759,13 +1759,13 @@ mod tests {
     }
 
     #[test]
-    fn test_event_subscription() {
+    fn test_event_subscription() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let collection = CollaborativeCollection::new("test", 4);
         let mut receiver = collection.subscribe();
 
         collection
             .insert("vec1", &[1.0, 0.0, 0.0, 0.0], HashMap::new())
-            .unwrap();
+            ?;
 
         let events = receiver.recv_all();
         assert_eq!(events.len(), 1);
@@ -1774,8 +1774,10 @@ mod tests {
             CollaborativeEvent::VectorInserted { id, .. } => {
                 assert_eq!(id, "vec1");
             }
-            _ => panic!("Expected VectorInserted event"),
+            _ => return Err("Expected VectorInserted event".into()),
         }
+
+        Ok(())
     }
 
     #[test]

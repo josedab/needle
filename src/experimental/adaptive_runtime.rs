@@ -704,19 +704,21 @@ mod tests {
     }
 
     #[test]
-    fn test_force_migration() {
+    fn test_force_migration() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let runtime = AdaptiveRuntime::new(64, AdaptiveRuntimeConfig::default());
         assert_eq!(runtime.active_index(), ActiveIndexType::Hnsw);
 
-        runtime.force_migrate(ActiveIndexType::Ivf).unwrap();
+        runtime.force_migrate(ActiveIndexType::Ivf)?;
         assert_eq!(runtime.active_index(), ActiveIndexType::Ivf);
 
         if let MigrationPhase::Complete { from, to } = runtime.migration_status() {
             assert_eq!(from, ActiveIndexType::Hnsw);
             assert_eq!(to, ActiveIndexType::Ivf);
         } else {
-            panic!("Expected Complete phase");
+            return Err("Expected Complete phase".into())
         }
+
+        Ok(())
     }
 
     #[test]

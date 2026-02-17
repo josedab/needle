@@ -1868,93 +1868,95 @@ mod tests {
     use tempfile::tempdir;
 
     #[test]
-    fn test_database_in_memory() {
+    fn test_database_in_memory() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let db = Database::in_memory();
 
-        db.create_collection("documents", 128).unwrap();
+        db.create_collection("documents", 128)?;
 
-        let coll = db.collection("documents").unwrap();
+        let coll = db.collection("documents")?;
         let vec = random_vector(128);
-        coll.insert("doc1", &vec, Some(json!({"title": "Test"})))
-            .unwrap();
+        coll.insert("doc1", &vec, Some(json!({"title": "Test"})))?;
 
         assert_eq!(coll.len(), 1);
+        Ok(())
     }
 
     #[test]
-    fn test_database_persistence() {
-        let dir = tempdir().unwrap();
+    fn test_database_persistence() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let dir = tempdir()?;
         let path = dir.path().join("test.needle");
 
         // Create and populate database
         {
-            let mut db = Database::open(&path).unwrap();
-            db.create_collection("documents", 64).unwrap();
+            let mut db = Database::open(&path)?;
+            db.create_collection("documents", 64)?;
 
-            let coll = db.collection("documents").unwrap();
+            let coll = db.collection("documents")?;
             for i in 0..10 {
                 let vec = random_vector(64);
-                coll.insert(format!("doc{}", i), &vec, Some(json!({"index": i})))
-                    .unwrap();
+                coll.insert(format!("doc{}", i), &vec, Some(json!({"index": i})))?;
             }
 
-            db.save().unwrap();
+            db.save()?;
         }
 
         // Reopen and verify
         {
-            let db = Database::open(&path).unwrap();
-            let coll = db.collection("documents").unwrap();
+            let db = Database::open(&path)?;
+            let coll = db.collection("documents")?;
             assert_eq!(coll.len(), 10);
 
-            let (_, meta) = coll.get("doc5").unwrap();
-            assert_eq!(meta.unwrap()["index"], 5);
+            let (_, meta) = coll.get("doc5").ok_or("doc5 not found")?;
+            assert_eq!(meta.ok_or("missing metadata")?["index"], 5);
         }
+        Ok(())
     }
 
     #[test]
-    fn test_database_multiple_collections() {
+    fn test_database_multiple_collections() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let db = Database::in_memory();
 
-        db.create_collection("images", 512).unwrap();
-        db.create_collection("text", 384).unwrap();
+        db.create_collection("images", 512)?;
+        db.create_collection("text", 384)?;
 
         let collections = db.list_collections();
         assert_eq!(collections.len(), 2);
         assert!(collections.contains(&"images".to_string()));
         assert!(collections.contains(&"text".to_string()));
+        Ok(())
     }
 
     #[test]
-    fn test_database_drop_collection() {
+    fn test_database_drop_collection() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let db = Database::in_memory();
 
-        db.create_collection("temp", 128).unwrap();
+        db.create_collection("temp", 128)?;
         assert!(db.has_collection("temp"));
 
-        db.drop_collection("temp").unwrap();
+        db.drop_collection("temp")?;
         assert!(!db.has_collection("temp"));
+        Ok(())
     }
 
     #[test]
-    fn test_database_search() {
+    fn test_database_search() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let db = Database::in_memory();
-        db.create_collection("test", 32).unwrap();
+        db.create_collection("test", 32)?;
 
-        let coll = db.collection("test").unwrap();
+        let coll = db.collection("test")?;
 
         // Insert vectors
         for i in 0..100 {
             let vec = random_vector(32);
-            coll.insert(format!("doc{}", i), &vec, Some(json!({"index": i})))
-                .unwrap();
+            coll.insert(format!("doc{}", i), &vec, Some(json!({"index": i})))?;
         }
 
         // Search
         let query = random_vector(32);
-        let results = coll.search(&query, 10).unwrap();
+        let results = coll.search(&query, 10)?;
 
         assert_eq!(results.len(), 10);
+        Ok(())
     }
 
     #[test]
@@ -1965,123 +1967,131 @@ mod tests {
     }
 
     #[test]
-    fn test_collection_already_exists() {
+    fn test_collection_already_exists() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let db = Database::in_memory();
-        db.create_collection("test", 128).unwrap();
+        db.create_collection("test", 128)?;
 
         let result = db.create_collection("test", 128);
         assert!(result.is_err());
+        Ok(())
     }
 
     // ========== Alias Tests ==========
 
     #[test]
-    fn test_alias_create_and_resolve() {
+    fn test_alias_create_and_resolve() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let db = Database::in_memory();
-        db.create_collection("v1", 128).unwrap();
+        db.create_collection("v1", 128)?;
 
         // Create alias
-        db.create_alias("prod", "v1").unwrap();
+        db.create_alias("prod", "v1")?;
 
         // Resolve alias
         assert_eq!(db.get_canonical_name("prod"), Some("v1".to_string()));
 
         // Access collection via alias
-        let coll = db.collection("prod").unwrap();
-        assert_eq!(coll.count(None).unwrap(), 0);
+        let coll = db.collection("prod")?;
+        assert_eq!(coll.count(None)?, 0);
+        Ok(())
     }
 
     #[test]
-    fn test_alias_list() {
+    fn test_alias_list() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let db = Database::in_memory();
-        db.create_collection("v1", 128).unwrap();
-        db.create_collection("v2", 128).unwrap();
+        db.create_collection("v1", 128)?;
+        db.create_collection("v2", 128)?;
 
-        db.create_alias("prod", "v1").unwrap();
-        db.create_alias("staging", "v2").unwrap();
+        db.create_alias("prod", "v1")?;
+        db.create_alias("staging", "v2")?;
 
         let aliases = db.list_aliases();
         assert_eq!(aliases.len(), 2);
         assert!(aliases.contains(&("prod".to_string(), "v1".to_string())));
         assert!(aliases.contains(&("staging".to_string(), "v2".to_string())));
+        Ok(())
     }
 
     #[test]
-    fn test_alias_delete() {
+    fn test_alias_delete() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let db = Database::in_memory();
-        db.create_collection("v1", 128).unwrap();
-        db.create_alias("prod", "v1").unwrap();
+        db.create_collection("v1", 128)?;
+        db.create_alias("prod", "v1")?;
 
         assert!(db.get_canonical_name("prod").is_some());
 
         // Delete alias
-        let deleted = db.delete_alias("prod").unwrap();
+        let deleted = db.delete_alias("prod")?;
         assert!(deleted);
 
         // Alias no longer exists
         assert!(db.get_canonical_name("prod").is_none());
 
         // Deleting again returns false
-        let deleted = db.delete_alias("prod").unwrap();
+        let deleted = db.delete_alias("prod")?;
         assert!(!deleted);
+        Ok(())
     }
 
     #[test]
-    fn test_alias_prevents_collection_drop() {
+    fn test_alias_prevents_collection_drop() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let db = Database::in_memory();
-        db.create_collection("v1", 128).unwrap();
-        db.create_alias("prod", "v1").unwrap();
+        db.create_collection("v1", 128)?;
+        db.create_alias("prod", "v1")?;
 
         // Trying to drop collection with alias should fail
         let result = db.drop_collection("v1");
         assert!(result.is_err());
 
         // Delete alias first
-        db.delete_alias("prod").unwrap();
+        db.delete_alias("prod")?;
 
         // Now drop should succeed
-        let dropped = db.drop_collection("v1").unwrap();
+        let dropped = db.drop_collection("v1")?;
         assert!(dropped);
+        Ok(())
     }
 
     #[test]
-    fn test_alias_update() {
+    fn test_alias_update() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let db = Database::in_memory();
-        db.create_collection("v1", 128).unwrap();
-        db.create_collection("v2", 128).unwrap();
+        db.create_collection("v1", 128)?;
+        db.create_collection("v2", 128)?;
 
-        db.create_alias("prod", "v1").unwrap();
+        db.create_alias("prod", "v1")?;
         assert_eq!(db.get_canonical_name("prod"), Some("v1".to_string()));
 
         // Update alias to point to v2
-        db.update_alias("prod", "v2").unwrap();
+        db.update_alias("prod", "v2")?;
         assert_eq!(db.get_canonical_name("prod"), Some("v2".to_string()));
+        Ok(())
     }
 
     #[test]
-    fn test_aliases_for_collection() {
+    fn test_aliases_for_collection() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let db = Database::in_memory();
-        db.create_collection("v1", 128).unwrap();
+        db.create_collection("v1", 128)?;
 
-        db.create_alias("prod", "v1").unwrap();
-        db.create_alias("latest", "v1").unwrap();
+        db.create_alias("prod", "v1")?;
+        db.create_alias("latest", "v1")?;
 
         let aliases = db.aliases_for_collection("v1");
         assert_eq!(aliases.len(), 2);
         assert!(aliases.contains(&"prod".to_string()));
         assert!(aliases.contains(&"latest".to_string()));
+        Ok(())
     }
 
     #[test]
-    fn test_alias_already_exists() {
+    fn test_alias_already_exists() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let db = Database::in_memory();
-        db.create_collection("v1", 128).unwrap();
+        db.create_collection("v1", 128)?;
 
-        db.create_alias("prod", "v1").unwrap();
+        db.create_alias("prod", "v1")?;
 
         // Creating same alias again should fail
         let result = db.create_alias("prod", "v1");
         assert!(result.is_err());
+        Ok(())
     }
 
     #[test]
@@ -2096,135 +2106,137 @@ mod tests {
     // ========== TTL Tests ==========
 
     #[test]
-    fn test_ttl_insert_and_stats() {
+    fn test_ttl_insert_and_stats() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let db = Database::in_memory();
-        db.create_collection("test", 32).unwrap();
+        db.create_collection("test", 32)?;
 
-        let coll = db.collection("test").unwrap();
+        let coll = db.collection("test")?;
 
         // Insert with TTL
         let vec = random_vector(32);
-        coll.insert_with_ttl("doc1", &vec, None, Some(3600))
-            .unwrap();
+        coll.insert_with_ttl("doc1", &vec, None, Some(3600))?;
 
         // Insert without TTL
         let vec2 = random_vector(32);
-        coll.insert("doc2", &vec2, None).unwrap();
+        coll.insert("doc2", &vec2, None)?;
 
         let (total_with_ttl, _expired, _earliest, _latest) = coll.ttl_stats();
         assert_eq!(total_with_ttl, 1);
-        assert_eq!(coll.count(None).unwrap(), 2);
+        assert_eq!(coll.count(None)?, 2);
+        Ok(())
     }
 
     #[test]
-    fn test_ttl_get_and_set() {
+    fn test_ttl_get_and_set() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let db = Database::in_memory();
-        db.create_collection("test", 32).unwrap();
+        db.create_collection("test", 32)?;
 
-        let coll = db.collection("test").unwrap();
+        let coll = db.collection("test")?;
 
         let vec = random_vector(32);
-        coll.insert("doc1", &vec, None).unwrap();
+        coll.insert("doc1", &vec, None)?;
 
         // Initially no TTL
         assert!(coll.get_ttl("doc1").is_none());
 
         // Set TTL
-        coll.set_ttl("doc1", Some(3600)).unwrap();
+        coll.set_ttl("doc1", Some(3600))?;
         assert!(coll.get_ttl("doc1").is_some());
 
         // Remove TTL
-        coll.set_ttl("doc1", None).unwrap();
+        coll.set_ttl("doc1", None)?;
         assert!(coll.get_ttl("doc1").is_none());
+        Ok(())
     }
 
     #[test]
-    fn test_ttl_expiration_sweep() {
+    fn test_ttl_expiration_sweep() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let db = Database::in_memory();
-        db.create_collection("test", 32).unwrap();
+        db.create_collection("test", 32)?;
 
-        let coll = db.collection("test").unwrap();
+        let coll = db.collection("test")?;
 
         // Insert with very short TTL (already expired - TTL of 0 means expire immediately)
         let vec = random_vector(32);
         // Use a TTL in the past by setting expiration directly
-        coll.insert_with_ttl("doc1", &vec, None, Some(0)).unwrap();
+        coll.insert_with_ttl("doc1", &vec, None, Some(0))?;
 
         // Wait a tiny bit and expire - but since TTL=0 sets expiration to now,
         // the vector should be expired immediately on the next sweep
         std::thread::sleep(std::time::Duration::from_millis(10));
 
-        let expired = coll.expire_vectors().unwrap();
+        let expired = coll.expire_vectors()?;
         assert_eq!(expired, 1);
 
         // Vector should be gone
         assert!(coll.get("doc1").is_none());
+        Ok(())
     }
 
     #[test]
-    fn test_ttl_lazy_expiration_in_search() {
+    fn test_ttl_lazy_expiration_in_search() -> std::result::Result<(), Box<dyn std::error::Error>> {
         use crate::CollectionConfig;
 
         let db = Database::in_memory();
 
         // Create collection with lazy expiration enabled
         let config = CollectionConfig::new("test", 32).with_lazy_expiration(true);
-        db.create_collection_with_config(config).unwrap();
+        db.create_collection_with_config(config)?;
 
-        let coll = db.collection("test").unwrap();
+        let coll = db.collection("test")?;
 
         // Insert expired vector
         let vec1 = random_vector(32);
-        coll.insert_with_ttl("expired", &vec1, None, Some(0))
-            .unwrap();
+        coll.insert_with_ttl("expired", &vec1, None, Some(0))?;
 
         // Insert non-expired vector
         let vec2 = random_vector(32);
-        coll.insert("valid", &vec2, None).unwrap();
+        coll.insert("valid", &vec2, None)?;
 
         std::thread::sleep(std::time::Duration::from_millis(10));
 
         // Search should only return the valid vector (lazy expiration filters out expired)
-        let results = coll.search(&vec1, 10).unwrap();
+        let results = coll.search(&vec1, 10)?;
 
         // The expired vector should not appear in results
         assert!(results.iter().all(|r| r.id != "expired"));
+        Ok(())
     }
 
     // ========== Distance Override Tests ==========
 
     #[test]
-    fn test_distance_override_search() {
+    fn test_distance_override_search() -> std::result::Result<(), Box<dyn std::error::Error>> {
         use crate::DistanceFunction;
 
         let db = Database::in_memory();
-        db.create_collection("test", 4).unwrap();
+        db.create_collection("test", 4)?;
 
-        let coll = db.collection("test").unwrap();
+        let coll = db.collection("test")?;
 
         // Insert some vectors
-        coll.insert("a", &[1.0, 0.0, 0.0, 0.0], None).unwrap();
-        coll.insert("b", &[0.0, 1.0, 0.0, 0.0], None).unwrap();
-        coll.insert("c", &[0.5, 0.5, 0.0, 0.0], None).unwrap();
+        coll.insert("a", &[1.0, 0.0, 0.0, 0.0], None)?;
+        coll.insert("b", &[0.0, 1.0, 0.0, 0.0], None)?;
+        coll.insert("c", &[0.5, 0.5, 0.0, 0.0], None)?;
 
         let query = vec![1.0, 0.0, 0.0, 0.0];
 
         // Search with default distance (cosine)
-        let results_default = coll.search(&query, 3).unwrap();
+        let results_default = coll.search(&query, 3)?;
         assert_eq!(results_default.len(), 3);
         assert_eq!(results_default[0].id, "a"); // Exact match
 
         // Search with euclidean distance override (triggers brute-force)
         let results_euclidean = coll
-            .search_with_options(&query, 3, Some(DistanceFunction::Euclidean), None, None, 3)
-            .unwrap();
+            .search_with_options(&query, 3, Some(DistanceFunction::Euclidean), None, None, 3)?;
         assert_eq!(results_euclidean.len(), 3);
         assert_eq!(results_euclidean[0].id, "a"); // Still exact match
         assert!(results_euclidean[0].distance < 0.001); // Euclidean distance to itself is 0
+        Ok(())
     }
 
     #[test]
-    fn test_distance_override_produces_correct_ordering() {
+    fn test_distance_override_produces_correct_ordering() -> std::result::Result<(), Box<dyn std::error::Error>> {
         use crate::DistanceFunction;
 
         let db = Database::in_memory();
@@ -2232,18 +2244,18 @@ mod tests {
         // Create collection with cosine distance
         let config =
             crate::CollectionConfig::new("test", 3).with_distance(DistanceFunction::Cosine);
-        db.create_collection_with_config(config).unwrap();
+        db.create_collection_with_config(config)?;
 
-        let coll = db.collection("test").unwrap();
+        let coll = db.collection("test")?;
 
         // Insert vectors with different magnitudes but same direction
-        coll.insert("small", &[1.0, 0.0, 0.0], None).unwrap();
-        coll.insert("large", &[10.0, 0.0, 0.0], None).unwrap();
+        coll.insert("small", &[1.0, 0.0, 0.0], None)?;
+        coll.insert("large", &[10.0, 0.0, 0.0], None)?;
 
         let query = vec![5.0, 0.0, 0.0];
 
         // With cosine, both should have same distance (direction matters, not magnitude)
-        let cosine_results = coll.search(&query, 2).unwrap();
+        let cosine_results = coll.search(&query, 2)?;
         let d1 = cosine_results[0].distance;
         let d2 = cosine_results[1].distance;
         assert!(
@@ -2253,17 +2265,17 @@ mod tests {
 
         // With euclidean override, magnitude matters
         let euclidean_results = coll
-            .search_with_options(&query, 2, Some(DistanceFunction::Euclidean), None, None, 3)
-            .unwrap();
+            .search_with_options(&query, 2, Some(DistanceFunction::Euclidean), None, None, 3)?;
 
         // "small" (1.0) is closer to query (5.0) than "large" (10.0) in euclidean
         // distance(5,1) = 4, distance(5,10) = 5
         assert_eq!(euclidean_results[0].id, "small");
         assert_eq!(euclidean_results[1].id, "large");
+        Ok(())
     }
 
     #[test]
-    fn test_distance_override_same_as_index_uses_hnsw() {
+    fn test_distance_override_same_as_index_uses_hnsw() -> std::result::Result<(), Box<dyn std::error::Error>> {
         use crate::DistanceFunction;
 
         let db = Database::in_memory();
@@ -2271,40 +2283,40 @@ mod tests {
         // Create collection with euclidean distance
         let config =
             crate::CollectionConfig::new("test", 32).with_distance(DistanceFunction::Euclidean);
-        db.create_collection_with_config(config).unwrap();
+        db.create_collection_with_config(config)?;
 
-        let coll = db.collection("test").unwrap();
+        let coll = db.collection("test")?;
 
         for i in 0..100 {
             let vec = random_vector(32);
-            coll.insert(format!("doc{}", i), &vec, None).unwrap();
+            coll.insert(format!("doc{}", i), &vec, None)?;
         }
 
         let query = random_vector(32);
 
         // Override with same distance as index - should use HNSW (not brute force)
         let results = coll
-            .search_with_options(&query, 10, Some(DistanceFunction::Euclidean), None, None, 3)
-            .unwrap();
+            .search_with_options(&query, 10, Some(DistanceFunction::Euclidean), None, None, 3)?;
 
         assert_eq!(results.len(), 10);
+        Ok(())
     }
 
     // ── Next-Gen Feature Tests ──────────────────────────────────────────
 
     #[test]
-    fn test_matryoshka_search() {
+    fn test_matryoshka_search() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let db = Database::in_memory();
-        db.create_collection("docs", 128).unwrap();
-        let coll = db.collection("docs").unwrap();
+        db.create_collection("docs", 128)?;
+        let coll = db.collection("docs")?;
 
         for i in 0..50 {
             let vec = random_vector(128);
-            coll.insert(format!("doc{}", i), &vec, None).unwrap();
+            coll.insert(format!("doc{}", i), &vec, None)?;
         }
 
         let query = random_vector(128);
-        let results = coll.search_matryoshka(&query, 10, 64, 4).unwrap();
+        let results = coll.search_matryoshka(&query, 10, 64, 4)?;
 
         assert!(!results.is_empty());
         assert!(results.len() <= 10);
@@ -2312,39 +2324,41 @@ mod tests {
         for w in results.windows(2) {
             assert!(w[0].distance <= w[1].distance);
         }
+        Ok(())
     }
 
     #[test]
-    fn test_matryoshka_search_fallback_to_full() {
+    fn test_matryoshka_search_fallback_to_full() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let db = Database::in_memory();
-        db.create_collection("docs", 64).unwrap();
-        let coll = db.collection("docs").unwrap();
+        db.create_collection("docs", 64)?;
+        let coll = db.collection("docs")?;
 
         for i in 0..20 {
             let vec = random_vector(64);
-            coll.insert(format!("doc{}", i), &vec, None).unwrap();
+            coll.insert(format!("doc{}", i), &vec, None)?;
         }
 
         let query = random_vector(64);
         // coarse_dims >= dims should fall back to normal search
-        let results = coll.search_matryoshka(&query, 5, 128, 4).unwrap();
+        let results = coll.search_matryoshka(&query, 5, 128, 4)?;
         assert_eq!(results.len(), 5);
+        Ok(())
     }
 
     #[test]
-    fn test_snapshot_create_list_restore() {
+    fn test_snapshot_create_list_restore() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let db = Database::in_memory();
-        db.create_collection("docs", 32).unwrap();
-        let coll = db.collection("docs").unwrap();
+        db.create_collection("docs", 32)?;
+        let coll = db.collection("docs")?;
 
         // Insert data
         for i in 0..10 {
-            coll.insert(format!("v{}", i), &random_vector(32), None).unwrap();
+            coll.insert(format!("v{}", i), &random_vector(32), None)?;
         }
         assert_eq!(coll.len(), 10);
 
         // Create snapshot
-        coll.create_snapshot("snap1").unwrap();
+        coll.create_snapshot("snap1")?;
 
         // List snapshots
         let snapshots = coll.list_snapshots();
@@ -2352,20 +2366,21 @@ mod tests {
 
         // Delete some vectors
         for i in 0..5 {
-            coll.delete(&format!("v{}", i)).unwrap();
+            coll.delete(&format!("v{}", i))?;
         }
         assert_eq!(coll.len(), 5);
 
         // Restore snapshot
-        coll.restore_snapshot("snap1").unwrap();
+        coll.restore_snapshot("snap1")?;
         assert_eq!(coll.len(), 10);
+        Ok(())
     }
 
     #[test]
-    fn test_memory_store_and_recall() {
+    fn test_memory_store_and_recall() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let db = Database::in_memory();
-        db.create_collection("memories", 32).unwrap();
-        let coll = db.collection("memories").unwrap();
+        db.create_collection("memories", 32)?;
+        let coll = db.collection("memories")?;
 
         // Store a "memory" with metadata
         let vec = random_vector(32);
@@ -2374,69 +2389,71 @@ mod tests {
             "_memory_tier": "semantic",
             "_memory_importance": 0.8,
         });
-        coll.insert("mem_1", &vec, Some(metadata)).unwrap();
+        coll.insert("mem_1", &vec, Some(metadata))?;
 
         // Recall by similarity
-        let results = coll.search(&vec, 5).unwrap();
+        let results = coll.search(&vec, 5)?;
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].id, "mem_1");
 
-        let meta = results[0].metadata.as_ref().unwrap();
+        let meta = results[0].metadata.as_ref().ok_or("missing metadata")?;
         assert_eq!(meta["_memory_tier"], "semantic");
         assert_eq!(meta["_memory_content"], "The user prefers dark mode");
 
         // Forget
-        assert!(coll.delete("mem_1").unwrap());
+        assert!(coll.delete("mem_1")?);
         assert_eq!(coll.len(), 0);
+        Ok(())
     }
 
     #[test]
-    fn test_vector_diff_between_collections() {
+    fn test_vector_diff_between_collections() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let db = Database::in_memory();
-        db.create_collection("a", 32).unwrap();
-        db.create_collection("b", 32).unwrap();
+        db.create_collection("a", 32)?;
+        db.create_collection("b", 32)?;
 
-        let coll_a = db.collection("a").unwrap();
-        let coll_b = db.collection("b").unwrap();
+        let coll_a = db.collection("a")?;
+        let coll_b = db.collection("b")?;
 
         // Shared vectors (same ID, same data)
         for i in 0..5 {
             let vec = random_vector(32);
-            coll_a.insert(format!("shared_{}", i), &vec, None).unwrap();
-            coll_b.insert(format!("shared_{}", i), &vec, None).unwrap();
+            coll_a.insert(format!("shared_{}", i), &vec, None)?;
+            coll_b.insert(format!("shared_{}", i), &vec, None)?;
         }
 
         // Only in A
         for i in 0..3 {
-            coll_a.insert(format!("only_a_{}", i), &random_vector(32), None).unwrap();
+            coll_a.insert(format!("only_a_{}", i), &random_vector(32), None)?;
         }
 
         // Only in B
         for i in 0..2 {
-            coll_b.insert(format!("only_b_{}", i), &random_vector(32), None).unwrap();
+            coll_b.insert(format!("only_b_{}", i), &random_vector(32), None)?;
         }
 
-        let ids_a: std::collections::HashSet<String> = coll_a.ids().unwrap().into_iter().collect();
-        let ids_b: std::collections::HashSet<String> = coll_b.ids().unwrap().into_iter().collect();
+        let ids_a: std::collections::HashSet<String> = coll_a.ids()?.into_iter().collect();
+        let ids_b: std::collections::HashSet<String> = coll_b.ids()?.into_iter().collect();
 
         assert_eq!(ids_a.difference(&ids_b).count(), 3); // only in A
         assert_eq!(ids_b.difference(&ids_a).count(), 2); // only in B
         assert_eq!(ids_a.intersection(&ids_b).count(), 5); // shared
+        Ok(())
     }
 
     #[test]
-    fn test_cost_estimator_integration() {
+    fn test_cost_estimator_integration() -> std::result::Result<(), Box<dyn std::error::Error>> {
         use crate::search::cost_estimator::{CostEstimator, CollectionStatistics};
 
         let db = Database::in_memory();
-        db.create_collection("bench", 128).unwrap();
-        let coll = db.collection("bench").unwrap();
+        db.create_collection("bench", 128)?;
+        let coll = db.collection("bench")?;
 
         for i in 0..100 {
-            coll.insert(format!("v{}", i), &random_vector(128), None).unwrap();
+            coll.insert(format!("v{}", i), &random_vector(128), None)?;
         }
 
-        let stats = coll.stats().unwrap();
+        let stats = coll.stats()?;
         let col_stats = CollectionStatistics::new(stats.vector_count, stats.dimensions, 0.0);
 
         let estimator = CostEstimator::default();
@@ -2445,10 +2462,11 @@ mod tests {
         assert!(plan.cost.estimated_latency_ms > 0.0);
         assert!(plan.cost.distance_computations > 0);
         assert!(!plan.rationale.is_empty());
+        Ok(())
     }
 
     #[test]
-    fn test_quantized_index_persistence() {
+    fn test_quantized_index_persistence() -> std::result::Result<(), Box<dyn std::error::Error>> {
         use crate::indexing::quantization::{ScalarQuantizer, QuantizedIndex};
 
         let vectors: Vec<Vec<f32>> = (0..50).map(|_| random_vector(32)).collect();
@@ -2462,9 +2480,10 @@ mod tests {
         assert!(!bytes.is_empty());
 
         // Deserialize
-        let restored = QuantizedIndex::from_bytes(&bytes).unwrap();
+        let restored = QuantizedIndex::from_bytes(&bytes)?;
         assert_eq!(restored.dimensions(), 32);
         assert_eq!(restored.compression_label(), "4x (scalar u8)");
+        Ok(())
     }
 
     #[test]
@@ -2540,23 +2559,24 @@ mod tests {
     }
 
     #[test]
-    fn test_auto_save_on_drop() {
-        let dir = tempdir().unwrap();
+    fn test_auto_save_on_drop() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let dir = tempdir()?;
         let path = dir.path().join("auto_save_test.needle");
 
         // Create database with auto_save, insert data, then drop
         {
-            let mut db = Database::open_with_config(DatabaseConfig::new(&path).with_auto_save(true)).unwrap();
-            db.create_collection("test", 4).unwrap();
-            let coll = db.collection("test").unwrap();
-            coll.insert("v1", &[1.0, 2.0, 3.0, 4.0], None).unwrap();
+            let mut db = Database::open_with_config(DatabaseConfig::new(&path).with_auto_save(true))?;
+            db.create_collection("test", 4)?;
+            let coll = db.collection("test")?;
+            coll.insert("v1", &[1.0, 2.0, 3.0, 4.0], None)?;
             assert!(db.is_dirty());
             // Drop triggers auto-save
         }
 
         // Reopen and verify data was persisted
-        let db2 = Database::open(&path).unwrap();
-        let coll2 = db2.collection("test").unwrap();
+        let db2 = Database::open(&path)?;
+        let coll2 = db2.collection("test")?;
         assert_eq!(coll2.len(), 1);
+        Ok(())
     }
 }

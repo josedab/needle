@@ -1710,13 +1710,15 @@ mod tests {
     }
 
     #[test]
-    fn test_span_status_error() {
+    fn test_span_status_error() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let status = SpanStatus::Error("timeout".to_string());
         if let SpanStatus::Error(msg) = &status {
             assert_eq!(msg, "timeout");
         } else {
-            panic!("expected SpanStatus::Error");
+            return Err("expected SpanStatus::Error".into())
         }
+
+        Ok(())
     }
 
     #[test]

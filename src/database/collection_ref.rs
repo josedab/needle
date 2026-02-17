@@ -1022,86 +1022,94 @@ mod tests {
     use std::sync::Arc;
     use std::thread;
 
-    fn setup_db(dim: usize) -> Database {
+    fn setup_db(dim: usize) -> std::result::Result<Database, Box<dyn std::error::Error>> {
         let db = Database::in_memory();
-        db.create_collection("test", dim).unwrap();
-        db
+        db.create_collection("test", dim)?;
+        Ok(db)
     }
 
     // ── Basic operations ─────────────────────────────────────────────────
 
     #[test]
-    fn test_insert_and_get() {
-        let db = setup_db(4);
-        let coll = db.collection("test").unwrap();
-        coll.insert("v1", &[1.0, 0.0, 0.0, 0.0], None).unwrap();
+    fn test_insert_and_get() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let db = setup_db(4)?;
+        let coll = db.collection("test")?;
+        coll.insert("v1", &[1.0, 0.0, 0.0, 0.0], None)?;
 
-        let (vec, meta) = coll.get("v1").unwrap();
+        let (vec, meta) = coll.get("v1").ok_or("v1 not found")?;
         assert_eq!(vec, vec![1.0, 0.0, 0.0, 0.0]);
         assert!(meta.is_none());
+        Ok(())
     }
 
     #[test]
-    fn test_insert_with_metadata() {
-        let db = setup_db(4);
-        let coll = db.collection("test").unwrap();
-        coll.insert("v1", &[1.0, 0.0, 0.0, 0.0], Some(json!({"key": "val"}))).unwrap();
+    fn test_insert_with_metadata() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let db = setup_db(4)?;
+        let coll = db.collection("test")?;
+        coll.insert("v1", &[1.0, 0.0, 0.0, 0.0], Some(json!({"key": "val"})))?;
 
-        let (_, meta) = coll.get("v1").unwrap();
+        let (_, meta) = coll.get("v1").ok_or("v1 not found")?;
         assert!(meta.is_some());
+        Ok(())
     }
 
     #[test]
-    fn test_get_nonexistent() {
-        let db = setup_db(4);
-        let coll = db.collection("test").unwrap();
+    fn test_get_nonexistent() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let db = setup_db(4)?;
+        let coll = db.collection("test")?;
         assert!(coll.get("nonexistent").is_none());
+        Ok(())
     }
 
     #[test]
-    fn test_contains() {
-        let db = setup_db(4);
-        let coll = db.collection("test").unwrap();
-        coll.insert("v1", &[1.0, 0.0, 0.0, 0.0], None).unwrap();
+    fn test_contains() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let db = setup_db(4)?;
+        let coll = db.collection("test")?;
+        coll.insert("v1", &[1.0, 0.0, 0.0, 0.0], None)?;
 
         assert!(coll.contains("v1"));
         assert!(!coll.contains("v2"));
+        Ok(())
     }
 
     #[test]
-    fn test_len_and_is_empty() {
-        let db = setup_db(4);
-        let coll = db.collection("test").unwrap();
+    fn test_len_and_is_empty() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let db = setup_db(4)?;
+        let coll = db.collection("test")?;
         assert!(coll.is_empty());
         assert_eq!(coll.len(), 0);
 
-        coll.insert("v1", &[1.0, 0.0, 0.0, 0.0], None).unwrap();
+        coll.insert("v1", &[1.0, 0.0, 0.0, 0.0], None)?;
         assert!(!coll.is_empty());
         assert_eq!(coll.len(), 1);
+        Ok(())
     }
 
     #[test]
-    fn test_dimensions() {
-        let db = setup_db(128);
-        let coll = db.collection("test").unwrap();
+    fn test_dimensions() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let db = setup_db(128)?;
+        let coll = db.collection("test")?;
         assert_eq!(coll.dimensions(), Some(128));
+        Ok(())
     }
 
     #[test]
-    fn test_name() {
-        let db = setup_db(4);
-        let coll = db.collection("test").unwrap();
+    fn test_name() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let db = setup_db(4)?;
+        let coll = db.collection("test")?;
         assert_eq!(coll.name(), "test");
+        Ok(())
     }
 
     // ── Error propagation ────────────────────────────────────────────────
 
     #[test]
-    fn test_dimension_mismatch_error() {
-        let db = setup_db(4);
-        let coll = db.collection("test").unwrap();
+    fn test_dimension_mismatch_error() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let db = setup_db(4)?;
+        let coll = db.collection("test")?;
         let result = coll.insert("v1", &[1.0, 0.0], None);
         assert!(result.is_err());
+        Ok(())
     }
 
     #[test]
@@ -1112,333 +1120,358 @@ mod tests {
     }
 
     #[test]
-    fn test_duplicate_insert_error() {
-        let db = setup_db(4);
-        let coll = db.collection("test").unwrap();
-        coll.insert("v1", &[1.0, 0.0, 0.0, 0.0], None).unwrap();
+    fn test_duplicate_insert_error() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let db = setup_db(4)?;
+        let coll = db.collection("test")?;
+        coll.insert("v1", &[1.0, 0.0, 0.0, 0.0], None)?;
         let result = coll.insert("v1", &[0.0, 1.0, 0.0, 0.0], None);
         assert!(result.is_err());
+        Ok(())
     }
 
     // ── Delete ───────────────────────────────────────────────────────────
 
     #[test]
-    fn test_delete() {
-        let db = setup_db(4);
-        let coll = db.collection("test").unwrap();
-        coll.insert("v1", &[1.0, 0.0, 0.0, 0.0], None).unwrap();
+    fn test_delete() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let db = setup_db(4)?;
+        let coll = db.collection("test")?;
+        coll.insert("v1", &[1.0, 0.0, 0.0, 0.0], None)?;
 
-        assert!(coll.delete("v1").unwrap());
-        assert!(!coll.delete("v1").unwrap());
+        assert!(coll.delete("v1")?);
+        assert!(!coll.delete("v1")?);
         assert!(coll.get("v1").is_none());
+        Ok(())
     }
 
     #[test]
-    fn test_deleted_count() {
-        let db = setup_db(4);
-        let coll = db.collection("test").unwrap();
-        coll.insert("v1", &[1.0, 0.0, 0.0, 0.0], None).unwrap();
-        coll.insert("v2", &[0.0, 1.0, 0.0, 0.0], None).unwrap();
+    fn test_deleted_count() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let db = setup_db(4)?;
+        let coll = db.collection("test")?;
+        coll.insert("v1", &[1.0, 0.0, 0.0, 0.0], None)?;
+        coll.insert("v2", &[0.0, 1.0, 0.0, 0.0], None)?;
 
         assert_eq!(coll.deleted_count(), 0);
-        coll.delete("v1").unwrap();
+        coll.delete("v1")?;
         assert_eq!(coll.deleted_count(), 1);
+        Ok(())
     }
 
     // ── Search ───────────────────────────────────────────────────────────
 
     #[test]
-    fn test_search() {
-        let db = setup_db(4);
-        let coll = db.collection("test").unwrap();
-        coll.insert("v1", &[1.0, 0.0, 0.0, 0.0], None).unwrap();
-        coll.insert("v2", &[0.0, 1.0, 0.0, 0.0], None).unwrap();
+    fn test_search() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let db = setup_db(4)?;
+        let coll = db.collection("test")?;
+        coll.insert("v1", &[1.0, 0.0, 0.0, 0.0], None)?;
+        coll.insert("v2", &[0.0, 1.0, 0.0, 0.0], None)?;
 
-        let results = coll.search(&[1.0, 0.0, 0.0, 0.0], 2).unwrap();
+        let results = coll.search(&[1.0, 0.0, 0.0, 0.0], 2)?;
         assert_eq!(results.len(), 2);
         assert_eq!(results[0].id, "v1");
+        Ok(())
     }
 
     #[test]
-    fn test_search_ids() {
-        let db = setup_db(4);
-        let coll = db.collection("test").unwrap();
-        coll.insert("v1", &[1.0, 0.0, 0.0, 0.0], None).unwrap();
+    fn test_search_ids() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let db = setup_db(4)?;
+        let coll = db.collection("test")?;
+        coll.insert("v1", &[1.0, 0.0, 0.0, 0.0], None)?;
 
-        let results = coll.search_ids(&[1.0, 0.0, 0.0, 0.0], 10).unwrap();
+        let results = coll.search_ids(&[1.0, 0.0, 0.0, 0.0], 10)?;
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].0, "v1");
+        Ok(())
     }
 
     #[test]
-    fn test_search_empty_collection() {
-        let db = setup_db(4);
-        let coll = db.collection("test").unwrap();
-        let results = coll.search(&[1.0, 0.0, 0.0, 0.0], 10).unwrap();
+    fn test_search_empty_collection() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let db = setup_db(4)?;
+        let coll = db.collection("test")?;
+        let results = coll.search(&[1.0, 0.0, 0.0, 0.0], 10)?;
         assert!(results.is_empty());
+        Ok(())
     }
 
     #[test]
-    fn test_query_builder() {
-        let db = setup_db(4);
-        let coll = db.collection("test").unwrap();
-        coll.insert("v1", &[1.0, 0.0, 0.0, 0.0], None).unwrap();
+    fn test_query_builder() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let db = setup_db(4)?;
+        let coll = db.collection("test")?;
+        coll.insert("v1", &[1.0, 0.0, 0.0, 0.0], None)?;
 
         let results = coll.query(&[1.0, 0.0, 0.0, 0.0])
             .limit(5)
-            .execute()
-            .unwrap();
+            .execute()?;
         assert_eq!(results.len(), 1);
+        Ok(())
     }
 
     #[test]
-    fn test_search_with_filter() {
-        let db = setup_db(4);
-        let coll = db.collection("test").unwrap();
-        coll.insert("v1", &[1.0, 0.0, 0.0, 0.0], Some(json!({"cat": "a"}))).unwrap();
-        coll.insert("v2", &[0.0, 1.0, 0.0, 0.0], Some(json!({"cat": "b"}))).unwrap();
+    fn test_search_with_filter() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let db = setup_db(4)?;
+        let coll = db.collection("test")?;
+        coll.insert("v1", &[1.0, 0.0, 0.0, 0.0], Some(json!({"cat": "a"})))?;
+        coll.insert("v2", &[0.0, 1.0, 0.0, 0.0], Some(json!({"cat": "b"})))?;
 
         let filter = Filter::eq("cat", "a");
-        let results = coll.search_with_filter(&[1.0, 0.0, 0.0, 0.0], 10, &filter).unwrap();
+        let results = coll.search_with_filter(&[1.0, 0.0, 0.0, 0.0], 10, &filter)?;
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].id, "v1");
+        Ok(())
     }
 
     // ── Update ───────────────────────────────────────────────────────────
 
     #[test]
-    fn test_update() {
-        let db = setup_db(4);
-        let coll = db.collection("test").unwrap();
-        coll.insert("v1", &[1.0, 0.0, 0.0, 0.0], None).unwrap();
+    fn test_update() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let db = setup_db(4)?;
+        let coll = db.collection("test")?;
+        coll.insert("v1", &[1.0, 0.0, 0.0, 0.0], None)?;
 
-        coll.update("v1", &[0.0, 1.0, 0.0, 0.0], Some(json!({"updated": true}))).unwrap();
-        let (vec, meta) = coll.get("v1").unwrap();
+        coll.update("v1", &[0.0, 1.0, 0.0, 0.0], Some(json!({"updated": true})))?;
+        let (vec, meta) = coll.get("v1").ok_or("v1 not found")?;
         assert_eq!(vec, vec![0.0, 1.0, 0.0, 0.0]);
         assert!(meta.is_some());
+        Ok(())
     }
 
     #[test]
-    fn test_update_nonexistent() {
-        let db = setup_db(4);
-        let coll = db.collection("test").unwrap();
+    fn test_update_nonexistent() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let db = setup_db(4)?;
+        let coll = db.collection("test")?;
         let result = coll.update("nonexistent", &[1.0, 0.0, 0.0, 0.0], None);
         assert!(result.is_err());
+        Ok(())
     }
 
     // ── Export & IDs ─────────────────────────────────────────────────────
 
     #[test]
-    fn test_export_all() {
-        let db = setup_db(4);
-        let coll = db.collection("test").unwrap();
-        coll.insert("v1", &[1.0, 0.0, 0.0, 0.0], None).unwrap();
-        coll.insert("v2", &[0.0, 1.0, 0.0, 0.0], None).unwrap();
+    fn test_export_all() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let db = setup_db(4)?;
+        let coll = db.collection("test")?;
+        coll.insert("v1", &[1.0, 0.0, 0.0, 0.0], None)?;
+        coll.insert("v2", &[0.0, 1.0, 0.0, 0.0], None)?;
 
-        let exported = coll.export_all().unwrap();
+        let exported = coll.export_all()?;
         assert_eq!(exported.len(), 2);
+        Ok(())
     }
 
     #[test]
-    fn test_ids() {
-        let db = setup_db(4);
-        let coll = db.collection("test").unwrap();
-        coll.insert("v1", &[1.0, 0.0, 0.0, 0.0], None).unwrap();
-        coll.insert("v2", &[0.0, 1.0, 0.0, 0.0], None).unwrap();
+    fn test_ids() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let db = setup_db(4)?;
+        let coll = db.collection("test")?;
+        coll.insert("v1", &[1.0, 0.0, 0.0, 0.0], None)?;
+        coll.insert("v2", &[0.0, 1.0, 0.0, 0.0], None)?;
 
-        let ids = coll.ids().unwrap();
+        let ids = coll.ids()?;
         assert_eq!(ids.len(), 2);
         assert!(ids.contains(&"v1".to_string()));
         assert!(ids.contains(&"v2".to_string()));
+        Ok(())
     }
 
     // ── Compact ──────────────────────────────────────────────────────────
 
     #[test]
-    fn test_compact() {
-        let db = setup_db(4);
-        let coll = db.collection("test").unwrap();
+    fn test_compact() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let db = setup_db(4)?;
+        let coll = db.collection("test")?;
         for i in 0..10 {
-            coll.insert(format!("v{}", i), &[i as f32, 0.0, 0.0, 0.0], None).unwrap();
+            coll.insert(format!("v{}", i), &[i as f32, 0.0, 0.0, 0.0], None)?;
         }
         for i in 0..5 {
-            coll.delete(&format!("v{}", i)).unwrap();
+            coll.delete(&format!("v{}", i))?;
         }
 
-        let removed = coll.compact().unwrap();
+        let removed = coll.compact()?;
         assert_eq!(removed, 5);
         assert_eq!(coll.len(), 5);
+        Ok(())
     }
 
     #[test]
-    fn test_needs_compaction() {
-        let db = setup_db(4);
-        let coll = db.collection("test").unwrap();
+    fn test_needs_compaction() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let db = setup_db(4)?;
+        let coll = db.collection("test")?;
         for i in 0..10 {
-            coll.insert(format!("v{}", i), &[i as f32, 0.0, 0.0, 0.0], None).unwrap();
+            coll.insert(format!("v{}", i), &[i as f32, 0.0, 0.0, 0.0], None)?;
         }
         for i in 0..8 {
-            coll.delete(&format!("v{}", i)).unwrap();
+            coll.delete(&format!("v{}", i))?;
         }
 
         assert!(coll.needs_compaction(0.5));
+        Ok(())
     }
 
     // ── Count ────────────────────────────────────────────────────────────
 
     #[test]
-    fn test_count() {
-        let db = setup_db(4);
-        let coll = db.collection("test").unwrap();
-        coll.insert("v1", &[1.0, 0.0, 0.0, 0.0], Some(json!({"type": "a"}))).unwrap();
-        coll.insert("v2", &[0.0, 1.0, 0.0, 0.0], Some(json!({"type": "b"}))).unwrap();
+    fn test_count() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let db = setup_db(4)?;
+        let coll = db.collection("test")?;
+        coll.insert("v1", &[1.0, 0.0, 0.0, 0.0], Some(json!({"type": "a"})))?;
+        coll.insert("v2", &[0.0, 1.0, 0.0, 0.0], Some(json!({"type": "b"})))?;
 
-        assert_eq!(coll.count(None).unwrap(), 2);
+        assert_eq!(coll.count(None)?, 2);
 
         let filter = Filter::eq("type", "a");
-        assert_eq!(coll.count(Some(&filter)).unwrap(), 1);
+        assert_eq!(coll.count(Some(&filter))?, 1);
+        Ok(())
     }
 
     // ── Stats ────────────────────────────────────────────────────────────
 
     #[test]
-    fn test_stats() {
-        let db = setup_db(4);
-        let coll = db.collection("test").unwrap();
-        coll.insert("v1", &[1.0, 0.0, 0.0, 0.0], None).unwrap();
+    fn test_stats() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let db = setup_db(4)?;
+        let coll = db.collection("test")?;
+        coll.insert("v1", &[1.0, 0.0, 0.0, 0.0], None)?;
 
-        let stats = coll.stats().unwrap();
+        let stats = coll.stats()?;
         assert_eq!(stats.vector_count, 1);
         assert_eq!(stats.dimensions, 4);
+        Ok(())
     }
 
     // ── Concurrent access ────────────────────────────────────────────────
 
     #[test]
-    fn test_concurrent_reads() {
+    fn test_concurrent_reads() -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let db = Arc::new(Database::in_memory());
-        db.create_collection("test", 4).unwrap();
+        db.create_collection("test", 4)?;
         {
-            let coll = db.collection("test").unwrap();
-            coll.insert("v1", &[1.0, 0.0, 0.0, 0.0], None).unwrap();
+            let coll = db.collection("test")?;
+            coll.insert("v1", &[1.0, 0.0, 0.0, 0.0], None)?;
         }
 
         let handles: Vec<_> = (0..8).map(|_| {
             let db = Arc::clone(&db);
-            thread::spawn(move || {
-                let coll = db.collection("test").unwrap();
-                let results = coll.search(&[1.0, 0.0, 0.0, 0.0], 10).unwrap();
+            thread::spawn(move || -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
+                let coll = db.collection("test")?;
+                let results = coll.search(&[1.0, 0.0, 0.0, 0.0], 10)?;
                 assert!(!results.is_empty());
+                Ok(())
             })
         }).collect();
 
         for h in handles {
-            h.join().unwrap();
+            h.join().map_err(|_| "thread panicked")??;
         }
+        Ok(())
     }
 
     #[test]
-    fn test_concurrent_insert_and_search() {
+    fn test_concurrent_insert_and_search() -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let db = Arc::new(Database::in_memory());
-        db.create_collection("test", 4).unwrap();
+        db.create_collection("test", 4)?;
 
         // Insert from multiple threads
         let handles: Vec<_> = (0..4).map(|t| {
             let db = Arc::clone(&db);
-            thread::spawn(move || {
-                let coll = db.collection("test").unwrap();
+            thread::spawn(move || -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
+                let coll = db.collection("test")?;
                 for i in 0..10 {
                     let id = format!("t{}_v{}", t, i);
                     let _ = coll.insert(&id, &[t as f32, i as f32, 0.0, 0.0], None);
                 }
+                Ok(())
             })
         }).collect();
 
         for h in handles {
-            h.join().unwrap();
+            h.join().map_err(|_| "thread panicked")??;
         }
 
-        let coll = db.collection("test").unwrap();
+        let coll = db.collection("test")?;
         assert_eq!(coll.len(), 40);
+        Ok(())
     }
 
     #[test]
-    fn test_concurrent_read_write() {
+    fn test_concurrent_read_write() -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let db = Arc::new(Database::in_memory());
-        db.create_collection("test", 4).unwrap();
+        db.create_collection("test", 4)?;
         {
-            let coll = db.collection("test").unwrap();
+            let coll = db.collection("test")?;
             for i in 0..10 {
-                coll.insert(format!("v{}", i), &[i as f32, 0.0, 0.0, 0.0], None).unwrap();
+                coll.insert(format!("v{}", i), &[i as f32, 0.0, 0.0, 0.0], None)?;
             }
         }
 
-        let mut handles: Vec<thread::JoinHandle<()>> = Vec::new();
+        let mut handles = Vec::new();
 
         // Readers
         for _ in 0..4 {
             let db = Arc::clone(&db);
-            handles.push(thread::spawn(move || {
-                let coll = db.collection("test").unwrap();
+            handles.push(thread::spawn(move || -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
+                let coll = db.collection("test")?;
                 for _ in 0..20 {
                     let _ = coll.search(&[1.0, 0.0, 0.0, 0.0], 5);
                     let _ = coll.get("v0");
                     let _ = coll.len();
                 }
+                Ok(())
             }));
         }
 
         // Writer
         {
             let db = Arc::clone(&db);
-            handles.push(thread::spawn(move || {
-                let coll = db.collection("test").unwrap();
+            handles.push(thread::spawn(move || -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
+                let coll = db.collection("test")?;
                 for i in 10..20 {
                     let _ = coll.insert(format!("v{}", i), &[i as f32, 0.0, 0.0, 0.0], None);
                 }
+                Ok(())
             }));
         }
 
         for h in handles {
-            h.join().unwrap();
+            h.join().map_err(|_| "thread panicked")??;
         }
+        Ok(())
     }
 
     // ── insert_vec ───────────────────────────────────────────────────────
 
     #[test]
-    fn test_insert_vec() {
-        let db = setup_db(4);
-        let coll = db.collection("test").unwrap();
-        coll.insert_vec("v1", vec![1.0, 0.0, 0.0, 0.0], None).unwrap();
+    fn test_insert_vec() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let db = setup_db(4)?;
+        let coll = db.collection("test")?;
+        coll.insert_vec("v1", vec![1.0, 0.0, 0.0, 0.0], None)?;
 
-        let (vec, _) = coll.get("v1").unwrap();
+        let (vec, _) = coll.get("v1").ok_or("v1 not found")?;
         assert_eq!(vec, vec![1.0, 0.0, 0.0, 0.0]);
+        Ok(())
     }
 
     // ── Search explain ───────────────────────────────────────────────────
 
     #[test]
-    fn test_search_explain() {
-        let db = setup_db(4);
-        let coll = db.collection("test").unwrap();
-        coll.insert("v1", &[1.0, 0.0, 0.0, 0.0], None).unwrap();
+    fn test_search_explain() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let db = setup_db(4)?;
+        let coll = db.collection("test")?;
+        coll.insert("v1", &[1.0, 0.0, 0.0, 0.0], None)?;
 
-        let (results, explain) = coll.search_explain(&[1.0, 0.0, 0.0, 0.0], 10).unwrap();
+        let (results, explain) = coll.search_explain(&[1.0, 0.0, 0.0, 0.0], 10)?;
         assert_eq!(results.len(), 1);
         assert!(explain.total_time_us > 0 || true); // may be 0 on fast machines
+        Ok(())
     }
 
     // ── Snapshots ────────────────────────────────────────────────────────
 
     #[test]
-    fn test_snapshots() {
-        let db = setup_db(4);
-        let coll = db.collection("test").unwrap();
-        coll.insert("v1", &[1.0, 0.0, 0.0, 0.0], None).unwrap();
+    fn test_snapshots() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let db = setup_db(4)?;
+        let coll = db.collection("test")?;
+        coll.insert("v1", &[1.0, 0.0, 0.0, 0.0], None)?;
 
-        coll.create_snapshot("snap1").unwrap();
+        coll.create_snapshot("snap1")?;
         let snaps = coll.list_snapshots();
         assert!(snaps.contains(&"snap1".to_string()));
+        Ok(())
     }
 }

@@ -136,33 +136,39 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_health() {
+    fn test_health() -> Result<(), Box<dyn std::error::Error>> {
         let rt = EdgeRuntime::new(EdgeConfig::for_platform(EdgePlatform::CloudflareWorkers));
         match rt.handle(EdgeRequest::Health) {
             EdgeResponse::Health { status, .. } => assert_eq!(status, "ok"),
-            _ => panic!("Expected Health response"),
+            _ => return Err("Expected Health response".into()),
         }
+
+        Ok(())
     }
 
     #[test]
-    fn test_info() {
+    fn test_info() -> Result<(), Box<dyn std::error::Error>> {
         let rt = EdgeRuntime::new(EdgeConfig::for_platform(EdgePlatform::DenoEdge));
         match rt.handle(EdgeRequest::Info) {
             EdgeResponse::Info { platform, max_vectors, .. } => {
                 assert_eq!(platform, "deno-deploy");
                 assert_eq!(max_vectors, 500_000);
             }
-            _ => panic!("Expected Info response"),
+            _ => return Err("Expected Info response".into()),
         }
+
+        Ok(())
     }
 
     #[test]
-    fn test_dimension_limit() {
+    fn test_dimension_limit() -> Result<(), Box<dyn std::error::Error>> {
         let rt = EdgeRuntime::new(EdgeConfig::for_platform(EdgePlatform::CloudflareWorkers));
         match rt.handle(EdgeRequest::Search { collection: "c".into(), query: vec![1.0; 2000], k: 5 }) {
             EdgeResponse::Error { code, .. } => assert_eq!(code, 400),
-            _ => panic!("Expected error"),
+            _ => return Err("Expected error".into()),
         }
+
+        Ok(())
     }
 
     #[test]

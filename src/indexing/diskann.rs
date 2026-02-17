@@ -1969,54 +1969,58 @@ mod tests {
     }
 
     #[test]
-    fn test_create_index() {
-        let dir = TempDir::new().unwrap();
+    fn test_create_index() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let dir = TempDir::new()?;
         let config = DiskAnnConfig::default();
-        let index = DiskAnnIndex::create(dir.path(), 128, config).unwrap();
+        let index = DiskAnnIndex::create(dir.path(), 128, config)?;
 
         assert_eq!(index.len(), 0);
         assert!(index.is_empty());
+        Ok(())
     }
 
     #[test]
-    fn test_add_vectors() {
-        let dir = TempDir::new().unwrap();
+    fn test_add_vectors() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let dir = TempDir::new()?;
         let config = DiskAnnConfig::default();
-        let mut index = DiskAnnIndex::create(dir.path(), 4, config).unwrap();
+        let mut index = DiskAnnIndex::create(dir.path(), 4, config)?;
 
-        index.add("vec1", &[1.0, 2.0, 3.0, 4.0]).unwrap();
-        index.add("vec2", &[5.0, 6.0, 7.0, 8.0]).unwrap();
+        index.add("vec1", &[1.0, 2.0, 3.0, 4.0])?;
+        index.add("vec2", &[5.0, 6.0, 7.0, 8.0])?;
 
         // Vectors are pending until build
         assert_eq!(index.pending_vectors.len(), 2);
+        Ok(())
     }
 
     #[test]
-    fn test_dimension_mismatch() {
-        let dir = TempDir::new().unwrap();
+    fn test_dimension_mismatch() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let dir = TempDir::new()?;
         let config = DiskAnnConfig::default();
-        let mut index = DiskAnnIndex::create(dir.path(), 4, config).unwrap();
+        let mut index = DiskAnnIndex::create(dir.path(), 4, config)?;
 
         let result = index.add("vec1", &[1.0, 2.0, 3.0]);
         assert!(result.is_err());
+        Ok(())
     }
 
     #[test]
-    fn test_duplicate_id() {
-        let dir = TempDir::new().unwrap();
+    fn test_duplicate_id() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let dir = TempDir::new()?;
         let config = DiskAnnConfig::default();
-        let mut index = DiskAnnIndex::create(dir.path(), 4, config).unwrap();
+        let mut index = DiskAnnIndex::create(dir.path(), 4, config)?;
 
-        index.add("vec1", &[1.0, 2.0, 3.0, 4.0]).unwrap();
-        index.build().unwrap();
+        index.add("vec1", &[1.0, 2.0, 3.0, 4.0])?;
+        index.build()?;
 
         let result = index.add("vec1", &[5.0, 6.0, 7.0, 8.0]);
         assert!(result.is_err());
+        Ok(())
     }
 
     #[test]
-    fn test_build_and_search() {
-        let dir = TempDir::new().unwrap();
+    fn test_build_and_search() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let dir = TempDir::new()?;
         let config = DiskAnnConfig {
             max_degree: 4,
             build_list_size: 10,
@@ -2024,7 +2028,7 @@ mod tests {
             ..Default::default()
         };
 
-        let mut index = DiskAnnIndex::create(dir.path(), 4, config).unwrap();
+        let mut index = DiskAnnIndex::create(dir.path(), 4, config)?;
 
         let vectors = vec![
             ("a", vec![0.0, 0.0, 0.0, 0.0]),
@@ -2035,48 +2039,50 @@ mod tests {
         ];
 
         for (id, vec) in vectors {
-            index.add(id, &vec).unwrap();
+            index.add(id, &vec)?;
         }
 
-        index.build().unwrap();
+        index.build()?;
 
         // Search for nearest to origin
         let query = vec![0.0, 0.0, 0.0, 0.0];
-        let results = index.search(&query, 3).unwrap();
+        let results = index.search(&query, 3)?;
 
         assert!(!results.is_empty());
         assert_eq!(results[0].id, "a"); // Origin should be closest
         assert!(results[0].distance < 0.001);
+        Ok(())
     }
 
     #[test]
-    fn test_save_and_load() {
-        let dir = TempDir::new().unwrap();
+    fn test_save_and_load() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let dir = TempDir::new()?;
         let config = DiskAnnConfig::default();
 
         // Create and build index
         {
-            let mut index = DiskAnnIndex::create(dir.path(), 4, config.clone()).unwrap();
-            index.add("vec1", &[1.0, 2.0, 3.0, 4.0]).unwrap();
-            index.add("vec2", &[5.0, 6.0, 7.0, 8.0]).unwrap();
-            index.build().unwrap();
+            let mut index = DiskAnnIndex::create(dir.path(), 4, config.clone())?;
+            index.add("vec1", &[1.0, 2.0, 3.0, 4.0])?;
+            index.add("vec2", &[5.0, 6.0, 7.0, 8.0])?;
+            index.build()?;
         }
 
         // Load and verify
-        let mut index = DiskAnnIndex::open(dir.path()).unwrap();
+        let mut index = DiskAnnIndex::open(dir.path())?;
         assert_eq!(index.len(), 2);
         assert!(index.is_built);
 
         // Search should work
-        let results = index.search(&[1.0, 2.0, 3.0, 4.0], 1).unwrap();
+        let results = index.search(&[1.0, 2.0, 3.0, 4.0], 1)?;
         assert_eq!(results[0].id, "vec1");
+        Ok(())
     }
 
     #[test]
-    fn test_batch_add() {
-        let dir = TempDir::new().unwrap();
+    fn test_batch_add() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let dir = TempDir::new()?;
         let config = DiskAnnConfig::default();
-        let mut index = DiskAnnIndex::create(dir.path(), 4, config).unwrap();
+        let mut index = DiskAnnIndex::create(dir.path(), 4, config)?;
 
         let vectors = vec![
             ("a".to_string(), vec![1.0, 0.0, 0.0, 0.0]),
@@ -2084,35 +2090,37 @@ mod tests {
             ("c".to_string(), vec![0.0, 0.0, 1.0, 0.0]),
         ];
 
-        index.add_batch(vectors).unwrap();
-        index.build().unwrap();
+        index.add_batch(vectors)?;
+        index.build()?;
 
         assert_eq!(index.len(), 3);
+        Ok(())
     }
 
     #[test]
-    fn test_stats() {
-        let dir = TempDir::new().unwrap();
+    fn test_stats() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let dir = TempDir::new()?;
         let config = DiskAnnConfig::default();
-        let mut index = DiskAnnIndex::create(dir.path(), 8, config).unwrap();
+        let mut index = DiskAnnIndex::create(dir.path(), 8, config)?;
 
         for i in 0..10 {
             let vec: Vec<f32> = (0..8).map(|j| (i * 8 + j) as f32).collect();
-            index.add(&format!("vec_{}", i), &vec).unwrap();
+            index.add(&format!("vec_{}", i), &vec)?;
         }
 
-        index.build().unwrap();
+        index.build()?;
 
         let stats = index.stats();
         assert_eq!(stats.num_vectors, 10);
         assert_eq!(stats.dimensions, 8);
         assert!(stats.total_edges > 0);
         assert!(stats.is_built);
+        Ok(())
     }
 
     #[test]
-    fn test_larger_index() {
-        let dir = TempDir::new().unwrap();
+    fn test_larger_index() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let dir = TempDir::new()?;
         let config = DiskAnnConfig {
             max_degree: 8,
             build_list_size: 20,
@@ -2121,46 +2129,48 @@ mod tests {
             ..Default::default()
         };
 
-        let mut index = DiskAnnIndex::create(dir.path(), 16, config).unwrap();
+        let mut index = DiskAnnIndex::create(dir.path(), 16, config)?;
 
         let vectors = create_test_vectors(100, 16);
-        index.add_batch(vectors).unwrap();
-        index.build().unwrap();
+        index.add_batch(vectors)?;
+        index.build()?;
 
         // Search should return good results
         let query: Vec<f32> = (0..16).map(|i| (i as f32).sin()).collect();
-        let results = index.search(&query, 5).unwrap();
+        let results = index.search(&query, 5)?;
 
         assert_eq!(results.len(), 5);
         // Results should be sorted by distance
         for i in 1..results.len() {
             assert!(results[i].distance >= results[i - 1].distance);
         }
+        Ok(())
     }
 
     #[test]
-    fn test_query_builder() {
-        let dir = TempDir::new().unwrap();
+    fn test_query_builder() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let dir = TempDir::new()?;
         let config = DiskAnnConfig::default();
-        let mut index = DiskAnnIndex::create(dir.path(), 4, config).unwrap();
+        let mut index = DiskAnnIndex::create(dir.path(), 4, config)?;
 
-        index.add("a", &[1.0, 0.0, 0.0, 0.0]).unwrap();
-        index.add("b", &[0.0, 1.0, 0.0, 0.0]).unwrap();
-        index.build().unwrap();
+        index.add("a", &[1.0, 0.0, 0.0, 0.0])?;
+        index.add("b", &[0.0, 1.0, 0.0, 0.0])?;
+        index.build()?;
 
         let results = DiskAnnQueryBuilder::new(&mut index, vec![1.0, 0.0, 0.0, 0.0])
             .k(1)
             .search_list_size(10)
             .execute()
-            .unwrap();
+            ?;
 
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].id, "a");
+        Ok(())
     }
 
     #[test]
-    fn test_compressed_graph() {
-        let dir = TempDir::new().unwrap();
+    fn test_compressed_graph() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let dir = TempDir::new()?;
         let config = DiskAnnConfig {
             max_degree: 4,
             build_list_size: 10,
@@ -2168,30 +2178,31 @@ mod tests {
             ..Default::default()
         };
 
-        let mut index = DiskAnnIndex::create(dir.path(), 4, config).unwrap();
+        let mut index = DiskAnnIndex::create(dir.path(), 4, config)?;
         for i in 0..10 {
             let vec = vec![i as f32, 0.0, 0.0, 0.0];
-            index.add(&format!("vec_{}", i), &vec).unwrap();
+            index.add(&format!("vec_{}", i), &vec)?;
         }
-        index.build().unwrap();
+        index.build()?;
 
         let graph = index.build_compressed_graph();
         assert!(graph.memory_bytes() > 0);
 
         // Search with compressed graph should return same results
         let query = vec![0.0, 0.0, 0.0, 0.0];
-        let normal_results = index.search(&query, 3).unwrap();
+        let normal_results = index.search(&query, 3)?;
         let compressed_results = index
             .search_with_compressed_graph(&query, 3, &graph)
-            .unwrap();
+            ?;
 
         assert_eq!(normal_results.len(), compressed_results.len());
         assert_eq!(normal_results[0].id, compressed_results[0].id);
+        Ok(())
     }
 
     #[test]
-    fn test_streaming_build() {
-        let dir = TempDir::new().unwrap();
+    fn test_streaming_build() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let dir = TempDir::new()?;
         let config = DiskAnnConfig {
             max_degree: 4,
             build_list_size: 10,
@@ -2199,10 +2210,10 @@ mod tests {
             ..Default::default()
         };
 
-        let mut index = DiskAnnIndex::create(dir.path(), 4, config).unwrap();
+        let mut index = DiskAnnIndex::create(dir.path(), 4, config)?;
         for i in 0..50 {
             let vec = vec![i as f32, (i as f32).sin(), (i as f32).cos(), 0.0];
-            index.add(&format!("vec_{}", i), &vec).unwrap();
+            index.add(&format!("vec_{}", i), &vec)?;
         }
 
         let stream_config = StreamingBuildConfig {
@@ -2211,147 +2222,155 @@ mod tests {
             temp_dir: None,
         };
 
-        index.streaming_build(&stream_config, None).unwrap();
+        index.streaming_build(&stream_config, None)?;
 
         let query = vec![0.0, 0.0, 1.0, 0.0];
-        let results = index.search(&query, 5).unwrap();
+        let results = index.search(&query, 5)?;
         assert_eq!(results.len(), 5);
         for i in 1..results.len() {
             assert!(results[i].distance >= results[i - 1].distance);
         }
+        Ok(())
     }
 
     #[test]
-    fn test_auto_tune() {
+    fn test_auto_tune() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let result = auto_tune_diskann(1_000_000, 128, 0.90, 2 * 1024 * 1024 * 1024, None);
         assert!(result.config.max_degree >= 32);
         assert!(result.estimated_ram_bytes > 0);
         assert!(result.estimated_recall > 0.5);
         assert!(result.estimated_p99_latency_ms > 0.0);
+        Ok(())
     }
 
     #[test]
-    fn test_ssd_benchmark() {
-        let dir = TempDir::new().unwrap();
-        let profile = benchmark_ssd(dir.path()).unwrap();
+    fn test_ssd_benchmark() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let dir = TempDir::new()?;
+        let profile = benchmark_ssd(dir.path())?;
         assert!(profile.sequential_read_mbps > 0.0);
         assert!(profile.random_read_iops > 0.0);
         assert!(profile.avg_read_latency_us > 0.0);
+        Ok(())
     }
 
     #[test]
-    fn test_prefetch_neighbors() {
-        let dir = TempDir::new().unwrap();
+    fn test_prefetch_neighbors() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let dir = TempDir::new()?;
         let config = DiskAnnConfig {
             max_degree: 4,
             cache_size: 100,
             ..Default::default()
         };
-        let mut index = DiskAnnIndex::create(dir.path(), 4, config).unwrap();
+        let mut index = DiskAnnIndex::create(dir.path(), 4, config)?;
         for i in 0..10 {
             index
                 .add(&format!("v{}", i), &[i as f32, 0.0, 0.0, 0.0])
-                .unwrap();
+                ?;
         }
-        index.build().unwrap();
+        index.build()?;
         index.clear_cache();
 
         // Prefetch neighbors of node 0
-        index.prefetch_neighbors(0).unwrap();
+        index.prefetch_neighbors(0)?;
         assert!(!index.vector_cache.is_empty());
+        Ok(())
     }
 
     #[test]
-    fn test_estimate_ram_usage() {
-        let dir = TempDir::new().unwrap();
+    fn test_estimate_ram_usage() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let dir = TempDir::new()?;
         let config = DiskAnnConfig::default();
-        let mut index = DiskAnnIndex::create(dir.path(), 128, config).unwrap();
+        let mut index = DiskAnnIndex::create(dir.path(), 128, config)?;
         for i in 0..100 {
             let vec: Vec<f32> = (0..128).map(|j| ((i * 128 + j) as f32).sin()).collect();
-            index.add(&format!("v{}", i), &vec).unwrap();
+            index.add(&format!("v{}", i), &vec)?;
         }
-        index.build().unwrap();
+        index.build()?;
 
         let ram = index.estimate_ram_usage();
         assert!(ram > 0);
+        Ok(())
     }
 
     #[test]
-    fn test_cache_eviction() {
-        let dir = TempDir::new().unwrap();
+    fn test_cache_eviction() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let dir = TempDir::new()?;
         let config = DiskAnnConfig {
             cache_size: 5,
             max_degree: 4,
             ..Default::default()
         };
 
-        let mut index = DiskAnnIndex::create(dir.path(), 4, config).unwrap();
+        let mut index = DiskAnnIndex::create(dir.path(), 4, config)?;
 
         for i in 0..20 {
             let vec = vec![i as f32, 0.0, 0.0, 0.0];
-            index.add(&format!("vec_{}", i), &vec).unwrap();
+            index.add(&format!("vec_{}", i), &vec)?;
         }
 
-        index.build().unwrap();
+        index.build()?;
 
         // Multiple searches should trigger cache eviction
         for i in 0..10 {
             let query = vec![i as f32, 0.0, 0.0, 0.0];
-            let _ = index.search(&query, 3).unwrap();
+            let _ = index.search(&query, 3)?;
         }
 
         // Cache should be at or under limit
         assert!(index.vector_cache.len() <= 5);
+        Ok(())
     }
 
     #[test]
-    fn test_wal_append_and_replay() {
-        let dir = TempDir::new().unwrap();
+    fn test_wal_append_and_replay() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let dir = TempDir::new()?;
         let wal_path = dir.path().join("test.wal");
 
         // Write WAL entries
         {
-            let mut wal = DiskAnnWal::open(&wal_path).unwrap();
+            let mut wal = DiskAnnWal::open(&wal_path)?;
             wal.append(DiskAnnWalEntry::Add {
                 id: "v1".into(),
                 vector: vec![1.0, 2.0, 3.0, 4.0],
             })
-            .unwrap();
+            ?;
             wal.append(DiskAnnWalEntry::Add {
                 id: "v2".into(),
                 vector: vec![5.0, 6.0, 7.0, 8.0],
             })
-            .unwrap();
+            ?;
             assert_eq!(wal.len(), 2);
         }
 
         // Replay into fresh index
-        let wal = DiskAnnWal::open(&wal_path).unwrap();
+        let wal = DiskAnnWal::open(&wal_path)?;
         assert_eq!(wal.len(), 2);
 
-        let mut index = DiskAnnIndex::create(dir.path().join("idx"), 4, DiskAnnConfig::default()).unwrap();
-        let applied = wal.replay(&mut index).unwrap();
+        let mut index = DiskAnnIndex::create(dir.path().join("idx"), 4, DiskAnnConfig::default())?;
+        let applied = wal.replay(&mut index)?;
         assert_eq!(applied, 2);
+        Ok(())
     }
 
     #[test]
-    fn test_wal_truncate() {
-        let dir = TempDir::new().unwrap();
+    fn test_wal_truncate() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let dir = TempDir::new()?;
         let wal_path = dir.path().join("trunc.wal");
-        let mut wal = DiskAnnWal::open(&wal_path).unwrap();
+        let mut wal = DiskAnnWal::open(&wal_path)?;
         wal.append(DiskAnnWalEntry::Add {
             id: "v1".into(),
             vector: vec![1.0],
         })
-        .unwrap();
+        ?;
         assert!(!wal.is_empty());
-        wal.truncate().unwrap();
+        wal.truncate()?;
         assert!(wal.is_empty());
+        Ok(())
     }
 
     #[test]
-    fn test_search_with_stats() {
-        let dir = TempDir::new().unwrap();
+    fn test_search_with_stats() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let dir = TempDir::new()?;
         let config = DiskAnnConfig {
             max_degree: 4,
             build_list_size: 10,
@@ -2359,42 +2378,44 @@ mod tests {
             cache_size: 100,
             ..Default::default()
         };
-        let mut index = DiskAnnIndex::create(dir.path(), 4, config).unwrap();
+        let mut index = DiskAnnIndex::create(dir.path(), 4, config)?;
         for i in 0..10 {
-            index.add(&format!("v{i}"), &[i as f32, 0.0, 0.0, 0.0]).unwrap();
+            index.add(&format!("v{i}"), &[i as f32, 0.0, 0.0, 0.0])?;
         }
-        index.build().unwrap();
+        index.build()?;
         index.clear_cache();
 
-        let (results, stats) = index.search_with_stats(&[0.0, 0.0, 0.0, 0.0], 3).unwrap();
+        let (results, stats) = index.search_with_stats(&[0.0, 0.0, 0.0, 0.0], 3)?;
         assert_eq!(results.len(), 3);
         assert!(stats.search_latency_us > 0);
         assert!(stats.disk_reads > 0 || stats.cache_hits > 0);
+        Ok(())
     }
 
     #[test]
-    fn test_delete_vector() {
-        let dir = TempDir::new().unwrap();
+    fn test_delete_vector() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let dir = TempDir::new()?;
         let config = DiskAnnConfig::default();
-        let mut index = DiskAnnIndex::create(dir.path(), 4, config).unwrap();
-        index.add("v1", &[1.0, 0.0, 0.0, 0.0]).unwrap();
-        index.build().unwrap();
+        let mut index = DiskAnnIndex::create(dir.path(), 4, config)?;
+        index.add("v1", &[1.0, 0.0, 0.0, 0.0])?;
+        index.build()?;
 
         assert!(index.contains("v1"));
-        assert!(index.delete("v1").unwrap());
+        assert!(index.delete("v1")?);
         assert!(!index.contains("v1"));
-        assert!(!index.delete("v1").unwrap());
+        assert!(!index.delete("v1")?);
+        Ok(())
     }
 
     #[test]
-    fn test_build_quality_metrics() {
-        let dir = TempDir::new().unwrap();
+    fn test_build_quality_metrics() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let dir = TempDir::new()?;
         let config = DiskAnnConfig { max_degree: 4, build_list_size: 10, search_list_size: 10, ..Default::default() };
-        let mut index = DiskAnnIndex::create(dir.path(), 4, config).unwrap();
+        let mut index = DiskAnnIndex::create(dir.path(), 4, config)?;
         for i in 0..20 {
-            index.add(&format!("v{i}"), &[i as f32, 0.0, 0.0, 0.0]).unwrap();
+            index.add(&format!("v{i}"), &[i as f32, 0.0, 0.0, 0.0])?;
         }
-        index.build().unwrap();
+        index.build()?;
 
         let quality = index.compute_build_quality();
         assert!(quality.avg_degree > 0.0);
@@ -2402,47 +2423,50 @@ mod tests {
         assert_eq!(quality.disconnected_nodes, 0);
         assert!(quality.estimated_diameter > 0);
         assert!(quality.compression_ratio > 0.0);
+        Ok(())
     }
 
     #[test]
-    fn test_multi_pass_build() {
-        let dir = TempDir::new().unwrap();
+    fn test_multi_pass_build() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let dir = TempDir::new()?;
         let config = DiskAnnConfig { max_degree: 4, build_list_size: 10, search_list_size: 10, ..Default::default() };
-        let mut index = DiskAnnIndex::create(dir.path(), 4, config).unwrap();
+        let mut index = DiskAnnIndex::create(dir.path(), 4, config)?;
         for i in 0..15 {
-            index.add(&format!("v{i}"), &[i as f32, 0.0, 0.0, 0.0]).unwrap();
+            index.add(&format!("v{i}"), &[i as f32, 0.0, 0.0, 0.0])?;
         }
 
-        let quality = index.build_multi_pass(2, 2.0).unwrap();
+        let quality = index.build_multi_pass(2, 2.0)?;
         assert!(quality.avg_degree >= 2.0);
         assert!(index.is_built);
+        Ok(())
     }
 
     #[test]
-    fn test_page_aligned_load() {
-        let dir = TempDir::new().unwrap();
+    fn test_page_aligned_load() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let dir = TempDir::new()?;
         let config = DiskAnnConfig { max_degree: 4, build_list_size: 10, search_list_size: 10, ..Default::default() };
-        let mut index = DiskAnnIndex::create(dir.path(), 4, config).unwrap();
+        let mut index = DiskAnnIndex::create(dir.path(), 4, config)?;
         for i in 0..10 {
-            index.add(&format!("v{i}"), &[i as f32, 0.0, 0.0, 0.0]).unwrap();
+            index.add(&format!("v{i}"), &[i as f32, 0.0, 0.0, 0.0])?;
         }
-        index.build().unwrap();
+        index.build()?;
         index.clear_cache();
 
         let io_config = PageAlignedIoConfig::default();
-        let loaded = index.load_vectors_aligned(&[0, 1, 2, 3], &io_config).unwrap();
+        let loaded = index.load_vectors_aligned(&[0, 1, 2, 3], &io_config)?;
         assert_eq!(loaded.len(), 4);
+        Ok(())
     }
 
     #[test]
-    fn test_readahead_queue() {
-        let dir = TempDir::new().unwrap();
+    fn test_readahead_queue() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let dir = TempDir::new()?;
         let config = DiskAnnConfig { max_degree: 4, build_list_size: 10, search_list_size: 10, ..Default::default() };
-        let mut index = DiskAnnIndex::create(dir.path(), 4, config).unwrap();
+        let mut index = DiskAnnIndex::create(dir.path(), 4, config)?;
         for i in 0..10 {
-            index.add(&format!("v{i}"), &[i as f32, 0.0, 0.0, 0.0]).unwrap();
+            index.add(&format!("v{i}"), &[i as f32, 0.0, 0.0, 0.0])?;
         }
-        index.build().unwrap();
+        index.build()?;
         index.clear_cache();
 
         let mut queue = ReadaheadQueue::new(16);
@@ -2451,9 +2475,10 @@ mod tests {
         queue.enqueue(2);
         assert_eq!(queue.pending_count(), 3);
 
-        let loaded = queue.drain_into(&mut index).unwrap();
+        let loaded = queue.drain_into(&mut index)?;
         assert_eq!(loaded, 3);
         assert_eq!(queue.prefetch_count, 3);
         assert_eq!(queue.pending_count(), 0);
+        Ok(())
     }
 }

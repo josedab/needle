@@ -2239,6 +2239,8 @@ pub enum RecoveryAction {
 mod tests {
     use super::*;
 
+    const TEST_API_KEY: &str = "test-api-key";
+
     #[test]
     fn test_create_tenant() {
         let cp = ControlPlane::default();
@@ -2813,7 +2815,7 @@ mod tests {
     #[test]
     fn test_sdk_client_connect() {
         let config = SdkConfig {
-            api_key: "ndk_test_key".into(),
+            api_key: TEST_API_KEY.into(),
             ..Default::default()
         };
         let client = NeedleCloudClient::new(config);
@@ -2824,7 +2826,7 @@ mod tests {
     #[test]
     fn test_sdk_client_stats() {
         let config = SdkConfig {
-            api_key: "ndk_key".into(),
+            api_key: TEST_API_KEY.into(),
             ..Default::default()
         };
         let client = NeedleCloudClient::new(config);
@@ -2840,7 +2842,7 @@ mod tests {
     #[test]
     fn test_sdk_client_retry_delay() {
         let client = NeedleCloudClient::new(SdkConfig {
-            api_key: "key".into(),
+            api_key: TEST_API_KEY.into(),
             retry_base_delay_ms: 100,
             ..Default::default()
         });
@@ -2852,7 +2854,7 @@ mod tests {
     #[test]
     fn test_sdk_client_fallback() {
         let config = SdkConfig {
-            api_key: "key".into(),
+            api_key: TEST_API_KEY.into(),
             local_fallback: true,
             ..Default::default()
         };

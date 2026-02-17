@@ -949,25 +949,27 @@ mod tests {
     }
 
     #[test]
-    fn test_text_to_vector_transform() {
+    fn test_text_to_vector_transform() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let t = TextToVectorTransform::new(64);
         let record = make_record("r1", "some text");
 
-        let result = t.apply(record).unwrap().unwrap();
+        let result = t.apply(record)??;
         match &result.data {
             RecordData::Vector(v) => {
                 assert_eq!(v.len(), 64);
                 // Deterministic: same input → same output
                 let record2 = make_record("r2", "some text");
-                let result2 = t.apply(record2).unwrap().unwrap();
+                let result2 = t.apply(record2)??;
                 if let RecordData::Vector(v2) = &result2.data {
                     assert_eq!(v, v2);
                 } else {
-                    panic!("expected Vector");
+                    return Err("expected Vector".into())
                 }
             }
-            _ => panic!("expected Vector"),
+            _ => return Err("expected Vector".into()),
         }
+
+        Ok(())
     }
 
     #[test]

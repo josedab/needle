@@ -1321,14 +1321,16 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_select_with_columns() {
+    fn test_parse_select_with_columns() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let ex = executor();
-        let plan = ex.parse("SELECT id, distance FROM docs LIMIT 5").unwrap();
+        let plan = ex.parse("SELECT id, distance FROM docs LIMIT 5")?;
         if let Statement::Select(q) = &plan.statement {
             assert_eq!(q.columns.len(), 2);
         } else {
-            panic!("Expected Select");
+            return Err("Expected Select".into())
         }
+
+        Ok(())
     }
 
     #[test]
@@ -1548,46 +1550,52 @@ mod tests {
     }
 
     #[test]
-    fn test_as_of_timestamp() {
+    fn test_as_of_timestamp() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let ex = executor();
         let plan = ex
             .parse("SELECT * FROM docs AS OF TIMESTAMP 1700000000 LIMIT 10")
-            .unwrap();
+            ?;
         if let Statement::Select(q) = &plan.statement {
             let as_of = q.as_of.as_ref().expect("AS OF should be present");
             assert_eq!(as_of.timestamp, Some(1_700_000_000));
         } else {
-            panic!("Expected Select");
+            return Err("Expected Select".into())
         }
         assert!(plan.steps.iter().any(|s| matches!(s.step_type, PlanStepType::TimeTravelScan { .. })));
+
+        Ok(())
     }
 
     #[test]
-    fn test_as_of_version() {
+    fn test_as_of_version() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let ex = executor();
         let plan = ex
             .parse("SELECT * FROM docs AS OF VERSION 42 LIMIT 10")
-            .unwrap();
+            ?;
         if let Statement::Select(q) = &plan.statement {
             let as_of = q.as_of.as_ref().expect("AS OF should be present");
             assert_eq!(as_of.version, Some(42));
         } else {
-            panic!("Expected Select");
+            return Err("Expected Select".into())
         }
+
+        Ok(())
     }
 
     #[test]
-    fn test_as_of_expression() {
+    fn test_as_of_expression() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let ex = executor();
         let plan = ex
             .parse("SELECT * FROM docs AS OF 'yesterday' LIMIT 10")
-            .unwrap();
+            ?;
         if let Statement::Select(q) = &plan.statement {
             let as_of = q.as_of.as_ref().expect("AS OF should be present");
             assert_eq!(as_of.time_expression, Some("yesterday".to_string()));
         } else {
-            panic!("Expected Select");
+            return Err("Expected Select".into())
         }
+
+        Ok(())
     }
 
     #[test]

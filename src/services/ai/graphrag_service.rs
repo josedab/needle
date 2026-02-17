@@ -1665,16 +1665,18 @@ mod tests {
     }
 
     #[test]
-    fn test_graph_filter_serde() {
+    fn test_graph_filter_serde() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let filter = GraphFilter::ConnectedTo { target: "x".into(), max_hops: 2 };
-        let json = serde_json::to_string(&filter).unwrap();
-        let deser: GraphFilter = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&filter)?;
+        let deser: GraphFilter = serde_json::from_str(&json)?;
         match deser {
             GraphFilter::ConnectedTo { target, max_hops } => {
                 assert_eq!(target, "x");
                 assert_eq!(max_hops, 2);
             }
-            _ => panic!("Wrong variant"),
+            _ => return Err("Wrong variant".into()),
         }
+
+        Ok(())
     }
 }
