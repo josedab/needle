@@ -216,16 +216,53 @@ fn default_lazy_expiration() -> bool {
     true
 }
 
+/// Maximum allowed length for collection names.
+const MAX_COLLECTION_NAME_LEN: usize = 256;
+
+/// Validate a collection name.
+///
+/// Names must be non-empty, at most 256 characters, and contain only
+/// alphanumeric characters, underscores, or hyphens.
+fn validate_collection_name(name: &str) -> Result<()> {
+    if name.is_empty() {
+        return Err(NeedleError::InvalidConfig(
+            "Collection name must not be empty".to_string(),
+        ));
+    }
+    if name.len() > MAX_COLLECTION_NAME_LEN {
+        return Err(NeedleError::InvalidConfig(format!(
+            "Collection name exceeds maximum length of {} characters",
+            MAX_COLLECTION_NAME_LEN
+        )));
+    }
+    if !name
+        .chars()
+        .all(|c| c.is_alphanumeric() || c == '_' || c == '-')
+    {
+        return Err(NeedleError::InvalidConfig(
+            "Collection name must contain only alphanumeric characters, underscores, or hyphens"
+                .to_string(),
+        ));
+    }
+    Ok(())
+}
+
 impl CollectionConfig {
     /// Create a new collection config with default settings
     ///
     /// # Panics
-    /// Panics if dimensions is 0.
+    /// Panics if dimensions is 0 or if the name is invalid.
     #[must_use]
     pub fn new(name: impl Into<String>, dimensions: usize) -> Self {
+        let name = name.into();
         assert!(dimensions > 0, "Vector dimensions must be greater than 0");
+        assert!(
+            validate_collection_name(&name).is_ok(),
+            "Invalid collection name: must be non-empty, max {} chars, alphanumeric/underscore/hyphen only",
+            MAX_COLLECTION_NAME_LEN
+        );
         Self {
-            name: name.into(),
+            name,
             dimensions,
             distance: DistanceFunction::Cosine,
             hnsw: HnswConfig::default(),
@@ -239,6 +276,8 @@ impl CollectionConfig {
 
     /// Create a new collection config with validation.
     pub fn try_new(name: impl Into<String>, dimensions: usize) -> Result<Self> {
+        let name = name.into();
+        validate_collection_name(&name)?;
         if dimensions == 0 {
             return Err(NeedleError::InvalidConfig(
                 "Vector dimensions must be greater than 0".to_string(),
@@ -437,8 +476,8 @@ mod tests {
 
     #[test]
     fn test_try_new_empty_name() {
-        let config = CollectionConfig::try_new("", 128).unwrap();
-        assert_eq!(config.name, "");
+        let result = CollectionConfig::try_new("", 128);
+        assert!(result.is_err());
     }
 
     // ── new panics ───────────────────────────────────────────────────────
