@@ -1,3 +1,5 @@
+# Build from source override — use with:
+#   docker compose -f docker-compose.yml -f docker-compose.source.yml up -d --build
 version: '3.8'
 
 services:
@@ -6,3 +8,4 @@ services:
       context: .
       dockerfile: Dockerfile
     image: needle:local
+    pull_policy: build

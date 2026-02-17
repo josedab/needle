@@ -17,14 +17,23 @@ RUN apt-get update && apt-get install -y \
 
 # Copy manifests first for dependency caching
 COPY Cargo.toml Cargo.lock ./
+COPY crates/needle-core/Cargo.toml crates/needle-core/Cargo.toml
+COPY crates/needle-cli/Cargo.toml crates/needle-cli/Cargo.toml
+COPY crates/needle-python/Cargo.toml crates/needle-python/Cargo.toml
 
-# Create dummy main.rs to build dependencies
-RUN mkdir src && echo "fn main() {}" > src/main.rs && echo "" > src/lib.rs
+# Create dummy source files to build dependencies only
+RUN mkdir -p src crates/needle-core/src crates/needle-cli/src crates/needle-python/src && \
+    echo "fn main() {}" > src/main.rs && \
+    echo "" > src/lib.rs && \
+    echo "" > crates/needle-core/src/lib.rs && \
+    echo "fn main() {}" > crates/needle-cli/src/main.rs && \
+    echo "" > crates/needle-python/src/lib.rs
 
 # Build dependencies (this layer is cached if Cargo.toml/Cargo.lock don't change)
-RUN cargo build --release --features full && rm -rf src
+RUN cargo build --release --features full; rm -rf src crates/*/src
 
 # Copy actual source code
+COPY crates ./crates
 COPY src ./src
 COPY benches ./benches 2>/dev/null || true
 COPY tests ./tests 2>/dev/null || true
