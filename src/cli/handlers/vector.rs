@@ -4,6 +4,9 @@ use std::io::{self, BufRead};
 
 use super::{parse_distance, parse_query_vector};
 
+/// Maximum import file size (1 GB).
+const MAX_IMPORT_FILE_SIZE: u64 = 1024 * 1024 * 1024;
+
 pub fn insert_command(path: &str, collection_name: &str) -> Result<()> {
     let mut db = Database::open(path)?;
     let coll = db.collection(collection_name)?;
@@ -253,6 +256,14 @@ pub fn import_command(path: &str, collection_name: &str, file_path: &str) -> Res
         }
         buffer
     } else {
+        let metadata = std::fs::metadata(file_path)?;
+        if metadata.len() > MAX_IMPORT_FILE_SIZE {
+            return Err(needle::NeedleError::InvalidInput(format!(
+                "Import file too large ({} bytes). Maximum allowed size is {} bytes",
+                metadata.len(),
+                MAX_IMPORT_FILE_SIZE
+            )));
+        }
         std::fs::read_to_string(file_path)?
     };
 
