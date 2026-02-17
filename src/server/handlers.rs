@@ -2609,6 +2609,7 @@ pub(super) async fn embedding_router_status_handler() -> impl IntoResponse {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use crate::database::Database;

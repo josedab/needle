@@ -36,7 +36,6 @@
 //! JWT tokens are passed via the `Authorization: Bearer <token>` header.
 
 
-#![allow(clippy::unwrap_used)] // tech debt: 12 unwrap() calls remaining
 mod auth;
 mod handlers;
 mod middleware;
@@ -1366,6 +1365,7 @@ pub fn openapi_spec_json() -> String {
 
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use axum::http::StatusCode;
