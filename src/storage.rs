@@ -65,7 +65,7 @@
 //! to detect corruption during reads. Invalid checksums result in a
 //! `NeedleError::CorruptedDatabase` error.
 
-#![allow(clippy::unwrap_used)] // tech debt: 13 unwrap() calls remaining
+#![cfg_attr(test, allow(clippy::unwrap_used))]
 use crate::error::{NeedleError, Result};
 use memmap2::{Mmap, MmapMut};
 use serde::{Deserialize, Serialize};

@@ -617,8 +617,7 @@ pub fn recommend_index(constraints: &IndexSelectionConstraints) -> IndexRecommen
         // Massive dataset (>10M): DiskANN unless very high memory available
         let has_abundant_memory = constraints
             .available_memory_bytes
-            .map(|m| ivf_total_memory < m)
-            .unwrap_or(false);
+            .is_some_and(|m| ivf_total_memory < m);
 
         if has_abundant_memory && constraints.low_latency_critical {
             explanation

@@ -31,7 +31,7 @@
 //! }
 //! ```
 
-#![allow(clippy::unwrap_used)] // tech debt: 1 unwrap() calls remaining
+#![cfg_attr(test, allow(clippy::unwrap_used))]
 use crate::database::Database;
 use axum::{
     extract::{Path, Query, State},

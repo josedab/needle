@@ -56,7 +56,7 @@
 //! | `$or` | Logical OR |
 //! | `$not` | Logical NOT |
 
-#![allow(clippy::unwrap_used)] // tech debt: 5 unwrap() calls remaining
+#![cfg_attr(test, allow(clippy::unwrap_used))]
 use crate::error::{NeedleError, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;

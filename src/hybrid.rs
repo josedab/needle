@@ -5,7 +5,7 @@
 //! - Vector similarity for semantic search
 //! - Reciprocal Rank Fusion (RRF) for combining results
 
-#![allow(clippy::unwrap_used)] // tech debt: 2 unwrap() calls remaining
+#![cfg_attr(test, allow(clippy::unwrap_used))]
 use rust_stemmers::{Algorithm, Stemmer};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -520,8 +520,7 @@ impl QueryFeatures {
 
         let is_question = words
             .first()
-            .map(|w| question_words.contains(w.to_lowercase().as_str()))
-            .unwrap_or(false)
+            .is_some_and(|w| question_words.contains(w.to_lowercase().as_str()))
             || query.trim().ends_with('?');
 
         let has_quotes = query.contains('"') || query.contains('\'');
@@ -532,7 +531,7 @@ impl QueryFeatures {
 
         let capitalized_count = words
             .iter()
-            .filter(|w| w.chars().next().map(|c| c.is_uppercase()).unwrap_or(false) && w.len() > 1)
+            .filter(|w| w.chars().next().is_some_and(|c| c.is_uppercase()) && w.len() > 1)
             .count();
 
         Self {
