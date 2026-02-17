@@ -20,6 +20,18 @@ fn sha256_hex(data: &[u8]) -> String {
     s
 }
 
+/// Constant-time byte slice comparison to prevent timing side-channel attacks.
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (x, y) in a.iter().zip(b.iter()) {
+        diff |= x ^ y;
+    }
+    diff == 0
+}
+
 // ── Core Types ──────────────────────────────────────────────────────────────
 
 /// Unique tenant identifier.
@@ -274,7 +286,8 @@ impl TenantManager {
         match &tenant.encryption_key_hash {
             Some(stored) => {
                 let hash = sha256_hex(key);
-                Ok(hash == *stored)
+                // Constant-time comparison to prevent timing side-channel attacks
+                Ok(constant_time_eq(hash.as_bytes(), stored.as_bytes()))
             }
             None => Ok(false),
         }
