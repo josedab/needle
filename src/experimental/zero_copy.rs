@@ -110,6 +110,8 @@ pub struct ZeroCopyBuffer {
     ptr: NonNull<u8>,
     /// Total byte length
     len: usize,
+    /// Original Vec capacity in bytes (only meaningful when owned)
+    capacity: usize,
     /// Data type
     dtype: DataType,
     /// Whether this buffer owns the memory
@@ -152,12 +154,14 @@ impl ZeroCopyBuffer {
     /// Create from owned Vec<f32>
     pub fn from_vec_f32(data: Vec<f32>) -> Self {
         let len = data.len() * 4;
+        let capacity = data.capacity() * 4;
         let ptr = data.as_ptr() as *mut u8;
         std::mem::forget(data); // Transfer ownership
 
         Self {
             ptr: NonNull::new(ptr).expect("alloc returned non-null"),
             len,
+            capacity,
             dtype: DataType::Float32,
             owned: true,
             alignment: 4,
@@ -177,6 +181,7 @@ impl ZeroCopyBuffer {
         Self {
             ptr: NonNull::new(ptr as *mut u8).expect("slice ptr is non-null"),
             len,
+            capacity: len,
             dtype,
             owned: false,
             alignment: dtype.byte_size(),
@@ -239,18 +244,19 @@ impl Drop for ZeroCopyBuffer {
                         let _ = Vec::from_raw_parts(
                             self.ptr.as_ptr() as *mut f32,
                             self.len / 4,
-                            self.len / 4,
+                            self.capacity / 4,
                         );
                     }
                     DataType::Float64 => {
                         let _ = Vec::from_raw_parts(
                             self.ptr.as_ptr() as *mut f64,
                             self.len / 8,
-                            self.len / 8,
+                            self.capacity / 8,
                         );
                     }
                     _ => {
-                        let _ = Vec::from_raw_parts(self.ptr.as_ptr(), self.len, self.len);
+                        let _ =
+                            Vec::from_raw_parts(self.ptr.as_ptr(), self.len, self.capacity);
                     }
                 }
             }
