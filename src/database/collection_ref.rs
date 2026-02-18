@@ -734,6 +734,17 @@ impl<'a> CollectionRef<'a> {
         self.db.needs_compaction_internal(&self.name, threshold)
     }
 
+    /// Scan for near-duplicate vectors in the collection.
+    ///
+    /// Returns groups of vectors whose pairwise distance is below the threshold.
+    /// Uses the collection's dedup config threshold if `threshold` is `None`.
+    pub fn dedup_scan(
+        &self,
+        threshold: Option<f32>,
+    ) -> Result<crate::collection::dedup::DedupScanResult> {
+        self.db.dedup_scan_internal(&self.name, threshold)
+    }
+
     // ============ TTL Methods ============
 
     /// Sweep and delete all expired vectors.

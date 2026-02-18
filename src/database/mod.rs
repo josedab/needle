@@ -1696,6 +1696,19 @@ impl Database {
             .is_some_and(|c| c.needs_compaction(threshold))
     }
 
+    fn dedup_scan_internal(
+        &self,
+        collection: &str,
+        threshold: Option<f32>,
+    ) -> Result<crate::collection::dedup::DedupScanResult> {
+        let state = self.state.read();
+        let coll = state
+            .collections
+            .get(collection)
+            .ok_or_else(|| NeedleError::CollectionNotFound(collection.to_string()))?;
+        Ok(coll.dedup_scan(threshold))
+    }
+
     // ============ TTL Internal Methods ============
 
     fn expire_vectors_internal(&self, collection: &str) -> Result<usize> {
