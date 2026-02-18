@@ -814,7 +814,7 @@ impl FineTuner {
                     self.ntxent_loss_backward(&anchor_t, &positive_t, &negative_t, triplet.weight)
                 }
                 LossFunction::MultipleNegativesRanking => {
-                    self.mnr_loss_backward(&anchor_t, &positive_t, &negative_t, triplet.weight)
+                    Self::mnr_loss_backward(&anchor_t, &positive_t, &negative_t, triplet.weight)
                 }
                 LossFunction::CosineEmbedding => {
                     self.cosine_loss_backward(&anchor_t, &positive_t, &negative_t, triplet.weight)
@@ -950,7 +950,6 @@ impl FineTuner {
 
     /// Multiple Negatives Ranking loss
     fn mnr_loss_backward(
-        &self,
         anchor: &[f32],
         positive: &[f32],
         negative: &[f32],

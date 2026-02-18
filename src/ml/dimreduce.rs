@@ -406,7 +406,7 @@ impl NeighborEmbedding {
         }
 
         // Compute pairwise distances
-        let distances = self.compute_distances(vectors);
+        let distances = Self::compute_distances(vectors);
 
         // Compute affinities (P matrix)
         let p = self.compute_affinities(&distances);
@@ -427,7 +427,7 @@ impl NeighborEmbedding {
 
         for _ in 0..self.n_iter {
             // Compute Q matrix (low-dimensional affinities)
-            let q = self.compute_q(&y);
+            let q = Self::compute_q(&y);
 
             // Compute gradients
             let gradients = self.compute_gradients(&p, &q, &y);
@@ -461,7 +461,7 @@ impl NeighborEmbedding {
         y
     }
 
-    fn compute_distances(&self, vectors: &[&[f32]]) -> Vec<Vec<f32>> {
+    fn compute_distances(vectors: &[&[f32]]) -> Vec<Vec<f32>> {
         let n = vectors.len();
         let mut distances = vec![vec![0.0; n]; n];
 
@@ -543,7 +543,7 @@ impl NeighborEmbedding {
     }
 
     #[allow(clippy::needless_range_loop)]
-    fn compute_q(&self, y: &[Vec<f32>]) -> Vec<Vec<f32>> {
+    fn compute_q(y: &[Vec<f32>]) -> Vec<Vec<f32>> {
         let n = y.len();
         let mut q = vec![vec![0.0; n]; n];
         let mut sum = 0.0f32;

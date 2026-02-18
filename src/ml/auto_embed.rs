@@ -477,7 +477,7 @@ impl AutoEmbedder {
 
     /// Get cache statistics
     pub fn cache_stats(&self) -> (usize, u64, u64) {
-        let size = self.cache.as_ref().map(|c| c.read().len()).unwrap_or(0);
+        let size = self.cache.as_ref().map_or(0, |c| c.read().len());
         (
             size,
             self.cache_hits.load(Ordering::Relaxed),

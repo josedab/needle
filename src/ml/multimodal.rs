@@ -400,7 +400,7 @@ impl MultiModalEmbedder {
 
         // Check cache
         if self.config.enable_cache {
-            let hash = self.hash_input(&input);
+            let hash = Self::hash_input(&input);
             if let Some(entry) = self.cache.read().get(&hash) {
                 self.stats.write().cache_hits += 1;
                 return Ok(MultiModalEmbedding::new(entry.embedding.clone(), modality));
@@ -436,7 +436,7 @@ impl MultiModalEmbedder {
 
         // Cache result
         if self.config.enable_cache {
-            let hash = self.hash_input(&input);
+            let hash = Self::hash_input(&input);
             let mut cache = self.cache.write();
 
             // Evict if cache is full
@@ -490,7 +490,7 @@ impl MultiModalEmbedder {
     /// Generate mock embedding for testing
     fn generate_mock_embedding(&self, input: &EmbedInput) -> Result<Vec<f32>> {
         // Generate deterministic embedding based on input hash
-        let hash = self.hash_input(input);
+        let hash = Self::hash_input(input);
         let mut embedding = Vec::with_capacity(self.config.dimension);
 
         let mut state = hash;
@@ -550,7 +550,7 @@ impl MultiModalEmbedder {
     }
 
     /// Hash input for caching
-    fn hash_input(&self, input: &EmbedInput) -> u64 {
+    fn hash_input(input: &EmbedInput) -> u64 {
         use std::collections::hash_map::DefaultHasher;
         use std::hash::{Hash, Hasher};
 

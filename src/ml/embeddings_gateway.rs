@@ -844,12 +844,10 @@ impl ProviderRouter {
                 available.into_iter().min_by(|a, b| {
                     let lat_a = metrics
                         .get(&a.provider_type)
-                        .map(|m| m.avg_latency_ms)
-                        .unwrap_or(f64::INFINITY);
+                        .map_or(f64::INFINITY, |m| m.avg_latency_ms);
                     let lat_b = metrics
                         .get(&b.provider_type)
-                        .map(|m| m.avg_latency_ms)
-                        .unwrap_or(f64::INFINITY);
+                        .map_or(f64::INFINITY, |m| m.avg_latency_ms);
                     lat_a
                         .partial_cmp(&lat_b)
                         .unwrap_or(std::cmp::Ordering::Equal)
@@ -1129,7 +1127,7 @@ impl EmbeddingsGateway {
 
         let embedding = match config.provider_type {
             ProviderType::Mock => {
-                self.generate_mock_embedding(text, config.dimensions.unwrap_or(384))
+                Self::generate_mock_embedding(text, config.dimensions.unwrap_or(384))
             }
             ProviderType::OpenAI | ProviderType::Anthropic | ProviderType::Cohere
             | ProviderType::HuggingFace | ProviderType::Ollama | ProviderType::LocalOnnx => {
@@ -1159,12 +1157,12 @@ impl EmbeddingsGateway {
     /// Build provider-specific HTTP request and execute it.
     /// Falls back to mock embedding if HTTP client is unavailable.
     fn call_provider(&self, text: &str, config: &ProviderConfig) -> Result<Vec<f32>> {
-        let request = self.build_request(text, config)?;
+        let request = Self::build_request(text, config)?;
 
         // Attempt blocking HTTP call via std::net
-        match self.http_post_json(&request) {
+        match Self::http_post_json(&request) {
             Ok(response_body) => {
-                self.parse_embedding_response(&response_body, config)
+                Self::parse_embedding_response(&response_body, config)
             }
             Err(e) => {
                 tracing::warn!(
@@ -1178,7 +1176,7 @@ impl EmbeddingsGateway {
     }
 
     /// Build a provider-specific HTTP request payload.
-    fn build_request(&self, text: &str, config: &ProviderConfig) -> Result<HttpEmbedRequest> {
+    fn build_request(text: &str, config: &ProviderConfig) -> Result<HttpEmbedRequest> {
         let (url, headers, body) = match config.provider_type {
             ProviderType::OpenAI => {
                 let base = config.base_url.as_deref().unwrap_or("https://api.openai.com/v1");
@@ -1262,7 +1260,6 @@ impl EmbeddingsGateway {
 
     /// Parse the embedding vector from a provider's JSON response.
     fn parse_embedding_response(
-        &self,
         body: &serde_json::Value,
         config: &ProviderConfig,
     ) -> Result<Vec<f32>> {
@@ -1322,7 +1319,7 @@ impl EmbeddingsGateway {
 
     /// Make a blocking HTTP POST request with JSON body.
     /// Uses std::net TcpStream for minimal dependency.
-    fn http_post_json(&self, request: &HttpEmbedRequest) -> Result<serde_json::Value> {
+    fn http_post_json(request: &HttpEmbedRequest) -> Result<serde_json::Value> {
         use std::io::{Read, Write};
         use std::net::TcpStream;
         use std::time::Duration;
@@ -1389,7 +1386,7 @@ impl EmbeddingsGateway {
     }
 
     /// Generate mock embedding for testing
-    fn generate_mock_embedding(&self, text: &str, dimensions: usize) -> Vec<f32> {
+    fn generate_mock_embedding(text: &str, dimensions: usize) -> Vec<f32> {
         use std::hash::{Hash, Hasher};
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         text.hash(&mut hasher);

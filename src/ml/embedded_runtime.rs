@@ -480,8 +480,7 @@ impl ModelManager {
         let dim = self
             .registry
             .get(default_id)
-            .map(|e| e.dimensions)
-            .unwrap_or(384);
+            .map_or(384, |e| e.dimensions);
         self.load_mock(default_id, dim)
     }
 
@@ -527,7 +526,7 @@ impl ModelManager {
 /// Returns a mock model suitable for testing and offline development.
 pub fn quick_model(model_id: &str) -> Box<dyn EmbeddingModel> {
     let registry = ModelRegistry::new();
-    let dim = registry.get(model_id).map(|e| e.dimensions).unwrap_or(384);
+    let dim = registry.get(model_id).map_or(384, |e| e.dimensions);
     Box::new(MockEmbeddingModel::new(model_id, dim))
 }
 
@@ -575,8 +574,7 @@ impl EmbeddingRuntime {
             .manager
             .registry()
             .get(model_id)
-            .map(|e| e.dimensions)
-            .unwrap_or(384);
+            .map_or(384, |e| e.dimensions);
         self.manager.load_mock(model_id, dim);
         *self.active_model_id.write() = Some(model_id.to_string());
         Ok(())

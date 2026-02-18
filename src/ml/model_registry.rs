@@ -1133,7 +1133,7 @@ impl ModelPerformanceTracker {
     /// Get reliability score (0.0 - 1.0) for a model
     pub fn reliability_score(&self, model_id: ModelId) -> f64 {
         let latencies = self.latencies.read();
-        let total = latencies.get(&model_id).map(|l| l.len()).unwrap_or(0);
+        let total = latencies.get(&model_id).map_or(0, |l| l.len());
         let errors = self.error_count(model_id) as usize;
 
         if total + errors == 0 {

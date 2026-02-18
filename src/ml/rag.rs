@@ -616,7 +616,7 @@ impl RagPipeline {
         let mut retrieved: Vec<RetrievedChunk> = candidates
             .into_iter()
             .filter_map(|result| {
-                let chunk = self.result_to_chunk(&result)?;
+                let chunk = Self::result_to_chunk(&result)?;
                 Some(RetrievedChunk {
                     chunk,
                     score: result.distance,
@@ -629,7 +629,7 @@ impl RagPipeline {
         // Rerank if enabled
         let rerank_latency = if self.config.rerank && !retrieved.is_empty() {
             let rerank_start = std::time::Instant::now();
-            self.rerank_chunks(query, &mut retrieved);
+            Self::rerank_chunks(query, &mut retrieved);
             Some(rerank_start.elapsed().as_millis() as u64)
         } else {
             None
@@ -651,7 +651,7 @@ impl RagPipeline {
         let context = self.assemble_context(&retrieved);
 
         // Build citations
-        let citations = self.build_citations(&retrieved);
+        let citations = Self::build_citations(&retrieved);
 
         let total_latency = start_time.elapsed().as_millis() as u64;
 
@@ -692,18 +692,18 @@ impl RagPipeline {
             ChunkingStrategy::FixedSize {
                 chunk_size,
                 overlap,
-            } => self.chunk_fixed_size(text, *chunk_size, *overlap),
+            } => Self::chunk_fixed_size(text, *chunk_size, *overlap),
             ChunkingStrategy::SlidingWindow {
                 window_size,
                 step_size,
-            } => self.chunk_sliding_window(text, *window_size, *step_size),
+            } => Self::chunk_sliding_window(text, *window_size, *step_size),
             ChunkingStrategy::Semantic {
                 max_chunk_size,
                 min_chunk_size,
             } => self.chunk_semantic(text, *max_chunk_size, *min_chunk_size),
             ChunkingStrategy::Hierarchical { levels } => self.chunk_hierarchical(text, levels),
             ChunkingStrategy::Paragraph { max_paragraphs } => {
-                self.chunk_paragraphs(text, *max_paragraphs)
+                Self::chunk_paragraphs(text, *max_paragraphs)
             }
             ChunkingStrategy::Recursive { chunk_size, chunk_overlap } => {
                 RecursiveTextSplitter::new(*chunk_size, *chunk_overlap).split(text)
@@ -712,7 +712,6 @@ impl RagPipeline {
     }
 
     fn chunk_fixed_size(
-        &self,
         text: &str,
         chunk_size: usize,
         overlap: usize,
@@ -741,7 +740,6 @@ impl RagPipeline {
     }
 
     fn chunk_sliding_window(
-        &self,
         text: &str,
         window_size: usize,
         step_size: usize,
@@ -780,7 +778,7 @@ impl RagPipeline {
         min_size: usize,
     ) -> Vec<(String, usize, usize)> {
         let mut chunks = Vec::new();
-        let sentences = self.split_sentences(text);
+        let sentences = Self::split_sentences(text);
 
         let mut current_chunk = String::new();
         let mut chunk_start = 0;
@@ -819,10 +817,10 @@ impl RagPipeline {
         // For simplicity, use the smallest level for now
         // A full implementation would create parent-child relationships
         let chunk_size = levels.last().copied().unwrap_or(512);
-        self.chunk_fixed_size(text, chunk_size, chunk_size / 4)
+        Self::chunk_fixed_size(text, chunk_size, chunk_size / 4)
     }
 
-    fn chunk_paragraphs(&self, text: &str, max_paragraphs: usize) -> Vec<(String, usize, usize)> {
+    fn chunk_paragraphs(text: &str, max_paragraphs: usize) -> Vec<(String, usize, usize)> {
         let paragraphs: Vec<&str> = text.split("\n\n").collect();
         let mut chunks = Vec::new();
         let mut pos = 0;
@@ -837,7 +835,7 @@ impl RagPipeline {
         chunks
     }
 
-    fn split_sentences(&self, text: &str) -> Vec<String> {
+    fn split_sentences(text: &str) -> Vec<String> {
         // Simple sentence splitting (could be improved with NLP)
         let mut sentences = Vec::new();
         let mut current = String::new();
@@ -857,7 +855,7 @@ impl RagPipeline {
         sentences
     }
 
-    fn result_to_chunk(&self, result: &SearchResult) -> Option<Chunk> {
+    fn result_to_chunk(result: &SearchResult) -> Option<Chunk> {
         let meta = result.metadata.as_ref()?;
 
         Some(Chunk {
@@ -874,7 +872,7 @@ impl RagPipeline {
         })
     }
 
-    fn rerank_chunks(&self, query: &str, chunks: &mut [RetrievedChunk]) {
+    fn rerank_chunks(query: &str, chunks: &mut [RetrievedChunk]) {
         // Simple reranking based on query term overlap
         // In production, use a cross-encoder model
         let query_lower = query.to_lowercase();
@@ -911,7 +909,7 @@ impl RagPipeline {
 
         for chunk in chunks {
             let is_duplicate = result.iter().any(|existing: &RetrievedChunk| {
-                self.text_similarity(&existing.chunk.text, &chunk.chunk.text)
+                Self::text_similarity(&existing.chunk.text, &chunk.chunk.text)
                     > self.config.dedup_threshold
             });
 
@@ -923,7 +921,7 @@ impl RagPipeline {
         result
     }
 
-    fn text_similarity(&self, a: &str, b: &str) -> f32 {
+    fn text_similarity(a: &str, b: &str) -> f32 {
         // Jaccard similarity on words
         let a_words: std::collections::HashSet<&str> = a.split_whitespace().collect();
         let b_words: std::collections::HashSet<&str> = b.split_whitespace().collect();
@@ -945,11 +943,11 @@ impl RagPipeline {
         match &self.config.context_strategy {
             ContextStrategy::None => {
                 // No optimization - include all chunks
-                self.format_chunks(chunks)
+                Self::format_chunks(chunks)
             }
             ContextStrategy::Truncate => {
                 // Simple truncation at character limit
-                let context = self.format_chunks(chunks);
+                let context = Self::format_chunks(chunks);
                 if context.len() <= max_chars {
                     context
                 } else {
@@ -980,7 +978,7 @@ impl RagPipeline {
     }
 
     /// Format chunks into context string
-    fn format_chunks(&self, chunks: &[RetrievedChunk]) -> String {
+    fn format_chunks(chunks: &[RetrievedChunk]) -> String {
         chunks
             .iter()
             .enumerate()
@@ -990,7 +988,7 @@ impl RagPipeline {
     }
 
     /// Estimate character count for a chunk in formatted context
-    fn estimate_chunk_chars(&self, chunk: &RetrievedChunk, index: usize) -> usize {
+    fn estimate_chunk_chars(chunk: &RetrievedChunk, index: usize) -> usize {
         // "[N] " prefix + text + "\n\n" separator
         format!("[{}] ", index + 1).len() + chunk.chunk.text.len() + 2
     }
@@ -1002,7 +1000,7 @@ impl RagPipeline {
         let mut total_chars = 0;
 
         for (i, chunk) in chunks.iter().enumerate() {
-            let chunk_chars = self.estimate_chunk_chars(chunk, result.len());
+            let chunk_chars = Self::estimate_chunk_chars(chunk, result.len());
             if total_chars + chunk_chars > max_chars && !result.is_empty() {
                 break;
             }
@@ -1039,7 +1037,7 @@ impl RagPipeline {
             let mut best_score = f32::NEG_INFINITY;
 
             for (i, chunk) in remaining.iter().enumerate() {
-                let chunk_chars = self.estimate_chunk_chars(chunk, selected.len());
+                let chunk_chars = Self::estimate_chunk_chars(chunk, selected.len());
                 if total_chars + chunk_chars > max_chars && !selected.is_empty() {
                     continue;
                 }
@@ -1053,7 +1051,7 @@ impl RagPipeline {
                 } else {
                     let max_sim = selected
                         .iter()
-                        .map(|s| self.text_similarity(&chunk.chunk.text, &s.chunk.text))
+                        .map(|s| Self::text_similarity(&chunk.chunk.text, &s.chunk.text))
                         .fold(0.0f32, |a, b| a.max(b));
                     1.0 - max_sim
                 };
@@ -1068,7 +1066,7 @@ impl RagPipeline {
 
             // Check if we found a valid chunk
             let chunk = remaining.remove(best_idx);
-            let chunk_chars = self.estimate_chunk_chars(chunk, selected.len());
+            let chunk_chars = Self::estimate_chunk_chars(chunk, selected.len());
             if total_chars + chunk_chars > max_chars && !selected.is_empty() {
                 break;
             }
@@ -1096,11 +1094,11 @@ impl RagPipeline {
         let mut total_chars = 0;
 
         for chunk in chunks {
-            let chunk_chars = self.estimate_chunk_chars(chunk, selected.len());
+            let chunk_chars = Self::estimate_chunk_chars(chunk, selected.len());
 
             // Check for redundancy with already selected chunks
             let is_redundant = selected.iter().any(|s| {
-                self.text_similarity(&chunk.chunk.text, &s.chunk.text) >= redundancy_threshold
+                Self::text_similarity(&chunk.chunk.text, &s.chunk.text) >= redundancy_threshold
             });
 
             if is_redundant {
@@ -1123,7 +1121,7 @@ impl RagPipeline {
             .join("\n\n")
     }
 
-    fn build_citations(&self, chunks: &[RetrievedChunk]) -> Vec<Citation> {
+    fn build_citations(chunks: &[RetrievedChunk]) -> Vec<Citation> {
         chunks
             .iter()
             .map(|c| Citation {
@@ -1285,7 +1283,7 @@ impl RagPipeline {
         all_chunks.truncate(self.config.top_k);
 
         let context = self.assemble_context(&all_chunks);
-        let citations = self.build_citations(&all_chunks);
+        let citations = Self::build_citations(&all_chunks);
         let total_latency = start_time.elapsed().as_millis() as u64;
 
         Ok(RagResponse {

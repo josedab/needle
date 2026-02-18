@@ -258,13 +258,13 @@ impl InferenceEngine {
             filtered
                 .into_iter()
                 .min_by_key(|m| m.dimensions)
-                .unwrap_or_default()
+                .expect("filtered is non-empty")
         } else {
             // Prefer largest dimensions (best quality)
             filtered
                 .into_iter()
                 .max_by_key(|m| m.dimensions)
-                .unwrap_or_default()
+                .expect("filtered is non-empty")
         }
     }
 
