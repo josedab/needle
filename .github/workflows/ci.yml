@@ -179,6 +179,9 @@ jobs:
           RUSTDOCFLAGS: "-D warnings -D rustdoc::broken_intra_doc_links"
         run: cargo doc --no-deps --features full
 
+      - name: Run documentation tests
+        run: cargo test --doc --features full
+
   bench:
     needs: quick-check
     name: Benchmarks
