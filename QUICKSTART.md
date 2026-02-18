@@ -67,3 +67,5 @@ make demo
 | Interactive HTTP walkthrough | `make playground` |
 | Full API docs | `cargo doc --open` |
 | See all CLI commands | `cargo run -- --help` |
+
+> **Want a focused HTTP API walkthrough?** See the [HTTP Quickstart](docs/http-quickstart.md) for step-by-step REST API usage (create, insert, search, clean up).

@@ -103,7 +103,7 @@ Memory usage: ~1.7GB for 1M vectors (384 dims) with HNSW index.
 
 ## Documentation
 
-📖 **[Full Documentation Website →](https://needle.dev)**
+📖 **[Full Documentation Website →](https://needle.dev)** · 📂 **[Documentation Index →](docs/README.md)**
 
 | Guide | Description |
 |-------|-------------|
@@ -111,6 +111,7 @@ Memory usage: ~1.7GB for 1M vectors (384 dims) with HNSW index.
 | [HTTP Quickstart](docs/http-quickstart.md) | Run the REST API and make your first requests |
 | [RAG Quickstart](docs/rag-quickstart.md) | End-to-end RAG pipeline with OpenAI embeddings |
 | [API Reference](docs/api-reference.md) | Complete method documentation |
+| [NeedleQL Guide](docs/needleql.md) | SQL-like query language for vector operations |
 | [Architecture](docs/architecture.md) | Internal design and data flow diagrams |
 | [Index Selection Guide](docs/index-selection-guide.md) | HNSW vs IVF vs DiskANN decision guide |
 | [Production Checklist](docs/production-checklist.md) | Pre-launch verification checklist |
@@ -119,6 +120,7 @@ Memory usage: ~1.7GB for 1M vectors (384 dims) with HNSW index.
 | [Distributed Operations](docs/distributed-operations.md) | Sharding, replication, and clustering |
 | [Services Architecture](docs/ARCHITECTURE_SERVICES.md) | Service module organization and dependencies |
 | [Migration Guide](docs/MIGRATION.md) | Version upgrade and migration instructions |
+| [Migration & Upgrade Guide](docs/migration-upgrade-guide.md) | Comprehensive migration, index changes, and external DB migration |
 | [Python SDK](docs/python.md) | Python client installation and usage |
 | [Benchmarks](docs/benchmarks.md) | Performance data and methodology |
 | [API Stability](docs/api-stability.md) | API stability tiers policy |
@@ -128,6 +130,9 @@ Memory usage: ~1.7GB for 1M vectors (384 dims) with HNSW index.
 | [Support](docs/SUPPORT.md) | Getting help and support channels |
 | [Security](SECURITY.md) | Security policy and vulnerability reporting |
 | [Examples](examples/README.md) | Runnable example commands |
+| [LangChain Integration](python/needle_langchain/README.md) | LangChain vector store adapter |
+| [LlamaIndex Integration](python/needle_llamaindex/README.md) | LlamaIndex vector store adapter |
+| [Launch Announcement](docs/launch-announcement.md) | v0.1.0 introduction and feature overview |
 
 ## Features
 
@@ -540,6 +545,8 @@ echo '{"id":"doc1","vector":[0.1,0.2,0.3],"metadata":{"title":"Hello"}}' | ./tar
 
 ### CLI Commands
 
+#### Core
+
 | Command | Description |
 |---------|-------------|
 | `create` | Create a new database file |
@@ -550,6 +557,7 @@ echo '{"id":"doc1","vector":[0.1,0.2,0.3],"metadata":{"title":"Hello"}}' | ./tar
 | `insert` | Insert vectors from stdin (JSON format, one per line) |
 | `get` | Retrieve a vector by ID |
 | `search` | Search for similar vectors |
+| `query` | Natural language query interface with analysis hints |
 | `delete` | Delete a vector by ID |
 | `export` | Export collection to JSON |
 | `import` | Import vectors from JSON file |
@@ -558,6 +566,67 @@ echo '{"id":"doc1","vector":[0.1,0.2,0.3],"metadata":{"title":"Hello"}}' | ./tar
 | `compact` | Remove deleted vectors and reclaim space |
 | `serve` | Start HTTP REST API server (requires `server` feature) |
 | `tune` | Auto-tune HNSW parameters for a workload |
+| `init` | Initialize a new Needle project with sample configuration |
+| `demo` | Run an interactive demo with generated sample data |
+
+#### Search & Query
+
+| Command | Description |
+|---------|-------------|
+| `sql` | Execute a SQL-compatible (NeedleQL) query against the database |
+| `explain-search` | Visualize HNSW graph traversal for a search query (debug tool) |
+| `federate` | Federated search across multiple instances (search, health, stats) |
+
+#### Data Management
+
+| Command | Description |
+|---------|-------------|
+| `diff` | Compare two collections and show differences |
+| `merge` | Merge vectors from source collection into target collection |
+| `dedup` | Deduplicate near-duplicate vectors in a collection |
+| `backup` | Backup management (create, list, restore, verify, cleanup) |
+| `snapshot` | Snapshot management for time-travel queries (create, list, restore, prune) |
+| `alias` | Collection alias management (create, delete, list, resolve, update) |
+| `ttl` | TTL (time-to-live) management for vectors (sweep, stats) |
+| `migrate` | Migrate vectors from external vector databases (Qdrant, ChromaDB, Milvus, Pinecone) |
+| `export-bundle` | Export a collection as a portable bundle |
+| `import-bundle` | Import a collection from a portable bundle |
+
+#### Analysis & Optimization
+
+| Command | Description |
+|---------|-------------|
+| `health` | Show collection health score and anomaly detection |
+| `drift` | Drift detection (baseline, detect, report) |
+| `estimate` | Estimate query cost before execution |
+| `evaluate` | Evaluate search quality against ground truth data |
+| `recommend-index` | Recommend the best index type for a workload |
+| `advise` | Recommend optimal index type with what-if analysis |
+| `advise-compression` | Analyze and recommend optimal compression strategy |
+| `partition` | Analyze collection for auto-partitioning recommendations |
+| `provenance` | Show provenance information for a vector |
+
+#### Views & Functions
+
+| Command | Description |
+|---------|-------------|
+| `views` | Materialized view management (create, list, drop, refresh) |
+| `function` | Serverless function management (deploy, list, logs, remove) |
+
+#### AI & Agent Integration
+
+| Command | Description |
+|---------|-------------|
+| `memory` | Agentic memory management (remember, recall, forget) |
+| `mcp` | Start Model Context Protocol (MCP) server for AI agents |
+| `playground` | Interactive REPL/playground for vector exploration |
+
+#### Developer Tools
+
+| Command | Description |
+|---------|-------------|
+| `doctor` | Check local environment and diagnose issues |
+| `dev` | Developer tools (check, generate-test-data, info, benchmark) |
 
 ## Feature Flags
 

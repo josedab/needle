@@ -71,6 +71,7 @@ For more examples, see [How-To Guides](how-to-guides.md).
 | Document | Description |
 |----------|-------------|
 | [API Reference](api-reference.md) | Complete API documentation with method signatures and examples |
+| [NeedleQL Guide](needleql.md) | SQL-like query language for vector operations |
 | [Architecture](architecture.md) | Internal design, data flow diagrams, and module relationships |
 | [How-To Guides](how-to-guides.md) | Practical tutorials for common tasks |
 

@@ -2,6 +2,8 @@
 
 This guide gets you from zero to a working HTTP search in a few minutes.
 
+> **See also:** [Quickstart](../QUICKSTART.md) covers three paths (Rust library, Docker, and build-from-source) to get running quickly. This guide focuses specifically on the HTTP REST API.
+
 ## 1) Start the server
 
 ```bash
