@@ -1,10 +1,12 @@
 use serde::{Deserialize, Serialize};
+use std::fmt;
 
 use crate::distance::DistanceFunction;
 use crate::error::{NeedleError, Result};
 use crate::hnsw::HnswConfig;
 
 /// Collection statistics
+#[must_use]
 #[derive(Debug, Clone)]
 pub struct CollectionStats {
     /// Collection name
@@ -25,6 +27,36 @@ pub struct CollectionStats {
     pub total_memory_bytes: usize,
     /// HNSW index statistics
     pub index_stats: crate::hnsw::HnswStats,
+}
+
+impl fmt::Display for CollectionStats {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fn format_bytes(bytes: usize) -> String {
+            if bytes >= 1_073_741_824 {
+                format!("{:.1} GB", bytes as f64 / 1_073_741_824.0)
+            } else if bytes >= 1_048_576 {
+                format!("{:.1} MB", bytes as f64 / 1_048_576.0)
+            } else if bytes >= 1024 {
+                format!("{:.1} KB", bytes as f64 / 1024.0)
+            } else {
+                format!("{bytes} B")
+            }
+        }
+
+        write!(
+            f,
+            "Collection '{}': {} vectors, {} dims, {:?} distance, {} total memory \
+             (vectors: {}, metadata: {}, index: {})",
+            self.name,
+            self.vector_count,
+            self.dimensions,
+            self.distance_function,
+            format_bytes(self.total_memory_bytes),
+            format_bytes(self.vector_memory_bytes),
+            format_bytes(self.metadata_memory_bytes),
+            format_bytes(self.index_memory_bytes),
+        )
+    }
 }
 
 /// Query cache statistics
