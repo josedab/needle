@@ -204,7 +204,7 @@ impl CollectionFederation {
         }
 
         // Normalize scores
-        let normalized = self.normalize_scores(&all_results, &query.normalization);
+        let normalized = Self::normalize_scores(&all_results, &query.normalization);
 
         // Merge results
         let merged = self.merge_results(
@@ -266,7 +266,6 @@ impl CollectionFederation {
 
     /// Normalize scores across collections.
     fn normalize_scores(
-        &self,
         results: &HashMap<String, Vec<SearchResult>>,
         normalization: &ScoreNormalization,
     ) -> HashMap<String, Vec<(SearchResult, f64)>> {
@@ -356,13 +355,13 @@ impl CollectionFederation {
     ) -> Vec<FederatedResult> {
         match strategy {
             MergeStrategy::ReciprocalRankFusion { k: rrf_k } => {
-                self.rrf_merge(normalized, *rrf_k, k)
+                Self::rrf_merge(normalized, *rrf_k, k)
             }
             MergeStrategy::NormalizedDistance => {
-                self.distance_merge(normalized, k)
+                Self::distance_merge(normalized, k)
             }
             MergeStrategy::RoundRobin => {
-                self.round_robin_merge(normalized, k)
+                Self::round_robin_merge(normalized, k)
             }
             MergeStrategy::Weighted { weights } => {
                 self.weighted_merge(normalized, weights, k)
@@ -372,7 +371,6 @@ impl CollectionFederation {
 
     /// Reciprocal Rank Fusion merge.
     fn rrf_merge(
-        &self,
         normalized: &HashMap<String, Vec<(SearchResult, f64)>>,
         rrf_k: usize,
         limit: usize,
@@ -421,7 +419,6 @@ impl CollectionFederation {
 
     /// Distance-based merge (lower normalized distance is better).
     fn distance_merge(
-        &self,
         normalized: &HashMap<String, Vec<(SearchResult, f64)>>,
         limit: usize,
     ) -> Vec<FederatedResult> {
@@ -449,7 +446,6 @@ impl CollectionFederation {
 
     /// Round-robin interleaving from each collection.
     fn round_robin_merge(
-        &self,
         normalized: &HashMap<String, Vec<(SearchResult, f64)>>,
         limit: usize,
     ) -> Vec<FederatedResult> {

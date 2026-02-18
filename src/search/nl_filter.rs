@@ -235,16 +235,16 @@ impl NLFilterParser {
         let mut used_ranges: Vec<(usize, usize)> = Vec::new();
 
         // Detect intents
-        if self.contains_any(&query_lower, &["show", "find", "search", "get", "look for"]) {
+        if Self::contains_any(&query_lower, &["show", "find", "search", "get", "look for"]) {
             intents.push(QueryIntent::Search);
         }
-        if self.contains_any(&query_lower, &["filter", "where", "with", "having"]) {
+        if Self::contains_any(&query_lower, &["filter", "where", "with", "having"]) {
             intents.push(QueryIntent::Filter);
         }
-        if self.contains_any(&query_lower, &["count", "how many", "total", "sum"]) {
+        if Self::contains_any(&query_lower, &["count", "how many", "total", "sum"]) {
             intents.push(QueryIntent::Aggregate);
         }
-        if self.contains_any(&query_lower, &["not", "without", "exclude", "except"]) {
+        if Self::contains_any(&query_lower, &["not", "without", "exclude", "except"]) {
             intents.push(QueryIntent::Exclude);
         }
 
@@ -297,7 +297,7 @@ impl NLFilterParser {
 
         // Calculate confidence
         let confidence =
-            self.calculate_confidence(&intents, combined_filter.is_some(), temporal.is_some());
+            Self::calculate_confidence(&intents, combined_filter.is_some(), temporal.is_some());
 
         ParsedQuery {
             search_text,
@@ -308,7 +308,7 @@ impl NLFilterParser {
         }
     }
 
-    fn contains_any(&self, text: &str, patterns: &[&str]) -> bool {
+    fn contains_any(text: &str, patterns: &[&str]) -> bool {
         patterns.iter().any(|p| text.contains(p))
     }
 
@@ -320,7 +320,7 @@ impl NLFilterParser {
         pattern: &FilterPattern,
     ) -> Option<(Filter, (usize, usize))> {
         for keyword in &pattern.keywords {
-            if let Some(keyword_pos) = self.find_word_position(words, keyword) {
+            if let Some(keyword_pos) = Self::find_word_position(words, keyword) {
                 let char_start = words[..keyword_pos]
                     .iter()
                     .map(|w| w.len() + 1)
@@ -342,7 +342,7 @@ impl NLFilterParser {
                     }
                     ValueExtractor::Comparison => {
                         if let Some((op, value, extra_len)) =
-                            self.extract_comparison(words, keyword_pos)
+                            Self::extract_comparison(words, keyword_pos)
                         {
                             let char_end = char_start + keyword.len() + extra_len;
                             let filter = match op {
@@ -414,7 +414,7 @@ impl NLFilterParser {
         None
     }
 
-    fn find_word_position(&self, words: &[&str], keyword: &str) -> Option<usize> {
+    fn find_word_position(words: &[&str], keyword: &str) -> Option<usize> {
         // Handle multi-word keywords
         let keyword_words: Vec<&str> = keyword.split_whitespace().collect();
 
@@ -435,7 +435,6 @@ impl NLFilterParser {
     }
 
     fn extract_comparison(
-        &self,
         words: &[&str],
         keyword_pos: usize,
     ) -> Option<(&'static str, f64, usize)> {
@@ -536,7 +535,6 @@ impl NLFilterParser {
     }
 
     fn calculate_confidence(
-        &self,
         intents: &[QueryIntent],
         has_filter: bool,
         has_temporal: bool,
@@ -947,7 +945,7 @@ impl ConversationalQueryParser {
                     let replacement = &last.parsed.search_text;
                     if !replacement.is_empty() {
                         // Replace pronoun with reference (simple word boundary check)
-                        return self.replace_word(&query, pronoun, replacement);
+                        return Self::replace_word(&query, pronoun, replacement);
                     }
                 }
             }
@@ -964,7 +962,7 @@ impl ConversationalQueryParser {
         query.to_string()
     }
 
-    fn replace_word(&self, text: &str, word: &str, replacement: &str) -> String {
+    fn replace_word(text: &str, word: &str, replacement: &str) -> String {
         let mut result = String::new();
         let text_lower = text.to_lowercase();
         let word_lower = word.to_lowercase();
@@ -1049,8 +1047,7 @@ impl ConversationalQueryParser {
 
         let primary_intent = sorted
             .first()
-            .map(|(i, _)| i.clone())
-            .unwrap_or(QueryIntent::Search);
+            .map_or(QueryIntent::Search, |(i, _)| i.clone());
         let secondary_intents: Vec<_> = sorted
             .iter()
             .skip(1)
@@ -1059,7 +1056,7 @@ impl ConversationalQueryParser {
             .collect();
 
         // Extract entities
-        let entities = self.extract_entities(&query);
+        let entities = Self::extract_entities(&query);
 
         IntentClassification {
             primary_intent,
@@ -1069,7 +1066,7 @@ impl ConversationalQueryParser {
         }
     }
 
-    fn extract_entities(&self, query: &str) -> Vec<Entity> {
+    fn extract_entities(query: &str) -> Vec<Entity> {
         let mut entities = Vec::new();
 
         // Extract numbers (without regex)
@@ -1294,8 +1291,7 @@ impl ParsedQuery {
         let (time_start, time_end) = self
             .temporal
             .as_ref()
-            .map(|t| (t.start, t.end))
-            .unwrap_or((None, None));
+            .map_or((None, None), |t| (t.start, t.end));
 
         NLSearchParams {
             search_text: self.search_text.clone(),

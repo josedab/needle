@@ -200,8 +200,7 @@ impl CrossCollectionSearch {
                 CollectionFilter::Suffix(suffix) => name.ends_with(suffix),
                 CollectionFilter::MatchingDimensions => cache
                     .get(name)
-                    .map(|m| m.dimensions == query_dims)
-                    .unwrap_or(false),
+                    .is_some_and(|m| m.dimensions == query_dims),
             })
             .collect()
     }
@@ -474,8 +473,7 @@ impl CrossCollectionSearch {
         for (collection, results) in collection_results {
             let weight = cache
                 .get(&collection)
-                .map(|m| m.vector_count as f32 / total_vectors.max(1) as f32)
-                .unwrap_or(1.0);
+                .map_or(1.0, |m| m.vector_count as f32 / total_vectors.max(1) as f32);
 
             for result in results {
                 scores

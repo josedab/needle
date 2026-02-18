@@ -344,7 +344,7 @@ impl GraphRAG {
         let mut results_map: HashMap<String, GraphRAGResult> = HashMap::new();
 
         // Normalise distances to a 0..1 similarity score.
-        let max_dist = ann.iter().map(|(_, d)| OrderedFloat(*d)).max().map(|d| d.0).unwrap_or(1.0).max(1e-6);
+        let max_dist = ann.iter().map(|(_, d)| OrderedFloat(*d)).max().map_or(1.0, |d| d.0).max(1e-6);
 
         for (vid, dist) in &ann {
             if let Some(eid) = self.idx_to_id.get(*vid) {
@@ -737,8 +737,8 @@ impl GraphRAG {
                     && community.member_ids.contains(&r.target_id)
             })
             .map(|r| {
-                let src = self.entities.get(&r.source_id).map(|e| e.name.as_str()).unwrap_or(&r.source_id);
-                let tgt = self.entities.get(&r.target_id).map(|e| e.name.as_str()).unwrap_or(&r.target_id);
+                let src = self.entities.get(&r.source_id).map_or(r.source_id.as_str(), |e| e.name.as_str());
+                let tgt = self.entities.get(&r.target_id).map_or(r.target_id.as_str(), |e| e.name.as_str());
                 format!("{} --[{:?}]--> {}", src, r.relation_type, tgt)
             })
             .collect();

@@ -596,16 +596,15 @@ impl ResultMerger {
         k: usize,
     ) -> Vec<FederatedSearchResult> {
         match self.strategy {
-            MergeStrategy::DistanceBased => self.merge_by_distance(instance_results, k),
-            MergeStrategy::ReciprocalRankFusion => self.merge_rrf(instance_results, k),
-            MergeStrategy::FirstResponse => self.merge_first(instance_results, k),
-            MergeStrategy::PriorityWeighted => self.merge_by_distance(instance_results, k), // Simplified
-            MergeStrategy::Consensus => self.merge_consensus(instance_results, k),
+            MergeStrategy::DistanceBased => Self::merge_by_distance(instance_results, k),
+            MergeStrategy::ReciprocalRankFusion => Self::merge_rrf(instance_results, k),
+            MergeStrategy::FirstResponse => Self::merge_first(instance_results, k),
+            MergeStrategy::PriorityWeighted => Self::merge_by_distance(instance_results, k), // Simplified
+            MergeStrategy::Consensus => Self::merge_consensus(instance_results, k),
         }
     }
 
     fn merge_by_distance(
-        &self,
         instance_results: Vec<(String, Vec<FederatedSearchResult>)>,
         k: usize,
     ) -> Vec<FederatedSearchResult> {
@@ -627,7 +626,6 @@ impl ResultMerger {
     }
 
     fn merge_rrf(
-        &self,
         instance_results: Vec<(String, Vec<FederatedSearchResult>)>,
         k: usize,
     ) -> Vec<FederatedSearchResult> {
@@ -655,7 +653,6 @@ impl ResultMerger {
     }
 
     fn merge_first(
-        &self,
         instance_results: Vec<(String, Vec<FederatedSearchResult>)>,
         k: usize,
     ) -> Vec<FederatedSearchResult> {
@@ -671,7 +668,6 @@ impl ResultMerger {
     }
 
     fn merge_consensus(
-        &self,
         instance_results: Vec<(String, Vec<FederatedSearchResult>)>,
         k: usize,
     ) -> Vec<FederatedSearchResult> {

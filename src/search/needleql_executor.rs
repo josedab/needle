@@ -441,7 +441,7 @@ impl NeedleQLExecutor {
         }
 
         if upper.starts_with("SELECT ") || upper.starts_with("SELECT\n") {
-            let (query_str, as_of) = self.extract_as_of_clause(query);
+            let (query_str, as_of) = Self::extract_as_of_clause(query);
             let mut select = self.parse_select_via_query_parser(&query_str)?;
             if as_of.is_some() {
                 select.as_of = as_of;
@@ -460,7 +460,7 @@ impl NeedleQLExecutor {
         }
 
         if upper.starts_with("INSERT ") {
-            let insert = self.parse_insert(query)?;
+            let insert = Self::parse_insert(query)?;
             let collection = insert.collection.clone();
             let steps = self.plan_steps(&Statement::Insert(insert.clone()));
             let cost = steps.iter().map(|s| s.cost).sum();
@@ -488,7 +488,7 @@ impl NeedleQLExecutor {
         }
 
         if upper.starts_with("CREATE COLLECTION ") {
-            let create = self.parse_create_collection(query)?;
+            let create = Self::parse_create_collection(query)?;
             let name = create.name.clone();
             let steps = self.plan_steps(&Statement::CreateCollection(create.clone()));
             let cost = steps.iter().map(|s| s.cost).sum();
@@ -709,9 +709,8 @@ impl NeedleQLExecutor {
 
         let limit = ql_query
             .limit
-            .map(|l| (l as usize).min(self.config.max_limit))
-            .unwrap_or(self.config.default_limit);
-        let offset = ql_query.offset.map(|o| o as usize).unwrap_or(0);
+            .map_or(self.config.default_limit, |l| (l as usize).min(self.config.max_limit));
+        let offset = ql_query.offset.map_or(0, |o| o as usize);
 
         // Map WITH options
         let mut options = HashMap::new();
@@ -736,12 +735,11 @@ impl NeedleQLExecutor {
         let hybrid_search = ql_query.using_clause.as_ref().map(|uc| HybridSearch {
             text_query: String::new(),
             vector: None,
-            vector_weight: uc.rag.hybrid_alpha.map(|a| a as f64).unwrap_or(0.5),
+            vector_weight: uc.rag.hybrid_alpha.map_or(0.5, |a| a as f64),
             text_weight: uc
                 .rag
                 .hybrid_alpha
-                .map(|a| 1.0 - a as f64)
-                .unwrap_or(0.5),
+                .map_or(0.5, |a| 1.0 - a as f64),
             rrf_k: 60.0,
         });
 
@@ -810,7 +808,7 @@ impl NeedleQLExecutor {
 
     // ── Fallback parsing for non-SELECT statements ──────────────────────
 
-    fn parse_insert(&self, query: &str) -> Result<InsertStatement> {
+    fn parse_insert(query: &str) -> Result<InsertStatement> {
         let upper = query.to_uppercase();
         let into_pos = upper.find("INTO ").ok_or_else(|| {
             NeedleError::InvalidArgument("Missing INTO in INSERT".into())
@@ -851,7 +849,7 @@ impl NeedleQLExecutor {
         })
     }
 
-    fn parse_create_collection(&self, query: &str) -> Result<CreateCollectionStatement> {
+    fn parse_create_collection(query: &str) -> Result<CreateCollectionStatement> {
         let upper = query.to_uppercase();
         let if_not_exists = upper.contains("IF NOT EXISTS");
 
@@ -907,7 +905,7 @@ impl NeedleQLExecutor {
     /// Extract AS OF clause from a query string, returning the cleaned query and the clause.
     /// Supports: `AS OF TIMESTAMP <unix_ts>`, `AS OF VERSION <version>`,
     /// `AS OF SNAPSHOT '<name>'`, and `AS OF '<time_expression>'`.
-    fn extract_as_of_clause(&self, query: &str) -> (String, Option<AsOfClause>) {
+    fn extract_as_of_clause(query: &str) -> (String, Option<AsOfClause>) {
         let upper = query.to_uppercase();
         let as_of_pos = match upper.find(" AS OF ") {
             Some(pos) => pos,
@@ -970,8 +968,7 @@ impl NeedleQLExecutor {
                 let quote = &after[..1];
                 after[1..]
                     .find(quote)
-                    .map(|p| p + 2)
-                    .unwrap_or(after.len())
+                    .map_or(after.len(), |p| p + 2)
             } else {
                 after
                     .find(|c: char| c == ';')

@@ -323,7 +323,7 @@ impl HuggingFaceReranker {
     }
 
     /// Score a single query-document pair (placeholder)
-    fn score_pair(&self, query: &str, document: &str) -> f32 {
+    fn score_pair(query: &str, document: &str) -> f32 {
         // In a real implementation, this would run the cross-encoder model
         // For now, we use simple Jaccard similarity as a placeholder
 
@@ -362,7 +362,7 @@ impl Reranker for HuggingFaceReranker {
                 .iter()
                 .enumerate()
                 .map(|(idx, doc)| {
-                    let score = self.score_pair(query, doc);
+                    let score = Self::score_pair(query, doc);
                     RerankResult::with_text(idx, score, doc.to_string())
                 })
                 .collect();
@@ -730,8 +730,7 @@ impl BanditsReranker {
     pub fn expected_relevance(&self, vector_id: &str) -> f64 {
         self.params
             .get(vector_id)
-            .map(|p| p.expected_value())
-            .unwrap_or(0.5)
+            .map_or(0.5, |p| p.expected_value())
     }
 }
 

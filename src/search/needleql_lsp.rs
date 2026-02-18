@@ -723,7 +723,7 @@ impl LspServer {
         }
         let before = &text[..position];
         let after = &text[position..];
-        let start = before.rfind(|c: char| !c.is_alphanumeric() && c != '_').map(|p| p + 1).unwrap_or(0);
+        let start = before.rfind(|c: char| !c.is_alphanumeric() && c != '_').map_or(0, |p| p + 1);
         let end = after.find(|c: char| !c.is_alphanumeric() && c != '_').unwrap_or(after.len());
         let word = format!("{}{}", &before[start..], &after[..end]);
         if word.is_empty() {

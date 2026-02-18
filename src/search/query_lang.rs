@@ -1597,7 +1597,7 @@ impl QueryExecutor {
 
         // Build plan if EXPLAIN – include optimizer output
         let plan = if query.explain {
-            Some(self.build_plan(query, &filter, total_time.as_secs_f64() * 1000.0))
+            Some(Self::build_plan(query, &filter, total_time.as_secs_f64() * 1000.0))
         } else {
             None
         };
@@ -1721,7 +1721,7 @@ impl QueryExecutor {
     }
 
     /// Build query plan
-    fn build_plan(&self, query: &Query, filter: &Option<Filter>, actual_time: f64) -> QueryPlan {
+    fn build_plan(query: &Query, filter: &Option<Filter>, actual_time: f64) -> QueryPlan {
         let mut nodes = Vec::new();
 
         // Collection scan node

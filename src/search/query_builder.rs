@@ -320,13 +320,13 @@ impl QueryAnalyzer {
         let patterns = self.detect_patterns(&query_lower);
 
         // Classify query
-        let class = self.classify_query(&parsed, &patterns);
+        let class = Self::classify_query(&parsed, &patterns);
 
         // Determine complexity
         let complexity = self.assess_complexity(&parsed, &patterns);
 
         // Extract search terms
-        let search_terms = self.extract_search_terms(&parsed.search_text);
+        let search_terms = Self::extract_search_terms(&parsed.search_text);
 
         // Extract filter fields
         let filter_fields = self.extract_filter_fields(&parsed.filter);
@@ -362,7 +362,7 @@ impl QueryAnalyzer {
         detected
     }
 
-    fn classify_query(&self, parsed: &ParsedQuery, patterns: &[DetectedPattern]) -> QueryClass {
+    fn classify_query(parsed: &ParsedQuery, patterns: &[DetectedPattern]) -> QueryClass {
         let has_search = !parsed.search_text.trim().is_empty();
         let has_filter = parsed.filter.is_some();
         let has_temporal = parsed.temporal.is_some();
@@ -448,7 +448,7 @@ impl QueryAnalyzer {
         }
     }
 
-    fn extract_search_terms(&self, search_text: &str) -> Vec<String> {
+    fn extract_search_terms(search_text: &str) -> Vec<String> {
         search_text
             .split_whitespace()
             .filter(|w| w.len() > 2)

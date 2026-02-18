@@ -955,8 +955,7 @@ impl AdaptiveOptimizer {
                     self.arms
                         .iter()
                         .min_by_key(|(_, s)| s.pulls)
-                        .map(|(&idx, _)| idx)
-                        .unwrap_or_else(|| self.estimator.plan(stats, k, filter_selectivity).index_choice)
+                        .map_or_else(|| self.estimator.plan(stats, k, filter_selectivity).index_choice, |(&idx, _)| idx)
                 } else {
                     self.best_arm()
                 }
@@ -988,8 +987,7 @@ impl AdaptiveOptimizer {
                     .partial_cmp(&b.mean_reward())
                     .unwrap_or(std::cmp::Ordering::Equal)
             })
-            .map(|(&idx, _)| idx)
-            .unwrap_or(IndexChoice::Hnsw)
+            .map_or(IndexChoice::Hnsw, |(&idx, _)| idx)
     }
 
     /// UCB1 selection: mean reward + confidence bound.
@@ -1006,8 +1004,7 @@ impl AdaptiveOptimizer {
                     .partial_cmp(&ucb_b)
                     .unwrap_or(std::cmp::Ordering::Equal)
             })
-            .map(|(&idx, _)| idx)
-            .unwrap_or(IndexChoice::Hnsw)
+            .map_or(IndexChoice::Hnsw, |(&idx, _)| idx)
     }
 
     /// Get performance statistics for all arms.

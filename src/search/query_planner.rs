@@ -197,7 +197,7 @@ impl QueryPlanner {
             (PlanStrategy::VectorOnly, 1.0f64)
         } else {
             let est_selectivity =
-                self.estimate_selectivity(request.filter.as_ref().expect("filter is Some"));
+                Self::estimate_selectivity(request.filter.as_ref().expect("filter is Some"));
 
             if n < 1000 {
                 (PlanStrategy::FullScan, est_selectivity)
@@ -285,7 +285,7 @@ impl QueryPlanner {
         serde_json::to_value(&plan).unwrap_or(Value::Null)
     }
 
-    fn estimate_selectivity(&self, _filter: &Filter) -> f64 {
+    fn estimate_selectivity(_filter: &Filter) -> f64 {
         // Heuristic: assume ~30% selectivity without real statistics
         0.3
     }

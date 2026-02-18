@@ -236,12 +236,12 @@ impl AnalyticsEngine {
         // 1. Filter (WHERE)
         let filtered: Vec<&Value> = rows
             .iter()
-            .filter(|row| self.evaluate_where(row, &query.where_clauses))
+            .filter(|row| Self::evaluate_where(row, &query.where_clauses))
             .collect();
         let rows_scanned = filtered.len();
 
         // 2. Group
-        let groups = self.group_rows(&filtered, &query.group_by);
+        let groups = Self::group_rows(&filtered, &query.group_by);
 
         // 3. Compute aggregates per group
         let mut result_rows: Vec<(HashMap<String, Value>, Vec<Value>)> = Vec::new();
@@ -254,7 +254,7 @@ impl AnalyticsEngine {
                         .cloned()
                         .unwrap_or(Value::Null),
                     SelectColumn::Aggregate(func) | SelectColumn::AliasedAggregate { func, .. } => {
-                        self.compute_aggregate(func, group_rows)
+                        Self::compute_aggregate(func, group_rows)
                     }
                 };
                 row_values.push(val);
@@ -312,12 +312,12 @@ impl AnalyticsEngine {
     fn column_name(&self, col: &SelectColumn) -> String {
         match col {
             SelectColumn::Field(name) => name.clone(),
-            SelectColumn::Aggregate(func) => self.agg_name(func),
+            SelectColumn::Aggregate(func) => Self::agg_name(func),
             SelectColumn::AliasedAggregate { alias, .. } => alias.clone(),
         }
     }
 
-    fn agg_name(&self, func: &AggFunc) -> String {
+    fn agg_name(func: &AggFunc) -> String {
         match func {
             AggFunc::Count => "COUNT(*)".to_string(),
             AggFunc::CountField(f) => format!("COUNT({f})"),
@@ -328,7 +328,7 @@ impl AnalyticsEngine {
         }
     }
 
-    fn evaluate_where(&self, row: &Value, conditions: &[Condition]) -> bool {
+    fn evaluate_where(row: &Value, conditions: &[Condition]) -> bool {
         conditions.iter().all(|cond| {
             let field_name = match &cond.left {
                 SelectColumn::Field(f) => f.as_str(),
@@ -340,7 +340,6 @@ impl AnalyticsEngine {
     }
 
     fn group_rows<'a>(
-        &self,
         rows: &[&'a Value],
         group_by: &[String],
     ) -> Vec<(HashMap<String, Value>, Vec<&'a Value>)> {
@@ -364,7 +363,7 @@ impl AnalyticsEngine {
         groups
     }
 
-    fn compute_aggregate(&self, func: &AggFunc, rows: &[&Value]) -> Value {
+    fn compute_aggregate(func: &AggFunc, rows: &[&Value]) -> Value {
         match func {
             AggFunc::Count => Value::from(rows.len() as u64),
             AggFunc::CountField(field) => {
@@ -418,7 +417,7 @@ impl AnalyticsEngine {
         having.iter().all(|cond| {
             let col_name = match &cond.left {
                 SelectColumn::Field(f) => f.clone(),
-                SelectColumn::Aggregate(func) => self.agg_name(func),
+                SelectColumn::Aggregate(func) => Self::agg_name(func),
                 SelectColumn::AliasedAggregate { alias, .. } => alias.clone(),
             };
             let col_names: Vec<String> = select.iter().map(|c| self.column_name(c)).collect();

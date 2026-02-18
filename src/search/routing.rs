@@ -220,8 +220,7 @@ impl QueryRouter {
                 .min_by_key(|id| {
                     self.shard_manager
                         .get_shard(**id)
-                        .map(|s| s.vector_count)
-                        .unwrap_or(u64::MAX)
+                        .map_or(u64::MAX, |s| s.vector_count)
                 })
                 .copied(),
             LoadBalancing::LocalityAware => {
