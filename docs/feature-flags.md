@@ -61,7 +61,7 @@ What are you doing?
 | `encryption` | chacha20poly1305, hkdf, etc. | ChaCha20-Poly1305 at-rest encryption |
 | `diskann` | bincode | DiskANN index support |
 | `integrations` | uuid | LangChain / LlamaIndex integration |
-| `observability` | — | Telemetry, drift detection, profiling modules |
+| `observability` | — (no extra crates) | Telemetry, drift detection, anomaly detection, and profiling. Enables the observability dashboard, query tracing with configurable sample rates, data drift monitoring, anomaly alerts, and runtime profiling hooks. |
 
 ### Cloud Storage Flags
 
