@@ -222,15 +222,18 @@ kubectl get hpa needle
 
 ## Helm Chart
 
+> **Note**: The hosted Helm repository at `charts.needle.dev` is not yet available. Use the local chart installation method below until the hosted repository is published.
+
 ### Installation
 
 ```bash
-# Add the chart (if published)
-helm repo add needle https://charts.needle.dev
-helm repo update
-
-# Or install from local chart
+# Install from the local chart bundled in this repository
 helm install needle ./helm/needle
+
+# (Future) Once charts.needle.dev is live:
+# helm repo add needle https://charts.needle.dev
+# helm repo update
+# helm install needle needle/needle
 ```
 
 ### Configuration
