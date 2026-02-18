@@ -519,7 +519,7 @@ impl ServerlessFunctionRuntime {
             )));
         }
         if functions.contains_key(name) {
-            return Err(NeedleError::AlreadyExists(format!(
+            return Err(NeedleError::DuplicateId(format!(
                 "Function '{}' already deployed",
                 name
             )));

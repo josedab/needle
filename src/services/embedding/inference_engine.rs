@@ -373,7 +373,7 @@ impl InferenceEngine {
 
         // Normalize if configured
         if self.config.normalize {
-            self.l2_normalize(pooled)
+            Self::l2_normalize(pooled)
         } else {
             pooled
         }
@@ -413,7 +413,7 @@ impl InferenceEngine {
         embedding
     }
 
-    fn l2_normalize(&self, mut vec: Vec<f32>) -> Vec<f32> {
+    fn l2_normalize(mut vec: Vec<f32>) -> Vec<f32> {
         let norm: f32 = vec.iter().map(|x| x * x).sum::<f32>().sqrt();
         if norm > f32::EPSILON {
             for v in &mut vec {

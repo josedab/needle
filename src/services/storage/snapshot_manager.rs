@@ -176,7 +176,7 @@ impl SnapshotManager {
 
         let mut results: Vec<(String, f32)> = Vec::new();
         for (id, entries) in &self.vectors {
-            if let Some(vec) = self.vector_at_version(entries, snap.version) {
+            if let Some(vec) = Self::vector_at_version(entries, snap.version) {
                 let dist = cosine_distance(query, vec);
                 results.push((id.clone(), dist));
             }
@@ -211,8 +211,8 @@ impl SnapshotManager {
             .iter()
             .filter(|id| {
                 ids_to.contains(*id) && {
-                    let v1 = self.vectors.get(*id).and_then(|e| self.vector_at_version(e, snap_from.version));
-                    let v2 = self.vectors.get(*id).and_then(|e| self.vector_at_version(e, snap_to.version));
+                    let v1 = self.vectors.get(*id).and_then(|e| Self::vector_at_version(e, snap_from.version));
+                    let v2 = self.vectors.get(*id).and_then(|e| Self::vector_at_version(e, snap_to.version));
                     match (v1, v2) {
                         (Some(a), Some(b)) => a != b,
                         _ => false,
@@ -264,19 +264,19 @@ impl SnapshotManager {
     fn count_at_version(&self, version: u64) -> usize {
         self.vectors
             .values()
-            .filter(|entries| self.vector_at_version(entries, version).is_some())
+            .filter(|entries| Self::vector_at_version(entries, version).is_some())
             .count()
     }
 
     fn ids_at_version(&self, version: u64) -> Vec<String> {
         self.vectors
             .iter()
-            .filter(|(_, entries)| self.vector_at_version(entries, version).is_some())
+            .filter(|(_, entries)| Self::vector_at_version(entries, version).is_some())
             .map(|(id, _)| id.clone())
             .collect()
     }
 
-    fn vector_at_version<'a>(&self, entries: &'a [VectorEntry], version: u64) -> Option<&'a Vec<f32>> {
+    fn vector_at_version<'a>(entries: &'a [VectorEntry], version: u64) -> Option<&'a Vec<f32>> {
         entries
             .iter()
             .rev()

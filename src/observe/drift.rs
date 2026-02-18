@@ -372,10 +372,10 @@ impl DriftDetector {
         };
 
         // Compute centroid shift (cosine distance)
-        let centroid_shift = self.cosine_distance(&baseline.centroid, &current.centroid);
+        let centroid_shift = Self::cosine_distance(&baseline.centroid, &current.centroid);
 
         // Compute variance ratio
-        let variance_ratio = self.compute_variance_ratio(baseline, current);
+        let variance_ratio = Self::compute_variance_ratio(baseline, current);
 
         // Compute KS statistic for magnitudes
         let ks_statistic = self.compute_ks_statistic();
@@ -418,7 +418,7 @@ impl DriftDetector {
     }
 
     /// Compute cosine distance between two vectors.
-    fn cosine_distance(&self, a: &[f32], b: &[f32]) -> f32 {
+    fn cosine_distance(a: &[f32], b: &[f32]) -> f32 {
         let dot: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
         let mag_a: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
         let mag_b: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
@@ -432,7 +432,7 @@ impl DriftDetector {
     }
 
     /// Compute overall variance ratio.
-    fn compute_variance_ratio(&self, baseline: &VectorStats, current: &VectorStats) -> f32 {
+    fn compute_variance_ratio(baseline: &VectorStats, current: &VectorStats) -> f32 {
         let baseline_total: f32 = baseline.variance.iter().sum();
         let current_total: f32 = current.variance.iter().sum();
 
@@ -602,7 +602,7 @@ impl DriftDetector {
             dimensions: self.dimensions,
             total_processed: self.total_processed,
             window_size: self.window.len(),
-            baseline_size: self.baseline.as_ref().map(|b| b.sample_count).unwrap_or(0),
+            baseline_size: self.baseline.as_ref().map_or(0, |b| b.sample_count),
             history: self.drift_history.clone(),
             trend: self.get_trend(100),
         }

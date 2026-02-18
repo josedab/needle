@@ -559,13 +559,13 @@ impl WasmDatabase {
     /// Export the entire database as a compact JSON string for backup/transfer.
     pub fn export_json(&self) -> Result<String> {
         let state = self.serialize_state()?;
-        serde_json::to_string(&state).map_err(|e| NeedleError::SerializationError(e.to_string()))
+        serde_json::to_string(&state).map_err(|e| NeedleError::InvalidArgument(e.to_string()))
     }
 
     /// Import database state from a JSON string (e.g., from IndexedDB backup).
     pub fn import_json(&mut self, json: &str) -> Result<RestoreResult> {
         let state: Value = serde_json::from_str(json)
-            .map_err(|e| NeedleError::SerializationError(e.to_string()))?;
+            .map_err(|e| NeedleError::InvalidArgument(e.to_string()))?;
         self.restore_state(&state)
     }
 
@@ -579,7 +579,7 @@ impl WasmDatabase {
         self.collections
             .values()
             .map(|c| {
-                let dims = c.dimensions().unwrap_or(0);
+                let dims = c.dimensions();
                 c.len() * dims * 4 // 4 bytes per f32
             })
             .sum()
@@ -619,7 +619,7 @@ impl IndexedDbEntry {
         Ok(Self {
             key: name.to_string(),
             schema_version: 1,
-            dimensions: collection.dimensions().unwrap_or(0),
+            dimensions: collection.dimensions(),
             vector_count: collection.len(),
             data,
             checksum,
@@ -1106,11 +1106,11 @@ impl WasmDatabase {
         &self,
         tracker: &mut DirtyTracker,
     ) -> Result<Vec<IndexedDbEntry>> {
-        let dirty = tracker.dirty_collections();
+        let dirty: Vec<String> = tracker.dirty_collections().iter().map(|s| s.to_string()).collect();
         let mut entries = Vec::with_capacity(dirty.len());
 
-        for name in dirty {
-            if let Some(collection) = self.collections.get(name) {
+        for name in &dirty {
+            if let Some(collection) = self.collections.get(name.as_str()) {
                 let entry = IndexedDbEntry::from_collection(name, collection)?;
                 entries.push(entry);
                 tracker.mark_saved(name);

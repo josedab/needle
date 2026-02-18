@@ -697,14 +697,12 @@ impl TimeTravelIndex {
                     .versions
                     .get(&r.id)
                     .and_then(|v| v.back())
-                    .map(|v| v.txn_id)
-                    .unwrap_or(0);
+                    .map_or(0, |v| v.txn_id);
                 let timestamp = self
                     .versions
                     .get(&r.id)
                     .and_then(|v| v.back())
-                    .map(|v| v.created_at)
-                    .unwrap_or(0);
+                    .map_or(0, |v| v.created_at);
 
                 TimeTravelSearchResult {
                     result: r,

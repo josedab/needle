@@ -64,7 +64,7 @@ impl LocalBackend {
     }
 
     /// Ensure parent directory exists.
-    fn ensure_parent_dir(&self, path: &Path) -> Result<()> {
+    fn ensure_parent_dir(path: &Path) -> Result<()> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
@@ -122,7 +122,7 @@ impl StorageBackend for LocalBackend {
             let path = self.key_to_path(key)?;
             let _conn = self.pool.acquire()?;
 
-            self.ensure_parent_dir(&path)?;
+            Self::ensure_parent_dir(&path)?;
 
             self.retry_policy
                 .execute(|| async { std::fs::write(&path, data).map_err(NeedleError::Io) })
@@ -158,8 +158,7 @@ impl StorageBackend for LocalBackend {
                 base.clone()
             } else {
                 base.parent()
-                    .map(|p| p.to_path_buf())
-                    .unwrap_or_else(|| self.base_path.clone())
+                    .map_or_else(|| self.base_path.clone(), |p| p.to_path_buf())
             };
 
             if search_dir.exists() {

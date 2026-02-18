@@ -565,7 +565,7 @@ impl VectorRepo {
                             similarity: Some(1.0),
                         }
                     } else {
-                        let sim = self.cosine_similarity(&o.vector, &n.vector);
+                        let sim = Self::cosine_similarity(&o.vector, &n.vector);
                         VectorDiff {
                             id: id.clone(),
                             change_type: ChangeType::Modified,
@@ -585,7 +585,7 @@ impl VectorRepo {
     }
 
     /// Compute cosine similarity.
-    fn cosine_similarity(&self, a: &[f32], b: &[f32]) -> f32 {
+    fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
         let dot: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
         let mag_a: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
         let mag_b: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
@@ -762,7 +762,7 @@ impl VectorRepo {
             .iter()
             .filter_map(|id| {
                 self.get_latest(id).ok().map(|entry| {
-                    let similarity = self.cosine_similarity(query, &entry.vector);
+                    let similarity = Self::cosine_similarity(query, &entry.vector);
                     SearchResult {
                         id: id.clone(),
                         similarity,
@@ -806,7 +806,7 @@ impl VectorRepo {
             .snapshot
             .iter()
             .map(|(id, entry)| {
-                let similarity = self.cosine_similarity(query, &entry.vector);
+                let similarity = Self::cosine_similarity(query, &entry.vector);
                 SearchResult {
                     id: id.clone(),
                     similarity,
@@ -1169,7 +1169,7 @@ impl VectorRepo {
             .snapshot
             .iter()
             .map(|(id, entry)| {
-                let similarity = self.cosine_similarity(query, &entry.vector);
+                let similarity = Self::cosine_similarity(query, &entry.vector);
                 SearchResult {
                     id: id.clone(),
                     similarity,
@@ -1230,7 +1230,7 @@ impl VectorRepo {
             };
 
             let similarity = match (&previous_vector, &current_vector) {
-                (Some(prev), Some(curr)) => Some(self.cosine_similarity(prev, &curr.vector)),
+                (Some(prev), Some(curr)) => Some(Self::cosine_similarity(prev, &curr.vector)),
                 _ => None,
             };
 
@@ -1345,7 +1345,7 @@ impl VectorRepo {
                         similarity: Some(1.0),
                     })
                 } else {
-                    let sim = self.cosine_similarity(&e1.vector, &e2.vector);
+                    let sim = Self::cosine_similarity(&e1.vector, &e2.vector);
                     Ok(VectorDiff {
                         id: vector_id.to_string(),
                         change_type: ChangeType::Modified,

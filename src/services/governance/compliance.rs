@@ -188,7 +188,7 @@ impl ComplianceEngine {
 
         // Auto-evaluate checks based on known Needle features
         for check in &mut checks {
-            self.auto_evaluate(check);
+            Self::auto_evaluate(check);
         }
 
         let total = checks.len();
@@ -225,7 +225,7 @@ impl ComplianceEngine {
         self.checks.len()
     }
 
-    fn auto_evaluate(&self, check: &mut ComplianceCheck) {
+    fn auto_evaluate(check: &mut ComplianceCheck) {
         // Auto-pass checks that Needle's known features satisfy
         match check.control_id.as_str() {
             "SOC2-CC6.1" | "GDPR-ART32-ENC" | "HIPAA-164.312a" => {

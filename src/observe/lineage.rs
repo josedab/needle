@@ -267,7 +267,7 @@ impl LineageTracker {
         }
 
         // Update indices
-        if let Some(source_id) = self.extract_source_id(&lineage.source) {
+        if let Some(source_id) = Self::extract_source_id(&lineage.source) {
             self.source_index
                 .entry(source_id)
                 .or_default()
@@ -298,7 +298,7 @@ impl LineageTracker {
     }
 
     /// Extract source ID from source info.
-    fn extract_source_id(&self, source: &SourceInfo) -> Option<String> {
+    fn extract_source_id(source: &SourceInfo) -> Option<String> {
         match source {
             SourceInfo::Document { document_id, .. } => Some(document_id.clone()),
             SourceInfo::Image { image_id, .. } => Some(image_id.clone()),
@@ -509,7 +509,7 @@ impl LineageTracker {
             .values()
             .map(|l| GraphNode {
                 id: l.vector_id.clone(),
-                source_type: self.source_type_name(&l.source),
+                source_type: Self::source_type_name(&l.source),
                 model: l.model.clone(),
                 transformation_count: l.transformations.len(),
             })
@@ -530,7 +530,7 @@ impl LineageTracker {
     }
 
     /// Get source type name.
-    fn source_type_name(&self, source: &SourceInfo) -> String {
+    fn source_type_name(source: &SourceInfo) -> String {
         match source {
             SourceInfo::Document { .. } => "document".to_string(),
             SourceInfo::Image { .. } => "image".to_string(),
@@ -550,7 +550,7 @@ impl LineageTracker {
             .ok_or_else(|| NeedleError::NotFound(format!("Vector '{}' not found", vector_id)))?;
 
         // Update indices
-        if let Some(source_id) = self.extract_source_id(&lineage.source) {
+        if let Some(source_id) = Self::extract_source_id(&lineage.source) {
             if let Some(vectors) = self.source_index.get_mut(&source_id) {
                 vectors.remove(vector_id);
             }
@@ -590,7 +590,7 @@ impl LineageTracker {
         let mut total_transformations = 0;
 
         for lineage in self.lineages.values() {
-            let source_type = self.source_type_name(&lineage.source);
+            let source_type = Self::source_type_name(&lineage.source);
             *source_counts.entry(source_type).or_default() += 1;
             *model_counts.entry(lineage.model.clone()).or_default() += 1;
             total_transformations += lineage.transformations.len();
@@ -846,8 +846,7 @@ impl TraceRecorder {
     ) -> SpanContext {
         let span = SpanContext {
             trace_id: trace_id
-                .map(|s| s.to_string())
-                .unwrap_or_else(generate_trace_id),
+                .map_or_else(generate_trace_id, |s| s.to_string()),
             span_id: generate_span_id(),
             parent_span_id: parent.map(|s| s.to_string()),
             operation: operation.to_string(),
@@ -1309,7 +1308,7 @@ impl LineageTracker {
         format!(
             "{},{},{},{},{},{}",
             l.vector_id,
-            self.source_type_name(&l.source),
+            Self::source_type_name(&l.source),
             l.model,
             l.model_version,
             l.created_at,

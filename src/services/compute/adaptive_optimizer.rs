@@ -485,9 +485,9 @@ impl AdaptiveOptimizer {
         }
 
         // Recommend parameters
-        let recommended_ef_search = self.recommend_ef_search(collection_size, k);
+        let recommended_ef_search = Self::recommend_ef_search(collection_size, k);
         let recommended_nprobe = if selected.strategy == Strategy::Ivf {
-            Some(self.recommend_nprobe(collection_size))
+            Some(Self::recommend_nprobe(collection_size))
         } else {
             None
         };
@@ -599,7 +599,7 @@ impl AdaptiveOptimizer {
         }
     }
 
-    fn recommend_ef_search(&self, collection_size: usize, k: usize) -> Option<usize> {
+    fn recommend_ef_search(collection_size: usize, k: usize) -> Option<usize> {
         let base_ef = k.max(50);
         let scale = if collection_size > 1_000_000 {
             2.0
@@ -611,7 +611,7 @@ impl AdaptiveOptimizer {
         Some(((base_ef as f64) * scale) as usize)
     }
 
-    fn recommend_nprobe(&self, collection_size: usize) -> usize {
+    fn recommend_nprobe(collection_size: usize) -> usize {
         let n_clusters = (collection_size as f64).sqrt() as usize;
         // Probe ~10% of clusters, minimum 1, maximum 64
         (n_clusters / 10).max(1).min(64)

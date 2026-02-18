@@ -113,8 +113,7 @@ impl TransactionLog {
     pub fn get_operations(&self, tx_id: TransactionId) -> &[WriteOperation] {
         self.entries
             .get(&tx_id)
-            .map(|v| v.as_slice())
-            .unwrap_or(&[])
+            .map_or(&[], |v| v.as_slice())
     }
 
     /// Remove all operations for a transaction.

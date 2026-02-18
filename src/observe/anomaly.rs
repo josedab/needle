@@ -80,7 +80,7 @@ impl LocalOutlierFactor {
             dists.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
             dists.truncate(k);
 
-            k_distances.push(dists.last().map(|(_, d)| *d).unwrap_or(0.0));
+            k_distances.push(dists.last().map_or(0.0, |(_, d)| *d));
             neighbors.push(dists);
         }
 

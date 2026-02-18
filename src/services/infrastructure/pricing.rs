@@ -111,7 +111,7 @@ impl PricingEngine {
     /// Recommend the best plan for a usage snapshot.
     pub fn recommend(&self, usage: &UsageSnapshot) -> Plan {
         let invoices = self.compare(usage);
-        invoices.into_iter().min_by(|a, b| a.total.partial_cmp(&b.total).unwrap_or(std::cmp::Ordering::Equal)).map(|i| i.plan).unwrap_or(Plan::Free)
+        invoices.into_iter().min_by(|a, b| a.total.partial_cmp(&b.total).unwrap_or(std::cmp::Ordering::Equal)).map_or(Plan::Free, |i| i.plan)
     }
 }
 

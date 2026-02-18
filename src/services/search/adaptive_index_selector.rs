@@ -170,8 +170,7 @@ impl AdaptiveSelector {
         let current = self.current_strategy;
 
         let needs_migration = current
-            .map(|c| c != rec.strategy && rec.confidence > 0.6)
-            .unwrap_or(false);
+            .is_some_and(|c| c != rec.strategy && rec.confidence > 0.6);
 
         let migration_plan = if needs_migration {
             current.map(|from| self.migration_plan(from, rec.strategy, vector_count))
@@ -186,8 +185,7 @@ impl AdaptiveSelector {
 
         let memory_estimate_bytes = vector_count * dimensions * 4;
         let memory_within_budget = self.memory_budget_bytes
-            .map(|budget| memory_estimate_bytes <= budget)
-            .unwrap_or(true);
+            .map_or(true, |budget| memory_estimate_bytes <= budget);
 
         IndexEvaluation {
             recommended: rec,
@@ -273,8 +271,8 @@ impl AdaptiveSelector {
         let mut sorted: Vec<(IndexStrategy, f32)> = scores.into_iter().collect();
         sorted.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
 
-        let best = sorted.first().map(|s| s.0).unwrap_or(IndexStrategy::Hnsw);
-        let max_score = sorted.first().map(|s| s.1).unwrap_or(1.0);
+        let best = sorted.first().map_or(IndexStrategy::Hnsw, |s| s.0);
+        let max_score = sorted.first().map_or(1.0, |s| s.1);
         let confidence = (max_score / 6.0).min(1.0);
         let mut params = HashMap::new();
         match best {

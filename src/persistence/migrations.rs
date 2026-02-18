@@ -716,8 +716,7 @@ impl MigrationManager {
                     .version
                     .major
                     .checked_sub(1)
-                    .map(|m| SchemaVersion::new(m, 0, 0))
-                    .unwrap_or(SchemaVersion::new(0, 0, 0));
+                    .map_or(SchemaVersion::new(0, 0, 0), |m| SchemaVersion::new(m, 0, 0));
 
                 let mut ctx = MigrationContext::new(self.current_version, prev_version);
 

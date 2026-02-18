@@ -184,8 +184,7 @@ impl MemoryBackend {
                 created_at: self
                     .metadata
                     .get(key)
-                    .map(|m| m.created_at)
-                    .unwrap_or(now),
+                    .map_or(now, |m| m.created_at),
                 modified_at: now,
                 content_hash: None,
                 tags: HashMap::new(),

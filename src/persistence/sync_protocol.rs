@@ -467,8 +467,8 @@ impl GraphDiff {
         if mutations.is_empty() {
             return None;
         }
-        let base_lsn = mutations.first().map(|m| m.lsn).unwrap_or(0);
-        let target_lsn = mutations.last().map(|m| m.lsn).unwrap_or(0);
+        let base_lsn = mutations.first().map_or(0, |m| m.lsn);
+        let target_lsn = mutations.last().map_or(0, |m| m.lsn);
         Some(Self {
             base_lsn,
             target_lsn,
@@ -632,7 +632,7 @@ impl DeltaReplicationManager {
         if log.is_empty() {
             return Vec::new();
         }
-        let last_lsn = log.last().map(|m| m.lsn).unwrap_or(0);
+        let last_lsn = log.last().map_or(0, |m| m.lsn);
         let mutations = std::mem::take(&mut *log);
         drop(log);
 

@@ -490,7 +490,7 @@ impl FederationService {
     pub fn generate_heartbeat(&mut self, self_node_id: &str) -> GossipMessage {
         self.gossip_generation += 1;
         self.stats.gossip_sent += 1;
-        let load = self.nodes.get(self_node_id).map(|n| n.load).unwrap_or(0.0);
+        let load = self.nodes.get(self_node_id).map_or(0.0, |n| n.load);
         GossipMessage::Heartbeat { node_id: self_node_id.to_string(), generation: self.gossip_generation, load }
     }
 
@@ -511,7 +511,7 @@ impl FederationService {
         }
         let replicas = self.hash_ring.get_nodes(&shard_id, self.config.replication_factor)
             .into_iter().filter(|n| *n != node_id).collect();
-        let version = self.shards.get(&shard_id).map(|s| s.version + 1).unwrap_or(1);
+        let version = self.shards.get(&shard_id).map_or(1, |s| s.version + 1);
         let core_id = self.next_shard_id;
         self.next_shard_id += 1;
         self.shards.insert(shard_id.clone(), ShardAssignment {

@@ -397,8 +397,7 @@ pub fn change_event_to_ingest(
             // Extract ID
             let id = after.get(&config.id_field)
                 .and_then(|v| v.as_str())
-                .map(|s| s.to_string())
-                .unwrap_or_else(|| event.document_key.clone().unwrap_or_default());
+                .map_or_else(|| event.document_key.clone().unwrap_or_default(), |s| s.to_string());
 
             // Extract vector
             let vector: Vec<f32> = after.get(&config.vector_field)

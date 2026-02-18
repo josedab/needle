@@ -348,7 +348,7 @@ impl TransactionManager {
 
         // Apply operations one by one, collecting undo records
         for (seq, op) in operations.iter().enumerate() {
-            match self.apply_operation(db, tx_id, seq as u64, op) {
+            match Self::apply_operation(db, tx_id, seq as u64, op) {
                 Ok(entry) => applied.push(entry),
                 Err(e) => {
                     // Rollback previously applied operations in reverse
@@ -435,7 +435,6 @@ impl TransactionManager {
     // ── Internal ─────────────────────────────────────────────────────────────
 
     fn apply_operation(
-        &self,
         db: &Database,
         tx_id: TxId,
         sequence: u64,
@@ -521,14 +520,14 @@ impl TransactionManager {
         for entry in entries.iter().rev() {
             if let Some(undo) = &entry.undo {
                 // Best-effort rollback — log failures but continue
-                if let Err(e) = self.apply_undo(db, undo) {
+                if let Err(e) = Self::apply_undo(db, undo) {
                     tracing::warn!("Transaction rollback undo failed: {e}");
                 }
             }
         }
     }
 
-    fn apply_undo(&self, db: &Database, undo: &UndoRecord) -> Result<()> {
+    fn apply_undo(db: &Database, undo: &UndoRecord) -> Result<()> {
         match undo {
             UndoRecord::DeleteVector { collection, id } => {
                 let coll = db.collection(collection)?;

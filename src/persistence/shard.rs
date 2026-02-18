@@ -101,7 +101,7 @@ pub enum ShardState {
 }
 
 /// Shard configuration
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ShardConfig {
     /// Number of shards
     pub num_shards: u32,

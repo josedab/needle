@@ -162,8 +162,8 @@ impl<'a> FederatedSearch<'a> {
         let merged = match self.config.strategy {
             MergeStrategy::Rrf => self.merge_rrf(&all_results, k),
             MergeStrategy::WeightedSum => self.merge_weighted(&all_results, k),
-            MergeStrategy::Interleave => self.merge_interleave(&all_results, k),
-            MergeStrategy::MinDistance => self.merge_min_distance(&all_results, k),
+            MergeStrategy::Interleave => Self::merge_interleave(&all_results, k),
+            MergeStrategy::MinDistance => Self::merge_min_distance(&all_results, k),
         };
 
         Ok(merged)
@@ -240,7 +240,7 @@ impl<'a> FederatedSearch<'a> {
         all
     }
 
-    fn merge_interleave(&self, results: &[(String, Vec<SearchResult>)], k: usize) -> Vec<FederatedResult> {
+    fn merge_interleave(results: &[(String, Vec<SearchResult>)], k: usize) -> Vec<FederatedResult> {
         let mut merged = Vec::new();
         let max_len = results.iter().map(|(_, r)| r.len()).max().unwrap_or(0);
         for i in 0..max_len {
@@ -259,7 +259,7 @@ impl<'a> FederatedSearch<'a> {
         merged
     }
 
-    fn merge_min_distance(&self, results: &[(String, Vec<SearchResult>)], k: usize) -> Vec<FederatedResult> {
+    fn merge_min_distance(results: &[(String, Vec<SearchResult>)], k: usize) -> Vec<FederatedResult> {
         let mut best: HashMap<String, FederatedResult> = HashMap::new();
         for (collection, search_results) in results {
             for sr in search_results {

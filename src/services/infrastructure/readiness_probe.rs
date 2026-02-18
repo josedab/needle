@@ -102,7 +102,7 @@ impl ReadinessProbe {
         checks.push(self.check_collections(db));
         checks.push(self.check_collection_sizes(db));
         checks.push(self.check_search_latency(db));
-        checks.push(self.check_api_responsiveness(db));
+        checks.push(Self::check_api_responsiveness(db));
 
         let overall = if checks.iter().any(|c| c.status == CheckStatus::Fail) {
             CheckStatus::Fail
@@ -207,7 +207,7 @@ impl ReadinessProbe {
         CheckResult { name: "search_latency".into(), status, message: msg, duration_us: start.elapsed().as_micros() as u64 }
     }
 
-    fn check_api_responsiveness(&self, db: &Database) -> CheckResult {
+    fn check_api_responsiveness(db: &Database) -> CheckResult {
         let start = Instant::now();
         let collections_result = db.list_collections();
         let latency = start.elapsed().as_micros() as u64;

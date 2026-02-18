@@ -333,7 +333,7 @@ impl<'a> SyncManager<'a> {
             .cloned()
             .collect();
 
-        let to_seq = ops.last().map(|op| op.sequence).unwrap_or(self.checkpoint);
+        let to_seq = ops.last().map_or(self.checkpoint, |op| op.sequence);
 
         let delta = DeltaLog {
             source_id: self.node_id.clone(),

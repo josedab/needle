@@ -827,12 +827,12 @@ impl NeedleVectorStore {
                 let (_, embedding) = &candidates[idx];
 
                 // Relevance to query
-                let query_sim = self.cosine_similarity(query_embedding, embedding);
+                let query_sim = Self::cosine_similarity(query_embedding, embedding);
 
                 // Maximum similarity to already selected documents
                 let max_selected_sim = selected
                     .iter()
-                    .map(|(_, sel_emb)| self.cosine_similarity(embedding, sel_emb))
+                    .map(|(_, sel_emb)| Self::cosine_similarity(embedding, sel_emb))
                     .fold(f32::NEG_INFINITY, f32::max);
 
                 // MMR score
@@ -856,7 +856,7 @@ impl NeedleVectorStore {
     }
 
     /// Compute cosine similarity between two vectors.
-    fn cosine_similarity(&self, a: &[f32], b: &[f32]) -> f32 {
+    fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
         let dot: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
         let norm_a: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
         let norm_b: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();

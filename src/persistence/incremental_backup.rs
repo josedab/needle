@@ -443,8 +443,7 @@ impl IncrementalBackupManager {
             .snapshots
             .range(..=target_lsn)
             .next_back()
-            .map(|(lsn, _)| *lsn)
-            .unwrap_or(0);
+            .map_or(0, |(lsn, _)| *lsn);
         if base_lsn >= target_lsn {
             return true; // snapshot itself is sufficient
         }

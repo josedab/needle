@@ -39,7 +39,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::database::Database;
-use crate::error::Result;
+use crate::error::{NeedleError, Result};
 
 // ── Configuration ────────────────────────────────────────────────────────────
 
@@ -460,7 +460,7 @@ impl<'a> TimeTravelService<'a> {
         query: &[f32],
         k: usize,
         unix_timestamp: u64,
-    ) -> Result<Vec<crate::collection::SearchResult>> {
+    ) -> Result<Vec<VersionedVector>> {
         // Find the latest version that was committed at or before the timestamp
         let target_version = self
             .audit_log
@@ -522,12 +522,12 @@ impl<'a> TimeTravelService<'a> {
             let before = history.len();
             // Keep the latest version and any version >= min_version
             if history.len() > 1 {
-                let latest = history.last().cloned();
-                history.retain(|v| v.version >= min_version);
+                let latest = history.values().next_back().cloned();
+                history.retain(|_k, v| v.version >= min_version);
                 // Always keep at least the latest version
                 if history.is_empty() {
                     if let Some(latest) = latest {
-                        history.push(latest);
+                        history.insert(latest.version, latest);
                     }
                 }
             }
@@ -570,7 +570,7 @@ impl<'a> TimeTravelService<'a> {
                     l2_distance: l2_dist,
                     dimension_changes: old.vector.iter().zip(new.vector.iter())
                         .enumerate()
-                        .filter(|(_, (a, b))| (a - b).abs() > f32::EPSILON)
+                        .filter(|(_, (a, b))| (*a - *b).abs() > f32::EPSILON)
                         .count(),
                     metadata_changed: old.metadata != new.metadata,
                 });
@@ -680,12 +680,12 @@ impl<'a> TimeTravelService<'a> {
         // Count discarded versions
         let versions_discarded = self.versions.values()
             .flat_map(|h| h.iter())
-            .filter(|v| v.version > target_version && v.version != result)
+            .filter(|(_k, v)| v.version > target_version && v.version != result)
             .count();
 
         // Count vectors at restored state
         let vector_count = self.versions.values()
-            .filter(|h| h.iter().any(|v| v.version <= target_version && !v.deleted))
+            .filter(|h| h.iter().any(|(_k, v)| v.version <= target_version && !v.deleted))
             .count();
 
         Ok(RestoreResult {
@@ -707,12 +707,13 @@ impl<'a> TimeTravelService<'a> {
                 continue;
             }
 
-            let mut compacted = Vec::with_capacity(history.len());
-            compacted.push(history[0].clone());
+            let entries: Vec<(Version, VersionedVector)> = history.iter().map(|(k, v)| (*k, v.clone())).collect();
+            let mut compacted = BTreeMap::new();
+            compacted.insert(entries[0].0, entries[0].1.clone());
+            let mut prev = &entries[0].1;
 
-            for i in 1..history.len() {
-                let prev = &compacted[compacted.len() - 1];
-                let curr = &history[i];
+            for entry in &entries[1..] {
+                let curr = &entry.1;
 
                 // Keep if vector changed or deletion status changed
                 let vectors_differ = prev.vector != curr.vector;
@@ -720,7 +721,8 @@ impl<'a> TimeTravelService<'a> {
                 let metadata_changed = prev.metadata != curr.metadata;
 
                 if vectors_differ || deletion_changed || metadata_changed {
-                    compacted.push(curr.clone());
+                    compacted.insert(entry.0, curr.clone());
+                    prev = curr;
                 } else {
                     removed += 1;
                 }
@@ -735,7 +737,7 @@ impl<'a> TimeTravelService<'a> {
     /// Get the list of version numbers where a specific vector was modified.
     pub fn version_history_for(&self, id: &str) -> Vec<Version> {
         self.versions.get(id)
-            .map(|h| h.iter().map(|v| v.version).collect())
+            .map(|h| h.iter().map(|(_k, v)| v.version).collect())
             .unwrap_or_default()
     }
 
@@ -771,11 +773,11 @@ impl<'a> TimeTravelService<'a> {
         for history in self.versions.values_mut() {
             let before = history.len();
             if history.len() > 1 {
-                let latest = history.last().cloned();
-                history.retain(|v| v.version > cutoff_version);
+                let latest = history.values().next_back().cloned();
+                history.retain(|_k, v| v.version > cutoff_version);
                 if history.is_empty() {
                     if let Some(latest) = latest {
-                        history.push(latest);
+                        history.insert(latest.version, latest);
                     }
                 }
             }

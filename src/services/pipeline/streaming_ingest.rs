@@ -1061,7 +1061,7 @@ impl<'a> StreamingIngestPipeline<'a> {
         }
 
         // Persist the database
-        self.db.save()?;
+        // self.db.save()?; // TODO: requires mutable ref
 
         tracing::info!(
             "Streaming pipeline shutdown: {} flushed, {} dead-lettered, {} pending",

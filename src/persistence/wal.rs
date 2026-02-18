@@ -474,7 +474,7 @@ impl WalManager {
             .map_err(|e| NeedleError::Io(e))?
             .filter_map(|e| e.ok())
             .map(|e| e.path())
-            .filter(|p| p.extension().map(|ext| ext == "wal").unwrap_or(false))
+            .filter(|p| p.extension().is_some_and(|ext| ext == "wal"))
             .collect();
         segments.sort();
 

@@ -84,11 +84,11 @@ impl EmbedderChain {
 
     /// Get the active dimensions (from first available backend).
     pub fn dimensions(&self) -> usize {
-        self.backends.first().map(|b| match b {
+        self.backends.first().map_or(64, |b| match b {
             EmbedderBackend::BuiltIn { dimensions } => *dimensions,
             EmbedderBackend::LocalOnnx { dimensions, .. } => *dimensions,
             EmbedderBackend::ApiProvider { dimensions, .. } => *dimensions,
-        }).unwrap_or(64)
+        })
     }
 }
 

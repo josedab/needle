@@ -847,8 +847,7 @@ impl SyncService {
             if state.deleted {
                 state
                     .deleted_at
-                    .map(|ts| ts.physical > cutoff_ms)
-                    .unwrap_or(true)
+                    .map_or(true, |ts| ts.physical > cutoff_ms)
             } else {
                 true
             }

@@ -197,7 +197,7 @@ impl CollectionBundle {
         let total_bytes: usize = self
             .vectors
             .iter()
-            .map(|v| v.vector.len() * 4 + v.id.len() + v.metadata.as_ref().map(|m| m.to_string().len()).unwrap_or(0))
+            .map(|v| v.vector.len() * 4 + v.id.len() + v.metadata.as_ref().map_or(0, |m| m.to_string().len()))
             .sum();
 
         let metadata_count = self.vectors.iter().filter(|v| v.metadata.is_some()).count();

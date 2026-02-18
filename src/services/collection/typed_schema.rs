@@ -377,8 +377,7 @@ impl SchemaService {
         for field in &schema.fields {
             if field.required {
                 let has_field = obj
-                    .map(|o| o.contains_key(&field.name))
-                    .unwrap_or(false);
+                    .is_some_and(|o| o.contains_key(&field.name));
                 if !has_field && field.default.is_none() {
                     errors.push(ValidationError {
                         field: field.name.clone(),
@@ -533,14 +532,12 @@ impl SchemaService {
             FieldType::StringArray => {
                 value
                     .as_array()
-                    .map(|arr| arr.iter().all(|v| v.is_string()))
-                    .unwrap_or(false)
+                    .is_some_and(|arr| arr.iter().all(|v| v.is_string()))
             }
             FieldType::IntArray => {
                 value
                     .as_array()
-                    .map(|arr| arr.iter().all(|v| v.is_i64() || v.is_u64()))
-                    .unwrap_or(false)
+                    .is_some_and(|arr| arr.iter().all(|v| v.is_i64() || v.is_u64()))
             }
         }
     }

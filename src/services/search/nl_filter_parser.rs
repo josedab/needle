@@ -264,7 +264,7 @@ impl NLFilterParser {
             )));
         }
 
-        let filter_json = self.build_filter_json(&clauses, &conjunction);
+        let filter_json = Self::build_filter_json(&clauses, &conjunction);
         let confidence = clauses.len() as f64 / parts.len() as f64;
         let filter = Filter::parse(&filter_json).ok();
 
@@ -375,7 +375,7 @@ impl NLFilterParser {
         json!(cleaned)
     }
 
-    fn build_filter_json(&self, clauses: &[FilterClause], conjunction: &str) -> Value {
+    fn build_filter_json(clauses: &[FilterClause], conjunction: &str) -> Value {
         if clauses.len() == 1 {
             let c = &clauses[0];
             return json!({ &c.field: { c.operator.to_mongo_key(): c.value } });

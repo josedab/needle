@@ -278,8 +278,7 @@ impl AutoEmbedService {
     pub fn collection_model(&self, collection: &str) -> String {
         self.collection_configs
             .get(collection)
-            .map(|c| c.model_id.clone())
-            .unwrap_or_else(|| self.config.default_model.clone())
+            .map_or_else(|| self.config.default_model.clone(), |c| c.model_id.clone())
     }
 
     /// List all configured collections.

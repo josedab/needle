@@ -203,8 +203,8 @@ impl ModuleAuditor {
         let mut summary: HashMap<String, usize> = HashMap::new();
 
         for module in &self.modules {
-            let action = self.recommend(module);
-            let rationale = self.rationale(module, action);
+            let action = Self::recommend(module);
+            let rationale = Self::rationale(module, action);
             let priority = match action {
                 RecommendedAction::Delete => 1,
                 RecommendedAction::Archive => 2,
@@ -243,7 +243,7 @@ impl ModuleAuditor {
         self.modules.len()
     }
 
-    fn recommend(&self, module: &ModuleInfo) -> RecommendedAction {
+    fn recommend(module: &ModuleInfo) -> RecommendedAction {
         match module.maturity {
             MaturityLevel::Scaffolding => {
                 if module.test_count == 0 && module.usage_count == 0 {
@@ -270,7 +270,7 @@ impl ModuleAuditor {
         }
     }
 
-    fn rationale(&self, module: &ModuleInfo, action: RecommendedAction) -> String {
+    fn rationale(module: &ModuleInfo, action: RecommendedAction) -> String {
         match action {
             RecommendedAction::Delete => format!(
                 "{} is scaffolding ({} LOC, {} tests, {} usage). No value to retain.",

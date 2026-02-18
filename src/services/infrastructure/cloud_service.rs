@@ -501,8 +501,7 @@ impl CloudService {
             let pricing = TierPricing::for_tier(inst.tier);
             let metrics = self.metrics.get(&inst.instance_id);
             let (queries, inserts, storage_bytes) = metrics
-                .map(|m| (m.total_queries, m.total_inserts, m.storage_bytes))
-                .unwrap_or((0, 0, 0));
+                .map_or((0, 0, 0), |m| (m.total_queries, m.total_inserts, m.storage_bytes));
 
             let query_charge = (queries as f64 / 1000.0) * pricing.per_1k_queries;
             let storage_gb = storage_bytes as f64 / (1024.0 * 1024.0 * 1024.0);
@@ -532,8 +531,8 @@ impl CloudService {
             return Ok(ScaleDecision::NoChange);
         }
         let metrics = self.metrics.get(instance_id);
-        let current_qps = metrics.map(|m| m.current_qps).unwrap_or(0.0);
-        let current_replicas = metrics.map(|m| m.current_replicas).unwrap_or(1);
+        let current_qps = metrics.map_or(0.0, |m| m.current_qps);
+        let current_replicas = metrics.map_or(1, |m| m.current_replicas);
         let target_qps = self.config.auto_scale.target_qps_per_replica as f64;
         let load = current_qps / (current_replicas as f64 * target_qps).max(1.0);
 

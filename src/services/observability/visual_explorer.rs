@@ -292,8 +292,7 @@ impl CollectionExplorer {
                         let db = euclidean_distance(vec, b);
                         da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
                     })
-                    .map(|(idx, _)| idx)
-                    .unwrap_or(0);
+                    .map_or(0, |(idx, _)| idx);
 
                 if assignments[i] != nearest {
                     assignments[i] = nearest;
@@ -475,7 +474,7 @@ impl CollectionExplorer {
         }
 
         // Project queries to 2D using same method
-        let projection = self.project_vectors_first_two(&self.query_log);
+        let projection = Self::project_vectors_first_two(&self.query_log);
 
         let (min_x, max_x, min_y, max_y) = projection.iter().fold(
             (f32::MAX, f32::MIN, f32::MAX, f32::MIN),
@@ -734,7 +733,7 @@ impl CollectionExplorer {
             .collect()
     }
 
-    fn project_vectors_first_two(&self, vecs: &[Vec<f32>]) -> Vec<(f32, f32)> {
+    fn project_vectors_first_two(vecs: &[Vec<f32>]) -> Vec<(f32, f32)> {
         vecs.iter()
             .map(|v| {
                 (

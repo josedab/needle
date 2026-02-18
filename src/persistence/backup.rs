@@ -847,8 +847,8 @@ impl IncrementalBackupManager {
                     .collect::<std::collections::HashSet<_>>()
                     .into_iter()
                     .collect();
-                let lsn_start = pending.first().map(|e| e.lsn).unwrap_or(0);
-                let lsn_end = pending.last().map(|e| e.lsn).unwrap_or(0);
+                let lsn_start = pending.first().map_or(0, |e| e.lsn);
+                let lsn_end = pending.last().map_or(0, |e| e.lsn);
                 drop(entries);
 
                 leader.produce_segment(lsn_start, lsn_end, collections, pending_bytes);

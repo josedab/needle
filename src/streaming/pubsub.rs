@@ -289,12 +289,11 @@ impl PubSub {
     pub async fn subscriber_count(&self, collection: &str) -> usize {
         let subs = self.subscriptions.read().await;
         subs.get(collection)
-            .map(|s| {
+            .map_or(0, |s| {
                 s.iter()
                     .filter(|sub| sub.active.load(Ordering::Relaxed))
                     .count()
             })
-            .unwrap_or(0)
     }
 
     /// Get total subscriber count

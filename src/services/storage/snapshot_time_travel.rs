@@ -263,7 +263,7 @@ impl VersionedStore {
         if version > self.version {
             return Err(NeedleError::NotFound(format!("Version {version} does not exist (current: {})", self.version)));
         }
-        let min_version = self.log.first().map(|e| e.version).unwrap_or(0);
+        let min_version = self.log.first().map_or(0, |e| e.version);
         if version < min_version && min_version > 0 {
             return Err(NeedleError::NotFound(format!(
                 "Version {version} has been compacted (earliest: {min_version})"
