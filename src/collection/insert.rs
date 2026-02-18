@@ -130,6 +130,25 @@ impl Collection {
             return Err(NeedleError::VectorAlreadyExists(id));
         }
 
+        // Semantic dedup check: 1-NN search against existing vectors
+        if let Some((existing_id, distance)) = self.check_dedup(&vector) {
+            let policy = self
+                .config
+                .dedup
+                .as_ref()
+                .map_or(crate::collection::config::DedupPolicy::Reject, |c| c.policy);
+            let _ = self.apply_dedup_policy(
+                &id,
+                vector,
+                metadata,
+                &existing_id,
+                distance,
+                policy,
+                ttl_seconds,
+            )?;
+            return Ok(());
+        }
+
         // Add to vector store (no clone needed - we own the vector)
         let internal_id = self.vectors.add(vector)?;
 

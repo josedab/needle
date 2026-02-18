@@ -49,6 +49,8 @@ pub mod config;
 pub use config::*;
 pub mod search;
 pub use search::*;
+pub mod dedup;
+pub use dedup::*;
 pub mod pipeline;
 pub use pipeline::*;
 mod sharding;
