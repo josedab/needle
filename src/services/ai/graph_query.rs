@@ -129,7 +129,7 @@ impl GraphQueryEngine {
         let mut visited: HashSet<String> = HashSet::new();
 
         for seed in &seeds {
-            let vec_dist = scored.iter().find(|(id, _)| id == seed).map(|(_, d)| *d).unwrap_or(1.0);
+            let vec_dist = scored.iter().find(|(id, _)| id == seed).map_or(1.0, |(_, d)| *d);
             visited.insert(seed.clone());
             results.insert(seed.clone(), GraphQueryResult {
                 id: seed.clone(), score: vec_dist * query.vector_weight,
