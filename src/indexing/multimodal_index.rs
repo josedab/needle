@@ -700,7 +700,7 @@ impl MultiModalUnifiedIndex {
         let mut scores: Vec<(String, f32)> = docs
             .iter()
             .filter_map(|doc| {
-                let score = self.alignment_score_inner(doc)?;
+                let score = Self::alignment_score_inner(doc)?;
                 Some((doc.id.clone(), score))
             })
             .collect();
@@ -710,7 +710,7 @@ impl MultiModalUnifiedIndex {
         scores
     }
 
-    fn alignment_score_inner(&self, doc: &MultiModalDoc) -> Option<f32> {
+    fn alignment_score_inner(doc: &MultiModalDoc) -> Option<f32> {
         let embeddings: Vec<&Vec<f32>> = doc.embeddings.values().collect();
         if embeddings.len() < 2 {
             return None;

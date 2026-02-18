@@ -266,8 +266,7 @@ impl Layer {
     fn get_connections(&self, id: VectorId) -> &[VectorId] {
         self.connections
             .get(id)
-            .map(|v| v.as_slice())
-            .unwrap_or(&[])
+            .map_or(&[], |v| v.as_slice())
     }
 
     fn set_connections(&mut self, id: VectorId, neighbors: Vec<VectorId>) {
@@ -295,7 +294,7 @@ impl Layer {
 
     /// Get the number of connections for a node without allocating
     fn connection_count(&self, id: VectorId) -> usize {
-        self.connections.get(id).map(|v| v.len()).unwrap_or(0)
+        self.connections.get(id).map_or(0, |v| v.len())
     }
 }
 
@@ -541,7 +540,7 @@ impl HnswIndex {
         for l in (0..=start_level).rev() {
             let candidates =
                 self.search_layer(vector, current, self.config.ef_construction, l, vectors)?;
-            let neighbors = self.select_neighbors(&candidates, self.max_connections(l));
+            let neighbors = Self::select_neighbors(&candidates, self.max_connections(l));
 
             // Set connections for the new node
             self.layers[l].set_connections(id, neighbors.iter().map(|(n, _)| *n).collect());
@@ -561,7 +560,7 @@ impl HnswIndex {
                     for &n in &neighbor_connections {
                         scored.push((n, self.distance.compute(neighbor_vec, &vectors[n])?));
                     }
-                    let pruned = self.select_neighbors(&scored, max_conn);
+                    let pruned = Self::select_neighbors(&scored, max_conn);
                     self.layers[l]
                         .set_connections(*neighbor_id, pruned.iter().map(|(n, _)| *n).collect());
                 }
@@ -868,7 +867,7 @@ impl HnswIndex {
         visited_count += 1;
 
         while let Some(Reverse((OrderedFloat(c_dist), c_id))) = candidates.pop() {
-            let worst_dist = results.peek().map(|(d, _)| d.0).unwrap_or(f32::INFINITY);
+            let worst_dist = results.peek().map_or(f32::INFINITY, |(d, _)| d.0);
 
             // If the best candidate is worse than our worst result, we're done
             if c_dist > worst_dist && results.len() >= ef {
@@ -913,7 +912,6 @@ impl HnswIndex {
     /// too close to each other, but the simple version performs well in practice
     /// and is faster.
     fn select_neighbors(
-        &self,
         candidates: &[(VectorId, f32)],
         max_neighbors: usize,
     ) -> Vec<(VectorId, f32)> {

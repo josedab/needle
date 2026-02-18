@@ -507,7 +507,7 @@ impl AutoSelector {
                 Err(_) => continue,
             };
 
-            let eval = self.evaluate_pipeline(&pipeline, &sample);
+            let eval = Self::evaluate_pipeline(&pipeline, &sample);
 
             // Score: prefer pipelines close to target ratio with low recall loss
             let ratio_distance =
@@ -529,7 +529,7 @@ impl AutoSelector {
                 let pipeline = CompressionPipelineBuilder::new()
                     .add_stage(CompressionStage::ScalarQuantization)
                     .build(&sample)?;
-                let eval = self.evaluate_pipeline(&pipeline, &sample);
+                let eval = Self::evaluate_pipeline(&pipeline, &sample);
                 Ok((pipeline, eval))
             }
         }
@@ -537,7 +537,6 @@ impl AutoSelector {
 
     /// Evaluate a pipeline on sample vectors.
     fn evaluate_pipeline(
-        &self,
         pipeline: &CompressionPipeline,
         samples: &[&[f32]],
     ) -> CompressionEvaluation {

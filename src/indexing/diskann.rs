@@ -456,7 +456,7 @@ impl DiskAnnIndex {
         let mut candidates: BinaryHeap<SearchCandidate> = BinaryHeap::new();
 
         // Start from entry point
-        let entry_dist = self.distance(query, &all_vectors[entry]);
+        let entry_dist = Self::distance(query, &all_vectors[entry]);
         candidates.push(SearchCandidate {
             index: entry,
             distance: entry_dist,
@@ -484,7 +484,7 @@ impl DiskAnnIndex {
             for &neighbor in &self.nodes[current.index].neighbors {
                 if !visited.contains(&neighbor) {
                     visited.insert(neighbor);
-                    let dist = self.distance(query, &all_vectors[neighbor]);
+                    let dist = Self::distance(query, &all_vectors[neighbor]);
                     candidates.push(SearchCandidate {
                         index: neighbor,
                         distance: dist,
@@ -524,7 +524,7 @@ impl DiskAnnIndex {
         // Sort candidates by distance
         let mut sorted: Vec<(usize, f32)> = candidates
             .iter()
-            .map(|&i| (i, self.distance(query, &all_vectors[i])))
+            .map(|&i| (i, Self::distance(query, &all_vectors[i])))
             .collect();
         sorted.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(Ordering::Equal));
 
@@ -539,7 +539,7 @@ impl DiskAnnIndex {
             let mut dominated = false;
             for &neighbor in &result {
                 let neighbor_to_candidate =
-                    self.distance(&all_vectors[neighbor], &all_vectors[candidate]);
+                    Self::distance(&all_vectors[neighbor], &all_vectors[candidate]);
                 if neighbor_to_candidate * alpha < candidate_dist {
                     dominated = true;
                     break;
@@ -577,7 +577,7 @@ impl DiskAnnIndex {
         let mut best_idx = 0;
         let mut best_dist = f32::MAX;
         for (i, vec) in all_vectors.iter().enumerate() {
-            let dist = self.distance(&centroid, vec);
+            let dist = Self::distance(&centroid, vec);
             if dist < best_dist {
                 best_dist = dist;
                 best_idx = i;
@@ -633,7 +633,7 @@ impl DiskAnnIndex {
     }
 
     /// Compute Euclidean distance.
-    fn distance(&self, a: &[f32], b: &[f32]) -> f32 {
+    fn distance(a: &[f32], b: &[f32]) -> f32 {
         a.iter()
             .zip(b.iter())
             .map(|(x, y)| (x - y).powi(2))
@@ -666,7 +666,7 @@ impl DiskAnnIndex {
 
         // Start from entry point
         let entry_vec = self.load_vector(entry)?;
-        let entry_dist = self.distance(query, &entry_vec);
+        let entry_dist = Self::distance(query, &entry_vec);
         candidates.push(SearchCandidate {
             index: entry,
             distance: entry_dist,
@@ -693,7 +693,7 @@ impl DiskAnnIndex {
                 if !visited.contains(&neighbor) {
                     visited.insert(neighbor);
                     let neighbor_vec = self.load_vector(neighbor)?;
-                    let dist = self.distance(query, &neighbor_vec);
+                    let dist = Self::distance(query, &neighbor_vec);
                     candidates.push(SearchCandidate {
                         index: neighbor,
                         distance: dist,
@@ -1178,7 +1178,7 @@ impl DiskAnnIndex {
                     let mut best: Vec<(usize, f32)> = boundary_vectors
                         .iter()
                         .filter(|(j, _)| *j != i)
-                        .map(|(j, vec_j)| (*j, self.distance(vec_i, vec_j)))
+                        .map(|(j, vec_j)| (*j, Self::distance(vec_i, vec_j)))
                         .collect();
                     best.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(Ordering::Equal));
                     best.truncate(max_degree / 4);
@@ -1229,7 +1229,7 @@ impl DiskAnnIndex {
             let mut best_idx = 0;
             let mut best_dist = f32::MAX;
             for (idx, vec) in &sample_vecs {
-                let dist = self.distance(&centroid, vec);
+                let dist = Self::distance(&centroid, vec);
                 if dist < best_dist {
                     best_dist = dist;
                     best_idx = *idx;
@@ -1265,7 +1265,7 @@ impl DiskAnnIndex {
         let mut visited: HashSet<usize> = HashSet::new();
         let mut candidates: BinaryHeap<SearchCandidate> = BinaryHeap::new();
 
-        let entry_dist = self.distance(query, &batch_vectors[entry - batch_start]);
+        let entry_dist = Self::distance(query, &batch_vectors[entry - batch_start]);
         candidates.push(SearchCandidate {
             index: entry,
             distance: entry_dist,
@@ -1296,7 +1296,7 @@ impl DiskAnnIndex {
                 {
                     visited.insert(neighbor);
                     let dist =
-                        self.distance(query, &batch_vectors[neighbor - batch_start]);
+                        Self::distance(query, &batch_vectors[neighbor - batch_start]);
                     candidates.push(SearchCandidate {
                         index: neighbor,
                         distance: dist,
@@ -1336,7 +1336,7 @@ impl DiskAnnIndex {
                     let c_idx = candidate - batch_start;
                     if n_idx < batch_vectors.len() && c_idx < batch_vectors.len() {
                         let neighbor_to_candidate =
-                            self.distance(&batch_vectors[n_idx], &batch_vectors[c_idx]);
+                            Self::distance(&batch_vectors[n_idx], &batch_vectors[c_idx]);
                         if neighbor_to_candidate * alpha < candidate_dist {
                             dominated = true;
                             break;
@@ -1385,7 +1385,7 @@ impl DiskAnnIndex {
         let mut candidates: BinaryHeap<SearchCandidate> = BinaryHeap::new();
 
         let entry_vec = self.load_vector(entry)?;
-        let entry_dist = self.distance(query, &entry_vec);
+        let entry_dist = Self::distance(query, &entry_vec);
         candidates.push(SearchCandidate {
             index: entry,
             distance: entry_dist,
@@ -1412,7 +1412,7 @@ impl DiskAnnIndex {
                 if !visited.contains(&neighbor) {
                     visited.insert(neighbor);
                     let neighbor_vec = self.load_vector(neighbor)?;
-                    let dist = self.distance(query, &neighbor_vec);
+                    let dist = Self::distance(query, &neighbor_vec);
                     candidates.push(SearchCandidate {
                         index: neighbor,
                         distance: dist,

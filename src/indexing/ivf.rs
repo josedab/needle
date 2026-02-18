@@ -297,14 +297,14 @@ impl IvfIndex {
         let k = self.config.n_clusters.min(n);
 
         // Initialize centroids using k-means++
-        let mut centroids = self.kmeans_pp_init(vectors, k)?;
+        let mut centroids = Self::kmeans_pp_init(vectors, k)?;
         let mut assignments = vec![0usize; n];
 
         for _iter in 0..self.config.max_iterations {
             // Assign vectors to nearest centroid
             let mut changed = false;
             for (i, v) in vectors.iter().enumerate() {
-                let nearest = self.find_nearest_centroid(v, &centroids);
+                let nearest = Self::find_nearest_centroid(v, &centroids);
                 if assignments[i] != nearest {
                     assignments[i] = nearest;
                     changed = true;
@@ -360,7 +360,7 @@ impl IvfIndex {
     }
 
     /// K-means++ initialization
-    fn kmeans_pp_init(&self, vectors: &[&[f32]], k: usize) -> IvfResult<Vec<Vec<f32>>> {
+    fn kmeans_pp_init(vectors: &[&[f32]], k: usize) -> IvfResult<Vec<Vec<f32>>> {
         let mut rng = thread_rng();
         let n = vectors.len();
 
@@ -415,13 +415,12 @@ impl IvfIndex {
     }
 
     /// Find nearest centroid index
-    fn find_nearest_centroid(&self, vector: &[f32], centroids: &[Vec<f32>]) -> usize {
+    fn find_nearest_centroid(vector: &[f32], centroids: &[Vec<f32>]) -> usize {
         centroids
             .iter()
             .enumerate()
             .min_by_key(|(_, c)| OrderedFloat(euclidean_distance(vector, c).unwrap_or(f32::MAX)))
-            .map(|(i, _)| i)
-            .unwrap_or(0)
+            .map_or(0, |(i, _)| i)
     }
 
     /// Insert a vector into the index
@@ -438,7 +437,7 @@ impl IvfIndex {
         }
 
         // Find nearest cluster
-        let cluster_idx = self.find_nearest_centroid(
+        let cluster_idx = Self::find_nearest_centroid(
             vector,
             &self
                 .clusters

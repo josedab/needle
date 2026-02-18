@@ -418,7 +418,7 @@ impl TieredIndex {
         // Merge results
         let hot_count = hot_results.len();
         let cold_count = cold_results.len();
-        let merged = self.merge_results(hot_results, cold_results, k);
+        let merged = Self::merge_results(hot_results, cold_results, k);
 
         // Track access for result vectors
         self.track_access(&merged);
@@ -462,7 +462,6 @@ impl TieredIndex {
 
     /// Merge results from both tiers
     fn merge_results(
-        &self,
         hot: Vec<SearchResult>,
         cold: Vec<SearchResult>,
         k: usize,

@@ -468,7 +468,7 @@ impl GraphVectorIndex {
 
         // Add bidirectional edge if configured
         if self.config.bidirectional {
-            let reverse_type = self.get_reverse_edge_type(&edge_type);
+            let reverse_type = Self::get_reverse_edge_type(&edge_type);
             if let Some(to_entity) = entities.get_mut(to) {
                 // Check for existing reverse edge
                 let has_reverse = to_entity.edges.iter().any(|e| e.target == from);
@@ -492,7 +492,7 @@ impl GraphVectorIndex {
     }
 
     /// Get the reverse edge type for bidirectional edges
-    fn get_reverse_edge_type(&self, edge_type: &EdgeType) -> EdgeType {
+    fn get_reverse_edge_type(edge_type: &EdgeType) -> EdgeType {
         match edge_type {
             EdgeType::ParentOf => EdgeType::ChildOf,
             EdgeType::ChildOf => EdgeType::ParentOf,
@@ -635,7 +635,7 @@ impl GraphVectorIndex {
         if let Some(anchors) = anchor_ids {
             for anchor_id in anchors {
                 if let Some(_entity) = entities.get(*anchor_id) {
-                    let reachable = self.bfs_reachable(*anchor_id, self.config.max_hops, &entities);
+                    let reachable = Self::bfs_reachable(*anchor_id, self.config.max_hops, &entities);
                     for (reachable_id, hops) in reachable {
                         let decay = self.config.distance_decay.powi(hops as i32);
                         let score = graph_scores.entry(reachable_id).or_insert(0.0);
@@ -649,7 +649,7 @@ impl GraphVectorIndex {
             for (i, (internal_id, _)) in vector_results.iter().take(5).enumerate() {
                 if let Some(ext_id) = reverse_map.get(internal_id) {
                     let anchor_weight = 1.0 - (i as f32 * 0.15); // Decay for lower-ranked anchors
-                    let reachable = self.bfs_reachable(ext_id, self.config.max_hops, &entities);
+                    let reachable = Self::bfs_reachable(ext_id, self.config.max_hops, &entities);
                     for (reachable_id, hops) in reachable {
                         let decay = self.config.distance_decay.powi(hops as i32) * anchor_weight;
                         let score = graph_scores.entry(reachable_id).or_insert(0.0);
@@ -678,7 +678,7 @@ impl GraphVectorIndex {
                     - (self.config.graph_weight * graph_score);
 
                 // Get connected entities for context
-                let connected = self.get_connected_entities(external_id, 1, &entities);
+                let connected = Self::get_connected_entities(external_id, 1, &entities);
 
                 Some(GraphVectorSearchResult {
                     id: external_id.clone(),
@@ -711,7 +711,6 @@ impl GraphVectorIndex {
 
     /// BFS to find all reachable entities within max_hops
     fn bfs_reachable(
-        &self,
         start: &str,
         max_hops: usize,
         entities: &HashMap<String, GraphEntity>,
@@ -742,7 +741,6 @@ impl GraphVectorIndex {
 
     /// Get connected entities up to max_hops
     fn get_connected_entities(
-        &self,
         id: &str,
         max_hops: usize,
         entities: &HashMap<String, GraphEntity>,
@@ -847,7 +845,7 @@ impl GraphVectorIndex {
         let max_edges = entities.values().map(|e| e.edges.len()).max().unwrap_or(0);
 
         // Count connected components via union-find simulation
-        let connected_components = self.count_connected_components(&entities);
+        let connected_components = Self::count_connected_components(&entities);
 
         GraphVectorStats {
             entity_count,
@@ -859,7 +857,7 @@ impl GraphVectorIndex {
         }
     }
 
-    fn count_connected_components(&self, entities: &HashMap<String, GraphEntity>) -> usize {
+    fn count_connected_components(entities: &HashMap<String, GraphEntity>) -> usize {
         let mut visited: HashSet<String> = HashSet::new();
         let mut components = 0;
 

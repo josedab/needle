@@ -211,8 +211,7 @@ impl AdvisorReport {
         let best = self
             .recommendations
             .first()
-            .map(|r| r.strategy)
-            .unwrap_or(QuantizationStrategy::None);
+            .map_or(QuantizationStrategy::None, |r| r.strategy);
 
         let projection = self.project_memory_savings(total_vectors);
         let target_projection = projection
@@ -373,7 +372,7 @@ impl CompressionAdvisor {
         };
 
         // Analyze distribution
-        let distribution = self.analyze_distribution(&sample, dim);
+        let distribution = Self::analyze_distribution(&sample, dim);
 
         // Split into base and queries
         let num_queries = self.config.num_test_queries.min(sample.len() / 10).max(1);
@@ -381,7 +380,7 @@ impl CompressionAdvisor {
 
         // Compute ground truth (brute force)
         let k = recall_k.min(base.len());
-        let ground_truth = self.compute_ground_truth(base, queries, k);
+        let ground_truth = Self::compute_ground_truth(base, queries, k);
 
         // Test each strategy
         let mut strategies = Vec::new();
@@ -422,7 +421,7 @@ impl CompressionAdvisor {
         })
     }
 
-    fn analyze_distribution(&self, vectors: &[&[f32]], dim: usize) -> DistributionAnalysis {
+    fn analyze_distribution(vectors: &[&[f32]], dim: usize) -> DistributionAnalysis {
         let n = vectors.len();
 
         // Compute per-dimension mean and variance
@@ -493,7 +492,6 @@ impl CompressionAdvisor {
     }
 
     fn compute_ground_truth(
-        &self,
         base: &[&[f32]],
         queries: &[&[f32]],
         k: usize,
@@ -514,7 +512,6 @@ impl CompressionAdvisor {
     }
 
     fn compute_recall(
-        &self,
         results: &[Vec<usize>],
         ground_truth: &[Vec<usize>],
         k: usize,
@@ -566,7 +563,7 @@ impl CompressionAdvisor {
             })
             .collect();
 
-        let recall = self.compute_recall(&results, ground_truth, k);
+        let recall = Self::compute_recall(&results, ground_truth, k);
 
         // Compute reconstruction error
         let mut total_error = 0.0;
@@ -621,7 +618,7 @@ impl CompressionAdvisor {
             })
             .collect();
 
-        let recall = self.compute_recall(&results, ground_truth, k);
+        let recall = Self::compute_recall(&results, ground_truth, k);
         let compression_ratio = (dim * 4) as f64 / num_subvectors as f64;
 
         let mut total_error = 0.0;
@@ -674,7 +671,7 @@ impl CompressionAdvisor {
             })
             .collect();
 
-        let recall = self.compute_recall(&results, ground_truth, k);
+        let recall = Self::compute_recall(&results, ground_truth, k);
         let bytes_per_vector = (dim + 7) / 8;
 
         StrategyResult {

@@ -182,7 +182,7 @@ impl DeltaBuffer {
 
     fn add(&mut self, id: String, vector: Vec<f32>, metadata: Option<Value>) {
         let vec_size = vector.len() * 4;
-        let meta_size = metadata.as_ref().map(|m| m.to_string().len()).unwrap_or(0);
+        let meta_size = metadata.as_ref().map_or(0, |m| m.to_string().len());
         self.size_bytes += vec_size + meta_size + id.len();
         self.vectors.push((id, vector, metadata));
     }

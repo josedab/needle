@@ -370,8 +370,7 @@ impl MultiModalFusion {
                     .config
                     .modalities
                     .get(modality)
-                    .map(|c| c.distance)
-                    .unwrap_or(DistanceFunction::Cosine);
+                    .map_or(DistanceFunction::Cosine, |c| c.distance);
 
                 if query_vec.len() == doc_vec.len() {
                     let dist = distance_fn.compute(query_vec, doc_vec).unwrap_or(f32::MAX);

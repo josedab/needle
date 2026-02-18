@@ -269,7 +269,7 @@ impl<'a> HybridSearch<'a> {
         };
 
         let estimated_recall = if self.config.enable_recall_estimation {
-            Some(self.estimate_recall(&results, k))
+            Some(Self::estimate_recall(&results, k))
         } else {
             None
         };
@@ -408,7 +408,7 @@ impl<'a> HybridSearch<'a> {
 
         if should_verify && !result.results.is_empty() {
             let exact = self.exact_search_internal(query, k, filter)?;
-            let actual_recall = self.calculate_recall(&result.results, &exact.results);
+            let actual_recall = Self::calculate_recall(&result.results, &exact.results);
 
             result.verified = true;
             result.actual_recall = Some(actual_recall);
@@ -417,7 +417,7 @@ impl<'a> HybridSearch<'a> {
             self.record_recall_sample(
                 result.estimated_recall.unwrap_or(0.0),
                 Some(actual_recall),
-                self.hash_query(query),
+                Self::hash_query(query),
             );
         }
 
@@ -441,9 +441,8 @@ impl<'a> HybridSearch<'a> {
         let min_dist = ann_result
             .results
             .first()
-            .map(|r| r.distance)
-            .unwrap_or(0.0);
-        let max_dist = ann_result.results.last().map(|r| r.distance).unwrap_or(0.0);
+            .map_or(0.0, |r| r.distance);
+        let max_dist = ann_result.results.last().map_or(0.0, |r| r.distance);
 
         if min_dist > 0.0 && max_dist / min_dist > self.config.cascade_threshold {
             debug!(
@@ -477,7 +476,7 @@ impl<'a> HybridSearch<'a> {
     }
 
     /// Estimate recall based on result distances
-    fn estimate_recall(&self, results: &[SearchResult], _k: usize) -> f32 {
+    fn estimate_recall(results: &[SearchResult], _k: usize) -> f32 {
         if results.is_empty() {
             return 0.0;
         }
@@ -504,7 +503,6 @@ impl<'a> HybridSearch<'a> {
 
     /// Calculate actual recall between ANN and exact results
     fn calculate_recall(
-        &self,
         ann_results: &[SearchResult],
         exact_results: &[SearchResult],
     ) -> f32 {
@@ -552,7 +550,7 @@ impl<'a> HybridSearch<'a> {
     }
 
     /// Hash query vector for tracking
-    fn hash_query(&self, query: &[f32]) -> u64 {
+    fn hash_query(query: &[f32]) -> u64 {
         use std::collections::hash_map::DefaultHasher;
         use std::hash::{Hash, Hasher};
 
