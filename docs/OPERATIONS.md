@@ -4,6 +4,7 @@ This guide covers operational best practices for running Needle in production en
 
 ## Table of Contents
 
+- [Configuration Precedence](#configuration-precedence)
 - [Deployment Architecture](#deployment-architecture)
 - [Monitoring and Observability](#monitoring-and-observability)
 - [Backup and Recovery](#backup-and-recovery)
@@ -11,6 +12,31 @@ This guide covers operational best practices for running Needle in production en
 - [Troubleshooting](#troubleshooting)
 - [Security Best Practices](#security-best-practices)
 - [Capacity Planning](#capacity-planning)
+
+---
+
+## Configuration Precedence
+
+Needle resolves configuration values using the following precedence hierarchy (highest to lowest):
+
+1. **CLI arguments** — flags passed directly on the command line (e.g., `--address 0.0.0.0:9090`)
+2. **Environment variables** — `NEEDLE_*` prefixed variables (e.g., `NEEDLE_ADDRESS=0.0.0.0:9090`)
+3. **Compiled defaults** — hard-coded fallback values in the Needle binary
+
+A higher-precedence source always overrides a lower one. For example, `--address` on the CLI takes priority over `NEEDLE_ADDRESS` in the environment, which in turn overrides the default `127.0.0.1:8080`.
+
+### Common Configuration Variables
+
+| CLI Flag | Environment Variable | Default | Description |
+|----------|---------------------|---------|-------------|
+| `--address`, `-a` | `NEEDLE_ADDRESS` | `127.0.0.1:8080` | Listen address for HTTP server |
+| `--database`, `-d` | `NEEDLE_DATABASE` | `needle.db` | Database file path |
+| `--data-dir` | `NEEDLE_DATA_DIR` | `/data` | Data directory |
+| — | `RUST_LOG` | `info` | Log level / per-module filtering |
+| — | `NEEDLE_TRACE_SAMPLE_RATE` | `0.01` | Distributed trace sampling rate (0.0–1.0) |
+| — | `NEEDLE_BACKUP_SECRET` | — | Secret key for backup encryption |
+
+> **Tip**: Use a `.env` file (see `.env.example` at the repo root) to manage environment variables during development. In production, prefer your orchestrator's secret management (e.g., Kubernetes Secrets, Docker secrets).
 
 ---
 

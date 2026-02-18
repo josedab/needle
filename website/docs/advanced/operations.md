@@ -8,6 +8,26 @@ Best practices for running Needle in production, including monitoring, backup/re
 
 ---
 
+## Configuration Precedence
+
+Needle resolves configuration using the following priority (highest to lowest):
+
+1. **CLI arguments** — flags passed on the command line (e.g., `--address 0.0.0.0:9090`)
+2. **Environment variables** — `NEEDLE_*` prefixed (e.g., `NEEDLE_ADDRESS=0.0.0.0:9090`)
+3. **Compiled defaults** — hard-coded fallback values
+
+| CLI Flag | Env Variable | Default |
+|----------|-------------|---------|
+| `--address`, `-a` | `NEEDLE_ADDRESS` | `127.0.0.1:8080` |
+| `--database`, `-d` | `NEEDLE_DATABASE` | `needle.db` |
+| `--data-dir` | `NEEDLE_DATA_DIR` | `/data` |
+| — | `RUST_LOG` | `info` |
+| — | `NEEDLE_TRACE_SAMPLE_RATE` | `0.01` |
+
+> **Tip**: Use a `.env` file (see `.env.example` at the repo root) during development. In production, prefer your orchestrator's secret management.
+
+---
+
 ## Deployment Architecture
 
 ### Single-Node (Recommended Start)
