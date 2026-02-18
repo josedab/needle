@@ -130,6 +130,20 @@ interface SearchResult {
   score: number;      // 1 / (1 + distance), normalized to [0, 1]
   metadata?: Record<string, unknown>;
 }
+
+// InsertOptions — passed as the third argument to insert()
+interface InsertOptions {
+  metadata?: Record<string, unknown>;  // arbitrary key-value metadata
+  skipDuplicates?: boolean;            // skip if ID already exists
+}
+
+// PersistenceStats — returned by persist()
+interface PersistenceStats {
+  stored: boolean;       // true if data was written to IndexedDB
+  sizeBytes: number;     // serialized size in bytes
+  vectorCount: number;   // number of vectors persisted
+  timestamp: number;     // epoch ms when persistence completed
+}
 ```
 
 Vectors accept both `Float32Array` and `number[]`:
@@ -175,7 +189,135 @@ await client.insert('doc1', [0.1, 0.2, /* ... */]);
 const results = await client.search([0.1, 0.2, /* ... */], 10);
 ```
 
-See the [Web Worker Message Protocol](#) types (`NeedleWorkerMessage`, `NeedleWorkerResponse`) exported by the package.
+#### `createWorkerClient(worker)`
+
+Creates a typed client that communicates with a Needle Web Worker via `postMessage`.
+
+| Method | Arguments | Returns | Description |
+|--------|-----------|---------|-------------|
+| `init(name, dimensions, distance?)` | `string, number, string?` | `Promise<{ success: boolean }>` | Initialize the worker database |
+| `insert(vecId, vector, metadata?)` | `string, number[], Record?` | `Promise<{ success: boolean }>` | Insert a vector |
+| `search(query, k)` | `number[], number` | `Promise<SearchResult[]>` | Search for nearest neighbors |
+| `delete(vecId)` | `string` | `Promise<{ existed: boolean }>` | Delete a vector |
+| `persist()` | — | `Promise<{ stats: PersistenceStats }>` | Persist to IndexedDB |
+| `clear()` | — | `Promise<void>` | Clear all vectors |
+| `stats()` | — | `Promise<{ count, memoryUsage, dirty }>` | Get collection stats |
+| `terminate()` | — | `void` | Terminate the worker |
+
+#### Worker Message Protocol
+
+The worker communicates using typed messages. Use these types to implement a custom worker:
+
+```typescript
+import type { NeedleWorkerMessage, NeedleWorkerResponse } from '@anthropic/needle';
+```
+
+**`NeedleWorkerMessage`** — sent from main thread to worker:
+
+| `type` | Fields | Description |
+|--------|--------|-------------|
+| `'init'` | `name, dimensions, distance?` | Initialize database |
+| `'insert'` | `vecId, vector, metadata?` | Insert a vector |
+| `'search'` | `query, k` | Search nearest neighbors |
+| `'delete'` | `vecId` | Delete a vector |
+| `'persist'` | — | Save to IndexedDB |
+| `'clear'` | — | Clear all vectors |
+| `'stats'` | — | Request collection stats |
+
+All messages include an `id: string` field for request/response correlation.
+
+**`NeedleWorkerResponse`** — sent from worker to main thread:
+
+| `type` | Fields | Description |
+|--------|--------|-------------|
+| `'ready'` | `success` | Worker initialized |
+| `'inserted'` | `success` | Vector inserted |
+| `'results'` | `results: SearchResult[]` | Search results |
+| `'deleted'` | `existed` | Whether vector existed |
+| `'persisted'` | `stats: PersistenceStats` | Persistence result |
+| `'cleared'` | — | Vectors cleared |
+| `'stats'` | `count, memoryUsage, dirty` | Collection stats |
+| `'error'` | `message` | Error response |
+
+#### Example Worker Implementation
+
+```typescript
+// needle-worker.ts
+import { NeedleDB, NeedleWorkerMessage, NeedleWorkerResponse } from '@anthropic/needle';
+
+let db: NeedleDB | null = null;
+
+self.onmessage = async (e: MessageEvent<NeedleWorkerMessage>) => {
+  const msg = e.data;
+  try {
+    switch (msg.type) {
+      case 'init':
+        db = await NeedleDB.create(msg.name, { dimensions: msg.dimensions });
+        self.postMessage({ id: msg.id, type: 'ready', success: true });
+        break;
+      case 'search':
+        const results = await db!.search(msg.query, msg.k);
+        self.postMessage({ id: msg.id, type: 'results', results });
+        break;
+      case 'insert':
+        await db!.insert(msg.vecId, msg.vector, msg.metadata);
+        self.postMessage({ id: msg.id, type: 'inserted', success: true });
+        break;
+      // ... handle delete, persist, clear, stats
+    }
+  } catch (err) {
+    self.postMessage({ id: msg.id, type: 'error', message: String(err) });
+  }
+};
+```
+
+### React Integration
+
+The SDK provides a React hook factory that avoids a hard React dependency.
+
+#### `createUseVectorSearch(react)`
+
+Creates a `useVectorSearch` hook by accepting React's `useState` and `useEffect`:
+
+```typescript
+import { useState, useEffect } from 'react';
+import { createUseVectorSearch, NeedleDB } from '@anthropic/needle';
+
+const useVectorSearch = createUseVectorSearch({ useState, useEffect });
+
+function SearchComponent({ db, query }: { db: NeedleDB; query: Float32Array }) {
+  const { results, loading, error } = useVectorSearch(db, query, 10);
+
+  if (loading) return <div>Searching...</div>;
+  if (error) return <div>Error: {error.message}</div>;
+
+  return (
+    <ul>
+      {results.map(r => <li key={r.id}>{r.id}: {r.score.toFixed(3)}</li>)}
+    </ul>
+  );
+}
+```
+
+**Parameters:**
+
+| Param | Type | Description |
+|-------|------|-------------|
+| `db` | `NeedleDB \| null` | Database instance (search runs when non-null) |
+| `query` | `Float32Array \| number[] \| null` | Query vector (search runs when non-null) |
+| `k` | `number` | Number of results to return (default: 10) |
+
+**Returns** `UseVectorSearchResult`:
+
+```typescript
+interface UseVectorSearchResult {
+  results: SearchResult[];  // search results (empty while loading)
+  loading: boolean;         // true while search is in progress
+  error: Error | null;      // error if search failed
+}
+```
+
+See the [Web Worker Message Protocol](#worker-message-protocol) types (`NeedleWorkerMessage`, `NeedleWorkerResponse`) exported by the package.
 
 ## Related
 
