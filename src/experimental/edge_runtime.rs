@@ -968,7 +968,7 @@ impl EdgeRuntime {
 
     /// Get collection size
     pub fn len(&self) -> usize {
-        self.collection.as_ref().map(|c| c.len()).unwrap_or(0)
+        self.collection.as_ref().map_or(0, |c| c.len())
     }
 
     /// Check if collection is empty
@@ -1384,8 +1384,7 @@ impl EdgeSearchCache {
         let expired = self
             .cache
             .get(&query_hash)
-            .map(|entry| entry.created_at.elapsed() > self.ttl)
-            .unwrap_or(true);
+            .map_or(true, |entry| entry.created_at.elapsed() > self.ttl);
 
         if expired {
             // Remove expired entry if it existed

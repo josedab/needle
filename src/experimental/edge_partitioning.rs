@@ -423,15 +423,14 @@ impl ClusterPartitioner {
                             .partial_cmp(&euclidean_distance(v, b))
                             .unwrap_or(std::cmp::Ordering::Equal)
                     })
-                    .map(|(i, _)| i)
-                    .unwrap_or(0)
+                    .map_or(0, |(i, _)| i)
             })
             .collect()
     }
 
     /// Update centroids based on assignments
     fn update_centroids(&mut self, vectors: &[Vec<f32>], assignments: &[usize]) {
-        let dims = vectors.first().map(|v| v.len()).unwrap_or(0);
+        let dims = vectors.first().map_or(0, |v| v.len());
 
         for (i, centroid) in self.centroids.iter_mut().enumerate() {
             let cluster_vectors: Vec<&Vec<f32>> = vectors
@@ -506,8 +505,7 @@ impl PartitionRouter for ClusterPartitioner {
                     .partial_cmp(&euclidean_distance(vector, b))
                     .unwrap_or(std::cmp::Ordering::Equal)
             })
-            .map(|(i, _)| i)
-            .unwrap_or(0);
+            .map_or(0, |(i, _)| i);
 
         PartitionId::new(best as u32)
     }
@@ -748,12 +746,12 @@ impl HierarchicalPartitioner {
         }
 
         // Split into children (binary split along highest variance dimension)
-        let split_dim = self.find_split_dimension(vectors, indices);
-        let (left_indices, right_indices) = self.split_by_dimension(vectors, indices, split_dim);
+        let split_dim = Self::find_split_dimension(vectors, indices);
+        let (left_indices, right_indices) = Self::split_by_dimension(vectors, indices, split_dim);
 
         // Calculate child centroids
-        let left_centroid = self.compute_centroid(vectors, &left_indices);
-        let right_centroid = self.compute_centroid(vectors, &right_indices);
+        let left_centroid = Self::compute_centroid(vectors, &left_indices);
+        let right_centroid = Self::compute_centroid(vectors, &right_indices);
 
         // Placeholder node
         self.nodes.push(HierarchicalNode {
@@ -774,7 +772,7 @@ impl HierarchicalPartitioner {
         node_id
     }
 
-    fn find_split_dimension(&self, vectors: &[Vec<f32>], indices: &[usize]) -> usize {
+    fn find_split_dimension(vectors: &[Vec<f32>], indices: &[usize]) -> usize {
         if indices.is_empty() {
             return 0;
         }
@@ -798,7 +796,6 @@ impl HierarchicalPartitioner {
     }
 
     fn split_by_dimension(
-        &self,
         vectors: &[Vec<f32>],
         indices: &[usize],
         dim: usize,
@@ -814,7 +811,7 @@ impl HierarchicalPartitioner {
         (sorted[..mid].to_vec(), sorted[mid..].to_vec())
     }
 
-    fn compute_centroid(&self, vectors: &[Vec<f32>], indices: &[usize]) -> Vec<f32> {
+    fn compute_centroid(vectors: &[Vec<f32>], indices: &[usize]) -> Vec<f32> {
         if indices.is_empty() {
             return Vec::new();
         }

@@ -444,8 +444,7 @@ impl LearnedTuner {
                         .partial_cmp(&b.ucb)
                         .unwrap_or(std::cmp::Ordering::Equal)
                 })
-                .map(|a| a.ef_search)
-                .unwrap_or(50);
+                .map_or(50, |a| a.ef_search);
 
             (
                 best_arm,
@@ -521,7 +520,7 @@ impl LearnedTuner {
 
         // Calculate confidence based on sample count and arm pull count
         let arms = self.arms.read();
-        let arm_pulls = arms.get(&ef_search).map(|a| a.pull_count).unwrap_or(0);
+        let arm_pulls = arms.get(&ef_search).map_or(0, |a| a.pull_count);
         let confidence = if total_pulls > 0 {
             ((arm_pulls as f64 / total_pulls as f64)
                 * (total_samples as f64 / self.config.min_samples as f64).min(1.0))
@@ -596,8 +595,7 @@ impl LearnedTuner {
                     .history
                     .read()
                     .front()
-                    .map(|f| f.timestamp)
-                    .unwrap_or(0);
+                    .map_or(0, |f| f.timestamp);
                 let newest = feedback.timestamp;
                 let duration_secs = ((newest - oldest) as f32 / 1000.0).max(1.0);
                 workload.query_rate = history_len / duration_secs;
@@ -668,8 +666,7 @@ impl LearnedTuner {
                         .partial_cmp(&b.avg_reward)
                         .unwrap_or(std::cmp::Ordering::Equal)
                 })
-                .map(|a| a.ef_search)
-                .unwrap_or(50)
+                .map_or(50, |a| a.ef_search)
         };
 
         LearnedTunerStats {

@@ -378,10 +378,10 @@ impl VectorConsumer {
 
         let messages = match self.config.source {
             MessageSource::Mock => self.poll_mock()?,
-            MessageSource::Kafka => self.poll_kafka()?,
-            MessageSource::Pulsar => self.poll_pulsar()?,
-            MessageSource::Postgres => self.poll_postgres()?,
-            MessageSource::MongoDB => self.poll_mongodb()?,
+            MessageSource::Kafka => Self::poll_kafka()?,
+            MessageSource::Pulsar => Self::poll_pulsar()?,
+            MessageSource::Postgres => Self::poll_postgres()?,
+            MessageSource::MongoDB => Self::poll_mongodb()?,
         };
 
         if messages.is_empty() {
@@ -424,28 +424,28 @@ impl VectorConsumer {
 
     /// Poll from Kafka
     #[cfg(not(feature = "cdc-kafka"))]
-    fn poll_kafka(&self) -> Result<Vec<VectorMessage>> {
+    fn poll_kafka() -> Result<Vec<VectorMessage>> {
         debug!("Kafka poll (stub - enable cdc-kafka feature for real implementation)");
         Ok(Vec::new())
     }
 
     /// Poll from Pulsar
     #[cfg(not(feature = "cdc-pulsar"))]
-    fn poll_pulsar(&self) -> Result<Vec<VectorMessage>> {
+    fn poll_pulsar() -> Result<Vec<VectorMessage>> {
         debug!("Pulsar poll (stub - enable cdc-pulsar feature for real implementation)");
         Ok(Vec::new())
     }
 
     /// Poll from PostgreSQL CDC
     #[cfg(not(feature = "cdc-postgres"))]
-    fn poll_postgres(&self) -> Result<Vec<VectorMessage>> {
+    fn poll_postgres() -> Result<Vec<VectorMessage>> {
         debug!("PostgreSQL CDC poll (stub - enable cdc-postgres feature for real implementation)");
         Ok(Vec::new())
     }
 
     /// Poll from MongoDB change streams
     #[cfg(not(feature = "cdc-mongodb"))]
-    fn poll_mongodb(&self) -> Result<Vec<VectorMessage>> {
+    fn poll_mongodb() -> Result<Vec<VectorMessage>> {
         debug!("MongoDB CDC poll (stub - enable cdc-mongodb feature for real implementation)");
         Ok(Vec::new())
     }
@@ -584,7 +584,7 @@ impl VectorConsumer {
             VectorFormat::Base64 => {
                 // Decode base64 then parse as LE
                 let decoded = base64_decode(data)?;
-                self.parse_binary_vector_bytes(&decoded, true)
+                Self::parse_binary_vector_bytes(&decoded, true)
             }
             _ => Err(NeedleError::InvalidInput(
                 "Unsupported binary format".to_string(),
@@ -592,7 +592,7 @@ impl VectorConsumer {
         }
     }
 
-    fn parse_binary_vector_bytes(&self, data: &[u8], little_endian: bool) -> Result<Vec<f32>> {
+    fn parse_binary_vector_bytes(data: &[u8], little_endian: bool) -> Result<Vec<f32>> {
         if data.len() % 4 != 0 {
             return Err(NeedleError::InvalidInput(
                 "Invalid binary vector length".to_string(),

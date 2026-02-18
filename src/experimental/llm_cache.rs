@@ -878,8 +878,7 @@ impl EnhancedLlmCache {
         let window_size = self
             .adaptive_config
             .as_ref()
-            .map(|c| c.window_size)
-            .unwrap_or(100);
+            .map_or(100, |c| c.window_size);
 
         recent.push_back(hit);
         while recent.len() > window_size {
@@ -1050,7 +1049,7 @@ impl OpenAIProxy {
         }
 
         // Create cache key from messages
-        let cache_key = self.create_cache_key(&request.messages);
+        let cache_key = Self::create_cache_key(&request.messages);
         let embedding = (self.embed_fn)(&cache_key);
 
         // Check cache
@@ -1075,7 +1074,7 @@ impl OpenAIProxy {
         Ok(response)
     }
 
-    fn create_cache_key(&self, messages: &[ChatMessage]) -> String {
+    fn create_cache_key(messages: &[ChatMessage]) -> String {
         // Use the last user message as the primary cache key
         // Include system message for context if present
         let mut key_parts = Vec::new();

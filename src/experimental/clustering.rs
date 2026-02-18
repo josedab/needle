@@ -299,8 +299,7 @@ impl KMeans {
             .enumerate()
             .map(|(i, c)| (i, distance.compute(vector, c).unwrap_or(f32::MAX)))
             .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
-            .map(|(i, _)| i)
-            .unwrap_or(0)
+            .map_or(0, |(i, _)| i)
     }
 
     fn get_rng(seed: Option<u64>) -> impl Rng {

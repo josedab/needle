@@ -634,7 +634,7 @@ impl Playground {
     pub fn get_tutorial_progress(&self, tutorial: Tutorial) -> (usize, usize) {
         let state = self.state.read();
         let current = *state.tutorial_progress.get(&tutorial).unwrap_or(&0);
-        let total = self.tutorials.get(&tutorial).map(|s| s.len()).unwrap_or(0);
+        let total = self.tutorials.get(&tutorial).map_or(0, |s| s.len());
         (current, total)
     }
 

@@ -547,11 +547,11 @@ impl<S: EdgeStorage> ChunkedEdgeStorage<S> {
         }
     }
 
-    fn chunk_key(&self, key: &str, chunk_index: usize) -> String {
+    fn chunk_key(key: &str, chunk_index: usize) -> String {
         format!("{}.__chunk_{}", key, chunk_index)
     }
 
-    fn meta_key(&self, key: &str) -> String {
+    fn meta_key(key: &str) -> String {
         format!("{}.__meta", key)
     }
 
@@ -571,7 +571,7 @@ impl<S: EdgeStorage> EdgeStorage for ChunkedEdgeStorage<S> {
         }
 
         // Check for chunked value
-        let meta_key = self.meta_key(key);
+        let meta_key = Self::meta_key(key);
         let meta_bytes = match self.inner.get(&meta_key)? {
             Some(b) => b,
             None => return Ok(None),
@@ -583,7 +583,7 @@ impl<S: EdgeStorage> EdgeStorage for ChunkedEdgeStorage<S> {
         // Read all chunks
         let mut data = Vec::with_capacity(meta.total_size);
         for i in 0..meta.chunk_count {
-            let chunk_key = self.chunk_key(key, i);
+            let chunk_key = Self::chunk_key(key, i);
             let chunk = self
                 .inner
                 .get(&chunk_key)?
@@ -615,13 +615,13 @@ impl<S: EdgeStorage> EdgeStorage for ChunkedEdgeStorage<S> {
 
         // Write chunks
         for (i, chunk) in chunks.iter().enumerate() {
-            let chunk_key = self.chunk_key(key, i);
+            let chunk_key = Self::chunk_key(key, i);
             self.inner.put(&chunk_key, chunk)?;
         }
 
         // Write metadata
         let meta_bytes = serde_json::to_vec(&meta).map_err(NeedleError::Serialization)?;
-        let meta_key = self.meta_key(key);
+        let meta_key = Self::meta_key(key);
         self.inner.put(&meta_key, &meta_bytes)?;
 
         Ok(())
@@ -634,12 +634,12 @@ impl<S: EdgeStorage> EdgeStorage for ChunkedEdgeStorage<S> {
         }
 
         // Check for chunked value
-        let meta_key = self.meta_key(key);
+        let meta_key = Self::meta_key(key);
         if let Some(meta_bytes) = self.inner.get(&meta_key)? {
             if let Ok(meta) = serde_json::from_slice::<ChunkMetadata>(&meta_bytes) {
                 // Delete all chunks
                 for i in 0..meta.chunk_count {
-                    if let Err(e) = self.inner.delete(&self.chunk_key(key, i)) {
+                    if let Err(e) = self.inner.delete(&Self::chunk_key(key, i)) {
                         tracing::debug!("Failed to delete chunk {} of key '{}': {}", i, key, e);
                     }
                 }

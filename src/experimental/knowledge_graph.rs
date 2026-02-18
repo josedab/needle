@@ -356,7 +356,7 @@ impl KnowledgeGraph {
         let mut results: Vec<GraphSearchResult> = candidates
             .iter()
             .map(|entity| {
-                let similarity = self.cosine_similarity(query, &entity.embedding);
+                let similarity = Self::cosine_similarity(query, &entity.embedding);
                 let graph_score = self.compute_graph_score(&entity.id);
                 let combined_score = self.config.similarity_weight * similarity
                     + self.config.graph_weight * graph_score;
@@ -398,7 +398,7 @@ impl KnowledgeGraph {
             .entities
             .values()
             .map(|entity| {
-                let similarity = self.cosine_similarity(query, &entity.embedding);
+                let similarity = Self::cosine_similarity(query, &entity.embedding);
                 let graph_score = if reachable.contains(&entity.id) {
                     1.0
                 } else {
@@ -574,8 +574,8 @@ impl KnowledgeGraph {
 
     /// Compute graph score based on centrality.
     fn compute_graph_score(&self, entity_id: &str) -> f32 {
-        let out_degree = self.outgoing.get(entity_id).map(|r| r.len()).unwrap_or(0);
-        let in_degree = self.incoming.get(entity_id).map(|r| r.len()).unwrap_or(0);
+        let out_degree = self.outgoing.get(entity_id).map_or(0, |r| r.len());
+        let in_degree = self.incoming.get(entity_id).map_or(0, |r| r.len());
         let total_degree = out_degree + in_degree;
 
         // Simple degree centrality normalized
@@ -584,7 +584,7 @@ impl KnowledgeGraph {
     }
 
     /// Cosine similarity.
-    fn cosine_similarity(&self, a: &[f32], b: &[f32]) -> f32 {
+    fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
         if a.len() != b.len() {
             return 0.0;
         }
@@ -827,7 +827,7 @@ impl<'a> GraphRAGRetriever<'a> {
             seen.insert(related_id.clone());
 
             // Calculate score with decay for hops
-            let similarity = self.cosine_similarity(query, &related.entity.embedding);
+            let similarity = Self::cosine_similarity(query, &related.entity.embedding);
             let hop_decay = 1.0 / (1.0 + current_hop as f32 * 0.5);
             let score = similarity * hop_decay * self.config.graph_weight;
 
@@ -910,7 +910,7 @@ impl<'a> GraphRAGRetriever<'a> {
         }
     }
 
-    fn cosine_similarity(&self, a: &[f32], b: &[f32]) -> f32 {
+    fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
         if a.len() != b.len() {
             return 0.0;
         }
@@ -994,7 +994,7 @@ impl<'a> EntityLinker<'a> {
         let mut scored: Vec<(String, f32)> = entities
             .iter()
             .map(|e| {
-                let similarity = self.cosine_similarity(query, &e.embedding);
+                let similarity = Self::cosine_similarity(query, &e.embedding);
                 (e.id.clone(), similarity)
             })
             .collect();
@@ -1004,7 +1004,7 @@ impl<'a> EntityLinker<'a> {
         scored
     }
 
-    fn cosine_similarity(&self, a: &[f32], b: &[f32]) -> f32 {
+    fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
         if a.len() != b.len() {
             return 0.0;
         }

@@ -998,7 +998,7 @@ impl AdaptiveOptimizer {
             .map(|(e, _)| e.strategy.clone());
 
         let sel = filter_selectivity.unwrap_or(stats.filter_selectivity);
-        let candidates = self.estimate_candidates_for(stats, &best.0.strategy, sel, k);
+        let candidates = Self::estimate_candidates_for(stats, &best.0.strategy, sel, k);
 
         QueryPlan {
             strategy: best.0.strategy.clone(),
@@ -1030,7 +1030,6 @@ impl AdaptiveOptimizer {
     }
 
     fn estimate_candidates_for(
-        &self,
         stats: &CollectionStatistics,
         strategy: &QueryStrategy,
         selectivity: f64,

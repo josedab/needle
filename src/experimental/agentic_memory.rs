@@ -817,7 +817,7 @@ impl AgentMemory {
                     (Some(a), Some(b)) => (a, b),
                     _ => continue,
                 };
-                let sim = self.cosine_similarity(&mem_i.embedding, &mem_j.embedding);
+                let sim = Self::cosine_similarity(&mem_i.embedding, &mem_j.embedding);
                 if sim >= similarity_threshold {
                     merge_targets.push(ids[j].clone());
                 }
@@ -917,7 +917,7 @@ impl AgentMemory {
         promoted
     }
 
-    fn cosine_similarity(&self, a: &[f32], b: &[f32]) -> f32 {
+    fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
         let dot: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
         let norm_a: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
         let norm_b: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();

@@ -454,8 +454,7 @@ impl EntityExtractor {
                 && word
                     .chars()
                     .next()
-                    .map(|c| c.is_uppercase())
-                    .unwrap_or(false)
+                    .is_some_and(|c| c.is_uppercase())
                 && !word.chars().all(|c| c.is_uppercase())
                 && i > 0
             {

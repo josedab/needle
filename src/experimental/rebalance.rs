@@ -769,8 +769,7 @@ where
                     + v.vector.len() * 4
                     + v.metadata
                         .as_ref()
-                        .map(|m| m.to_string().len())
-                        .unwrap_or(0)) as u64
+                        .map_or(0, |m| m.to_string().len())) as u64
             })
             .sum();
 

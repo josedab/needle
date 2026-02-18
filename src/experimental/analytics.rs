@@ -367,7 +367,7 @@ impl AnalyticsDashboard {
 
             // Trim old events
             let cutoff = Instant::now() - Duration::from_secs(self.config.rate_window_seconds);
-            while recent.front().map(|(t, _)| *t < cutoff).unwrap_or(false) {
+            while recent.front().is_some_and(|(t, _)| *t < cutoff) {
                 recent.pop_front();
             }
         }

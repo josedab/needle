@@ -376,7 +376,7 @@ impl SemanticGraph {
 
                         if edge.to == to {
                             // Reconstruct path
-                            return Some(self.reconstruct_path(from, to, &visited));
+                            return Some(Self::reconstruct_path(from, to, &visited));
                         }
                     }
                 }
@@ -408,7 +408,7 @@ impl SemanticGraph {
             let sim = sim.0;
 
             if current == to {
-                return Some(self.reconstruct_path_sim(from, to, &parent));
+                return Some(Self::reconstruct_path_sim(from, to, &parent));
             }
 
             if sim < best_sim.get(&current).copied().unwrap_or(0.0) {
@@ -432,7 +432,6 @@ impl SemanticGraph {
     }
 
     fn reconstruct_path(
-        &self,
         _from: &str,
         to: &str,
         visited: &HashMap<String, (String, f32)>,
@@ -467,7 +466,6 @@ impl SemanticGraph {
     }
 
     fn reconstruct_path_sim(
-        &self,
         from: &str,
         to: &str,
         parent: &HashMap<String, (String, f32)>,

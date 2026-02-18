@@ -678,8 +678,7 @@ impl GpuAccelerator {
                         .enumerate()
                         .map(|(i, c)| (i, euclidean_distance_simd(v, c)))
                         .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
-                        .map(|(i, _)| i)
-                        .unwrap_or(0)
+                        .map_or(0, |(i, _)| i)
                 })
                 .collect()
         } else {
@@ -691,13 +690,12 @@ impl GpuAccelerator {
                         .enumerate()
                         .map(|(i, c)| (i, euclidean_distance_simd(v, c)))
                         .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
-                        .map(|(i, _)| i)
-                        .unwrap_or(0)
+                        .map_or(0, |(i, _)| i)
                 })
                 .collect()
         };
 
-        let dim = vectors.first().map(|v| v.len()).unwrap_or(0);
+        let dim = vectors.first().map_or(0, |v| v.len());
         let total_ops = vectors.len().saturating_mul(centroids.len()).saturating_mul(dim);
         self.update_metrics(
             KernelType::KMeansAssign,
@@ -1474,7 +1472,7 @@ impl TransparentFallbackManager {
         }
 
         // CPU fallback
-        let results = self.cpu_search(query, vectors, k, distance);
+        let results = Self::cpu_search(query, vectors, k, distance);
         FallbackSearchResult {
             results,
             backend_used: ExecutionBackend::CpuSimd,
@@ -1507,7 +1505,6 @@ impl TransparentFallbackManager {
     }
 
     fn cpu_search(
-        &self,
         query: &[f32],
         vectors: &[Vec<f32>],
         k: usize,
