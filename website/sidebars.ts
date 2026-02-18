@@ -33,12 +33,15 @@ const sidebars: SidebarsConfig = {
       items: [
         'guides/semantic-search',
         'guides/rag',
+        'guides/rag-quickstart',
         'guides/hybrid-search',
         'guides/quantization',
         'guides/production',
         'guides/index-selection',
         'guides/docker-quickstart',
         'guides/production-checklist',
+        'guides/wasm',
+        'guides/mcp-integration',
       ],
     },
     {
