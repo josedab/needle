@@ -115,6 +115,67 @@ impl SemanticQueryCacheConfig {
     }
 }
 
+/// Policy to apply when a near-duplicate vector is detected on insert.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DedupPolicy {
+    /// Reject the insert entirely.
+    Reject,
+    /// Keep the existing vector but merge metadata from the new insert.
+    MergeMetadata,
+    /// Store the new vector as a versioned variant (appends "-vN" to ID).
+    Version,
+}
+
+impl Default for DedupPolicy {
+    fn default() -> Self {
+        Self::Reject
+    }
+}
+
+/// Configuration for semantic deduplication on insert.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SemanticDedupConfig {
+    /// Enable semantic deduplication.
+    pub enabled: bool,
+    /// Distance threshold below which vectors are considered duplicates.
+    /// Uses cosine distance by default (0.0 = identical).
+    pub distance_threshold: f32,
+    /// Policy to apply when a duplicate is detected.
+    pub policy: DedupPolicy,
+}
+
+impl Default for SemanticDedupConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            distance_threshold: 0.02,
+            policy: DedupPolicy::Reject,
+        }
+    }
+}
+
+impl SemanticDedupConfig {
+    /// Strict preset: threshold=0.01, rejects near-duplicates.
+    pub fn strict() -> Self {
+        Self { enabled: true, distance_threshold: 0.01, policy: DedupPolicy::Reject }
+    }
+
+    /// Moderate preset: threshold=0.05, rejects near-duplicates.
+    pub fn moderate() -> Self {
+        Self { enabled: true, distance_threshold: 0.05, policy: DedupPolicy::Reject }
+    }
+
+    /// Relaxed preset: threshold=0.1, rejects near-duplicates.
+    pub fn relaxed() -> Self {
+        Self { enabled: true, distance_threshold: 0.1, policy: DedupPolicy::Reject }
+    }
+
+    /// Create config with specified threshold and policy.
+    pub fn new(threshold: f32, policy: DedupPolicy) -> Self {
+        Self { enabled: true, distance_threshold: threshold, policy }
+    }
+}
+
 impl QueryCacheStats {
     /// Returns the cache hit ratio (0.0 to 1.0)
     pub fn hit_ratio(&self) -> f64 {
@@ -210,6 +271,9 @@ pub struct CollectionConfig {
     /// Semantic query cache configuration (similarity-based cache lookups)
     #[serde(default)]
     pub semantic_cache: Option<SemanticQueryCacheConfig>,
+    /// Semantic deduplication configuration
+    #[serde(default)]
+    pub dedup: Option<SemanticDedupConfig>,
 }
 
 fn default_lazy_expiration() -> bool {
@@ -271,6 +335,7 @@ impl CollectionConfig {
             default_ttl_seconds: None,
             lazy_expiration: true,
             semantic_cache: None,
+            dedup: None,
         }
     }
 
@@ -435,6 +500,13 @@ impl CollectionConfig {
     #[must_use]
     pub fn with_semantic_cache(mut self, config: SemanticQueryCacheConfig) -> Self {
         self.semantic_cache = Some(config);
+        self
+    }
+
+    /// Set semantic deduplication configuration
+    #[must_use]
+    pub fn with_dedup(mut self, dedup: SemanticDedupConfig) -> Self {
+        self.dedup = Some(dedup);
         self
     }
 }
