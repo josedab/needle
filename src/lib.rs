@@ -69,6 +69,7 @@
 //! ```
 
 #![warn(missing_docs)]
+#![deny(unsafe_code)]
 
 // ── Core ──────────────────────────────────────────────────────────────────────
 // Fundamental types: database, collections, vectors, errors, storage, metadata.

@@ -1,3 +1,4 @@
+#![allow(unsafe_code)] // GPU backend FFI requires unsafe
 //! ⚠️ **Experimental**: This module is under active development. APIs may change without notice.
 //!
 //! GPU Acceleration for Vector Operations

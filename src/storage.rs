@@ -1,5 +1,4 @@
-// Allow dead_code for this internal storage module - some methods used only in specific features
-#![allow(dead_code)]
+#![allow(unsafe_code)] // Memory-mapped I/O (memmap2) requires unsafe
 
 //! Storage Layer - File I/O and Memory-Mapped Storage
 //!

@@ -1,3 +1,4 @@
+#![allow(unsafe_code)] // SIMD intrinsics (AVX2, NEON) require unsafe
 //! Distance Functions for Vector Similarity
 //!
 //! This module provides various distance and similarity metrics for comparing vectors,
