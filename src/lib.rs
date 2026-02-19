@@ -418,6 +418,9 @@ pub use experimental::ipc_protocol;
 /// Event-driven triggers for vector operations. **Experimental**: API may change without notice.
 #[cfg(feature = "experimental")]
 pub use experimental::triggers;
+/// Closed-loop relevance feedback for search quality improvement. **Experimental**: API may change without notice.
+#[cfg(feature = "experimental")]
+pub use experimental::relevance_feedback;
 
 // ── Streaming (feature-gated) ────────────────────────────────────────────────
 

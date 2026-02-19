@@ -70,3 +70,5 @@ pub mod ipc_protocol;
 pub mod wasm_plugin_runtime;
 #[cfg(feature = "experimental")]
 pub mod triggers;
+#[cfg(feature = "experimental")]
+pub mod relevance_feedback;
