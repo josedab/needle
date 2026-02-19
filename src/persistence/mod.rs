@@ -18,3 +18,7 @@ pub mod replica_manager;
 pub mod wal;
 /// Incremental backup with WAL-based point-in-time recovery (PITR).
 pub mod incremental_backup;
+/// Compact binary delta format for pull-based index replication.
+pub mod delta_sync;
+/// Vector lifecycle policies: TTL, archival, and retention windows.
+pub mod lifecycle;
