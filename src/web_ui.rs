@@ -526,6 +526,7 @@ fn base_layout(title: &str, content: &str, active_page: &str) -> String {
                 <li><a href="/collections" class="{collections_active}">Collections</a></li>
                 <li><a href="/query" class="{query_active}">Query</a></li>
                 <li><a href="/monitoring" class="{monitoring_active}">Monitoring</a></li>
+                <li><a href="/playground" class="{playground_active}">Playground</a></li>
             </ul>
         </div>
     </nav>
@@ -556,6 +557,11 @@ fn base_layout(title: &str, content: &str, active_page: &str) -> String {
         },
         query_active = if active_page == "query" { "active" } else { "" },
         monitoring_active = if active_page == "monitoring" {
+            "active"
+        } else {
+            ""
+        },
+        playground_active = if active_page == "playground" {
             "active"
         } else {
             ""
@@ -1187,6 +1193,165 @@ curl -X POST http://localhost:8080/collections/YOUR_COLLECTION/search \
     Html(base_layout("Query Playground", &content, "query"))
 }
 
+/// GET /playground - NeedleQL interactive playground with code editor
+async fn needleql_playground_handler(
+    State(state): State<Arc<WebUiState>>,
+) -> Html<String> {
+    let db = state.db.read().await;
+    let collections = db.list_collections();
+
+    let collection_list: String = collections
+        .iter()
+        .map(|name| format!(r#""{name}""#))
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    let example_queries = r#"
+-- Example NeedleQL Queries:
+
+-- Search for similar vectors
+SELECT * FROM documents
+  WHERE vector SIMILAR TO [0.1, 0.2, 0.3]
+  LIMIT 10;
+
+-- Count vectors in a collection
+SELECT COUNT(*) FROM documents;
+
+-- Search with metadata filter
+SELECT id, distance FROM documents
+  WHERE vector SIMILAR TO [0.1, 0.2, 0.3]
+  AND category = 'science'
+  LIMIT 5;
+"#;
+
+    let content = format!(
+        r#"
+        <div class="page-header">
+            <h1 class="page-title">NeedleQL Playground</h1>
+            <p class="page-description">Interactive query editor for vector search</p>
+        </div>
+
+        <div class="card" style="margin-bottom: 1rem;">
+            <div class="card-header" style="display: flex; justify-content: space-between; align-items: center;">
+                <h2 class="card-title">Query Editor</h2>
+                <div>
+                    <button onclick="runQuery()" class="btn btn-primary" style="margin-right: 0.5rem;">
+                        ▶ Run Query
+                    </button>
+                    <button onclick="clearEditor()" class="btn" style="background: var(--surface); border: 1px solid var(--border);">
+                        Clear
+                    </button>
+                </div>
+            </div>
+            <div style="position: relative;">
+                <textarea
+                    id="query-editor"
+                    style="width: 100%; min-height: 200px; font-family: 'Menlo', 'Monaco', 'Courier New', monospace;
+                           font-size: 14px; line-height: 1.6; padding: 1rem; border: 1px solid var(--border);
+                           border-radius: 8px; background: var(--surface); color: var(--text-primary);
+                           resize: vertical; tab-size: 2;"
+                    spellcheck="false"
+                    placeholder="Enter your NeedleQL query here..."
+                >{example_queries}</textarea>
+            </div>
+            <div style="margin-top: 0.5rem; display: flex; gap: 0.5rem; flex-wrap: wrap;">
+                <small style="color: var(--text-secondary);">
+                    Collections: [{collection_list}]
+                </small>
+            </div>
+        </div>
+
+        <div class="grid grid-2">
+            <div class="card">
+                <div class="card-header" style="display: flex; justify-content: space-between; align-items: center;">
+                    <h2 class="card-title">Results</h2>
+                    <div>
+                        <button onclick="showView('table')" class="btn" style="font-size: 12px; padding: 4px 8px;">Table</button>
+                        <button onclick="showView('json')" class="btn" style="font-size: 12px; padding: 4px 8px;">JSON</button>
+                    </div>
+                </div>
+                <div id="results-table" style="overflow-x: auto;">
+                    <p style="color: var(--text-secondary); text-align: center; padding: 2rem;">
+                        Run a query to see results here.
+                    </p>
+                </div>
+                <pre id="results-json" style="display: none; overflow: auto; max-height: 400px;
+                     padding: 1rem; background: var(--surface); border-radius: 8px; font-size: 13px;"></pre>
+            </div>
+
+            <div class="card">
+                <div class="card-header">
+                    <h2 class="card-title">Query History</h2>
+                </div>
+                <div id="query-history" style="max-height: 300px; overflow-y: auto;">
+                    <p style="color: var(--text-secondary); text-align: center; padding: 1rem; font-size: 14px;">
+                        No queries yet.
+                    </p>
+                </div>
+            </div>
+        </div>
+
+        <script>
+        const queryHistory = JSON.parse(localStorage.getItem('needle_query_history') || '[]');
+        renderHistory();
+
+        function runQuery() {{
+            const editor = document.getElementById('query-editor');
+            const query = editor.value.trim();
+            if (!query) return;
+
+            // Save to history
+            queryHistory.unshift({{ query: query, time: new Date().toISOString() }});
+            if (queryHistory.length > 50) queryHistory.pop();
+            localStorage.setItem('needle_query_history', JSON.stringify(queryHistory));
+            renderHistory();
+
+            // Display query as result (actual execution would need backend endpoint)
+            const resultsTable = document.getElementById('results-table');
+            resultsTable.innerHTML = '<div style="padding: 1rem;"><p><strong>Query submitted:</strong></p><pre style="background: var(--surface); padding: 0.5rem; border-radius: 4px; font-size: 13px;">' +
+                query.replace(/</g, '&lt;') + '</pre><p style="color: var(--text-secondary); margin-top: 0.5rem;">Connect to a running Needle server to execute queries.</p></div>';
+
+            const resultsJson = document.getElementById('results-json');
+            resultsJson.textContent = JSON.stringify({{ query: query, status: "submitted" }}, null, 2);
+        }}
+
+        function clearEditor() {{
+            document.getElementById('query-editor').value = '';
+        }}
+
+        function showView(view) {{
+            document.getElementById('results-table').style.display = view === 'table' ? 'block' : 'none';
+            document.getElementById('results-json').style.display = view === 'json' ? 'block' : 'none';
+        }}
+
+        function renderHistory() {{
+            const container = document.getElementById('query-history');
+            if (queryHistory.length === 0) return;
+            container.innerHTML = queryHistory.map((h, i) =>
+                '<div style="padding: 0.5rem; border-bottom: 1px solid var(--border); cursor: pointer;" ' +
+                'onclick="document.getElementById(\'query-editor\').value = queryHistory[' + i + '].query">' +
+                '<small style="color: var(--text-secondary);">' + new Date(h.time).toLocaleTimeString() + '</small>' +
+                '<pre style="margin: 0.25rem 0 0; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">' +
+                h.query.replace(/</g, '&lt;').substring(0, 80) + '</pre></div>'
+            ).join('');
+        }}
+
+        // Keyboard shortcut: Ctrl/Cmd+Enter to run
+        document.getElementById('query-editor').addEventListener('keydown', function(e) {{
+            if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {{
+                e.preventDefault();
+                runQuery();
+            }}
+        }});
+        </script>
+        "#,
+        example_queries = example_queries.replace('<', "&lt;"),
+        collection_list = collection_list,
+    );
+
+    Html(base_layout("NeedleQL Playground", &content, "playground"))
+}
+
 /// GET /monitoring - Metrics dashboard
 async fn monitoring_handler(State(state): State<Arc<WebUiState>>) -> Html<String> {
     let db = state.db.read().await;
@@ -1394,6 +1559,7 @@ pub fn create_web_ui_router(state: Arc<WebUiState>) -> Router {
         .route("/collections", get(collections_list_handler))
         .route("/collections/{name}", get(collection_detail_handler))
         .route("/query", get(query_playground_handler))
+        .route("/playground", get(needleql_playground_handler))
         .route("/monitoring", get(monitoring_handler))
         // API endpoints
         .route("/api/stats", get(api_stats_handler))
