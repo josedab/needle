@@ -41,6 +41,7 @@ use std::time::Instant;
 
 static METRICS: OnceLock<NeedleMetrics> = OnceLock::new();
 static HTTP_METRICS: OnceLock<HttpMetrics> = OnceLock::new();
+static INGESTION_METRICS: OnceLock<IngestionMetrics> = OnceLock::new();
 
 /// Get or initialize the global metrics instance.
 /// Falls back to a no-op metrics instance if Prometheus registration fails.
@@ -60,6 +61,17 @@ pub fn http_metrics() -> &'static HttpMetrics {
         HttpMetrics::try_new().unwrap_or_else(|e| {
             tracing::warn!("Failed to initialize HTTP metrics, using no-op fallback: {e}");
             HttpMetrics::noop()
+        })
+    })
+}
+
+/// Get or initialize the ingestion metrics instance.
+/// Falls back to a no-op metrics instance if Prometheus registration fails.
+pub fn ingestion_metrics() -> &'static IngestionMetrics {
+    INGESTION_METRICS.get_or_init(|| {
+        IngestionMetrics::try_new().unwrap_or_else(|e| {
+            tracing::warn!("Failed to initialize ingestion metrics, using no-op fallback: {e}");
+            IngestionMetrics::noop()
         })
     })
 }
@@ -131,6 +143,123 @@ impl HttpMetrics {
             status: None,
             metrics: self,
         }
+    }
+}
+
+/// Streaming ingestion metrics for pipeline monitoring
+pub struct IngestionMetrics {
+    /// Total vectors ingested by source and collection
+    pub vectors_total: CounterVec,
+    /// Total bytes ingested by source and collection
+    pub bytes_total: CounterVec,
+    /// Total batches processed by source
+    pub batches_total: CounterVec,
+    /// Total backpressure events by source
+    pub backpressure_total: CounterVec,
+    /// Total ingestion errors by source
+    pub errors_total: CounterVec,
+}
+
+impl IngestionMetrics {
+    fn try_new() -> std::result::Result<Self, prometheus::Error> {
+        let vectors_total = register_counter_vec!(
+            "needle_ingestion_vectors_total",
+            "Total number of vectors ingested",
+            &["source", "collection"]
+        )?;
+
+        let bytes_total = register_counter_vec!(
+            "needle_ingestion_bytes_total",
+            "Total bytes ingested",
+            &["source", "collection"]
+        )?;
+
+        let batches_total = register_counter_vec!(
+            "needle_ingestion_batches_total",
+            "Total number of batches processed",
+            &["source"]
+        )?;
+
+        let backpressure_total = register_counter_vec!(
+            "needle_ingestion_backpressure_total",
+            "Total backpressure events",
+            &["source"]
+        )?;
+
+        let errors_total = register_counter_vec!(
+            "needle_ingestion_errors_total",
+            "Total ingestion errors",
+            &["source"]
+        )?;
+
+        Ok(Self {
+            vectors_total,
+            bytes_total,
+            batches_total,
+            backpressure_total,
+            errors_total,
+        })
+    }
+
+    /// Create a no-op fallback instance using unregistered metrics.
+    fn noop() -> Self {
+        Self {
+            vectors_total: CounterVec::new(
+                prometheus::opts!("needle_ingestion_vectors_noop", "noop"),
+                &["source", "collection"],
+            ).expect("noop ingestion vectors_total metric has valid static config"),
+            bytes_total: CounterVec::new(
+                prometheus::opts!("needle_ingestion_bytes_noop", "noop"),
+                &["source", "collection"],
+            ).expect("noop ingestion bytes_total metric has valid static config"),
+            batches_total: CounterVec::new(
+                prometheus::opts!("needle_ingestion_batches_noop", "noop"),
+                &["source"],
+            ).expect("noop ingestion batches_total metric has valid static config"),
+            backpressure_total: CounterVec::new(
+                prometheus::opts!("needle_ingestion_backpressure_noop", "noop"),
+                &["source"],
+            ).expect("noop ingestion backpressure_total metric has valid static config"),
+            errors_total: CounterVec::new(
+                prometheus::opts!("needle_ingestion_errors_noop", "noop"),
+                &["source"],
+            ).expect("noop ingestion errors_total metric has valid static config"),
+        }
+    }
+
+    /// Record vectors ingested
+    pub fn record_vectors(&self, source: &str, collection: &str, count: u64) {
+        self.vectors_total
+            .with_label_values(&[source, collection])
+            .inc_by(count as f64);
+    }
+
+    /// Record bytes ingested
+    pub fn record_bytes(&self, source: &str, collection: &str, bytes: u64) {
+        self.bytes_total
+            .with_label_values(&[source, collection])
+            .inc_by(bytes as f64);
+    }
+
+    /// Record a batch processed
+    pub fn record_batch(&self, source: &str) {
+        self.batches_total
+            .with_label_values(&[source])
+            .inc();
+    }
+
+    /// Record a backpressure event
+    pub fn record_backpressure(&self, source: &str) {
+        self.backpressure_total
+            .with_label_values(&[source])
+            .inc();
+    }
+
+    /// Record an ingestion error
+    pub fn record_error(&self, source: &str) {
+        self.errors_total
+            .with_label_values(&[source])
+            .inc();
     }
 }
 
