@@ -372,6 +372,128 @@ impl ChangeEventLog {
     }
 }
 
+/// Filter for CDC events by type and/or collection.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct CdcEventFilter {
+    /// Only include events for these collections (empty = all).
+    pub collections: Vec<String>,
+    /// Only include these change types (empty = all).
+    pub change_types: Vec<ChangeType>,
+    /// Only include events after this LSN.
+    pub since_lsn: Option<Lsn>,
+}
+
+impl CdcEventFilter {
+    /// Create a filter for a specific collection.
+    pub fn collection(name: impl Into<String>) -> Self {
+        Self {
+            collections: vec![name.into()],
+            ..Default::default()
+        }
+    }
+
+    /// Add a change type filter.
+    #[must_use]
+    pub fn with_change_type(mut self, ct: ChangeType) -> Self {
+        self.change_types.push(ct);
+        self
+    }
+
+    /// Set the since LSN.
+    #[must_use]
+    pub fn since(mut self, lsn: Lsn) -> Self {
+        self.since_lsn = Some(lsn);
+        self
+    }
+
+    /// Check if an event matches this filter.
+    pub fn matches(&self, event: &VectorChangeEvent) -> bool {
+        if !self.collections.is_empty() && !self.collections.contains(&event.collection) {
+            return false;
+        }
+        if !self.change_types.is_empty() && !self.change_types.contains(&event.change_type) {
+            return false;
+        }
+        if let Some(since) = self.since_lsn {
+            if event.lsn <= since {
+                return false;
+            }
+        }
+        true
+    }
+}
+
+impl ChangeEventLog {
+    /// Get events matching a filter.
+    pub fn query(&self, filter: &CdcEventFilter) -> Vec<VectorChangeEvent> {
+        let events = self.events.read();
+        events.iter().filter(|e| filter.matches(e)).cloned().collect()
+    }
+}
+
+/// Consumer SDK for managing CDC subscriptions with at-least-once delivery.
+pub struct CdcConsumer {
+    subscriber_id: String,
+    filter: CdcEventFilter,
+    cursor: AtomicU64,
+    batch_size: usize,
+}
+
+impl CdcConsumer {
+    /// Create a new consumer.
+    pub fn new(subscriber_id: impl Into<String>) -> Self {
+        Self {
+            subscriber_id: subscriber_id.into(),
+            filter: CdcEventFilter::default(),
+            cursor: AtomicU64::new(0),
+            batch_size: 100,
+        }
+    }
+
+    /// Set the event filter.
+    #[must_use]
+    pub fn with_filter(mut self, filter: CdcEventFilter) -> Self {
+        self.filter = filter;
+        self
+    }
+
+    /// Set the batch size for polling.
+    #[must_use]
+    pub fn with_batch_size(mut self, size: usize) -> Self {
+        self.batch_size = size;
+        self
+    }
+
+    /// Resume from a specific LSN.
+    pub fn resume_from(&self, lsn: Lsn) {
+        self.cursor.store(lsn, Ordering::SeqCst);
+    }
+
+    /// Poll for the next batch of events.
+    pub fn poll(&self, log: &ChangeEventLog) -> Vec<VectorChangeEvent> {
+        let current = self.cursor.load(Ordering::SeqCst);
+        let mut filter = self.filter.clone();
+        filter.since_lsn = Some(current);
+
+        let events: Vec<_> = log.query(&filter).into_iter().take(self.batch_size).collect();
+
+        if let Some(last) = events.last() {
+            self.cursor.store(last.lsn, Ordering::SeqCst);
+        }
+        events
+    }
+
+    /// Acknowledge processing up to a specific LSN.
+    pub fn acknowledge(&self, log: &ChangeEventLog, lsn: Lsn) {
+        log.acknowledge(&self.subscriber_id, lsn);
+    }
+
+    /// Get the current cursor position.
+    pub fn cursor(&self) -> Lsn {
+        self.cursor.load(Ordering::SeqCst)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -600,5 +722,52 @@ mod tests {
         assert_eq!(update.change_type, ChangeType::Update);
         assert!(update.before.is_some());
         assert!(update.after.is_some());
+    }
+
+    #[test]
+    fn test_cdc_event_filter() {
+        let filter = CdcEventFilter::collection("col_a")
+            .with_change_type(ChangeType::Insert);
+
+        let insert_a = VectorChangeEvent::insert("col_a", "v1", vec![1.0], None, 1);
+        let delete_a = VectorChangeEvent::delete("col_a", "v2", None, None, 2);
+        let insert_b = VectorChangeEvent::insert("col_b", "v3", vec![1.0], None, 3);
+
+        assert!(filter.matches(&insert_a));
+        assert!(!filter.matches(&delete_a));
+        assert!(!filter.matches(&insert_b));
+    }
+
+    #[test]
+    fn test_cdc_consumer_poll() {
+        let log = ChangeEventLog::new(CdcConfig::default());
+        for i in 0..5 {
+            let lsn = log.next_lsn();
+            log.append(VectorChangeEvent::insert("col", format!("v{i}"), vec![i as f32], None, lsn));
+        }
+
+        let consumer = CdcConsumer::new("test_consumer")
+            .with_batch_size(3);
+
+        let batch1 = consumer.poll(&log);
+        assert_eq!(batch1.len(), 3);
+
+        let batch2 = consumer.poll(&log);
+        assert_eq!(batch2.len(), 2);
+    }
+
+    #[test]
+    fn test_change_event_log_query() {
+        let log = ChangeEventLog::new(CdcConfig::default());
+        let lsn1 = log.next_lsn();
+        log.append(VectorChangeEvent::insert("col_a", "v1", vec![1.0], None, lsn1));
+        let lsn2 = log.next_lsn();
+        log.append(VectorChangeEvent::delete("col_a", "v2", None, None, lsn2));
+        let lsn3 = log.next_lsn();
+        log.append(VectorChangeEvent::insert("col_b", "v3", vec![1.0], None, lsn3));
+
+        let filter = CdcEventFilter::collection("col_a");
+        let results = log.query(&filter);
+        assert_eq!(results.len(), 2);
     }
 }
