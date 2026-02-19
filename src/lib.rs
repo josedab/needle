@@ -424,6 +424,9 @@ pub use experimental::relevance_feedback;
 /// Locality-aware index compaction with k-means clustering. **Experimental**: API may change without notice.
 #[cfg(feature = "experimental")]
 pub use experimental::locality_compaction;
+/// Temporal vector sequences with trajectory search and drift detection. **Experimental**: API may change without notice.
+#[cfg(feature = "experimental")]
+pub use experimental::temporal_sequences;
 
 // ── Streaming (feature-gated) ────────────────────────────────────────────────
 

@@ -74,3 +74,5 @@ pub mod triggers;
 pub mod relevance_feedback;
 #[cfg(feature = "experimental")]
 pub mod locality_compaction;
+#[cfg(feature = "experimental")]
+pub mod temporal_sequences;
