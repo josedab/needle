@@ -130,9 +130,9 @@ pub use search::{
 /// Storage and persistence: WAL, backups, migrations, sharding, and cloud storage.
 pub mod persistence;
 pub use persistence::{
-    backup, cloud_storage, cow_storage, incremental_backup, managed_backup, migrations,
-    replica_manager, schema_evolution, shard, snapshot_replication, sync_protocol, tiered,
-    time_travel, transaction, vector_versioning, versioning, wal,
+    backup, cloud_storage, cow_storage, delta_sync, incremental_backup, lifecycle,
+    managed_backup, migrations, replica_manager, schema_evolution, shard, snapshot_replication,
+    sync_protocol, tiered, time_travel, transaction, vector_versioning, versioning, wal,
 };
 
 // ── Embeddings & ML ──────────────────────────────────────────────────────────
@@ -477,8 +477,9 @@ uniffi::setup_scaffolding!();
 // These types form the core stable API surface. Breaking changes follow semver.
 pub use collection::{
     BundleManifest, Collection, CollectionConfig, CollectionIter, CollectionStats,
+    DedupGroup, DedupInsertResult, DedupPolicy, DedupScanResult,
     EvaluationReport, GroundTruthEntry, QueryCacheConfig, QueryCacheStats, QueryMetrics,
-    SearchExplain, SearchResult, SemanticQueryCacheConfig,
+    SearchExplain, SearchResult, SemanticDedupConfig, SemanticQueryCacheConfig,
 };
 pub use database::collection_ref::SearchParams;
 pub use database::{CollectionRef, Database, DatabaseConfig, ExportEntry};
