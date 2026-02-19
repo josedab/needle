@@ -841,6 +841,69 @@ mod tests {
         assert_eq!(selection.recommended, RecommendedIndex::Hnsw); // Small dataset
         assert!(!selection.reasoning.is_empty());
     }
+
+    #[test]
+    fn test_adaptive_index_manager_cooldown() {
+        let mgr =
+            AdaptiveIndexManager::new(0.95, 10.0, 1_000_000_000).with_cooldown_secs(3600);
+        // No observations yet → no migration
+        assert!(mgr.evaluate().is_none());
+        assert_eq!(mgr.current_index(), RecommendedIndex::Hnsw);
+    }
+
+    #[test]
+    fn test_adaptive_index_manager_record_profile() {
+        let mgr = AdaptiveIndexManager::new(0.95, 10.0, 1_000_000_000);
+        let profile = WorkloadProfile {
+            qps: 100.0,
+            insert_rate: 50.0,
+            vector_count: 10_000,
+            dimensions: 384,
+            ..Default::default()
+        };
+        mgr.record_profile(profile);
+        assert_eq!(mgr.profile_history().len(), 1);
+    }
+
+    #[test]
+    fn test_adaptive_index_manager_migration_record() {
+        let mgr = AdaptiveIndexManager::new(0.95, 10.0, 1_000_000_000);
+        mgr.record_migration(RecommendedIndex::Ivf);
+        assert_eq!(mgr.current_index(), RecommendedIndex::Ivf);
+    }
+
+    #[test]
+    fn test_cost_model_hnsw_faster_than_brute_force() {
+        let hnsw_cost = AdaptiveIndexManager::estimate_query_cost(
+            RecommendedIndex::Hnsw, 100_000, 384,
+        );
+        // HNSW should be sublinear
+        assert!(hnsw_cost < 100_000.0 * 384.0 * 0.0001);
+    }
+
+    #[test]
+    fn test_cost_model_memory_ordering() {
+        let hnsw_mem = AdaptiveIndexManager::estimate_memory(
+            RecommendedIndex::Hnsw, 100_000, 384,
+        );
+        let ivf_mem = AdaptiveIndexManager::estimate_memory(
+            RecommendedIndex::Ivf, 100_000, 384,
+        );
+        let diskann_mem = AdaptiveIndexManager::estimate_memory(
+            RecommendedIndex::DiskAnn, 100_000, 384,
+        );
+        // HNSW uses most memory, DiskANN least
+        assert!(hnsw_mem > ivf_mem);
+        assert!(ivf_mem > diskann_mem);
+    }
+
+    #[test]
+    fn test_cost_model_build_time() {
+        let build_time = AdaptiveIndexManager::estimate_build_cost(
+            RecommendedIndex::Hnsw, 100_000, 384,
+        );
+        assert!(build_time > 0.0);
+    }
 }
 
 // ============ Data Profiling and ML-Based Selection ============
@@ -1383,6 +1446,240 @@ pub struct AdaptiveRecommendation {
     pub suggested_config: Option<HnswConfig>,
     pub should_migrate: bool,
     pub confidence: f64,
+}
+
+// ---------------------------------------------------------------------------
+// Workload Profile & Adaptive Index Manager
+// ---------------------------------------------------------------------------
+
+/// Runtime workload profile used for index selection decisions.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkloadProfile {
+    /// Queries per second over the observation window.
+    pub qps: f64,
+    /// Insert rate (vectors/sec) over the observation window.
+    pub insert_rate: f64,
+    /// Average query latency in milliseconds.
+    pub avg_latency_ms: f64,
+    /// P99 query latency in milliseconds.
+    pub p99_latency_ms: f64,
+    /// Measured recall estimate (0.0-1.0).
+    pub measured_recall: f64,
+    /// Current vector count.
+    pub vector_count: usize,
+    /// Vector dimensionality.
+    pub dimensions: usize,
+    /// Memory usage in bytes.
+    pub memory_bytes: u64,
+    /// Fraction of queries using metadata filters (0.0-1.0).
+    pub filter_ratio: f64,
+    /// Timestamp of this profile snapshot.
+    pub timestamp_secs: u64,
+}
+
+impl Default for WorkloadProfile {
+    fn default() -> Self {
+        Self {
+            qps: 0.0,
+            insert_rate: 0.0,
+            avg_latency_ms: 0.0,
+            p99_latency_ms: 0.0,
+            measured_recall: 0.95,
+            vector_count: 0,
+            dimensions: 128,
+            memory_bytes: 0,
+            filter_ratio: 0.0,
+            timestamp_secs: 0,
+        }
+    }
+}
+
+/// Manages adaptive index selection with cooldown and hysteresis to prevent thrashing.
+pub struct AdaptiveIndexManager {
+    /// The adaptive tuner for recommendations.
+    tuner: AdaptiveTuner,
+    /// Current active index type.
+    current_index: parking_lot::RwLock<RecommendedIndex>,
+    /// Timestamp of last migration (for cooldown).
+    last_migration_secs: std::sync::atomic::AtomicU64,
+    /// Minimum cooldown between migrations in seconds (default: 3600 = 1 hour).
+    cooldown_secs: u64,
+    /// Hysteresis threshold: new index score must exceed current by this margin.
+    hysteresis_threshold: f64,
+    /// Migration manager for tracking migration state.
+    migration_manager: OnlineMigrationManager,
+    /// History of workload profiles.
+    profile_history: parking_lot::RwLock<Vec<WorkloadProfile>>,
+    /// Maximum profiles to retain.
+    max_history: usize,
+}
+
+impl AdaptiveIndexManager {
+    /// Create a new adaptive index manager.
+    pub fn new(target_recall: f64, target_latency_ms: f64, memory_budget: u64) -> Self {
+        Self {
+            tuner: AdaptiveTuner::new(target_recall, target_latency_ms, memory_budget),
+            current_index: parking_lot::RwLock::new(RecommendedIndex::Hnsw),
+            last_migration_secs: std::sync::atomic::AtomicU64::new(0),
+            cooldown_secs: 3600,
+            hysteresis_threshold: 0.15,
+            migration_manager: OnlineMigrationManager::new(target_recall),
+            profile_history: parking_lot::RwLock::new(Vec::new()),
+            max_history: 1000,
+        }
+    }
+
+    /// Set the cooldown period between migrations.
+    #[must_use]
+    pub fn with_cooldown_secs(mut self, secs: u64) -> Self {
+        self.cooldown_secs = secs;
+        self
+    }
+
+    /// Set the hysteresis threshold.
+    #[must_use]
+    pub fn with_hysteresis(mut self, threshold: f64) -> Self {
+        self.hysteresis_threshold = threshold;
+        self
+    }
+
+    /// Record a workload observation and profile snapshot.
+    pub fn record_profile(&self, profile: WorkloadProfile) {
+        let obs = WorkloadObservation {
+            vector_count: profile.vector_count,
+            dimensions: profile.dimensions,
+            qps: profile.qps,
+            insert_rate: profile.insert_rate,
+            avg_latency_ms: profile.avg_latency_ms,
+            measured_recall: profile.measured_recall,
+            memory_bytes: profile.memory_bytes,
+            current_index: *self.current_index.read(),
+            current_config: None,
+        };
+        self.tuner.observe(obs);
+
+        let mut history = self.profile_history.write();
+        history.push(profile);
+        if history.len() > self.max_history {
+            history.remove(0);
+        }
+    }
+
+    /// Evaluate whether an index migration should be triggered.
+    /// Returns `Some((from, to))` if migration is recommended and cooldown has elapsed.
+    pub fn evaluate(&self) -> Option<(RecommendedIndex, RecommendedIndex)> {
+        let rec = self.tuner.recommend();
+
+        let current = *self.current_index.read();
+        if rec.recommended == current {
+            return None;
+        }
+
+        // Check cooldown
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let last = self
+            .last_migration_secs
+            .load(std::sync::atomic::Ordering::Relaxed);
+        if now.saturating_sub(last) < self.cooldown_secs {
+            return None;
+        }
+
+        // Check hysteresis: new index must score significantly higher
+        if !rec.should_migrate || rec.confidence < self.hysteresis_threshold {
+            return None;
+        }
+
+        Some((current, rec.recommended))
+    }
+
+    /// Record that a migration was completed.
+    pub fn record_migration(&self, to: RecommendedIndex) {
+        *self.current_index.write() = to;
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        self.last_migration_secs
+            .store(now, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Get the current active index type.
+    pub fn current_index(&self) -> RecommendedIndex {
+        *self.current_index.read()
+    }
+
+    /// Get the migration manager for tracking state.
+    pub fn migration_manager(&self) -> &OnlineMigrationManager {
+        &self.migration_manager
+    }
+
+    /// Get workload profile history.
+    pub fn profile_history(&self) -> Vec<WorkloadProfile> {
+        self.profile_history.read().clone()
+    }
+
+    /// Get current recommendation without triggering migration.
+    pub fn peek_recommendation(&self) -> AdaptiveRecommendation {
+        self.tuner.recommend()
+    }
+
+    /// Analytical cost estimate for a single query on a given index type.
+    ///
+    /// Returns estimated microseconds based on data size, dimensions, and index type.
+    pub fn estimate_query_cost(
+        index: RecommendedIndex,
+        vector_count: usize,
+        dimensions: usize,
+    ) -> f64 {
+        let n = vector_count as f64;
+        let d = dimensions as f64;
+        match index {
+            // HNSW: O(log(n) * M * d) — fast for moderate sizes
+            RecommendedIndex::Hnsw => (n.ln().max(1.0)) * 16.0 * d * 0.0001,
+            // IVF: O(nprobe * n/nclusters * d) — good for large datasets
+            RecommendedIndex::Ivf => {
+                let nclusters = (n.sqrt()).max(1.0);
+                let nprobe = (nclusters * 0.05).max(1.0);
+                nprobe * (n / nclusters) * d * 0.0001
+            }
+            // DiskANN: O(log(n) * d) + disk latency
+            RecommendedIndex::DiskAnn => (n.ln().max(1.0)) * d * 0.001 + 100.0,
+        }
+    }
+
+    /// Analytical cost estimate for building an index of a given type.
+    ///
+    /// Returns estimated seconds.
+    pub fn estimate_build_cost(
+        index: RecommendedIndex,
+        vector_count: usize,
+        dimensions: usize,
+    ) -> f64 {
+        let n = vector_count as f64;
+        let d = dimensions as f64;
+        match index {
+            RecommendedIndex::Hnsw => n * (n.ln().max(1.0)) * d * 1e-8,
+            RecommendedIndex::Ivf => n * d * 1e-7 + (n.sqrt() * d * 1e-6),
+            RecommendedIndex::DiskAnn => n * (n.ln().max(1.0)) * d * 2e-8,
+        }
+    }
+
+    /// Estimated memory usage in bytes for a given index type.
+    pub fn estimate_memory(
+        index: RecommendedIndex,
+        vector_count: usize,
+        dimensions: usize,
+    ) -> usize {
+        let vector_bytes = vector_count * dimensions * 4;
+        match index {
+            RecommendedIndex::Hnsw => vector_bytes + vector_count * 16 * 2 * 8 + vector_count * 100,
+            RecommendedIndex::Ivf => vector_bytes + vector_count * 50,
+            RecommendedIndex::DiskAnn => vector_count * 100, // vectors on disk
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
