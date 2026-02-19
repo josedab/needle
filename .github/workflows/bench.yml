@@ -14,13 +14,13 @@ jobs:
     name: Performance Regression Check
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@b3b07ba8b418998c39fb20f53e18c1f174b91f20 # stable
 
       - name: Cache cargo registry
-        uses: actions/cache@v4
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
         with:
           path: |
             ~/.cargo/registry
@@ -32,7 +32,7 @@ jobs:
 
       # Download baseline from main branch (if exists)
       - name: Download baseline
-        uses: actions/cache@v4
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
         with:
           path: target/criterion-baseline
           key: criterion-baseline-${{ runner.os }}
@@ -85,7 +85,7 @@ jobs:
       # Update baseline cache on main branch
       - name: Update baseline cache
         if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
         with:
           path: target/criterion-baseline
           key: criterion-baseline-${{ runner.os }}-${{ github.sha }}
@@ -93,7 +93,7 @@ jobs:
       # Upload benchmark results as artifact
       - name: Upload benchmark results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: benchmark-results
           path: |
@@ -102,7 +102,7 @@ jobs:
       # Publish to GitHub Pages benchmark dashboard (main branch only)
       - name: Store benchmark result
         if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
-        uses: benchmark-action/github-action-benchmark@v1
+        uses: benchmark-action/github-action-benchmark@d3c1b18bf06e049dc0ad50e063adb83907a65498 # v1.20.4
         with:
           tool: 'cargo'
           output-file-path: benchmark-results.txt
@@ -112,5 +112,4 @@ jobs:
           comment-on-alert: true
           fail-on-alert: true
           benchmark-data-dir-path: 'dev/bench'
-            benchmark-results.txt
           retention-days: 30

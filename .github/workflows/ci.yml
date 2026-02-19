@@ -16,11 +16,11 @@ jobs:
     name: Quick Check
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: dtolnay/rust-toolchain@b3b07ba8b418998c39fb20f53e18c1f174b91f20 # stable
         with:
           components: rustfmt, clippy
-      - uses: actions/cache@v4
+      - uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
         with:
           path: |
             ~/.cargo/registry
@@ -48,15 +48,15 @@ jobs:
             rust: nightly
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@master
+        uses: dtolnay/rust-toolchain@b3b07ba8b418998c39fb20f53e18c1f174b91f20 # master
         with:
           toolchain: ${{ matrix.rust }}
 
       - name: Cache cargo registry
-        uses: actions/cache@v4
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
         with:
           path: |
             ~/.cargo/registry
@@ -80,10 +80,10 @@ jobs:
     name: Lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@master
+        uses: dtolnay/rust-toolchain@b3b07ba8b418998c39fb20f53e18c1f174b91f20 # master
         with:
           toolchain: stable
           components: clippy, rustfmt
@@ -98,10 +98,10 @@ jobs:
     name: Documentation
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@master
+        uses: dtolnay/rust-toolchain@b3b07ba8b418998c39fb20f53e18c1f174b91f20 # master
         with:
           toolchain: stable
 
@@ -114,10 +114,10 @@ jobs:
     name: Benchmarks
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@master
+        uses: dtolnay/rust-toolchain@b3b07ba8b418998c39fb20f53e18c1f174b91f20 # master
         with:
           toolchain: stable
 
@@ -128,10 +128,10 @@ jobs:
     name: Examples
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@b3b07ba8b418998c39fb20f53e18c1f174b91f20 # stable
 
       - name: Compile-check all examples
         run: cargo build --examples
@@ -140,22 +140,22 @@ jobs:
     name: Code Coverage
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@master
+        uses: dtolnay/rust-toolchain@b3b07ba8b418998c39fb20f53e18c1f174b91f20 # master
         with:
           toolchain: stable
           components: llvm-tools-preview
 
       - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@cargo-llvm-cov
+        uses: taiki-e/install-action@8a04e7e1b5765b8b4f1f6bef476643e1b0676f60 # cargo-llvm-cov
 
       - name: Generate coverage report
         run: cargo llvm-cov --all-features --lcov --output-path lcov.info
 
       - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v4
+        uses: codecov/codecov-action@18283e04ce6e62d37312384ff67231eb8fd56d24 # v5.4.3
         with:
           files: lcov.info
           fail_ci_if_error: true
@@ -164,10 +164,10 @@ jobs:
     name: Minimum Supported Rust Version
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@master
+        uses: dtolnay/rust-toolchain@b3b07ba8b418998c39fb20f53e18c1f174b91f20 # master
         with:
           toolchain: "1.85"
 
@@ -189,13 +189,13 @@ jobs:
           - "server,metrics"
           - "full"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@b3b07ba8b418998c39fb20f53e18c1f174b91f20 # stable
 
       - name: Cache cargo registry
-        uses: actions/cache@v4
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
         with:
           path: |
             ~/.cargo/registry
