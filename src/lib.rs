@@ -421,6 +421,9 @@ pub use experimental::triggers;
 /// Closed-loop relevance feedback for search quality improvement. **Experimental**: API may change without notice.
 #[cfg(feature = "experimental")]
 pub use experimental::relevance_feedback;
+/// Locality-aware index compaction with k-means clustering. **Experimental**: API may change without notice.
+#[cfg(feature = "experimental")]
+pub use experimental::locality_compaction;
 
 // ── Streaming (feature-gated) ────────────────────────────────────────────────
 

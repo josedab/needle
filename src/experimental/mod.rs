@@ -72,3 +72,5 @@ pub mod wasm_plugin_runtime;
 pub mod triggers;
 #[cfg(feature = "experimental")]
 pub mod relevance_feedback;
+#[cfg(feature = "experimental")]
+pub mod locality_compaction;
