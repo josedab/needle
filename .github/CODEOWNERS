@@ -5,39 +5,50 @@
 * @anthropics/needle-maintainers
 
 # Core database and collection logic
-/src/database.rs @anthropics/needle-core
-/src/collection.rs @anthropics/needle-core
+/src/database/ @anthropics/needle-core
+/src/collection/ @anthropics/needle-core
 /src/storage.rs @anthropics/needle-core
 /src/error.rs @anthropics/needle-core
 
-# HNSW index implementation
-/src/hnsw.rs @anthropics/needle-core
+# Indexing (HNSW, IVF, DiskANN, sparse, multi-vector)
+/src/indexing/ @anthropics/needle-core
 /src/distance.rs @anthropics/needle-core
 /src/tuning.rs @anthropics/needle-core
 
-# Advanced search features
+# Search features
+/src/search/ @anthropics/needle-search
 /src/hybrid.rs @anthropics/needle-search
-/src/sparse.rs @anthropics/needle-search
-/src/multivec.rs @anthropics/needle-search
 /src/metadata.rs @anthropics/needle-search
-
-# Quantization
-/src/quantization.rs @anthropics/needle-core
 
 # HTTP Server and API
 /src/server.rs @anthropics/needle-api
 /src/metrics.rs @anthropics/needle-api
+/src/web_ui.rs @anthropics/needle-api
 
 # Language bindings
 /src/python.rs @anthropics/needle-bindings
 /src/wasm.rs @anthropics/needle-bindings
 /src/uniffi_bindings.rs @anthropics/needle-bindings
+/crates/needle-python/ @anthropics/needle-bindings
+/sdk/ @anthropics/needle-bindings
 
-# Embeddings
+# ML and embeddings
+/src/ml/ @anthropics/needle-ml
 /src/embeddings.rs @anthropics/needle-ml
+/src/embeddings_provider.rs @anthropics/needle-ml
+
+# Enterprise features
+/src/enterprise/ @anthropics/needle-security @anthropics/needle-maintainers
+
+# Experimental modules
+/src/experimental/ @anthropics/needle-maintainers
+
+# Persistence and storage
+/src/persistence/ @anthropics/needle-core
 
 # Documentation
 /docs/ @anthropics/needle-docs
+/website/ @anthropics/needle-docs
 *.md @anthropics/needle-docs
 /CLAUDE.md @anthropics/needle-maintainers
 
@@ -45,12 +56,14 @@
 /.github/ @anthropics/needle-infra
 /Cargo.toml @anthropics/needle-maintainers
 /Cargo.lock @anthropics/needle-maintainers
+/Dockerfile @anthropics/needle-infra
+/helm/ @anthropics/needle-infra
+/deploy/ @anthropics/needle-infra
 
-# Tests
+# Tests and benchmarks
 /tests/ @anthropics/needle-core
 /benches/ @anthropics/needle-core
+/fuzz/ @anthropics/needle-core
 
 # Security-sensitive files
 /SECURITY.md @anthropics/needle-security @anthropics/needle-maintainers
-/src/encryption.rs @anthropics/needle-security
-/src/auth.rs @anthropics/needle-security
