@@ -664,7 +664,7 @@ pub fn dedup_command(
     }
 
     println!("═══ Deduplication for '{}' ═══", collection_name);
-    println!("  Threshold: {:.2}", threshold);
+    println!("  Threshold: {:.4}", threshold);
     println!("  Strategy: {}", strategy);
     println!("  Vectors: {}", num_vectors);
     if dry_run {
@@ -672,54 +672,62 @@ pub fn dedup_command(
     }
     println!();
 
-    // Collect all vector IDs and vectors via export
-    let exported = coll.export_all()?;
-    let all_ids: Vec<String> = exported.iter().map(|(id, _, _)| id.clone()).collect();
-    let all_vectors: Vec<&Vec<f32>> = exported.iter().map(|(_, v, _)| v).collect();
+    // Use the collection's dedup_scan for structured duplicate detection
+    let scan = coll.dedup_scan(Some(threshold))?;
 
-    // Sample-based dedup: search each vector against the collection
-    let sample_size = num_vectors.min(1000);
-    let mut duplicates_found = 0usize;
+    println!("Scan complete:");
+    println!("  Vectors scanned: {}", scan.vectors_scanned);
+    println!("  Duplicate groups: {}", scan.duplicate_groups);
+    println!("  Total duplicates: {}", scan.duplicate_count);
+    println!();
+
+    if scan.duplicate_count == 0 {
+        println!("No near-duplicates found at threshold {:.4}.", threshold);
+        return Ok(());
+    }
+
+    // Determine which IDs to delete based on strategy
     let mut ids_to_delete: Vec<String> = Vec::new();
-
-    for i in 0..sample_size {
-        let results = coll.search(all_vectors[i], 10)?;
-        for result in &results {
-            if result.distance < (1.0 - threshold) && result.id != all_ids[i] {
-                duplicates_found += 1;
-                match strategy {
-                    "keep-first" => {
-                        ids_to_delete.push(result.id.clone());
-                    }
-                    "keep-latest" => {
-                        ids_to_delete.push(all_ids[i].clone());
-                    }
-                    _ => {
-                        ids_to_delete.push(result.id.clone());
-                    }
+    for group in &scan.groups {
+        match strategy {
+            "keep-first" => {
+                // Keep canonical, delete duplicates
+                ids_to_delete.extend(group.duplicate_ids.clone());
+            }
+            "keep-latest" => {
+                // Keep last duplicate, delete canonical and earlier dupes
+                ids_to_delete.push(group.canonical_id.clone());
+                if group.duplicate_ids.len() > 1 {
+                    ids_to_delete
+                        .extend(group.duplicate_ids[..group.duplicate_ids.len() - 1].to_vec());
                 }
+            }
+            "merge-metadata" => {
+                // Just report — merge is handled by dedup config on insert
+                ids_to_delete.extend(group.duplicate_ids.clone());
+            }
+            _ => {
+                ids_to_delete.extend(group.duplicate_ids.clone());
             }
         }
     }
 
-    // Deduplicate the delete list
     ids_to_delete.sort();
     ids_to_delete.dedup();
 
-    println!("Duplicate pairs found: {}", duplicates_found);
     println!("Vectors to remove: {}", ids_to_delete.len());
 
     if dry_run {
         println!();
         println!("Dry run — no changes made.");
-        if !ids_to_delete.is_empty() {
-            println!("Would remove:");
-            for id in ids_to_delete.iter().take(20) {
-                println!("  - {}", id);
-            }
-            if ids_to_delete.len() > 20 {
-                println!("  ... and {} more", ids_to_delete.len() - 20);
-            }
+        for group in scan.groups.iter().take(10) {
+            println!(
+                "  Group: canonical='{}', duplicates={:?}, distances={:?}",
+                group.canonical_id, group.duplicate_ids, group.distances
+            );
+        }
+        if scan.groups.len() > 10 {
+            println!("  ... and {} more groups", scan.groups.len() - 10);
         }
     } else {
         for id in &ids_to_delete {
