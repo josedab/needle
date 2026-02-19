@@ -170,6 +170,8 @@ pub fn run(cli: Cli) -> Result<()> {
             health_command(&database, &collection, &format),
         Commands::Playground { database } =>
             playground_command(database.as_deref()),
+        Commands::Ingestion(cmd) => ingestion_command(cmd),
+        Commands::Cache(cmd) => cache_command(cmd),
         Commands::Partition { database, collection, analyze, target_size } =>
             partition_command(&database, &collection, analyze, target_size),
     }

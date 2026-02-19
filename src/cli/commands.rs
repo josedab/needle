@@ -592,6 +592,14 @@ pub enum Commands {
         database: Option<String>,
     },
 
+    /// Streaming ingestion management
+    #[command(subcommand)]
+    Ingestion(IngestionCommands),
+
+    /// Semantic cache management
+    #[command(subcommand)]
+    Cache(CacheCommands),
+
     /// Analyze collection for auto-partitioning recommendations
     Partition {
         /// Path to the database file
@@ -608,6 +616,34 @@ pub enum Commands {
         /// Target partition size (number of vectors per partition)
         #[arg(long, default_value = "100000")]
         target_size: usize,
+    },
+}
+
+/// Cache management subcommands
+#[derive(Subcommand)]
+pub enum CacheCommands {
+    /// Show cache statistics
+    Stats {
+        /// Path to the database file
+        database: String,
+    },
+    /// Clear all cache entries
+    Clear {
+        /// Path to the database file
+        database: String,
+        /// Skip confirmation prompt
+        #[arg(long)]
+        force: bool,
+    },
+}
+
+/// Ingestion subcommands
+#[derive(Subcommand)]
+pub enum IngestionCommands {
+    /// Show ingestion pipeline status
+    Status {
+        /// Path to the database file
+        database: String,
     },
 }
 
