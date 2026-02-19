@@ -415,6 +415,9 @@ pub use experimental::zero_copy;
 /// Zero-copy IPC protocol for multi-process shared memory access. **Experimental**: API may change without notice.
 #[cfg(feature = "experimental")]
 pub use experimental::ipc_protocol;
+/// Event-driven triggers for vector operations. **Experimental**: API may change without notice.
+#[cfg(feature = "experimental")]
+pub use experimental::triggers;
 
 // ── Streaming (feature-gated) ────────────────────────────────────────────────
 
