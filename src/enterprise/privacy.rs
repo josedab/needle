@@ -17,6 +17,8 @@
 //! let noisy_distance = mechanism.perturb_distance(0.5, 1.0);
 //! ```
 
+use crate::collection::SearchResult;
+use crate::error::{NeedleError, Result};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -250,6 +252,190 @@ pub struct PrivacyExplain {
     pub max_budget: f64,
 }
 
+/// Composition theorem for privacy budget accounting across repeated queries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CompositionTheorem {
+    /// Basic composition: total ε = sum of individual ε values
+    Basic,
+    /// Advanced composition: total ε ≈ √(2k·ln(1/δ'))·ε + k·ε·(e^ε - 1)
+    Advanced,
+    /// Rényi Differential Privacy composition (tighter bounds)
+    Renyi,
+}
+
+impl Default for CompositionTheorem {
+    fn default() -> Self {
+        Self::Basic
+    }
+}
+
+/// Per-collection privacy policy.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CollectionPrivacyPolicy {
+    /// Collection name this policy applies to
+    pub collection_name: String,
+    /// Privacy configuration for this collection
+    pub config: PrivacyConfig,
+    /// Composition theorem to use for budget accounting
+    pub composition: CompositionTheorem,
+    /// Whether privacy is enforced (vs advisory)
+    pub enforced: bool,
+    /// Optional per-field sensitivity overrides
+    pub field_sensitivities: HashMap<String, f64>,
+}
+
+impl CollectionPrivacyPolicy {
+    /// Create a new privacy policy for a collection.
+    pub fn new(collection_name: impl Into<String>, config: PrivacyConfig) -> Self {
+        Self {
+            collection_name: collection_name.into(),
+            config,
+            composition: CompositionTheorem::default(),
+            enforced: true,
+            field_sensitivities: HashMap::new(),
+        }
+    }
+
+    /// Set the composition theorem.
+    #[must_use]
+    pub fn with_composition(mut self, composition: CompositionTheorem) -> Self {
+        self.composition = composition;
+        self
+    }
+
+    /// Set whether the policy is enforced.
+    #[must_use]
+    pub fn with_enforced(mut self, enforced: bool) -> Self {
+        self.enforced = enforced;
+        self
+    }
+
+    /// Add a per-field sensitivity override.
+    #[must_use]
+    pub fn with_field_sensitivity(mut self, field: impl Into<String>, sensitivity: f64) -> Self {
+        self.field_sensitivities.insert(field.into(), sensitivity);
+        self
+    }
+}
+
+/// Registry of per-collection privacy policies.
+#[derive(Debug, Default)]
+pub struct PrivacyPolicyRegistry {
+    policies: HashMap<String, CollectionPrivacyPolicy>,
+    budget: PrivacyBudget,
+}
+
+impl PrivacyPolicyRegistry {
+    /// Create a new empty registry.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Register a privacy policy for a collection.
+    pub fn register(&mut self, policy: CollectionPrivacyPolicy) {
+        self.policies.insert(policy.collection_name.clone(), policy);
+    }
+
+    /// Remove a privacy policy for a collection.
+    pub fn unregister(&mut self, collection_name: &str) -> Option<CollectionPrivacyPolicy> {
+        self.policies.remove(collection_name)
+    }
+
+    /// Get the policy for a collection.
+    pub fn get_policy(&self, collection_name: &str) -> Option<&CollectionPrivacyPolicy> {
+        self.policies.get(collection_name)
+    }
+
+    /// List all registered policies.
+    pub fn list_policies(&self) -> Vec<&CollectionPrivacyPolicy> {
+        self.policies.values().collect()
+    }
+
+    /// Compute the composed epsilon for k queries using the specified theorem.
+    pub fn composed_epsilon(
+        &self,
+        single_epsilon: f64,
+        delta: f64,
+        k: usize,
+        theorem: CompositionTheorem,
+    ) -> f64 {
+        let k_f64 = k as f64;
+        match theorem {
+            CompositionTheorem::Basic => single_epsilon * k_f64,
+            CompositionTheorem::Advanced => {
+                // Advanced composition: ε_total = √(2k·ln(1/δ'))·ε + k·ε·(e^ε - 1)
+                let delta_prime = delta / 2.0;
+                let term1 = (2.0 * k_f64 * (1.0 / delta_prime).ln()).sqrt() * single_epsilon;
+                let term2 = k_f64 * single_epsilon * (single_epsilon.exp() - 1.0);
+                term1 + term2
+            }
+            CompositionTheorem::Renyi => {
+                // Simplified Rényi composition: tighter than advanced for small ε
+                let alpha = 1.0 + 1.0 / (single_epsilon + 1e-10);
+                let rdp_epsilon = k_f64 * single_epsilon.powi(2) / (2.0 * (alpha - 1.0));
+                rdp_epsilon + (1.0 / delta).ln() / (alpha - 1.0)
+            }
+        }
+    }
+
+    /// Apply privacy to search results for a collection. Returns modified results
+    /// with perturbed distances, or an error if the privacy budget is exhausted.
+    pub fn apply_privacy(
+        &mut self,
+        collection_name: &str,
+        session_id: &str,
+        results: Vec<SearchResult>,
+    ) -> Result<Vec<SearchResult>> {
+        let policy = match self.policies.get(collection_name) {
+            Some(p) => p.clone(),
+            None => return Ok(results), // No policy, return unchanged
+        };
+
+        if policy.enforced
+            && !self.budget.has_budget(
+                session_id,
+                policy.config.epsilon,
+                policy.config.max_budget_per_session,
+            )
+        {
+            return Err(NeedleError::QuotaExceeded(format!(
+                "Privacy budget exhausted for session '{}' on collection '{}'",
+                session_id, collection_name
+            )));
+        }
+
+        self.budget.consume(
+            session_id,
+            policy.config.epsilon,
+            policy.config.max_budget_per_session,
+        );
+
+        let mechanism = PrivacyMechanism::new(policy.config.clone());
+        let mut perturbed_results = results;
+        for result in &mut perturbed_results {
+            result.distance = mechanism.perturb_distance(result.distance, policy.config.sensitivity);
+        }
+        // Re-sort by perturbed distance
+        perturbed_results.sort_by(|a, b| {
+            a.distance
+                .partial_cmp(&b.distance)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        Ok(perturbed_results)
+    }
+
+    /// Get the budget tracker.
+    pub fn budget(&self) -> &PrivacyBudget {
+        &self.budget
+    }
+
+    /// Get a mutable reference to the budget tracker.
+    pub fn budget_mut(&mut self) -> &mut PrivacyBudget {
+        &mut self.budget
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -314,5 +500,69 @@ mod tests {
         for d in &distances {
             assert!(*d >= 0.0);
         }
+    }
+
+    #[test]
+    fn test_composition_basic() {
+        let registry = PrivacyPolicyRegistry::new();
+        let eps = registry.composed_epsilon(1.0, 1e-5, 10, CompositionTheorem::Basic);
+        assert!((eps - 10.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_composition_advanced() {
+        let registry = PrivacyPolicyRegistry::new();
+        let eps = registry.composed_epsilon(1.0, 1e-5, 10, CompositionTheorem::Advanced);
+        // Advanced composition should be tighter than basic for many queries
+        let basic = registry.composed_epsilon(1.0, 1e-5, 10, CompositionTheorem::Basic);
+        assert!(eps < basic);
+    }
+
+    #[test]
+    fn test_policy_registry() {
+        let mut registry = PrivacyPolicyRegistry::new();
+        let policy = CollectionPrivacyPolicy::new(
+            "my_collection",
+            PrivacyConfig::new(0.5, 1e-5),
+        )
+        .with_composition(CompositionTheorem::Advanced)
+        .with_enforced(true);
+
+        registry.register(policy);
+        assert!(registry.get_policy("my_collection").is_some());
+        assert!(registry.get_policy("other").is_none());
+        assert_eq!(registry.list_policies().len(), 1);
+    }
+
+    #[test]
+    fn test_apply_privacy_no_policy() {
+        let mut registry = PrivacyPolicyRegistry::new();
+        let results = vec![SearchResult {
+            id: "v1".to_string(),
+            distance: 0.5,
+            metadata: None,
+        }];
+        let applied = registry.apply_privacy("unregistered", "s1", results.clone()).unwrap();
+        assert_eq!(applied[0].distance, results[0].distance);
+    }
+
+    #[test]
+    fn test_apply_privacy_budget_exhaustion() {
+        let mut registry = PrivacyPolicyRegistry::new();
+        let policy = CollectionPrivacyPolicy::new(
+            "coll",
+            PrivacyConfig::new(5.0, 1e-5).with_max_budget(6.0),
+        );
+        registry.register(policy);
+
+        let results = vec![SearchResult {
+            id: "v1".to_string(),
+            distance: 0.5,
+            metadata: None,
+        }];
+        // First query: consumes 5.0 of 6.0 budget
+        assert!(registry.apply_privacy("coll", "s1", results.clone()).is_ok());
+        // Second query: would exceed budget (5.0 + 5.0 > 6.0)
+        assert!(registry.apply_privacy("coll", "s1", results).is_err());
     }
 }

@@ -154,6 +154,9 @@ pub mod enterprise;
 #[cfg(feature = "encryption")]
 pub use enterprise::encryption;
 pub use enterprise::{autoscaling, namespace, privacy, raft, security, tenant_isolation};
+pub use privacy::{
+    CollectionPrivacyPolicy, CompositionTheorem, PrivacyPolicyRegistry,
+};
 
 // ── Observability ────────────────────────────────────────────────────────────
 // Telemetry, drift detection, anomaly detection, profiling.
