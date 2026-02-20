@@ -1804,7 +1804,7 @@ mod tests {
         let pipeline = RagPipeline::new(db, RagConfig::default()).unwrap();
 
         let text = "This is a test document. It has multiple sentences. We want to chunk it.";
-        let chunks = pipeline.chunk_fixed_size(text, 20, 5);
+        let chunks = RagPipeline::chunk_fixed_size(text, 20, 5);
 
         assert!(!chunks.is_empty());
         for (chunk, start, end) in &chunks {
@@ -1830,7 +1830,7 @@ mod tests {
         let pipeline = RagPipeline::new(db, RagConfig::default()).unwrap();
 
         let text = "Paragraph one.\n\nParagraph two.\n\nParagraph three.";
-        let chunks = pipeline.chunk_paragraphs(text, 2);
+        let chunks = RagPipeline::chunk_paragraphs(text, 2);
 
         assert_eq!(chunks.len(), 2);
     }
@@ -1873,13 +1873,13 @@ mod tests {
         let db = Arc::new(Database::in_memory());
         let pipeline = RagPipeline::new(db, RagConfig::default()).unwrap();
 
-        let sim = pipeline.text_similarity("hello world", "hello world");
+        let sim = RagPipeline::text_similarity("hello world", "hello world");
         assert!((sim - 1.0).abs() < 0.001);
 
-        let sim = pipeline.text_similarity("hello world", "goodbye world");
+        let sim = RagPipeline::text_similarity("hello world", "goodbye world");
         assert!(sim > 0.0 && sim < 1.0);
 
-        let sim = pipeline.text_similarity("hello", "goodbye");
+        let sim = RagPipeline::text_similarity("hello", "goodbye");
         assert!(sim < 0.5);
     }
 
