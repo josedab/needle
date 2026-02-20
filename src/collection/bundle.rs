@@ -327,3 +327,240 @@ impl Collection {
         Ok(manifest)
     }
 }
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+    use crate::test_utils::random_vector;
+    use serde_json::json;
+
+    fn make_collection(n: usize) -> Collection {
+        let mut col = Collection::with_dimensions("test", 4);
+        for i in 0..n {
+            col.insert(format!("v{i}"), &random_vector(4), Some(json!({"idx": i})))
+                .unwrap();
+        }
+        col
+    }
+
+    // ── Serialization roundtrip ─────────────────────────────────────────
+
+    #[test]
+    fn test_to_bytes_from_bytes_roundtrip() {
+        let col = make_collection(10);
+        let bytes = col.to_bytes().unwrap();
+        let restored = Collection::from_bytes(&bytes).unwrap();
+        assert_eq!(restored.len(), 10);
+        assert_eq!(restored.name(), "test");
+        assert_eq!(restored.dimensions(), 4);
+    }
+
+    #[test]
+    fn test_to_bytes_empty_collection() {
+        let col = Collection::with_dimensions("empty", 8);
+        let bytes = col.to_bytes().unwrap();
+        let restored = Collection::from_bytes(&bytes).unwrap();
+        assert_eq!(restored.len(), 0);
+        assert_eq!(restored.name(), "empty");
+    }
+
+    #[test]
+    fn test_from_bytes_invalid() {
+        let result = Collection::from_bytes(b"not valid json");
+        assert!(result.is_err());
+    }
+
+    // ── Snapshot ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_create_restore_snapshot() {
+        let col = make_collection(5);
+        let snapshot = col.create_snapshot().unwrap();
+        let restored = Collection::restore_snapshot(&snapshot).unwrap();
+        assert_eq!(restored.len(), 5);
+        assert_eq!(restored.name(), "test");
+    }
+
+    #[test]
+    fn test_restore_snapshot_invalid() {
+        let result = Collection::restore_snapshot(b"garbage");
+        assert!(result.is_err());
+    }
+
+    // ── all_ids ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_all_ids() {
+        let col = make_collection(5);
+        let ids = col.all_ids();
+        assert_eq!(ids.len(), 5);
+        for i in 0..5 {
+            assert!(ids.contains(&format!("v{i}")));
+        }
+    }
+
+    #[test]
+    fn test_all_ids_empty() {
+        let col = Collection::with_dimensions("empty", 4);
+        assert!(col.all_ids().is_empty());
+    }
+
+    // ── iter_filtered ───────────────────────────────────────────────────
+
+    #[test]
+    fn test_iter_filtered() {
+        let mut col = Collection::with_dimensions("test", 4);
+        col.insert("a", &[1.0, 0.0, 0.0, 0.0], Some(json!({"cat": "x"}))).unwrap();
+        col.insert("b", &[0.0, 1.0, 0.0, 0.0], Some(json!({"cat": "y"}))).unwrap();
+        col.insert("c", &[0.0, 0.0, 1.0, 0.0], Some(json!({"cat": "x"}))).unwrap();
+
+        let filter = Filter::eq("cat", "x");
+        let filtered: Vec<_> = col.iter_filtered(&filter).collect();
+        assert_eq!(filtered.len(), 2);
+    }
+
+    // ── estimate_memory ─────────────────────────────────────────────────
+
+    #[test]
+    fn test_estimate_memory() {
+        let bytes = Collection::estimate_memory(1000, 384, 256);
+        // 1000 * 384 * 4 (vector) + 1000 * 256 (meta) + 1000 * 200 (index)
+        let expected = 1000 * 384 * 4 + 1000 * 256 + 1000 * 200;
+        assert_eq!(bytes, expected);
+    }
+
+    #[test]
+    fn test_estimate_memory_zero_vectors() {
+        let bytes = Collection::estimate_memory(0, 384, 256);
+        assert_eq!(bytes, 0);
+    }
+
+    // ── evaluate ────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_evaluate_empty_ground_truth() {
+        let col = make_collection(10);
+        let report = col.evaluate(&[], 5).unwrap();
+        assert_eq!(report.num_queries, 0);
+        assert_eq!(report.k, 5);
+    }
+
+    #[test]
+    fn test_evaluate_basic() {
+        let mut col = Collection::with_dimensions("test", 4);
+        col.insert("v0", &[1.0, 0.0, 0.0, 0.0], None).unwrap();
+        col.insert("v1", &[0.0, 1.0, 0.0, 0.0], None).unwrap();
+        col.insert("v2", &[0.0, 0.0, 1.0, 0.0], None).unwrap();
+
+        let ground_truth = vec![GroundTruthEntry {
+            query: vec![1.0, 0.0, 0.0, 0.0],
+            relevant_ids: vec!["v0".to_string()],
+        }];
+
+        let report = col.evaluate(&ground_truth, 3).unwrap();
+        assert_eq!(report.num_queries, 1);
+        assert!(report.mean_recall_at_k > 0.0);
+        assert_eq!(report.per_query.len(), 1);
+        assert!(report.eval_time_ms >= 0.0);
+    }
+
+    // ── Bundle export/import ────────────────────────────────────────────
+
+    #[test]
+    fn test_bundle_export_import_roundtrip() {
+        let col = make_collection(5);
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.bundle");
+
+        let manifest = col.export_bundle(&path).unwrap();
+        assert_eq!(manifest.collection_name, "test");
+        assert_eq!(manifest.dimensions, 4);
+        assert_eq!(manifest.vector_count, 5);
+        assert_eq!(manifest.format_version, 1);
+        assert!(manifest.data_hash.is_some());
+
+        let restored = Collection::import_bundle(&path).unwrap();
+        assert_eq!(restored.len(), 5);
+        assert_eq!(restored.name(), "test");
+    }
+
+    #[test]
+    fn test_bundle_import_nonexistent_file() {
+        let result = Collection::import_bundle(std::path::Path::new("/tmp/nonexistent_needle_test_bundle.json"));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_bundle_import_invalid_json() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("bad.bundle");
+        std::fs::write(&path, b"not json").unwrap();
+        let result = Collection::import_bundle(&path);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_bundle_import_missing_manifest() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("no_manifest.bundle");
+        std::fs::write(&path, b"{}").unwrap();
+        let result = Collection::import_bundle(&path);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_bundle_validate_compatibility() {
+        let col = make_collection(3);
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("compat.bundle");
+        col.export_bundle(&path).unwrap();
+
+        let manifest = Collection::validate_bundle_compatibility(&path).unwrap();
+        assert_eq!(manifest.collection_name, "test");
+        assert_eq!(manifest.format_version, 1);
+    }
+
+    #[test]
+    fn test_bundle_empty_collection() {
+        let col = Collection::with_dimensions("empty", 8);
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("empty.bundle");
+
+        let manifest = col.export_bundle(&path).unwrap();
+        assert_eq!(manifest.vector_count, 0);
+
+        let restored = Collection::import_bundle(&path).unwrap();
+        assert_eq!(restored.len(), 0);
+    }
+
+    // ── record_feedback ─────────────────────────────────────────────────
+
+    #[test]
+    fn test_record_feedback_no_crash() {
+        let col = Collection::with_dimensions("test", 4);
+        // Should not panic
+        col.record_feedback("q1", "v1", 1.0);
+        col.record_feedback("q1", "v1", 0.0);
+    }
+
+    // ── BundleManifest ──────────────────────────────────────────────────
+
+    #[test]
+    fn test_bundle_manifest_serde() {
+        let manifest = BundleManifest {
+            format_version: 1,
+            collection_name: "test".into(),
+            dimensions: 128,
+            distance_function: "Cosine".into(),
+            vector_count: 100,
+            embedding_model: Some("ada-002".into()),
+            created_at: 12345,
+            data_hash: Some("abc123".into()),
+        };
+        let json = serde_json::to_string(&manifest).unwrap();
+        let restored: BundleManifest = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.collection_name, "test");
+        assert_eq!(restored.dimensions, 128);
+    }
+}
