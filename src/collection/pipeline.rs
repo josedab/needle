@@ -514,3 +514,257 @@ pub(super) struct BruteForceSearchParams<'a> {
     pub(super) post_filter: Option<&'a Filter>,
     pub(super) include_metadata: bool,
 }
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+    use crate::test_utils::random_vector;
+    use serde_json::json;
+
+    fn make_collection(n: usize, dims: usize) -> Collection {
+        let mut col = Collection::with_dimensions("test", dims);
+        for i in 0..n {
+            let vec = random_vector(dims);
+            col.insert(format!("v{i}"), &vec, Some(json!({"idx": i, "cat": if i % 2 == 0 { "even" } else { "odd" }})))
+                .unwrap();
+        }
+        col
+    }
+
+    // ── SearchBuilder defaults ──────────────────────────────────────────
+
+    #[test]
+    fn test_search_builder_default_k() {
+        let col = make_collection(20, 8);
+        let query = random_vector(8);
+        let builder = col.search_builder(&query);
+        let results = builder.execute().unwrap();
+        assert!(results.len() <= 10); // default k=10
+    }
+
+    #[test]
+    fn test_search_builder_custom_k() {
+        let col = make_collection(20, 8);
+        let query = random_vector(8);
+        let results = col.search_builder(&query).k(3).execute().unwrap();
+        assert!(results.len() <= 3);
+    }
+
+    #[test]
+    fn test_search_builder_k_zero() {
+        let col = make_collection(10, 4);
+        let query = random_vector(4);
+        let results = col.search_builder(&query).k(0).execute().unwrap();
+        assert!(results.is_empty());
+    }
+
+    // ── Pre-filter ──────────────────────────────────────────────────────
+
+    #[test]
+    fn test_search_builder_pre_filter() {
+        let col = make_collection(30, 8);
+        let query = random_vector(8);
+        let filter = Filter::eq("cat", "even");
+        let results = col.search_builder(&query).k(10).filter(&filter).execute().unwrap();
+        for r in &results {
+            if let Some(meta) = &r.metadata {
+                assert_eq!(meta["cat"], "even");
+            }
+        }
+    }
+
+    // ── Post-filter ─────────────────────────────────────────────────────
+
+    #[test]
+    fn test_search_builder_post_filter() {
+        let col = make_collection(30, 8);
+        let query = random_vector(8);
+        let pf = Filter::eq("cat", "odd");
+        let results = col.search_builder(&query)
+            .k(5)
+            .post_filter(&pf)
+            .post_filter_factor(5)
+            .execute()
+            .unwrap();
+        for r in &results {
+            if let Some(meta) = &r.metadata {
+                assert_eq!(meta["cat"], "odd");
+            }
+        }
+    }
+
+    #[test]
+    fn test_post_filter_factor_min_one() {
+        let col = make_collection(10, 4);
+        let query = random_vector(4);
+        let pf = Filter::eq("cat", "even");
+        // factor 0 should be clamped to 1
+        let results = col.search_builder(&query)
+            .k(5)
+            .post_filter(&pf)
+            .post_filter_factor(0)
+            .execute()
+            .unwrap();
+        assert!(results.len() <= 5);
+    }
+
+    // ── include_metadata ────────────────────────────────────────────────
+
+    #[test]
+    fn test_search_builder_without_metadata() {
+        let col = make_collection(10, 4);
+        let query = random_vector(4);
+        let results = col.search_builder(&query)
+            .k(5)
+            .include_metadata(false)
+            .execute()
+            .unwrap();
+        for r in &results {
+            assert!(r.metadata.is_none());
+        }
+    }
+
+    #[test]
+    fn test_search_builder_with_metadata() {
+        let col = make_collection(10, 4);
+        let query = random_vector(4);
+        let results = col.search_builder(&query)
+            .k(5)
+            .include_metadata(true)
+            .execute()
+            .unwrap();
+        for r in &results {
+            assert!(r.metadata.is_some());
+        }
+    }
+
+    // ── Distance override ───────────────────────────────────────────────
+
+    #[test]
+    fn test_search_builder_distance_override_same() {
+        let col = make_collection(10, 4);
+        let query = random_vector(4);
+        // Same distance as collection - should use index
+        let results = col.search_builder(&query)
+            .k(5)
+            .distance(DistanceFunction::Cosine)
+            .execute()
+            .unwrap();
+        assert!(results.len() <= 5);
+    }
+
+    #[test]
+    fn test_search_builder_distance_override_different() {
+        let col = make_collection(10, 4);
+        let query = random_vector(4);
+        // Different distance - should fall back to brute-force
+        let results = col.search_builder(&query)
+            .k(5)
+            .distance(DistanceFunction::Euclidean)
+            .execute()
+            .unwrap();
+        assert!(results.len() <= 5);
+    }
+
+    // ── ef_search override ──────────────────────────────────────────────
+
+    #[test]
+    fn test_search_builder_ef_search() {
+        let col = make_collection(30, 8);
+        let query = random_vector(8);
+        let results = col.search_builder(&query)
+            .k(5)
+            .ef_search(200)
+            .execute()
+            .unwrap();
+        assert!(results.len() <= 5);
+    }
+
+    // ── execute_ids_only ────────────────────────────────────────────────
+
+    #[test]
+    fn test_execute_ids_only() {
+        let col = make_collection(20, 8);
+        let query = random_vector(8);
+        let ids = col.search_builder(&query)
+            .k(5)
+            .execute_ids_only()
+            .unwrap();
+        assert!(ids.len() <= 5);
+        for (id, dist) in &ids {
+            assert!(!id.is_empty());
+            assert!(*dist >= 0.0);
+        }
+    }
+
+    // ── Dimension mismatch ──────────────────────────────────────────────
+
+    #[test]
+    fn test_search_builder_dim_mismatch() {
+        let col = make_collection(5, 4);
+        let query = random_vector(8);
+        let result = col.search_builder(&query).k(5).execute();
+        assert!(result.is_err());
+    }
+
+    // ── as_of timestamp ─────────────────────────────────────────────────
+
+    #[test]
+    fn test_as_of_timestamp_accessor() {
+        let col = Collection::with_dimensions("test", 4);
+        let query = vec![1.0, 0.0, 0.0, 0.0];
+        let builder = col.search_builder(&query).as_of(12345);
+        assert_eq!(builder.as_of_timestamp(), Some(12345));
+    }
+
+    #[test]
+    fn test_as_of_timestamp_default_none() {
+        let col = Collection::with_dimensions("test", 4);
+        let query = vec![1.0, 0.0, 0.0, 0.0];
+        let builder = col.search_builder(&query);
+        assert_eq!(builder.as_of_timestamp(), None);
+    }
+
+    // ── GroundTruthEntry & QueryMetrics ─────────────────────────────────
+
+    #[test]
+    fn test_ground_truth_entry() {
+        let entry = GroundTruthEntry {
+            query: vec![1.0, 0.0],
+            relevant_ids: vec!["a".into(), "b".into()],
+        };
+        assert_eq!(entry.query.len(), 2);
+        assert_eq!(entry.relevant_ids.len(), 2);
+    }
+
+    #[test]
+    fn test_query_metrics() {
+        let metrics = QueryMetrics {
+            query_index: 0,
+            recall_at_k: 0.8,
+            precision_at_k: 0.6,
+            average_precision: 0.7,
+            reciprocal_rank: 1.0,
+            ndcg: 0.9,
+        };
+        assert!((metrics.recall_at_k - 0.8).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_evaluation_report() {
+        let report = EvaluationReport {
+            num_queries: 10,
+            k: 5,
+            mean_recall_at_k: 0.85,
+            mean_precision_at_k: 0.7,
+            map: 0.75,
+            mrr: 0.9,
+            mean_ndcg: 0.88,
+            per_query: vec![],
+            eval_time_ms: 42.0,
+        };
+        assert_eq!(report.num_queries, 10);
+        assert_eq!(report.k, 5);
+    }
+}
