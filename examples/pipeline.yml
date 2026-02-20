@@ -1,0 +1,72 @@
+# Needle CDC Pipeline Configuration
+# Streams database changes into Needle vector collections in real-time.
+#
+# Usage:
+#   needle pipeline --config pipeline.yml
+#
+# Supported sources: postgres, kafka, mongodb
+# Embedding: Requires --features embedding-providers
+
+pipeline:
+  name: "postgres-to-needle"
+  description: "Sync Postgres documents to Needle for semantic search"
+
+source:
+  type: postgres
+  connection:
+    host: localhost
+    port: 5432
+    database: myapp
+    user: ${POSTGRES_USER}
+    password: ${POSTGRES_PASSWORD}
+  # Which tables/columns to watch
+  tables:
+    - name: documents
+      columns: [id, title, content, updated_at]
+      # Column containing the text to embed
+      text_column: content
+      # Column to use as the vector ID
+      id_column: id
+      # Additional columns to store as metadata
+      metadata_columns: [title, updated_at]
+
+# Alternatively, use Kafka as source:
+# source:
+#   type: kafka
+#   brokers: ["localhost:9092"]
+#   topic: document-updates
+#   group_id: needle-cdc
+#   format: json  # json or avro
+
+destination:
+  database: vectors.needle
+  collection: documents
+  dimensions: 384
+  distance: cosine
+
+embedding:
+  provider: openai  # openai, cohere, ollama
+  model: text-embedding-3-small
+  # For OpenAI:
+  api_key: ${OPENAI_API_KEY}
+  # For Ollama:
+  # base_url: http://localhost:11434
+
+processing:
+  batch_size: 100
+  # How often to flush batches (seconds)
+  flush_interval: 5
+  # Max concurrent embedding requests
+  concurrency: 4
+  # Retry failed operations
+  max_retries: 3
+  retry_delay_ms: 1000
+
+# Optional: filtering and transformation
+transform:
+  # Skip rows where content is null or empty
+  skip_empty: true
+  # Maximum text length before truncation
+  max_text_length: 8192
+  # Prepend column name as prefix (improves retrieval quality)
+  prefix_template: "title: {title}\ncontent: {content}"

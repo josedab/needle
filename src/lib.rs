@@ -82,6 +82,7 @@ pub mod metadata;
 pub(crate) mod storage;
 pub mod tuning;
 pub mod columnar;
+pub mod pipeline;
 
 // ── Indexing ──────────────────────────────────────────────────────────────────
 // Vector index implementations: HNSW, DiskANN, IVF, sparse, multi-vector.
