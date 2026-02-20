@@ -430,6 +430,9 @@ pub use experimental::temporal_sequences;
 /// Predictive query pre-warming based on access patterns. **Experimental**: API may change without notice.
 #[cfg(feature = "experimental")]
 pub use experimental::query_prewarming;
+/// Vector aggregation primitives (CENTROID, MEDOID, CLUSTER, etc.). **Experimental**: API may change without notice.
+#[cfg(feature = "experimental")]
+pub use experimental::vector_aggregation;
 
 // ── Streaming (feature-gated) ────────────────────────────────────────────────
 

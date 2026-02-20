@@ -78,3 +78,5 @@ pub mod locality_compaction;
 pub mod temporal_sequences;
 #[cfg(feature = "experimental")]
 pub mod query_prewarming;
+#[cfg(feature = "experimental")]
+pub mod vector_aggregation;
