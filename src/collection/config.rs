@@ -781,6 +781,167 @@ mod tests {
         assert!(display.contains("800 B"));
     }
 
+    // ── Name validation edge cases ──────────────────────────────────────
+
+    #[test]
+    fn test_try_new_name_with_spaces() {
+        let result = CollectionConfig::try_new("hello world", 128);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_try_new_name_with_special_chars() {
+        let result = CollectionConfig::try_new("test@#$!", 128);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_try_new_name_with_dots() {
+        let result = CollectionConfig::try_new("my.collection", 128);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_try_new_name_too_long() {
+        let long_name = "a".repeat(MAX_COLLECTION_NAME_LEN + 1);
+        let result = CollectionConfig::try_new(&long_name, 128);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_try_new_name_at_max_length() {
+        let name = "a".repeat(MAX_COLLECTION_NAME_LEN);
+        let config = CollectionConfig::try_new(&name, 128).unwrap();
+        assert_eq!(config.name.len(), MAX_COLLECTION_NAME_LEN);
+    }
+
+    #[test]
+    fn test_try_new_name_with_underscores_and_hyphens() {
+        let config = CollectionConfig::try_new("my_collection-v2", 128).unwrap();
+        assert_eq!(config.name, "my_collection-v2");
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_new_invalid_name_panics() {
+        CollectionConfig::new("bad name!", 128);
+    }
+
+    // ── Dedup config ────────────────────────────────────────────────────
+
+    #[test]
+    fn test_dedup_default_none() {
+        let config = CollectionConfig::new("test", 128);
+        assert!(config.dedup.is_none());
+    }
+
+    #[test]
+    fn test_with_dedup_strict() {
+        let config = CollectionConfig::new("test", 128)
+            .with_dedup(SemanticDedupConfig::strict());
+        let dedup = config.dedup.unwrap();
+        assert!(dedup.enabled);
+        assert!((dedup.distance_threshold - 0.01).abs() < f32::EPSILON);
+        assert_eq!(dedup.policy, DedupPolicy::Reject);
+    }
+
+    #[test]
+    fn test_with_dedup_moderate() {
+        let dedup = SemanticDedupConfig::moderate();
+        assert!(dedup.enabled);
+        assert!((dedup.distance_threshold - 0.05).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn test_with_dedup_relaxed() {
+        let dedup = SemanticDedupConfig::relaxed();
+        assert!(dedup.enabled);
+        assert!((dedup.distance_threshold - 0.1).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn test_dedup_custom_policy() {
+        let dedup = SemanticDedupConfig::new(0.03, DedupPolicy::MergeMetadata);
+        assert!(dedup.enabled);
+        assert_eq!(dedup.policy, DedupPolicy::MergeMetadata);
+    }
+
+    #[test]
+    fn test_dedup_version_policy() {
+        let dedup = SemanticDedupConfig::new(0.05, DedupPolicy::Version);
+        assert_eq!(dedup.policy, DedupPolicy::Version);
+    }
+
+    #[test]
+    fn test_dedup_default_disabled() {
+        let dedup = SemanticDedupConfig::default();
+        assert!(!dedup.enabled);
+    }
+
+    // ── Display formatting ──────────────────────────────────────────────
+
+    #[test]
+    fn test_collection_stats_display_mb() {
+        let stats = CollectionStats {
+            name: "big".to_string(),
+            vector_count: 100_000,
+            dimensions: 384,
+            distance_function: DistanceFunction::Cosine,
+            vector_memory_bytes: 100 * 1_048_576,
+            metadata_memory_bytes: 10 * 1_048_576,
+            index_memory_bytes: 50 * 1_048_576,
+            total_memory_bytes: 160 * 1_048_576,
+            index_stats: make_hnsw_stats(),
+        };
+        let display = format!("{}", stats);
+        assert!(display.contains("MB"));
+    }
+
+    #[test]
+    fn test_collection_stats_display_gb() {
+        let stats = CollectionStats {
+            name: "huge".to_string(),
+            vector_count: 10_000_000,
+            dimensions: 768,
+            distance_function: DistanceFunction::DotProduct,
+            vector_memory_bytes: 2 * 1_073_741_824,
+            metadata_memory_bytes: 1_073_741_824,
+            index_memory_bytes: 1_073_741_824,
+            total_memory_bytes: 4 * 1_073_741_824,
+            index_stats: make_hnsw_stats(),
+        };
+        let display = format!("{}", stats);
+        assert!(display.contains("GB"));
+    }
+
+    // ── Builder chaining ────────────────────────────────────────────────
+
+    #[test]
+    fn test_full_builder_chain() {
+        let config = CollectionConfig::new("test", 256)
+            .with_distance(DistanceFunction::DotProduct)
+            .with_m(32)
+            .with_ef_construction(400)
+            .with_slow_query_threshold_us(50_000)
+            .with_query_cache_capacity(1000)
+            .with_default_ttl_seconds(7200)
+            .with_lazy_expiration(false)
+            .with_semantic_cache(SemanticQueryCacheConfig::new(200, 0.9))
+            .with_dedup(SemanticDedupConfig::strict());
+
+        assert_eq!(config.name, "test");
+        assert_eq!(config.dimensions, 256);
+        assert_eq!(config.distance, DistanceFunction::DotProduct);
+        assert_eq!(config.hnsw.m, 32);
+        assert_eq!(config.hnsw.ef_construction, 400);
+        assert_eq!(config.slow_query_threshold_us, Some(50_000));
+        assert_eq!(config.query_cache.capacity, 1000);
+        assert_eq!(config.default_ttl_seconds, Some(7200));
+        assert!(!config.lazy_expiration);
+        assert!(config.semantic_cache.is_some());
+        assert!(config.dedup.is_some());
+    }
+
     #[test]
     fn test_collection_stats_display_kb() {
         let stats = CollectionStats {
