@@ -554,7 +554,7 @@ mod tests {
             ],
         );
 
-        let normalized = fed.normalize_scores(&results, &ScoreNormalization::MinMax);
+        let normalized = CollectionFederation::normalize_scores(&results, &ScoreNormalization::MinMax);
         let scores: Vec<f64> = normalized["test"].iter().map(|(_, s)| *s).collect();
 
         assert!((scores[0] - 0.0).abs() < 0.01); // min -> 0
@@ -581,7 +581,7 @@ mod tests {
             ],
         );
 
-        let merged = fed.rrf_merge(&normalized, 60, 5);
+        let merged = CollectionFederation::rrf_merge(&normalized, 60, 5);
         assert!(!merged.is_empty());
         // "a" appears in both collections, should have higher RRF score
     }
@@ -605,7 +605,7 @@ mod tests {
             ],
         );
 
-        let merged = fed.round_robin_merge(&normalized, 10);
+        let merged = CollectionFederation::round_robin_merge(&normalized, 10);
         assert_eq!(merged.len(), 3);
     }
 }
