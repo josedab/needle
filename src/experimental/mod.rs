@@ -82,3 +82,5 @@ pub mod query_prewarming;
 pub mod vector_aggregation;
 #[cfg(feature = "experimental")]
 pub mod sdk_generator;
+#[cfg(feature = "experimental")]
+pub mod collaborative_filtering;

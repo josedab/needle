@@ -436,6 +436,9 @@ pub use experimental::vector_aggregation;
 /// Universal SDK generator from OpenAPI spec. **Experimental**: API may change without notice.
 #[cfg(feature = "experimental")]
 pub use experimental::sdk_generator;
+/// Embedded collaborative filtering with ALS matrix factorization. **Experimental**: API may change without notice.
+#[cfg(feature = "experimental")]
+pub use experimental::collaborative_filtering;
 
 // ── Streaming (feature-gated) ────────────────────────────────────────────────
 
