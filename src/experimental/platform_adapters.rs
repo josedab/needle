@@ -774,7 +774,7 @@ mod tests {
 
     #[test]
     fn test_chunked_storage() {
-        let inner = crate::edge_runtime::InMemoryEdgeStorage::new();
+        let inner = crate::experimental::edge_runtime::InMemoryEdgeStorage::new();
         let chunked = ChunkedEdgeStorage::new(inner, 10); // 10 byte chunks
 
         // Small value (no chunking)
@@ -793,8 +793,8 @@ mod tests {
 
     #[test]
     fn test_tiered_storage() {
-        let cache = crate::edge_runtime::InMemoryEdgeStorage::new();
-        let backing = crate::edge_runtime::InMemoryEdgeStorage::new();
+        let cache = crate::experimental::edge_runtime::InMemoryEdgeStorage::new();
+        let backing = crate::experimental::edge_runtime::InMemoryEdgeStorage::new();
         let tiered = TieredEdgeStorage::new(cache, backing, 100);
 
         // Small value goes to cache
