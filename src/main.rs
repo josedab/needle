@@ -1,4 +1,16 @@
-//! Needle CLI - Command line interface for the Needle vector database
+//! Needle CLI — Command line interface for the Needle vector database.
+//!
+//! Provides commands for database management, vector operations, search,
+//! server mode, backup/restore, and administrative tools.
+//!
+//! # Usage
+//!
+//! ```bash
+//! needle create mydb.needle
+//! needle create-collection mydb.needle -n docs -d 384
+//! needle info mydb.needle
+//! needle serve -a 127.0.0.1:8080  # requires --features server
+//! ```
 
 use clap::{Parser, Subcommand};
 use needle::{CollectionConfig, Database, DistanceFunction, NeedleError, Result};
