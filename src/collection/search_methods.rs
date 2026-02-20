@@ -865,3 +865,301 @@ impl Collection {
             .collect()
     }
 }
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+    use crate::test_utils::random_vector;
+    use serde_json::json;
+
+    fn populated_collection(n: usize, dims: usize) -> Collection {
+        let mut col = Collection::with_dimensions("test", dims);
+        for i in 0..n {
+            let vec = random_vector(dims);
+            col.insert(format!("v{i}"), &vec, Some(json!({"idx": i})))
+                .unwrap();
+        }
+        col
+    }
+
+    // ── Basic search ────────────────────────────────────────────────────
+
+    #[test]
+    fn test_search_returns_sorted_results() {
+        let col = populated_collection(50, 16);
+        let query = random_vector(16);
+        let results = col.search(&query, 10).unwrap();
+        assert!(results.len() <= 10);
+        for w in results.windows(2) {
+            assert!(w[0].distance <= w[1].distance);
+        }
+    }
+
+    #[test]
+    fn test_search_k_zero_returns_empty() {
+        let col = populated_collection(10, 8);
+        let query = random_vector(8);
+        let results = col.search(&query, 0).unwrap();
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_search_empty_collection() {
+        let col = Collection::with_dimensions("empty", 8);
+        let query = random_vector(8);
+        let results = col.search(&query, 5).unwrap();
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_search_k_larger_than_collection() {
+        let col = populated_collection(3, 8);
+        let query = random_vector(8);
+        let results = col.search(&query, 100).unwrap();
+        assert_eq!(results.len(), 3);
+    }
+
+    #[test]
+    fn test_search_dimension_mismatch() {
+        let col = populated_collection(5, 8);
+        let query = random_vector(16);
+        let result = col.search(&query, 5);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_search_nan_query() {
+        let col = populated_collection(5, 4);
+        let query = vec![f32::NAN, 0.0, 0.0, 0.0];
+        let result = col.search(&query, 5);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_search_infinity_query() {
+        let col = populated_collection(5, 4);
+        let query = vec![f32::INFINITY, 0.0, 0.0, 0.0];
+        let result = col.search(&query, 5);
+        assert!(result.is_err());
+    }
+
+    // ── search_ids / search_ids_ref ─────────────────────────────────────
+
+    #[test]
+    fn test_search_ids_returns_tuples() {
+        let col = populated_collection(20, 8);
+        let query = random_vector(8);
+        let results = col.search_ids(&query, 5).unwrap();
+        assert!(results.len() <= 5);
+        for (id, dist) in &results {
+            assert!(!id.is_empty());
+            assert!(*dist >= 0.0);
+        }
+    }
+
+    #[test]
+    fn test_search_ids_ref_returns_refs() {
+        let col = populated_collection(20, 8);
+        let query = random_vector(8);
+        let results = col.search_ids_ref(&query, 5).unwrap();
+        assert!(results.len() <= 5);
+        for (id, dist) in &results {
+            assert!(!id.is_empty());
+            assert!(*dist >= 0.0);
+        }
+    }
+
+    #[test]
+    fn test_search_ids_k_zero() {
+        let col = populated_collection(5, 4);
+        let query = random_vector(4);
+        assert!(col.search_ids(&query, 0).unwrap().is_empty());
+        assert!(col.search_ids_ref(&query, 0).unwrap().is_empty());
+    }
+
+    // ── search_with_filter ──────────────────────────────────────────────
+
+    #[test]
+    fn test_search_with_filter_narrows_results() {
+        let mut col = Collection::with_dimensions("test", 4);
+        col.insert("a", &[1.0, 0.0, 0.0, 0.0], Some(json!({"cat": "x"}))).unwrap();
+        col.insert("b", &[0.9, 0.1, 0.0, 0.0], Some(json!({"cat": "y"}))).unwrap();
+        col.insert("c", &[0.8, 0.2, 0.0, 0.0], Some(json!({"cat": "x"}))).unwrap();
+
+        let filter = Filter::eq("cat", "x");
+        let results = col.search_with_filter(&[1.0, 0.0, 0.0, 0.0], 10, &filter).unwrap();
+        assert!(results.iter().all(|r| r.id == "a" || r.id == "c"));
+    }
+
+    #[test]
+    fn test_search_with_filter_no_match() {
+        let mut col = Collection::with_dimensions("test", 4);
+        col.insert("a", &[1.0, 0.0, 0.0, 0.0], Some(json!({"cat": "x"}))).unwrap();
+
+        let filter = Filter::eq("cat", "nonexistent");
+        let results = col.search_with_filter(&[1.0, 0.0, 0.0, 0.0], 10, &filter).unwrap();
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_search_with_filter_dimension_mismatch() {
+        let col = populated_collection(5, 4);
+        let filter = Filter::eq("cat", "x");
+        let result = col.search_with_filter(&[1.0, 0.0], 10, &filter);
+        assert!(result.is_err());
+    }
+
+    // ── search_explain ──────────────────────────────────────────────────
+
+    #[test]
+    fn test_search_explain_returns_valid_stats() {
+        let col = populated_collection(50, 8);
+        let query = random_vector(8);
+        let (results, explain) = col.search_explain(&query, 5).unwrap();
+        assert!(results.len() <= 5);
+        assert_eq!(explain.dimensions, 8);
+        assert_eq!(explain.collection_size, 50);
+        assert_eq!(explain.requested_k, 5);
+        assert!(explain.effective_k <= 50);
+        assert!(!explain.filter_applied);
+    }
+
+    #[test]
+    fn test_search_explain_k_zero() {
+        let col = populated_collection(10, 4);
+        let query = random_vector(4);
+        let (results, explain) = col.search_explain(&query, 0).unwrap();
+        assert!(results.is_empty());
+        assert_eq!(explain.effective_k, 0);
+    }
+
+    #[test]
+    fn test_search_with_filter_explain_shows_filter() {
+        let mut col = Collection::with_dimensions("test", 4);
+        col.insert("a", &[1.0, 0.0, 0.0, 0.0], Some(json!({"cat": "x"}))).unwrap();
+        col.insert("b", &[0.0, 1.0, 0.0, 0.0], Some(json!({"cat": "y"}))).unwrap();
+
+        let filter = Filter::eq("cat", "x");
+        let (results, explain) = col.search_with_filter_explain(
+            &[1.0, 0.0, 0.0, 0.0], 10, &filter
+        ).unwrap();
+        assert!(explain.filter_applied);
+        assert!(results.len() <= 1);
+    }
+
+    // ── search_radius ───────────────────────────────────────────────────
+
+    #[test]
+    fn test_search_radius_basic() {
+        let mut col = Collection::with_dimensions("test", 4);
+        col.insert("close", &[1.0, 0.0, 0.0, 0.0], None).unwrap();
+        col.insert("far", &[0.0, 0.0, 0.0, 1.0], None).unwrap();
+
+        let results = col.search_radius(&[1.0, 0.0, 0.0, 0.0], 0.1, 100).unwrap();
+        for r in &results {
+            assert!(r.distance <= 0.1);
+        }
+    }
+
+    #[test]
+    fn test_search_radius_negative_distance_returns_empty() {
+        let col = populated_collection(10, 4);
+        let query = random_vector(4);
+        let results = col.search_radius(&query, -1.0, 100).unwrap();
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_search_radius_zero_limit() {
+        let col = populated_collection(10, 4);
+        let query = random_vector(4);
+        let results = col.search_radius(&query, 1.0, 0).unwrap();
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_search_radius_with_filter() {
+        let mut col = Collection::with_dimensions("test", 4);
+        col.insert("a", &[1.0, 0.0, 0.0, 0.0], Some(json!({"t": "x"}))).unwrap();
+        col.insert("b", &[0.99, 0.1, 0.0, 0.0], Some(json!({"t": "y"}))).unwrap();
+
+        let filter = Filter::eq("t", "x");
+        let results = col.search_radius_with_filter(
+            &[1.0, 0.0, 0.0, 0.0], 0.5, 100, &filter
+        ).unwrap();
+        assert!(results.iter().all(|r| r.id == "a"));
+    }
+
+    // ── search_matryoshka ───────────────────────────────────────────────
+
+    #[test]
+    fn test_search_matryoshka_basic() {
+        let col = populated_collection(50, 16);
+        let query = random_vector(16);
+        let results = col.search_matryoshka(&query, 5, 8, 4).unwrap();
+        assert!(results.len() <= 5);
+    }
+
+    #[test]
+    fn test_search_matryoshka_coarse_dims_zero_falls_back() {
+        let col = populated_collection(10, 8);
+        let query = random_vector(8);
+        let results = col.search_matryoshka(&query, 5, 0, 4).unwrap();
+        assert!(results.len() <= 5);
+    }
+
+    #[test]
+    fn test_search_matryoshka_coarse_dims_gte_full_falls_back() {
+        let col = populated_collection(10, 8);
+        let query = random_vector(8);
+        let results = col.search_matryoshka(&query, 5, 8, 4).unwrap();
+        assert!(results.len() <= 5);
+    }
+
+    #[test]
+    fn test_search_matryoshka_k_zero() {
+        let col = populated_collection(10, 8);
+        let query = random_vector(8);
+        let results = col.search_matryoshka(&query, 0, 4, 4).unwrap();
+        assert!(results.is_empty());
+    }
+
+    // ── search_with_trace ───────────────────────────────────────────────
+
+    #[test]
+    fn test_search_with_trace_returns_trace() {
+        let col = populated_collection(30, 8);
+        let query = random_vector(8);
+        let (results, _trace) = col.search_with_trace(&query, 5).unwrap();
+        assert!(results.len() <= 5);
+    }
+
+    #[test]
+    fn test_search_with_trace_k_zero() {
+        let col = populated_collection(10, 4);
+        let query = random_vector(4);
+        let (results, trace) = col.search_with_trace(&query, 0).unwrap();
+        assert!(results.is_empty());
+        assert!(trace.hops.is_empty());
+    }
+
+    // ── search_builder ──────────────────────────────────────────────────
+
+    #[test]
+    fn test_search_builder_basic() {
+        let col = populated_collection(30, 8);
+        let query = random_vector(8);
+        let results = col.search_builder(&query).k(5).execute().unwrap();
+        assert!(results.len() <= 5);
+    }
+
+    // ── enrich_results ──────────────────────────────────────────────────
+
+    #[test]
+    fn test_enrich_results_empty() {
+        let col = Collection::with_dimensions("test", 4);
+        let results = col.enrich_results(vec![]).unwrap();
+        assert!(results.is_empty());
+    }
+}
