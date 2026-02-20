@@ -427,6 +427,9 @@ pub use experimental::locality_compaction;
 /// Temporal vector sequences with trajectory search and drift detection. **Experimental**: API may change without notice.
 #[cfg(feature = "experimental")]
 pub use experimental::temporal_sequences;
+/// Predictive query pre-warming based on access patterns. **Experimental**: API may change without notice.
+#[cfg(feature = "experimental")]
+pub use experimental::query_prewarming;
 
 // ── Streaming (feature-gated) ────────────────────────────────────────────────
 

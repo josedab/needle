@@ -76,3 +76,5 @@ pub mod relevance_feedback;
 pub mod locality_compaction;
 #[cfg(feature = "experimental")]
 pub mod temporal_sequences;
+#[cfg(feature = "experimental")]
+pub mod query_prewarming;
