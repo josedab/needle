@@ -80,3 +80,5 @@ pub mod temporal_sequences;
 pub mod query_prewarming;
 #[cfg(feature = "experimental")]
 pub mod vector_aggregation;
+#[cfg(feature = "experimental")]
+pub mod sdk_generator;

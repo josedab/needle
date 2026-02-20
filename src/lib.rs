@@ -433,6 +433,9 @@ pub use experimental::query_prewarming;
 /// Vector aggregation primitives (CENTROID, MEDOID, CLUSTER, etc.). **Experimental**: API may change without notice.
 #[cfg(feature = "experimental")]
 pub use experimental::vector_aggregation;
+/// Universal SDK generator from OpenAPI spec. **Experimental**: API may change without notice.
+#[cfg(feature = "experimental")]
+pub use experimental::sdk_generator;
 
 // ── Streaming (feature-gated) ────────────────────────────────────────────────
 
