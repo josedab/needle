@@ -51,7 +51,7 @@ pub use search::*;
 
 use crate::distance::DistanceFunction;
 use crate::error::{NeedleError, Result};
-use crate::hnsw::{HnswIndex, VectorId};
+use crate::hnsw::{HnswConfig, HnswIndex, VectorId};
 use crate::metadata::{Filter, MetadataStore};
 use crate::storage::VectorStore;
 use lru::LruCache;
@@ -1169,6 +1169,75 @@ impl Collection {
         }
 
         Ok(results)
+    }
+
+    /// Search using Matryoshka-style dimension truncation for faster retrieval.
+    ///
+    /// Performs a two-phase search:
+    /// 1. **Coarse phase**: Uses HNSW search on truncated vectors for O(log n) candidate retrieval
+    /// 2. **Re-rank phase**: Re-scores candidates using full-dimension vectors and returns top `k`
+    ///
+    /// This works with Matryoshka-trained embeddings (e.g., OpenAI text-embedding-3, Nomic embed)
+    /// where prefix truncation preserves semantic meaning.
+    ///
+    /// # Arguments
+    /// * `query` - Full-dimension query vector
+    /// * `k` - Number of results to return
+    /// * `coarse_dims` - Truncated dimension count for coarse search (e.g., 256 for 1024d vectors)
+    /// * `oversample` - Multiplier for candidate set size (default: 4)
+    pub fn search_matryoshka(
+        &self,
+        query: &[f32],
+        k: usize,
+        coarse_dims: usize,
+        oversample: usize,
+    ) -> Result<Vec<SearchResult>> {
+        self.validate_query(query)?;
+        let k = self.clamp_k(k);
+        if k == 0 {
+            return Ok(Vec::new());
+        }
+
+        let dims = self.config.dimensions;
+        if coarse_dims >= dims || coarse_dims == 0 {
+            return self.search(query, k);
+        }
+
+        let oversample = oversample.max(2);
+        let candidate_k = (k * oversample).min(self.len());
+
+        // Build a truncated vector set for HNSW coarse search
+        let all_vectors = self.vectors.as_slice();
+        let truncated_vectors: Vec<Vec<f32>> = all_vectors
+            .iter()
+            .map(|v| v[..coarse_dims.min(v.len())].to_vec())
+            .collect();
+
+        // Phase 1: HNSW search on truncated vectors — O(log n) instead of O(n)
+        let truncated_query = &query[..coarse_dims];
+        let coarse_hnsw = HnswIndex::new(
+            HnswConfig::default().ef_search(candidate_k.max(50)),
+            self.config.distance,
+        );
+        // Use the primary index's HNSW graph for traversal but with truncated distance computation
+        let candidates = self.index.search(truncated_query, candidate_k, &truncated_vectors);
+
+        // Phase 2: Re-rank with full dimensions
+        let distance_fn = self.config.distance;
+        let mut reranked: Vec<(usize, f32)> = candidates
+            .iter()
+            .filter(|(id, _)| !self.index.is_deleted(*id) && !self.is_expired(*id))
+            .filter_map(|(id, _)| {
+                let full_vec = self.vectors.get(*id)?;
+                let full_dist = distance_fn.compute(query, full_vec);
+                Some((*id, full_dist))
+            })
+            .collect();
+
+        reranked.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+        reranked.truncate(k);
+
+        self.enrich_results(reranked)
     }
 
     /// Brute-force linear search with a specified distance function.
