@@ -46,16 +46,20 @@ cargo build --features full
 ```
 needle/
 ├── src/
-│   ├── lib.rs          # Library entry point
-│   ├── main.rs         # CLI application
-│   ├── collection.rs   # Collection implementation
-│   ├── database.rs     # Database management
-│   ├── hnsw.rs         # HNSW index
-│   ├── distance.rs     # Distance functions
-│   ├── metadata.rs     # Metadata filtering
+│   ├── lib.rs              # Library entry point
+│   ├── main.rs             # CLI application
+│   ├── collection/mod.rs   # Collection implementation
+│   ├── database/mod.rs     # Database management
+│   ├── indexing/hnsw.rs    # HNSW index
+│   ├── distance.rs         # Distance functions
+│   ├── metadata.rs         # Metadata filtering
+│   ├── enterprise/         # Encryption, RBAC, Raft
+│   ├── persistence/        # Backup, WAL, versioning
+│   ├── search/             # Query planning, reranking
 │   └── ...
-├── tests/              # Integration tests
+├── tests/              # Integration tests (12 files)
 ├── benches/            # Benchmarks
+├── crates/             # Workspace crates (core, cli, python)
 └── website/            # Documentation site
 ```
 
