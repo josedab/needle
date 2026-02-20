@@ -12,12 +12,15 @@ pub use crate::backup::{
     IncrementalBackupManager, IncrementalState, PitrConfig, ReplicationConfig, ReplicationLeader,
     RestorePoint, RestorePointType, SnapshotSegment, WalEntry, WalOperation,
 };
+#[cfg(feature = "experimental")]
 pub use crate::clustering::{
     elbow_method, silhouette_score, ClusteringConfig, HierarchicalClustering, KMeans, Linkage,
     MiniBatchKMeans,
 };
+#[cfg(feature = "experimental")]
 pub use crate::dedup::{DeduplicationConfig, DuplicateDetector, DuplicateGroup, DuplicateResult};
 pub use crate::dimreduce::{NeighborEmbedding, RandomProjection, PCA};
+#[cfg(feature = "experimental")]
 pub use crate::graph::{Community, GraphConfig, GraphPath, NeighborhoodResult, SemanticGraph};
 pub use crate::namespace::{
     AccessControl, AccessLevel, Namespace, NamespaceCollection, NamespaceManager, TenantConfig,

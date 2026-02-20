@@ -118,6 +118,7 @@ pub use crate::finetuning::{
     TrainingResult, Triplet,
 };
 pub use crate::float16::{Bf16, Bf16Vector, F16Vector, HalfPrecision, F16};
+#[cfg(feature = "experimental")]
 pub use crate::gpu::{
     select_kernel, DataType, DistanceType, ExecutionBackend, FallbackSearchResult, GpuAccelerator,
     GpuBackend, GpuConfig, GpuDevice, GpuMetrics, GpuResidentIndex, HardwareCapabilities,
@@ -261,6 +262,7 @@ pub use crate::playground::{
     ProjectionEngine, ProjectionInput, ProjectionMethod, ProjectionScene, SceneBounds, Theme,
     Tutorial, TutorialInfo, TutorialStep, VisualizationConfig, VisualizationPoint,
 };
+#[cfg(feature = "experimental")]
 pub use crate::plugin::{
     DistancePlugin, HookResult, Plugin, PluginError, PluginInfo, PluginManager, PluginManifest,
     PluginType, PostSearchHook, PreSearchHook, SearchHookResult,
@@ -345,6 +347,7 @@ pub use crate::sync_protocol::{
 pub use crate::telemetry::{
     Metric, MetricValue, Span, SpanStatus, Telemetry, TelemetryConfig, TraceContext,
 };
+#[cfg(feature = "experimental")]
 pub use crate::temporal::{DecayFunction, TemporalConfig, TemporalIndex, VectorVersion};
 pub use crate::tenant_isolation::{
     AccessPolicy as TenantAccessPolicy, AuditLogEntry as TenantAuditLogEntry, BillingSummary,

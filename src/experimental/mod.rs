@@ -10,9 +10,11 @@ pub mod agentic_memory;
 pub mod analytics;
 #[cfg(feature = "experimental")]
 pub mod cloud_control;
+#[cfg(feature = "experimental")]
 pub mod clustering;
 #[cfg(feature = "experimental")]
 pub mod crdt;
+#[cfg(feature = "experimental")]
 pub mod dedup;
 #[cfg(feature = "experimental")]
 pub mod distributed_hnsw;
@@ -22,7 +24,9 @@ pub mod edge_optimized;
 pub mod edge_partitioning;
 #[cfg(feature = "experimental")]
 pub mod edge_runtime;
+#[cfg(feature = "experimental")]
 pub mod gpu;
+#[cfg(feature = "experimental")]
 pub mod graph;
 #[cfg(feature = "experimental")]
 pub mod graphrag_index;
@@ -38,6 +42,7 @@ pub mod optimizer;
 pub mod platform_adapters;
 #[cfg(feature = "experimental")]
 pub mod playground;
+#[cfg(feature = "experimental")]
 pub mod plugin;
 #[cfg(feature = "experimental")]
 pub mod plugin_registry;
@@ -49,6 +54,7 @@ pub mod rebalance;
 pub mod serverless_runtime;
 #[cfg(feature = "experimental")]
 pub mod streaming_upsert;
+#[cfg(feature = "experimental")]
 pub mod temporal;
 #[cfg(feature = "experimental")]
 pub mod vector_streaming;

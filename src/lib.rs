@@ -166,9 +166,11 @@ pub use experimental::agentic_memory;
 pub use experimental::analytics;
 #[cfg(feature = "experimental")]
 pub use experimental::cloud_control;
+#[cfg(feature = "experimental")]
 pub use experimental::clustering;
 #[cfg(feature = "experimental")]
 pub use experimental::crdt;
+#[cfg(feature = "experimental")]
 pub use experimental::dedup;
 #[cfg(feature = "experimental")]
 pub use experimental::distributed_hnsw;
@@ -176,9 +178,13 @@ pub use experimental::distributed_hnsw;
 pub use experimental::edge_optimized;
 #[cfg(feature = "experimental")]
 pub use experimental::edge_partitioning;
+#[cfg(feature = "experimental")]
 pub use experimental::gpu;
+#[cfg(feature = "experimental")]
 pub use experimental::graph;
+#[cfg(feature = "experimental")]
 pub use experimental::plugin;
+#[cfg(feature = "experimental")]
 pub use experimental::temporal;
 // NOTE: experimental::edge_runtime is accessed via crate::experimental::edge_runtime
 // to avoid conflict with the services::edge_runtime re-export above.
