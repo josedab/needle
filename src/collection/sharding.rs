@@ -388,3 +388,313 @@ impl SemanticQueryCache {
         (self.hits, self.misses)
     }
 }
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+    use crate::collection::config::SemanticQueryCacheConfig;
+
+    fn make_result(id: &str, dist: f32) -> SearchResult {
+        SearchResult {
+            id: id.to_string(),
+            distance: dist,
+            metadata: None,
+        }
+    }
+
+    // ── QueryCacheKey ───────────────────────────────────────────────────
+
+    #[test]
+    fn test_cache_key_equality() {
+        let k1 = QueryCacheKey::new(&[1.0, 2.0, 3.0], 5);
+        let k2 = QueryCacheKey::new(&[1.0, 2.0, 3.0], 5);
+        assert!(k1 == k2);
+    }
+
+    #[test]
+    fn test_cache_key_different_k() {
+        let k1 = QueryCacheKey::new(&[1.0, 2.0], 5);
+        let k2 = QueryCacheKey::new(&[1.0, 2.0], 10);
+        assert!(k1 != k2);
+    }
+
+    #[test]
+    fn test_cache_key_different_vector() {
+        let k1 = QueryCacheKey::new(&[1.0, 2.0], 5);
+        let k2 = QueryCacheKey::new(&[1.0, 3.0], 5);
+        assert!(k1 != k2);
+    }
+
+    #[test]
+    fn test_cache_key_hash_consistency() {
+        use std::collections::hash_map::DefaultHasher;
+        let k1 = QueryCacheKey::new(&[1.0, 2.0], 5);
+        let k2 = QueryCacheKey::new(&[1.0, 2.0], 5);
+        let mut h1 = DefaultHasher::new();
+        let mut h2 = DefaultHasher::new();
+        k1.hash(&mut h1);
+        k2.hash(&mut h2);
+        assert_eq!(h1.finish(), h2.finish());
+    }
+
+    // ── QueryCache ──────────────────────────────────────────────────────
+
+    #[test]
+    fn test_query_cache_put_get() {
+        let mut cache = QueryCache::new(NonZeroUsize::new(10).unwrap());
+        let key = QueryCacheKey::new(&[1.0, 0.0], 5);
+        let value = CachedSearchResult {
+            results: Arc::new(vec![make_result("a", 0.1)]),
+        };
+        cache.put(key.clone(), value);
+        let result = cache.get(&key);
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().results.len(), 1);
+    }
+
+    #[test]
+    fn test_query_cache_miss() {
+        let mut cache = QueryCache::new(NonZeroUsize::new(10).unwrap());
+        let key = QueryCacheKey::new(&[1.0, 0.0], 5);
+        let result = cache.get(&key);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_query_cache_stats() {
+        let mut cache = QueryCache::new(NonZeroUsize::new(10).unwrap());
+        let key = QueryCacheKey::new(&[1.0], 1);
+        let _ = cache.get(&key); // miss
+        cache.put(
+            key.clone(),
+            CachedSearchResult { results: Arc::new(vec![]) },
+        );
+        let _ = cache.get(&key); // hit
+        let stats = cache.stats(10);
+        assert_eq!(stats.hits, 1);
+        assert_eq!(stats.misses, 1);
+        assert_eq!(stats.size, 1);
+        assert_eq!(stats.capacity, 10);
+    }
+
+    #[test]
+    fn test_query_cache_clear() {
+        let mut cache = QueryCache::new(NonZeroUsize::new(10).unwrap());
+        let key = QueryCacheKey::new(&[1.0], 1);
+        cache.put(key.clone(), CachedSearchResult { results: Arc::new(vec![]) });
+        cache.clear();
+        assert!(cache.get(&key).is_none());
+    }
+
+    #[test]
+    fn test_query_cache_eviction() {
+        let mut cache = QueryCache::new(NonZeroUsize::new(2).unwrap());
+        let k1 = QueryCacheKey::new(&[1.0], 1);
+        let k2 = QueryCacheKey::new(&[2.0], 1);
+        let k3 = QueryCacheKey::new(&[3.0], 1);
+        let val = CachedSearchResult { results: Arc::new(vec![]) };
+
+        cache.put(k1.clone(), val.clone());
+        cache.put(k2.clone(), val.clone());
+        cache.put(k3.clone(), val);
+
+        // k1 should have been evicted (LRU)
+        assert!(cache.get(&k1).is_none());
+        assert!(cache.get(&k3).is_some());
+    }
+
+    #[test]
+    fn test_query_cache_debug() {
+        let cache = QueryCache::new(NonZeroUsize::new(10).unwrap());
+        let debug = format!("{:?}", cache);
+        assert!(debug.contains("QueryCache"));
+        assert!(debug.contains("hits"));
+    }
+
+    // ── ShardedQueryCache ───────────────────────────────────────────────
+
+    #[test]
+    fn test_sharded_cache_put_get() {
+        let cache = ShardedQueryCache::new(NonZeroUsize::new(100).unwrap());
+        let key = QueryCacheKey::new(&[1.0, 2.0], 5);
+        let val = CachedSearchResult {
+            results: Arc::new(vec![make_result("a", 0.1)]),
+        };
+        cache.put(key.clone(), val);
+        let result = cache.get(&key);
+        assert!(result.is_some());
+    }
+
+    #[test]
+    fn test_sharded_cache_miss() {
+        let cache = ShardedQueryCache::new(NonZeroUsize::new(100).unwrap());
+        let key = QueryCacheKey::new(&[1.0, 2.0], 5);
+        assert!(cache.get(&key).is_none());
+    }
+
+    #[test]
+    fn test_sharded_cache_clear() {
+        let cache = ShardedQueryCache::new(NonZeroUsize::new(100).unwrap());
+        let key = QueryCacheKey::new(&[1.0], 1);
+        cache.put(key.clone(), CachedSearchResult { results: Arc::new(vec![]) });
+        cache.clear();
+        assert!(cache.get(&key).is_none());
+    }
+
+    #[test]
+    fn test_sharded_cache_aggregate_stats() {
+        let cache = ShardedQueryCache::new(NonZeroUsize::new(100).unwrap());
+        let key = QueryCacheKey::new(&[1.0], 1);
+        let _ = cache.get(&key); // miss
+        cache.put(key.clone(), CachedSearchResult { results: Arc::new(vec![]) });
+        let _ = cache.get(&key); // hit
+
+        let (size, hits, misses) = cache.aggregate_stats();
+        assert_eq!(size, 1);
+        assert_eq!(hits, 1);
+        assert_eq!(misses, 1);
+    }
+
+    #[test]
+    fn test_sharded_cache_stats() {
+        let cache = ShardedQueryCache::new(NonZeroUsize::new(50).unwrap());
+        let stats = cache.stats(50);
+        assert_eq!(stats.capacity, 50);
+        assert_eq!(stats.hits, 0);
+        assert_eq!(stats.misses, 0);
+    }
+
+    #[test]
+    fn test_sharded_cache_debug() {
+        let cache = ShardedQueryCache::new(NonZeroUsize::new(100).unwrap());
+        let debug = format!("{:?}", cache);
+        assert!(debug.contains("ShardedQueryCache"));
+    }
+
+    #[test]
+    fn test_sharded_cache_distributes_keys() {
+        let cache = ShardedQueryCache::new(NonZeroUsize::new(1000).unwrap());
+        for i in 0..50 {
+            let key = QueryCacheKey::new(&[i as f32], 1);
+            cache.put(key, CachedSearchResult { results: Arc::new(vec![]) });
+        }
+        let (size, _, _) = cache.aggregate_stats();
+        assert_eq!(size, 50);
+    }
+
+    // ── SemanticQueryCache ──────────────────────────────────────────────
+
+    #[test]
+    fn test_semantic_cache_insert_and_lookup() {
+        let config = SemanticQueryCacheConfig::new(10, 0.95);
+        let mut cache = SemanticQueryCache::new(&config, 4);
+
+        let query = vec![1.0, 0.0, 0.0, 0.0];
+        let results = vec![make_result("a", 0.1), make_result("b", 0.2)];
+        cache.insert(&query, 5, &results);
+
+        // Exact same query should hit
+        let lookup = cache.lookup(&query, 5);
+        assert!(lookup.is_some());
+        assert_eq!(lookup.unwrap().len(), 2);
+    }
+
+    #[test]
+    fn test_semantic_cache_miss_empty() {
+        let config = SemanticQueryCacheConfig::new(10, 0.95);
+        let mut cache = SemanticQueryCache::new(&config, 4);
+        let query = vec![1.0, 0.0, 0.0, 0.0];
+        let result = cache.lookup(&query, 5);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_semantic_cache_truncates_to_k() {
+        let config = SemanticQueryCacheConfig::new(10, 0.95);
+        let mut cache = SemanticQueryCache::new(&config, 4);
+
+        let query = vec![1.0, 0.0, 0.0, 0.0];
+        let results = vec![
+            make_result("a", 0.1),
+            make_result("b", 0.2),
+            make_result("c", 0.3),
+        ];
+        cache.insert(&query, 10, &results);
+
+        // Request fewer results than cached
+        let lookup = cache.lookup(&query, 2);
+        assert!(lookup.is_some());
+        assert_eq!(lookup.unwrap().len(), 2);
+    }
+
+    #[test]
+    fn test_semantic_cache_miss_insufficient_k() {
+        let config = SemanticQueryCacheConfig::new(10, 0.95);
+        let mut cache = SemanticQueryCache::new(&config, 4);
+
+        let query = vec![1.0, 0.0, 0.0, 0.0];
+        cache.insert(&query, 3, &vec![make_result("a", 0.1)]);
+
+        // Request more results than cached k
+        let lookup = cache.lookup(&query, 5);
+        assert!(lookup.is_none());
+    }
+
+    #[test]
+    fn test_semantic_cache_eviction_at_capacity() {
+        let config = SemanticQueryCacheConfig::new(2, 0.95);
+        let mut cache = SemanticQueryCache::new(&config, 4);
+
+        cache.insert(&[1.0, 0.0, 0.0, 0.0], 5, &vec![make_result("a", 0.1)]);
+        cache.insert(&[0.0, 1.0, 0.0, 0.0], 5, &vec![make_result("b", 0.1)]);
+        cache.insert(&[0.0, 0.0, 1.0, 0.0], 5, &vec![make_result("c", 0.1)]);
+
+        // Should have evicted an entry
+        assert!(cache.entries.len() <= 2);
+    }
+
+    #[test]
+    fn test_semantic_cache_clear() {
+        let config = SemanticQueryCacheConfig::new(10, 0.95);
+        let mut cache = SemanticQueryCache::new(&config, 4);
+
+        cache.insert(&[1.0, 0.0, 0.0, 0.0], 5, &vec![make_result("a", 0.1)]);
+        cache.clear();
+
+        assert!(cache.entries.is_empty());
+        assert_eq!(cache.next_id, 0);
+    }
+
+    #[test]
+    fn test_semantic_cache_stats() {
+        let config = SemanticQueryCacheConfig::new(10, 0.95);
+        let mut cache = SemanticQueryCache::new(&config, 4);
+
+        let _ = cache.lookup(&[1.0, 0.0, 0.0, 0.0], 5); // miss
+        let (hits, misses) = cache.stats();
+        assert_eq!(hits, 0);
+        assert_eq!(misses, 1);
+    }
+
+    #[test]
+    fn test_semantic_cache_warm() {
+        let config = SemanticQueryCacheConfig::new(10, 0.95);
+        let mut cache = SemanticQueryCache::new(&config, 4);
+
+        let entries = vec![
+            (&[1.0_f32, 0.0, 0.0, 0.0][..], 5, vec![make_result("a", 0.1)]),
+            (&[0.0, 1.0, 0.0, 0.0][..], 5, vec![make_result("b", 0.2)]),
+        ];
+        cache.warm(entries);
+        assert_eq!(cache.entries.len(), 2);
+    }
+
+    #[test]
+    fn test_semantic_cache_debug() {
+        let config = SemanticQueryCacheConfig::new(10, 0.95);
+        let cache = SemanticQueryCache::new(&config, 4);
+        let debug = format!("{:?}", cache);
+        assert!(debug.contains("SemanticQueryCache"));
+    }
+}
