@@ -96,7 +96,7 @@ memmap2 = "0.9"
 rand = "0.8"
 
 # Ordered floats for comparison
-ordered-float = "4.0"
+ordered-float = "5.1"
 
 # Parking lot for faster locks
 parking_lot = "0.12"
