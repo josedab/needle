@@ -174,7 +174,7 @@ objc = { version = "0.2", optional = true }
 wide = { version = "0.7", optional = true }
 
 # TUI (optional)
-ratatui = { version = "0.29", optional = true }
+ratatui = { version = "0.30", optional = true }
 crossterm = { version = "0.28", optional = true }
 
 # CDC / Streaming connectors (optional)
