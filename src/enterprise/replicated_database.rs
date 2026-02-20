@@ -516,3 +516,250 @@ pub struct ReplicatedDatabaseStatus {
     /// Total vectors across all collections.
     pub total_vectors: usize,
 }
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+
+    fn make_replicated_db() -> ReplicatedDatabase {
+        let db = Database::in_memory();
+        let config = ReplicatedDatabaseConfig::new(1).with_peers(vec![2, 3]);
+        ReplicatedDatabase::new(db, config)
+    }
+
+    // ── Config ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_config_defaults() {
+        let config = ReplicatedDatabaseConfig::default();
+        assert_eq!(config.node_id, NodeId(1));
+        assert!(config.peers.is_empty());
+        assert!(config.allow_follower_reads);
+    }
+
+    #[test]
+    fn test_config_with_peers() {
+        let config = ReplicatedDatabaseConfig::new(5).with_peers(vec![1, 2, 3]);
+        assert_eq!(config.node_id, NodeId(5));
+        assert_eq!(config.peers.len(), 3);
+    }
+
+    #[test]
+    fn test_config_follower_reads_disabled() {
+        let config = ReplicatedDatabaseConfig::new(1).allow_follower_reads(false);
+        assert!(!config.allow_follower_reads);
+    }
+
+    // ── ReplicatedDatabase creation ─────────────────────────────────────
+
+    #[test]
+    fn test_new_replicated_db() {
+        let rdb = make_replicated_db();
+        assert_eq!(rdb.node_id(), NodeId(1));
+    }
+
+    #[test]
+    fn test_database_accessor() {
+        let rdb = make_replicated_db();
+        let db = rdb.database();
+        assert!(db.list_collections().is_empty());
+    }
+
+    #[test]
+    fn test_initial_state() {
+        let rdb = make_replicated_db();
+        // Freshly created node starts as follower
+        let state = rdb.state();
+        assert!(state == RaftState::Follower || state == RaftState::Candidate);
+    }
+
+    // ── Status ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_status_initial() {
+        let rdb = make_replicated_db();
+        let status = rdb.status();
+        assert_eq!(status.node_id, NodeId(1));
+        assert!(status.collections.is_empty());
+        assert_eq!(status.total_vectors, 0);
+    }
+
+    // ── Propose commands when not leader ─────────────────────────────────
+
+    #[test]
+    fn test_propose_create_collection_not_leader() {
+        let mut rdb = make_replicated_db();
+        let result = rdb.propose_create_collection("test", 128);
+        // Freshly created node is not leader, should fail
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_propose_insert_not_leader() {
+        let mut rdb = make_replicated_db();
+        let result = rdb.propose_insert("test", "v1", &[1.0, 0.0], None);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_propose_delete_not_leader() {
+        let mut rdb = make_replicated_db();
+        let result = rdb.propose_delete("test", "v1");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_propose_update_not_leader() {
+        let mut rdb = make_replicated_db();
+        let result = rdb.propose_update("test", "v1", &[1.0], None);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_propose_drop_collection_not_leader() {
+        let mut rdb = make_replicated_db();
+        let result = rdb.propose_drop_collection("test");
+        assert!(result.is_err());
+    }
+
+    // ── Read operations ─────────────────────────────────────────────────
+
+    #[test]
+    fn test_list_collections_follower_reads_allowed() {
+        let rdb = make_replicated_db();
+        let collections = rdb.list_collections().unwrap();
+        assert!(collections.is_empty());
+    }
+
+    #[test]
+    fn test_list_collections_follower_reads_disabled() {
+        let db = Database::in_memory();
+        let config = ReplicatedDatabaseConfig::new(1)
+            .with_peers(vec![2, 3])
+            .allow_follower_reads(false);
+        let rdb = ReplicatedDatabase::new(db, config);
+        let result = rdb.list_collections();
+        // Not leader and follower reads disabled
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_has_collection_empty() {
+        let rdb = make_replicated_db();
+        let has = rdb.has_collection("nonexistent").unwrap();
+        assert!(!has);
+    }
+
+    #[test]
+    fn test_read_collection_not_found() {
+        let rdb = make_replicated_db();
+        let result = rdb.read_collection("nonexistent");
+        assert!(result.is_err());
+    }
+
+    // ── ReplicatedCommand serialization ─────────────────────────────────
+
+    #[test]
+    fn test_command_roundtrip() {
+        let cmd = ReplicatedCommand::CreateCollection {
+            name: "test".into(),
+            dimensions: 128,
+            config: None,
+        };
+        let raft_cmd = cmd.to_raft_command();
+        let parsed = ReplicatedCommand::from_raft_command(&raft_cmd);
+        assert!(parsed.is_some());
+        if let Some(ReplicatedCommand::CreateCollection { name, dimensions, .. }) = parsed {
+            assert_eq!(name, "test");
+            assert_eq!(dimensions, 128);
+        }
+    }
+
+    #[test]
+    fn test_command_noop_roundtrip() {
+        let cmd = ReplicatedCommand::Noop;
+        let raft_cmd = cmd.to_raft_command();
+        let parsed = ReplicatedCommand::from_raft_command(&raft_cmd);
+        assert!(parsed.is_some());
+    }
+
+    #[test]
+    fn test_noop_from_raft_noop() {
+        let parsed = ReplicatedCommand::from_raft_command(&RaftCommand::Noop);
+        assert!(matches!(parsed, Some(ReplicatedCommand::Noop)));
+    }
+
+    // ── Error display ───────────────────────────────────────────────────
+
+    #[test]
+    fn test_error_display_not_leader_known() {
+        let err = ReplicatedDatabaseError::NotLeader(Some(NodeId(3)));
+        let msg = err.to_string();
+        assert!(msg.contains("Not the leader"));
+    }
+
+    #[test]
+    fn test_error_display_not_leader_unknown() {
+        let err = ReplicatedDatabaseError::NotLeader(None);
+        assert!(err.to_string().contains("leader unknown"));
+    }
+
+    #[test]
+    fn test_error_display_invalid_operation() {
+        let err = ReplicatedDatabaseError::InvalidOperation("bad".into());
+        assert!(err.to_string().contains("bad"));
+    }
+
+    #[test]
+    fn test_error_display_database() {
+        let err = ReplicatedDatabaseError::Database(
+            NeedleError::CollectionNotFound("x".into()),
+        );
+        assert!(err.to_string().contains("Database error"));
+    }
+
+    // ── Tick ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_tick_no_crash() {
+        let mut rdb = make_replicated_db();
+        // Should not panic
+        for _ in 0..10 {
+            rdb.tick();
+        }
+    }
+
+    // ── Apply command directly ──────────────────────────────────────────
+
+    #[test]
+    fn test_apply_noop() {
+        let rdb = make_replicated_db();
+        let result = rdb.apply_command(&ReplicatedCommand::Noop);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_apply_create_collection() {
+        let rdb = make_replicated_db();
+        let result = rdb.apply_command(&ReplicatedCommand::CreateCollection {
+            name: "docs".into(),
+            dimensions: 64,
+            config: None,
+        });
+        assert!(result.is_ok());
+        assert!(rdb.database().has_collection("docs"));
+    }
+
+    #[test]
+    fn test_apply_insert_nonexistent_collection() {
+        let rdb = make_replicated_db();
+        let result = rdb.apply_command(&ReplicatedCommand::Insert {
+            collection: "nonexistent".into(),
+            id: "v1".into(),
+            vector: vec![1.0],
+            metadata: None,
+        });
+        assert!(result.is_err());
+    }
+}
