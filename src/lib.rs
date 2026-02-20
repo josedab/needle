@@ -439,6 +439,9 @@ pub use experimental::sdk_generator;
 /// Embedded collaborative filtering with ALS matrix factorization. **Experimental**: API may change without notice.
 #[cfg(feature = "experimental")]
 pub use experimental::collaborative_filtering;
+/// Edge-cloud tiered sync with CRDTs and Merkle trees. **Experimental**: API may change without notice.
+#[cfg(feature = "experimental")]
+pub use experimental::edge_cloud_sync;
 
 // ── Streaming (feature-gated) ────────────────────────────────────────────────
 

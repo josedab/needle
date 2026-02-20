@@ -84,3 +84,5 @@ pub mod vector_aggregation;
 pub mod sdk_generator;
 #[cfg(feature = "experimental")]
 pub mod collaborative_filtering;
+#[cfg(feature = "experimental")]
+pub mod edge_cloud_sync;
