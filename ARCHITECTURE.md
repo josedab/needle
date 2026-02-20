@@ -18,46 +18,53 @@ Application → Database → Collection → HNSW Index → Distance Functions (S
 
 ```
 src/
-├── lib.rs              # Library entry, re-exports public API
-├── main.rs             # CLI application
+├── lib.rs                  # Library entry, re-exports public API
+├── main.rs                 # CLI application
 │
 ├── Core
-│   ├── collection.rs   # Collection: vectors + metadata + index
-│   ├── database.rs     # Database: multi-collection management
-│   ├── error.rs        # Error types with structured codes
-│   ├── storage.rs      # File I/O, mmap, vector storage
-│   └── metadata.rs     # Metadata storage and filtering
+│   ├── collection/mod.rs   # Collection: vectors + metadata + index
+│   ├── database/mod.rs     # Database: multi-collection management
+│   ├── error.rs            # Error types with structured codes
+│   ├── storage.rs          # File I/O, mmap, vector storage
+│   └── metadata.rs         # Metadata storage and filtering
 │
-├── Indexing
-│   ├── hnsw.rs         # HNSW index (primary index)
-│   ├── ivf.rs          # IVF (Inverted File) index
-│   ├── diskann.rs      # DiskANN on-disk index
-│   ├── sparse.rs       # Sparse vector inverted index
-│   └── multivec.rs     # Multi-vector (ColBERT) support
+├── Indexing (src/indexing/)
+│   ├── hnsw.rs             # HNSW index (primary index)
+│   ├── ivf.rs              # IVF (Inverted File) index
+│   ├── diskann.rs          # DiskANN on-disk index
+│   ├── sparse.rs           # Sparse vector inverted index
+│   ├── quantization.rs     # Scalar, Product, Binary quantization
+│   └── multivec.rs         # Multi-vector (ColBERT) support
 │
-├── Search & Retrieval
-│   ├── distance.rs     # Distance functions (Cosine, Euclidean, Dot, Manhattan)
-│   ├── quantization.rs # Scalar, Product, Binary quantization
-│   ├── hybrid.rs       # BM25 + RRF hybrid search (feature: hybrid)
-│   └── reranker.rs     # Cross-encoder reranking
+├── Search (src/search/)
+│   ├── query_lang.rs       # NeedleQL query language
+│   ├── query_planner.rs    # Query planning and optimization
+│   ├── reranker.rs         # Cross-encoder reranking
+│   └── federated.rs        # Multi-instance federated search
+│
+├── distance.rs             # Distance functions (Cosine, Euclidean, Dot, Manhattan)
 │
 ├── Interfaces
-│   ├── server.rs       # HTTP REST API (feature: server)
-│   ├── python.rs       # Python bindings (feature: python)
-│   ├── wasm.rs         # WASM bindings (feature: wasm)
-│   └── tui.rs          # Terminal UI (feature: tui)
+│   ├── server.rs           # HTTP REST API (feature: server)
+│   ├── python.rs           # Python bindings (feature: python)
+│   ├── wasm.rs             # WASM bindings (feature: wasm)
+│   └── tui.rs              # Terminal UI (feature: tui)
 │
-├── Enterprise (Beta)
-│   ├── encryption.rs   # ChaCha20-Poly1305 encryption at rest
-│   ├── security.rs     # RBAC and audit logging
-│   ├── wal.rs          # Write-ahead logging
-│   ├── raft.rs         # Raft consensus
-│   ├── shard.rs        # Consistent hash sharding
-│   └── namespace.rs    # Multi-tenancy
+├── Enterprise (src/enterprise/) — Beta
+│   ├── encryption.rs       # ChaCha20-Poly1305 encryption at rest
+│   ├── security.rs         # RBAC and audit logging
+│   ├── wal.rs              # Write-ahead logging
+│   ├── raft.rs             # Raft consensus
+│   └── namespace.rs        # Multi-tenancy
 │
-└── Experimental        # ⚠️ APIs may change without notice
-    ├── gpu.rs          # GPU acceleration (scaffolding, CPU fallback)
-    ├── cloud_storage/  # S3/GCS/Azure backends (interface only)
+├── Persistence (src/persistence/)
+│   ├── backup.rs           # Backup and restore
+│   ├── versioning.rs       # Vector version control
+│   ├── cloud_storage/      # S3/GCS/Azure backends
+│   └── wal.rs              # Write-ahead logging
+│
+└── Experimental (src/experimental/) — ⚠️ APIs may change without notice
+    ├── gpu.rs              # GPU acceleration (scaffolding, CPU fallback)
     ├── agentic_memory.rs
     ├── playground.rs
     └── ... (~25 more modules)
@@ -67,13 +74,13 @@ src/
 
 | Type | Module | Role |
 |------|--------|------|
-| `Database` | database.rs | Entry point, manages collections and persistence |
-| `Collection` | collection.rs | Holds vectors, HNSW index, and metadata |
-| `CollectionRef` | database.rs | Thread-safe reference (Arc + RwLock) |
-| `HnswIndex` | hnsw.rs | Hierarchical Navigable Small World graph |
-| `Filter` | metadata.rs | MongoDB-style metadata query filters |
-| `SearchResult` | collection.rs | Result with id, distance, and metadata |
-| `NeedleError` | error.rs | Structured error with error codes |
+| `Database` | `database/mod.rs` | Entry point, manages collections and persistence |
+| `Collection` | `collection/mod.rs` | Holds vectors, HNSW index, and metadata |
+| `CollectionRef` | `database/collection_ref.rs` | Thread-safe reference (Arc + RwLock) |
+| `HnswIndex` | `indexing/hnsw.rs` | Hierarchical Navigable Small World graph |
+| `Filter` | `metadata.rs` | MongoDB-style metadata query filters |
+| `SearchResult` | `collection/search.rs` | Result with id, distance, and metadata |
+| `NeedleError` | `error.rs` | Structured error with error codes |
 
 ## API Stability Tiers
 

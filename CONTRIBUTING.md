@@ -385,13 +385,14 @@ Understanding the codebase structure will help you contribute effectively.
 
 | Module | Purpose |
 |--------|---------|
-| `database.rs` | Database management, collections |
-| `collection.rs` | Vector storage and search |
-| `hnsw.rs` | HNSW index implementation |
+| `collection/mod.rs` | Vector storage, search, and collection management |
+| `database/mod.rs` | Database management, persistence, thread-safe access |
+| `database/collection_ref.rs` | Thread-safe `CollectionRef` handle |
+| `indexing/hnsw.rs` | HNSW index implementation |
 | `metadata.rs` | Metadata storage and filtering |
-| `distance.rs` | Distance functions |
-| `server.rs` | HTTP REST API |
-| `error.rs` | Error types |
+| `distance.rs` | Distance functions (Cosine, Euclidean, Dot, Manhattan) |
+| `server.rs` | HTTP REST API (feature: server) |
+| `error.rs` | Error types with structured codes |
 
 ### Adding Features
 
@@ -409,7 +410,7 @@ pub enum NeedleError {
 
 #### New Collection Method
 
-1. Add method to `Collection` in `src/collection.rs`
+1. Add method to `Collection` in `src/collection/mod.rs`
 2. Add internal method to `Database`
 3. Add public method to `CollectionRef`
 4. Export in `src/lib.rs` if public

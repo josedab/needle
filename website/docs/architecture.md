@@ -69,9 +69,9 @@ flowchart TB
 | `Collection` | `collection/mod.rs` | Holds vectors, HNSW index, metadata, search logic |
 | `CollectionRef` | `database/collection_ref.rs` | Thread-safe reference (`Arc` + `RwLock`) |
 | `HnswIndex` | `indexing/hnsw.rs` | Hierarchical Navigable Small World graph |
-| `Filter` | `core/metadata.rs` | MongoDB-style metadata query filters |
-| `SearchResult` | `collection/mod.rs` | Result with id, distance, and metadata |
-| `NeedleError` | `core/error.rs` | Structured error with error codes |
+| `Filter` | `metadata.rs` | MongoDB-style metadata query filters |
+| `SearchResult` | `collection/search.rs` | Result with id, distance, and metadata |
+| `NeedleError` | `error.rs` | Structured error with error codes |
 
 ## Module Map
 

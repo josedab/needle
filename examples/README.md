@@ -20,6 +20,8 @@ Work through these examples in order to learn Needle's core features:
 | 6 | `multi_vector` | ColBERT-style multi-vector retrieval | `cargo run --example multi_vector` |
 | 7 | `image_search` | Image similarity search patterns | `cargo run --example image_search` |
 | 8 | `rag_chatbot` | Build a RAG pipeline (mock embeddings) | `cargo run --example rag_chatbot` |
+| 9 | `multi_tenant` | Multi-tenancy and namespace isolation | `cargo run --example multi_tenant` |
+| 10 | `sharding` | Data sharding and partitioning strategies | `cargo run --example sharding` |
 
 ## Feature-flagged Examples
 
