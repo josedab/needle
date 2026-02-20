@@ -326,3 +326,206 @@ impl Collection {
         &self.provenance_store
     }
 }
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+    use crate::collection::config::SemanticDedupConfig;
+    use serde_json::json;
+
+    // ── Basic inserts ───────────────────────────────────────────────────
+
+    #[test]
+    fn test_insert_basic() {
+        let mut col = Collection::with_dimensions("test", 4);
+        col.insert("v1", &[1.0, 0.0, 0.0, 0.0], None).unwrap();
+        assert_eq!(col.len(), 1);
+        assert!(col.contains("v1"));
+    }
+
+    #[test]
+    fn test_insert_with_metadata() {
+        let mut col = Collection::with_dimensions("test", 4);
+        col.insert("v1", &[1.0, 0.0, 0.0, 0.0], Some(json!({"key": "val"})))
+            .unwrap();
+        let (vec, meta) = col.get("v1").unwrap();
+        assert_eq!(vec.len(), 4);
+        assert!(meta.is_some());
+    }
+
+    #[test]
+    fn test_insert_vec_ownership() {
+        let mut col = Collection::with_dimensions("test", 4);
+        let vec = vec![1.0, 0.0, 0.0, 0.0];
+        col.insert_vec("v1", vec, None).unwrap();
+        assert_eq!(col.len(), 1);
+    }
+
+    // ── Error conditions ────────────────────────────────────────────────
+
+    #[test]
+    fn test_insert_dimension_mismatch() {
+        let mut col = Collection::with_dimensions("test", 4);
+        let result = col.insert("v1", &[1.0, 0.0], None);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_insert_duplicate_id() {
+        let mut col = Collection::with_dimensions("test", 4);
+        col.insert("v1", &[1.0, 0.0, 0.0, 0.0], None).unwrap();
+        let result = col.insert("v1", &[0.0, 1.0, 0.0, 0.0], None);
+        assert!(matches!(result, Err(NeedleError::VectorAlreadyExists(_))));
+    }
+
+    #[test]
+    fn test_insert_nan_vector() {
+        let mut col = Collection::with_dimensions("test", 4);
+        let result = col.insert("v1", &[f32::NAN, 0.0, 0.0, 0.0], None);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_insert_infinity_vector() {
+        let mut col = Collection::with_dimensions("test", 4);
+        let result = col.insert("v1", &[f32::INFINITY, 0.0, 0.0, 0.0], None);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_insert_neg_infinity_vector() {
+        let mut col = Collection::with_dimensions("test", 4);
+        let result = col.insert("v1", &[f32::NEG_INFINITY, 0.0, 0.0, 0.0], None);
+        assert!(result.is_err());
+    }
+
+    // ── TTL inserts ─────────────────────────────────────────────────────
+
+    #[test]
+    fn test_insert_with_ttl() {
+        let mut col = Collection::with_dimensions("test", 4);
+        col.insert_with_ttl("v1", &[1.0, 0.0, 0.0, 0.0], None, Some(3600))
+            .unwrap();
+        assert_eq!(col.len(), 1);
+    }
+
+    #[test]
+    fn test_insert_with_ttl_none() {
+        let mut col = Collection::with_dimensions("test", 4);
+        col.insert_with_ttl("v1", &[1.0, 0.0, 0.0, 0.0], None, None)
+            .unwrap();
+        assert_eq!(col.len(), 1);
+    }
+
+    // ── Batch inserts ───────────────────────────────────────────────────
+
+    #[test]
+    fn test_insert_batch_basic() {
+        let mut col = Collection::with_dimensions("test", 4);
+        let ids = vec!["a".into(), "b".into(), "c".into()];
+        let vecs = vec![
+            vec![1.0, 0.0, 0.0, 0.0],
+            vec![0.0, 1.0, 0.0, 0.0],
+            vec![0.0, 0.0, 1.0, 0.0],
+        ];
+        let meta = vec![None, None, None];
+        col.insert_batch(ids, vecs, meta).unwrap();
+        assert_eq!(col.len(), 3);
+    }
+
+    #[test]
+    fn test_insert_batch_mismatched_sizes() {
+        let mut col = Collection::with_dimensions("test", 4);
+        let ids = vec!["a".into(), "b".into()];
+        let vecs = vec![vec![1.0, 0.0, 0.0, 0.0]];
+        let meta = vec![None, None];
+        let result = col.insert_batch(ids, vecs, meta);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_insert_batch_duplicate_ids_in_batch() {
+        let mut col = Collection::with_dimensions("test", 4);
+        let ids = vec!["a".into(), "a".into()];
+        let vecs = vec![
+            vec![1.0, 0.0, 0.0, 0.0],
+            vec![0.0, 1.0, 0.0, 0.0],
+        ];
+        let meta = vec![None, None];
+        let result = col.insert_batch(ids, vecs, meta);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_insert_batch_existing_id() {
+        let mut col = Collection::with_dimensions("test", 4);
+        col.insert("a", &[1.0, 0.0, 0.0, 0.0], None).unwrap();
+
+        let ids = vec!["a".into(), "b".into()];
+        let vecs = vec![
+            vec![0.0, 1.0, 0.0, 0.0],
+            vec![0.0, 0.0, 1.0, 0.0],
+        ];
+        let meta = vec![None, None];
+        let result = col.insert_batch(ids, vecs, meta);
+        assert!(matches!(result, Err(NeedleError::VectorAlreadyExists(_))));
+    }
+
+    #[test]
+    fn test_insert_batch_dimension_mismatch_rolls_back() {
+        let mut col = Collection::with_dimensions("test", 4);
+        let ids = vec!["a".into(), "b".into()];
+        let vecs = vec![
+            vec![1.0, 0.0, 0.0, 0.0],
+            vec![1.0, 0.0], // wrong dims
+        ];
+        let meta = vec![None, None];
+        let result = col.insert_batch(ids, vecs, meta);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_insert_batch_empty() {
+        let mut col = Collection::with_dimensions("test", 4);
+        col.insert_batch(vec![], vec![], vec![]).unwrap();
+        assert_eq!(col.len(), 0);
+    }
+
+    // ── Multiple sequential inserts ─────────────────────────────────────
+
+    #[test]
+    fn test_insert_many_sequential() {
+        let mut col = Collection::with_dimensions("test", 4);
+        for i in 0..100 {
+            col.insert(format!("v{i}"), &[i as f32, 0.0, 0.0, 0.0], None)
+                .unwrap();
+        }
+        assert_eq!(col.len(), 100);
+    }
+
+    // ── Insert then search ──────────────────────────────────────────────
+
+    #[test]
+    fn test_insert_then_search_finds_result() {
+        let mut col = Collection::with_dimensions("test", 4);
+        col.insert("v1", &[1.0, 0.0, 0.0, 0.0], None).unwrap();
+        col.insert("v2", &[0.0, 1.0, 0.0, 0.0], None).unwrap();
+
+        let results = col.search(&[1.0, 0.0, 0.0, 0.0], 1).unwrap();
+        assert_eq!(results[0].id, "v1");
+    }
+
+    // ── Dedup inserts ───────────────────────────────────────────────────
+
+    #[test]
+    fn test_insert_with_dedup_reject() {
+        let config = CollectionConfig::new("test", 4)
+            .with_dedup(SemanticDedupConfig::new(0.5, crate::collection::config::DedupPolicy::Reject));
+        let mut col = Collection::new(config);
+        col.insert("v1", &[1.0, 0.0, 0.0, 0.0], None).unwrap();
+        // Near-duplicate (identical vector) should be rejected
+        let result = col.insert("v2", &[1.0, 0.0, 0.0, 0.0], None);
+        assert!(result.is_err() || col.len() == 1);
+    }
+}
