@@ -1047,7 +1047,7 @@ mod tests {
             },
         ];
 
-        let recall = hybrid.calculate_recall(&ann_results, &exact_results);
+        let recall = HybridSearch::calculate_recall(&ann_results, &exact_results);
         assert!((recall - 0.666).abs() < 0.01); // 2/3 overlap
     }
 

@@ -785,7 +785,7 @@ mod tests {
         let refs: Vec<&[f32]> = vectors.iter().map(|v| v.as_slice()).collect();
 
         let advisor = CompressionAdvisor::new(AdvisorConfig::default());
-        let dist = advisor.analyze_distribution(&refs, 4);
+        let dist = CompressionAdvisor::analyze_distribution(&refs, 4);
 
         assert_eq!(dist.dimensions, 4);
         assert_eq!(dist.num_vectors, 50);
@@ -868,7 +868,7 @@ mod tests {
         let refs: Vec<&[f32]> = vectors.iter().map(|v| v.as_slice()).collect();
 
         let advisor = CompressionAdvisor::new(AdvisorConfig::default());
-        let dist = advisor.analyze_distribution(&refs, 4);
+        let dist = CompressionAdvisor::analyze_distribution(&refs, 4);
 
         // Dimension 0 should have highest variance
         assert!(dist.variance[0] > dist.variance[1]);
