@@ -133,7 +133,7 @@ prometheus = { version = "0.13", optional = true }
 rust-stemmers = { version = "1.2", optional = true }
 
 # Python bindings (optional)
-pyo3 = { version = "0.23", features = ["extension-module"], optional = true }
+pyo3 = { version = "0.27", features = ["extension-module"], optional = true }
 pythonize = { version = "0.23", optional = true }
 
 # WASM bindings (optional)
