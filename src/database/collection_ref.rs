@@ -903,4 +903,19 @@ impl<'a> CollectionRef<'a> {
             post_filter_factor,
         )
     }
+
+    /// Create a named snapshot of this collection.
+    pub fn create_snapshot(&self, snapshot_name: &str) -> Result<()> {
+        self.db.create_snapshot(&self.name, snapshot_name)
+    }
+
+    /// Restore this collection from a named snapshot.
+    pub fn restore_snapshot(&self, snapshot_name: &str) -> Result<()> {
+        self.db.restore_snapshot(&self.name, snapshot_name)
+    }
+
+    /// List all snapshots for this collection.
+    pub fn list_snapshots(&self) -> Vec<String> {
+        self.db.list_snapshots(&self.name)
+    }
 }
