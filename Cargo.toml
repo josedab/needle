@@ -142,7 +142,7 @@ js-sys = { version = "0.3", optional = true }
 web-sys = { version = "0.3", optional = true }
 
 # UniFFI for Swift/Kotlin bindings (optional)
-uniffi = { version = "0.28", optional = true }
+uniffi = { version = "0.31", optional = true }
 
 # ONNX Runtime for embedding inference (optional)
 # Note: Using pre-release 2.0 as all 1.x versions have been yanked
@@ -212,7 +212,7 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 futures = "0.3"
 
 [build-dependencies]
-uniffi = { version = "0.28", features = ["build"], optional = true }
+uniffi = { version = "0.31", features = ["build"], optional = true }
 
 [[bench]]
 name = "benchmarks"
