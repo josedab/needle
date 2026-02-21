@@ -473,3 +473,262 @@ impl ChangeEventFilter {
         true
     }
 }
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+
+    // ── OperationType ───────────────────────────────────────────────────
+
+    #[test]
+    fn test_operation_type_display() {
+        assert_eq!(OperationType::Insert.to_string(), "insert");
+        assert_eq!(OperationType::Update.to_string(), "update");
+        assert_eq!(OperationType::Delete.to_string(), "delete");
+        assert_eq!(OperationType::Drop.to_string(), "drop");
+        assert_eq!(OperationType::Rename.to_string(), "rename");
+        assert_eq!(OperationType::CreateIndex.to_string(), "createIndex");
+        assert_eq!(OperationType::DropIndex.to_string(), "dropIndex");
+        assert_eq!(OperationType::Batch.to_string(), "batch");
+    }
+
+    #[test]
+    fn test_operation_type_from_str() {
+        assert_eq!(OperationType::from_str("insert"), Ok(OperationType::Insert));
+        assert_eq!(OperationType::from_str("UPDATE"), Ok(OperationType::Update));
+        assert_eq!(OperationType::from_str("Delete"), Ok(OperationType::Delete));
+        assert_eq!(OperationType::from_str("createindex"), Ok(OperationType::CreateIndex));
+        assert_eq!(OperationType::from_str("create_index"), Ok(OperationType::CreateIndex));
+        assert_eq!(OperationType::from_str("dropindex"), Ok(OperationType::DropIndex));
+        assert_eq!(OperationType::from_str("drop_index"), Ok(OperationType::DropIndex));
+    }
+
+    #[test]
+    fn test_operation_type_from_str_invalid() {
+        assert!(OperationType::from_str("unknown").is_err());
+        assert!(OperationType::from_str("").is_err());
+    }
+
+    // ── StreamError ─────────────────────────────────────────────────────
+
+    #[test]
+    fn test_stream_error_display() {
+        assert!(StreamError::StreamClosed.to_string().contains("closed"));
+        assert!(StreamError::BufferOverflow.to_string().contains("overflow"));
+        assert!(StreamError::Timeout.to_string().contains("timed out"));
+        assert!(StreamError::Cancelled.to_string().contains("cancelled"));
+        assert!(StreamError::CompactionInProgress.to_string().contains("Compaction"));
+        assert!(StreamError::InvalidResumeToken("bad".into()).to_string().contains("bad"));
+        assert!(StreamError::PositionNotFound(42).to_string().contains("42"));
+        assert!(StreamError::SendError("err".into()).to_string().contains("err"));
+        assert!(StreamError::ReceiveError("err".into()).to_string().contains("err"));
+        assert!(StreamError::SubscriptionError("err".into()).to_string().contains("err"));
+        assert!(StreamError::EventLogError("err".into()).to_string().contains("err"));
+    }
+
+    // ── ResumeToken ─────────────────────────────────────────────────────
+
+    #[test]
+    fn test_resume_token_new() {
+        let token = ResumeToken::new(42, 1000);
+        assert_eq!(token.position, 42);
+        assert_eq!(token.timestamp, 1000);
+        assert_eq!(token.as_str(), "42:1000");
+    }
+
+    #[test]
+    fn test_resume_token_parse_valid() {
+        let token = ResumeToken::parse("100:5000").unwrap();
+        assert_eq!(token.position, 100);
+        assert_eq!(token.timestamp, 5000);
+    }
+
+    #[test]
+    fn test_resume_token_parse_invalid_format() {
+        assert!(ResumeToken::parse("invalid").is_err());
+        assert!(ResumeToken::parse("1:2:3").is_err());
+        assert!(ResumeToken::parse("").is_err());
+    }
+
+    #[test]
+    fn test_resume_token_parse_invalid_numbers() {
+        assert!(ResumeToken::parse("abc:123").is_err());
+        assert!(ResumeToken::parse("123:abc").is_err());
+    }
+
+    #[test]
+    fn test_resume_token_display() {
+        let token = ResumeToken::new(10, 20);
+        assert_eq!(format!("{}", token), "10:20");
+    }
+
+    #[test]
+    fn test_resume_token_equality() {
+        let t1 = ResumeToken::new(1, 100);
+        let t2 = ResumeToken::new(1, 100);
+        assert_eq!(t1, t2);
+    }
+
+    #[test]
+    fn test_resume_token_roundtrip() {
+        let original = ResumeToken::new(42, 9999);
+        let parsed = ResumeToken::parse(original.as_str()).unwrap();
+        assert_eq!(original, parsed);
+    }
+
+    // ── ChangeEvent ─────────────────────────────────────────────────────
+
+    #[test]
+    fn test_change_event_insert() {
+        let event = ChangeEvent::insert("docs", "doc1", vec![1, 2, 3], 1);
+        assert_eq!(event.operation, OperationType::Insert);
+        assert_eq!(event.collection, "docs");
+        assert_eq!(event.document_key, Some("doc1".to_string()));
+        assert!(event.full_document.is_some());
+        assert_eq!(event.id, 1);
+        assert!(event.timestamp > 0);
+    }
+
+    #[test]
+    fn test_change_event_update() {
+        let mut fields = HashMap::new();
+        fields.insert("field1".to_string(), vec![4, 5]);
+        let event = ChangeEvent::update(
+            "docs", "doc1", Some(vec![1, 2, 3]), fields, vec!["old_field".into()], 2,
+        );
+        assert_eq!(event.operation, OperationType::Update);
+        assert!(event.updated_fields.is_some());
+        assert!(event.removed_fields.is_some());
+    }
+
+    #[test]
+    fn test_change_event_delete() {
+        let event = ChangeEvent::delete("docs", "doc1", 3);
+        assert_eq!(event.operation, OperationType::Delete);
+        assert!(event.full_document.is_none());
+    }
+
+    #[test]
+    fn test_change_event_drop_collection() {
+        let event = ChangeEvent::drop_collection("docs", 4);
+        assert_eq!(event.operation, OperationType::Drop);
+        assert!(event.document_key.is_none());
+    }
+
+    #[test]
+    fn test_change_event_with_before_change() {
+        let event = ChangeEvent::insert("docs", "doc1", vec![1], 1)
+            .with_before_change(vec![0]);
+        assert!(event.full_document_before_change.is_some());
+    }
+
+    #[test]
+    fn test_change_event_with_metadata() {
+        let event = ChangeEvent::insert("docs", "doc1", vec![1], 1)
+            .with_metadata("source", "api")
+            .with_metadata("version", "1");
+        let meta = event.metadata.unwrap();
+        assert_eq!(meta.get("source").unwrap(), "api");
+        assert_eq!(meta.get("version").unwrap(), "1");
+    }
+
+    #[test]
+    fn test_change_event_with_metadata_map() {
+        let mut map = HashMap::new();
+        map.insert("key".to_string(), "val".to_string());
+        let event = ChangeEvent::insert("docs", "d1", vec![], 1)
+            .with_metadata_map(map);
+        assert_eq!(event.metadata.unwrap().get("key").unwrap(), "val");
+    }
+
+    // ── ChangeEventFilter ───────────────────────────────────────────────
+
+    #[test]
+    fn test_filter_empty_matches_all() {
+        let filter = ChangeEventFilter::new();
+        let event = ChangeEvent::insert("any", "any", vec![], 1);
+        assert!(filter.matches(&event));
+    }
+
+    #[test]
+    fn test_filter_by_collection() {
+        let filter = ChangeEventFilter::collections(&["docs"]);
+        let match_event = ChangeEvent::insert("docs", "d1", vec![], 1);
+        let no_match = ChangeEvent::insert("other", "d1", vec![], 2);
+        assert!(filter.matches(&match_event));
+        assert!(!filter.matches(&no_match));
+    }
+
+    #[test]
+    fn test_filter_by_operations() {
+        let filter = ChangeEventFilter::operations(&[OperationType::Insert, OperationType::Update]);
+        let insert = ChangeEvent::insert("c", "d1", vec![], 1);
+        let delete = ChangeEvent::delete("c", "d1", 2);
+        assert!(filter.matches(&insert));
+        assert!(!filter.matches(&delete));
+    }
+
+    #[test]
+    fn test_filter_by_document_key_pattern() {
+        let filter = ChangeEventFilter::new()
+            .with_document_key_pattern("user");
+        let match_event = ChangeEvent::insert("c", "user_123", vec![], 1);
+        let no_match = ChangeEvent::insert("c", "post_456", vec![], 2);
+        let no_key = ChangeEvent::drop_collection("c", 3);
+        assert!(filter.matches(&match_event));
+        assert!(!filter.matches(&no_match));
+        assert!(!filter.matches(&no_key));
+    }
+
+    #[test]
+    fn test_filter_by_timestamp_range() {
+        let filter = ChangeEventFilter::new()
+            .with_min_timestamp(100)
+            .with_max_timestamp(200);
+        let mut in_range = ChangeEvent::insert("c", "d", vec![], 1);
+        in_range.timestamp = 150;
+        let mut before = ChangeEvent::insert("c", "d", vec![], 2);
+        before.timestamp = 50;
+        let mut after = ChangeEvent::insert("c", "d", vec![], 3);
+        after.timestamp = 300;
+
+        assert!(filter.matches(&in_range));
+        assert!(!filter.matches(&before));
+        assert!(!filter.matches(&after));
+    }
+
+    #[test]
+    fn test_filter_combined() {
+        let filter = ChangeEventFilter::new()
+            .with_collections(&["docs"])
+            .with_operations(&[OperationType::Insert]);
+
+        let match_event = ChangeEvent::insert("docs", "d1", vec![], 1);
+        let wrong_collection = ChangeEvent::insert("other", "d1", vec![], 2);
+        let wrong_operation = ChangeEvent::delete("docs", "d1", 3);
+
+        assert!(filter.matches(&match_event));
+        assert!(!filter.matches(&wrong_collection));
+        assert!(!filter.matches(&wrong_operation));
+    }
+
+    // ── Constants ───────────────────────────────────────────────────────
+
+    #[test]
+    fn test_constants() {
+        assert!(DEFAULT_BUFFER_SIZE > 0);
+        assert!(DEFAULT_CHANNEL_CAPACITY > 0);
+        assert!(COMPACTION_THRESHOLD > 0);
+    }
+
+    // ── current_timestamp_millis ─────────────────────────────────────────
+
+    #[test]
+    fn test_current_timestamp_millis() {
+        let ts = current_timestamp_millis();
+        assert!(ts > 0);
+        // Should be after 2020-01-01
+        assert!(ts > 1_577_836_800_000);
+    }
+}
