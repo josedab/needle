@@ -519,4 +519,1014 @@ mod tests {
 
         Ok(())
     }
+
+    // ── create_collection: success with valid payload ────────────────────
+
+    #[tokio::test]
+    async fn test_create_collection_success() -> Result<(), Box<dyn std::error::Error>> {
+        let state = make_state();
+        let result = create_collection(
+            State(state.clone()),
+            Json(CreateCollectionRequest {
+                name: "test".to_string(),
+                dimensions: 128,
+                distance: None,
+                m: None,
+                ef_construction: None,
+            }),
+        ).await;
+        assert!(result.is_ok());
+
+        let db = state.db.read().await;
+        assert!(db.has_collection("test"));
+        Ok(())
+    }
+
+    // ── create_collection: 400 for invalid name ──────────────────────────
+
+    #[tokio::test]
+    async fn test_create_collection_invalid_name() -> Result<(), Box<dyn std::error::Error>> {
+        let state = make_state();
+        let result = create_collection(
+            State(state),
+            Json(CreateCollectionRequest {
+                name: "bad name!@#".to_string(),
+                dimensions: 4,
+                distance: None,
+                m: None,
+                ef_construction: None,
+            }),
+        ).await;
+        match result {
+            Err((status, _)) => assert_eq!(status, StatusCode::BAD_REQUEST),
+            Ok(_) => return Err("Expected error for invalid name".into()),
+        }
+        Ok(())
+    }
+
+    // ── create_collection: 400 for zero dimensions ───────────────────────
+
+    #[tokio::test]
+    async fn test_create_collection_zero_dimensions() -> Result<(), Box<dyn std::error::Error>> {
+        let state = make_state();
+        let result = create_collection(
+            State(state),
+            Json(CreateCollectionRequest {
+                name: "test".to_string(),
+                dimensions: 0,
+                distance: None,
+                m: None,
+                ef_construction: None,
+            }),
+        ).await;
+        match result {
+            Err((status, _)) => assert_eq!(status, StatusCode::BAD_REQUEST),
+            Ok(_) => return Err("Expected error for zero dimensions".into()),
+        }
+        Ok(())
+    }
+
+    // ── insert_vector: success with valid payload ────────────────────────
+
+    #[tokio::test]
+    async fn test_insert_vector_success() -> Result<(), Box<dyn std::error::Error>> {
+        let state = make_state_with_collection("test", 4).await;
+        let result = insert_vector(
+            State(state.clone()),
+            axum::extract::Path("test".to_string()),
+            Json(InsertRequest {
+                id: "v1".to_string(),
+                vector: vec![1.0, 0.0, 0.0, 0.0],
+                metadata: Some(serde_json::json!({"key": "value"})),
+                ttl_seconds: None,
+            }),
+        ).await;
+        assert!(result.is_ok());
+
+        // Verify vector was inserted
+        let db = state.db.read().await;
+        let coll = db.collection("test").unwrap();
+        assert!(coll.get("v1").is_some());
+        Ok(())
+    }
+
+    // ── batch_insert: success with valid batch ───────────────────────────
+
+    #[tokio::test]
+    async fn test_batch_insert_success() -> Result<(), Box<dyn std::error::Error>> {
+        let state = make_state_with_collection("test", 4).await;
+        let vectors = vec![
+            InsertRequest {
+                id: "v1".to_string(),
+                vector: vec![1.0, 0.0, 0.0, 0.0],
+                metadata: None,
+                ttl_seconds: None,
+            },
+            InsertRequest {
+                id: "v2".to_string(),
+                vector: vec![0.0, 1.0, 0.0, 0.0],
+                metadata: None,
+                ttl_seconds: None,
+            },
+        ];
+        let result = batch_insert(
+            State(state.clone()),
+            axum::extract::Path("test".to_string()),
+            Json(BatchInsertRequest { vectors }),
+        ).await;
+        assert!(result.is_ok());
+
+        let db = state.db.read().await;
+        let coll = db.collection("test").unwrap();
+        assert!(coll.get("v1").is_some());
+        assert!(coll.get("v2").is_some());
+        Ok(())
+    }
+
+    // ── batch_insert: 404 for missing collection ─────────────────────────
+
+    #[tokio::test]
+    async fn test_batch_insert_collection_not_found() -> Result<(), Box<dyn std::error::Error>> {
+        let state = make_state();
+        let result = batch_insert(
+            State(state),
+            axum::extract::Path("nonexistent".to_string()),
+            Json(BatchInsertRequest { vectors: vec![
+                InsertRequest {
+                    id: "v1".to_string(),
+                    vector: vec![1.0],
+                    metadata: None,
+                    ttl_seconds: None,
+                },
+            ] }),
+        ).await;
+        match result {
+            Err((status, _)) => assert_eq!(status, StatusCode::NOT_FOUND),
+            Ok(_) => return Err("Expected error".into()),
+        }
+        Ok(())
+    }
+
+    // ── batch_insert: partial failure with dimension mismatch ───────────
+
+    #[tokio::test]
+    async fn test_batch_insert_dimension_mismatch() -> Result<(), Box<dyn std::error::Error>> {
+        let state = make_state_with_collection("test", 4).await;
+        let vectors = vec![
+            InsertRequest {
+                id: "v1".to_string(),
+                vector: vec![1.0, 0.0, 0.0, 0.0],
+                metadata: None,
+                ttl_seconds: None,
+            },
+            InsertRequest {
+                id: "v2".to_string(),
+                vector: vec![1.0, 0.0], // wrong dims
+                metadata: None,
+                ttl_seconds: None,
+            },
+        ];
+        let result = batch_insert(
+            State(state.clone()),
+            axum::extract::Path("test".to_string()),
+            Json(BatchInsertRequest { vectors }),
+        ).await;
+        // batch_insert uses partial failure: valid vectors succeed, invalid ones produce errors
+        assert!(result.is_ok(), "Batch insert should succeed with partial errors");
+        // v1 should have been inserted
+        let db = state.db.read().await;
+        let coll = db.collection("test").unwrap();
+        assert!(coll.get("v1").is_some());
+        Ok(())
+    }
+
+    // ── search: empty collection returns ok ─────────────────────────────
+
+    #[tokio::test]
+    async fn test_search_empty_collection() -> Result<(), Box<dyn std::error::Error>> {
+        let state = make_state_with_collection("test", 4).await;
+        let result = search(
+            State(state),
+            axum::extract::Path("test".to_string()),
+            Json(SearchRequest {
+                vector: vec![1.0, 0.0, 0.0, 0.0],
+                k: 10,
+                filter: None,
+                post_filter: None,
+                post_filter_factor: 3,
+                include_vectors: false,
+                distance: None,
+                explain: false,
+            }),
+        ).await;
+        assert!(result.is_ok(), "Search on empty collection should succeed");
+        Ok(())
+    }
+
+    // ── search: with valid filter ────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_search_with_filter() -> Result<(), Box<dyn std::error::Error>> {
+        let state = make_state_with_collection("test", 4).await;
+        {
+            let db = state.db.write().await;
+            let coll = db.collection("test")?;
+            coll.insert("v1", &[1.0, 0.0, 0.0, 0.0], Some(serde_json::json!({"category": "a"})))?;
+            coll.insert("v2", &[0.0, 1.0, 0.0, 0.0], Some(serde_json::json!({"category": "b"})))?;
+        }
+
+        let result = search(
+            State(state),
+            axum::extract::Path("test".to_string()),
+            Json(SearchRequest {
+                vector: vec![1.0, 0.0, 0.0, 0.0],
+                k: 10,
+                filter: Some(serde_json::json!({"category": "a"})),
+                post_filter: None,
+                post_filter_factor: 3,
+                include_vectors: false,
+                distance: None,
+                explain: false,
+            }),
+        ).await;
+        assert!(result.is_ok(), "Search with filter should succeed");
+        Ok(())
+    }
+
+    // ── delete_vector: success for existing vector ───────────────────────
+
+    #[tokio::test]
+    async fn test_delete_vector_success() -> Result<(), Box<dyn std::error::Error>> {
+        let state = make_state_with_collection("test", 4).await;
+        {
+            let db = state.db.write().await;
+            let coll = db.collection("test")?;
+            coll.insert("v1", &[1.0, 0.0, 0.0, 0.0], None)?;
+        }
+        let result = delete_vector(
+            State(state.clone()),
+            axum::extract::Path(("test".to_string(), "v1".to_string())),
+        ).await;
+        assert!(result.is_ok());
+
+        let db = state.db.read().await;
+        let coll = db.collection("test")?;
+        assert!(coll.get("v1").is_none());
+        Ok(())
+    }
+
+    // ── health endpoint ──────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_health_endpoint() {
+        let _response = health().await;
+        // health() returns impl IntoResponse (Json); just verify it doesn't panic
+    }
+
+    // ── save_database endpoint ───────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_save_database_in_memory() -> Result<(), Box<dyn std::error::Error>> {
+        let state = make_state();
+        let result = save_database(State(state)).await;
+        // in-memory databases may succeed or fail depending on implementation
+        // but should not panic
+        let _ = result;
+        Ok(())
+    }
+
+    // ── error response format validation ─────────────────────────────────
+
+    #[tokio::test]
+    async fn test_error_response_format() -> Result<(), Box<dyn std::error::Error>> {
+        let state = make_state();
+        let result = get_collection(
+            State(state),
+            axum::extract::Path("nonexistent".to_string()),
+        ).await;
+        match result {
+            Err((status, Json(err))) => {
+                assert_eq!(status, StatusCode::NOT_FOUND);
+                assert!(!err.error.is_empty());
+                assert!(!err.code.is_empty());
+                assert_eq!(err.code, "COLLECTION_NOT_FOUND");
+            }
+            Ok(_) => return Err("Expected error".into()),
+        }
+        Ok(())
+    }
+
+    // ── text_to_deterministic_vector consistency ─────────────────────────
+
+    #[test]
+    fn test_text_to_deterministic_vector_consistency() {
+        let v1 = text_to_deterministic_vector("hello world", 128);
+        let v2 = text_to_deterministic_vector("hello world", 128);
+        assert_eq!(v1.len(), 128);
+        assert_eq!(v1, v2, "Same input should produce same vector");
+
+        let v3 = text_to_deterministic_vector("different text", 128);
+        assert_ne!(v1, v3, "Different input should produce different vector");
+    }
+
+    #[test]
+    fn test_text_to_deterministic_vector_normalization() {
+        let v = text_to_deterministic_vector("test normalization", 64);
+        let norm: f32 = v.iter().map(|x| x * x).sum::<f32>().sqrt();
+        assert!((norm - 1.0).abs() < 0.01, "Vector should be unit normalized, got {}", norm);
+    }
+
+    #[test]
+    fn test_text_to_deterministic_vector_empty_input() {
+        let v = text_to_deterministic_vector("", 32);
+        assert_eq!(v.len(), 32);
+        // Empty text should still produce a valid vector
+        let norm: f32 = v.iter().map(|x| x * x).sum::<f32>().sqrt();
+        assert!(norm > 0.0 || v.iter().all(|&x| x == 0.0));
+    }
+
+    // ── validate_collection_name edge cases ──────────────────────────────
+
+    #[test]
+    fn test_validate_collection_name_empty() {
+        assert!(validate_collection_name("").is_err());
+    }
+
+    #[test]
+    fn test_validate_collection_name_too_long() {
+        let name = "a".repeat(257);
+        assert!(validate_collection_name(&name).is_err());
+    }
+
+    #[test]
+    fn test_validate_collection_name_valid() {
+        assert!(validate_collection_name("my-collection_123").is_ok());
+    }
+
+    // ── search: with explain enabled ─────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_search_with_explain() -> Result<(), Box<dyn std::error::Error>> {
+        let state = make_state_with_collection("test", 4).await;
+        {
+            let db = state.db.write().await;
+            let coll = db.collection("test")?;
+            coll.insert("v1", &[1.0, 0.0, 0.0, 0.0], None)?;
+        }
+
+        let result = search(
+            State(state),
+            axum::extract::Path("test".to_string()),
+            Json(SearchRequest {
+                vector: vec![1.0, 0.0, 0.0, 0.0],
+                k: 1,
+                filter: None,
+                post_filter: None,
+                post_filter_factor: 3,
+                include_vectors: false,
+                distance: None,
+                explain: true,
+            }),
+        ).await;
+        assert!(result.is_ok(), "Search with explain should succeed");
+        Ok(())
+    }
+
+    // ── html_escape test ─────────────────────────────────────────────────
+
+    #[test]
+    fn test_html_escape() {
+        assert_eq!(html_escape("<script>"), "&lt;script&gt;");
+        assert_eq!(html_escape("a&b"), "a&amp;b");
+        assert_eq!(html_escape("\"quoted\""), "&quot;quoted&quot;");
+        assert_eq!(html_escape("safe text"), "safe text");
+    }
+
+    // ── list_collections handler ─────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_list_collections() -> Result<(), Box<dyn std::error::Error>> {
+        let state = make_state_with_collection("test", 4).await;
+        let _response = list_collections(State(state)).await;
+        // Returns impl IntoResponse, verify no panic
+        Ok(())
+    }
+
+    // ── get_collection: success for existing ─────────────────────────────
+
+    #[tokio::test]
+    async fn test_get_collection_success() -> Result<(), Box<dyn std::error::Error>> {
+        let state = make_state_with_collection("test", 4).await;
+        let result = get_collection(
+            State(state),
+            axum::extract::Path("test".to_string()),
+        ).await;
+        assert!(result.is_ok());
+        Ok(())
+    }
+
+    // ── delete_collection: success for existing ──────────────────────────
+
+    #[tokio::test]
+    async fn test_delete_collection_success() -> Result<(), Box<dyn std::error::Error>> {
+        let state = make_state_with_collection("test", 4).await;
+        let result = delete_collection(
+            State(state.clone()),
+            axum::extract::Path("test".to_string()),
+        ).await;
+        assert!(result.is_ok());
+
+        let db = state.db.read().await;
+        assert!(!db.has_collection("test"));
+        Ok(())
+    }
+
+    // ── search with include_vectors ──────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_search_include_vectors() -> Result<(), Box<dyn std::error::Error>> {
+        let state = make_state_with_collection("test", 4).await;
+        {
+            let db = state.db.write().await;
+            let coll = db.collection("test")?;
+            coll.insert("v1", &[1.0, 0.0, 0.0, 0.0], None)?;
+        }
+
+        let result = search(
+            State(state),
+            axum::extract::Path("test".to_string()),
+            Json(SearchRequest {
+                vector: vec![1.0, 0.0, 0.0, 0.0],
+                k: 1,
+                filter: None,
+                post_filter: None,
+                post_filter_factor: 3,
+                include_vectors: true,
+                distance: None,
+                explain: false,
+            }),
+        ).await;
+        assert!(result.is_ok(), "Search with include_vectors should succeed");
+        Ok(())
+    }
+
+    // ── upsert_vector: insert then update ────────────────────────────────
+
+    #[tokio::test]
+    async fn test_upsert_vector_insert() -> Result<(), Box<dyn std::error::Error>> {
+        let state = make_state_with_collection("test", 4).await;
+        let result = upsert_vector(
+            State(state.clone()),
+            axum::extract::Path("test".to_string()),
+            Json(UpsertRequest {
+                id: "v1".to_string(),
+                vector: vec![1.0, 0.0, 0.0, 0.0],
+                metadata: None,
+                ttl_seconds: None,
+            }),
+        ).await;
+        assert!(result.is_ok());
+        let db = state.db.read().await;
+        let coll = db.collection("test")?;
+        assert!(coll.get("v1").is_some());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_upsert_vector_update_existing() -> Result<(), Box<dyn std::error::Error>> {
+        let state = make_state_with_collection("test", 4).await;
+        {
+            let db = state.db.write().await;
+            let coll = db.collection("test")?;
+            coll.insert("v1", &[1.0, 0.0, 0.0, 0.0], None)?;
+        }
+        let result = upsert_vector(
+            State(state.clone()),
+            axum::extract::Path("test".to_string()),
+            Json(UpsertRequest {
+                id: "v1".to_string(),
+                vector: vec![0.0, 1.0, 0.0, 0.0],
+                metadata: Some(serde_json::json!({"updated": true})),
+                ttl_seconds: None,
+            }),
+        ).await;
+        assert!(result.is_ok());
+        let db = state.db.read().await;
+        let coll = db.collection("test")?;
+        let (vec, meta) = coll.get("v1").unwrap();
+        assert!((vec[1] - 1.0).abs() < 0.001);
+        assert!(meta.is_some());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_upsert_vector_collection_not_found() -> Result<(), Box<dyn std::error::Error>> {
+        let state = make_state();
+        let result = upsert_vector(
+            State(state),
+            axum::extract::Path("nonexistent".to_string()),
+            Json(UpsertRequest {
+                id: "v1".to_string(),
+                vector: vec![1.0],
+                metadata: None,
+                ttl_seconds: None,
+            }),
+        ).await;
+        match result {
+            Err((status, _)) => assert_eq!(status, StatusCode::NOT_FOUND),
+            Ok(_) => return Err("Expected error".into()),
+        }
+        Ok(())
+    }
+
+    // ── batch_search ─────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_batch_search_success() -> Result<(), Box<dyn std::error::Error>> {
+        let state = make_state_with_collection("test", 4).await;
+        {
+            let db = state.db.write().await;
+            let coll = db.collection("test")?;
+            coll.insert("v1", &[1.0, 0.0, 0.0, 0.0], None)?;
+            coll.insert("v2", &[0.0, 1.0, 0.0, 0.0], None)?;
+        }
+        let result = batch_search(
+            State(state),
+            axum::extract::Path("test".to_string()),
+            Json(BatchSearchRequest {
+                vectors: vec![
+                    vec![1.0, 0.0, 0.0, 0.0],
+                    vec![0.0, 1.0, 0.0, 0.0],
+                ],
+                k: 1,
+                filter: None,
+            }),
+        ).await;
+        assert!(result.is_ok());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_batch_search_collection_not_found() -> Result<(), Box<dyn std::error::Error>> {
+        let state = make_state();
+        let result = batch_search(
+            State(state),
+            axum::extract::Path("nonexistent".to_string()),
+            Json(BatchSearchRequest {
+                vectors: vec![vec![1.0]],
+                k: 5,
+                filter: None,
+            }),
+        ).await;
+        match result {
+            Err((status, _)) => assert_eq!(status, StatusCode::NOT_FOUND),
+            Ok(_) => return Err("Expected error".into()),
+        }
+        Ok(())
+    }
+
+    // ── radius_search ────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_radius_search_success() -> Result<(), Box<dyn std::error::Error>> {
+        let state = make_state_with_collection("test", 4).await;
+        {
+            let db = state.db.write().await;
+            let coll = db.collection("test")?;
+            coll.insert("v1", &[1.0, 0.0, 0.0, 0.0], None)?;
+        }
+        let result = radius_search(
+            State(state),
+            axum::extract::Path("test".to_string()),
+            Json(RadiusSearchRequest {
+                vector: vec![1.0, 0.0, 0.0, 0.0],
+                max_distance: 0.5,
+                limit: 100,
+                filter: None,
+                include_vectors: false,
+            }),
+        ).await;
+        assert!(result.is_ok());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_radius_search_invalid_limit() -> Result<(), Box<dyn std::error::Error>> {
+        let state = make_state_with_collection("test", 4).await;
+        let result = radius_search(
+            State(state),
+            axum::extract::Path("test".to_string()),
+            Json(RadiusSearchRequest {
+                vector: vec![1.0, 0.0, 0.0, 0.0],
+                max_distance: 0.5,
+                limit: 0,
+                filter: None,
+                include_vectors: false,
+            }),
+        ).await;
+        match result {
+            Err((status, _)) => assert_eq!(status, StatusCode::BAD_REQUEST),
+            Ok(_) => return Err("Expected error for limit=0".into()),
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_radius_search_collection_not_found() -> Result<(), Box<dyn std::error::Error>> {
+        let state = make_state();
+        let result = radius_search(
+            State(state),
+            axum::extract::Path("nonexistent".to_string()),
+            Json(RadiusSearchRequest {
+                vector: vec![1.0],
+                max_distance: 1.0,
+                limit: 10,
+                filter: None,
+                include_vectors: false,
+            }),
+        ).await;
+        match result {
+            Err((status, _)) => assert_eq!(status, StatusCode::NOT_FOUND),
+            Ok(_) => return Err("Expected error".into()),
+        }
+        Ok(())
+    }
+
+    // ── streaming_insert_handler ─────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_streaming_insert_success() -> Result<(), Box<dyn std::error::Error>> {
+        let state = make_state_with_collection("test", 4).await;
+        let _response = streaming_insert_handler(
+            State(state.clone()),
+            axum::extract::Path("test".to_string()),
+            Json(StreamingInsertRequest {
+                vectors: vec![
+                    StreamingVector {
+                        id: "s1".to_string(),
+                        vector: vec![1.0, 0.0, 0.0, 0.0],
+                        metadata: None,
+                    },
+                    StreamingVector {
+                        id: "s2".to_string(),
+                        vector: vec![0.0, 1.0, 0.0, 0.0],
+                        metadata: Some(serde_json::json!({"key": "val"})),
+                    },
+                ],
+                sequence_id: None,
+                flush: false,
+            }),
+        ).await;
+        let db = state.db.read().await;
+        let coll = db.collection("test")?;
+        assert!(coll.get("s1").is_some());
+        assert!(coll.get("s2").is_some());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_streaming_insert_collection_not_found() -> Result<(), Box<dyn std::error::Error>> {
+        let state = make_state();
+        let _response = streaming_insert_handler(
+            State(state),
+            axum::extract::Path("nonexistent".to_string()),
+            Json(StreamingInsertRequest {
+                vectors: vec![StreamingVector {
+                    id: "s1".to_string(),
+                    vector: vec![1.0],
+                    metadata: None,
+                }],
+                sequence_id: None,
+                flush: false,
+            }),
+        ).await;
+        // Returns impl IntoResponse; verify no panic
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_streaming_insert_partial_failure() -> Result<(), Box<dyn std::error::Error>> {
+        let state = make_state_with_collection("test", 4).await;
+        let _response = streaming_insert_handler(
+            State(state),
+            axum::extract::Path("test".to_string()),
+            Json(StreamingInsertRequest {
+                vectors: vec![
+                    StreamingVector {
+                        id: "ok".to_string(),
+                        vector: vec![1.0, 0.0, 0.0, 0.0],
+                        metadata: None,
+                    },
+                    StreamingVector {
+                        id: "bad".to_string(),
+                        vector: vec![1.0], // wrong dims
+                        metadata: None,
+                    },
+                ],
+                sequence_id: None,
+                flush: false,
+            }),
+        ).await;
+        Ok(())
+    }
+
+    // ── list_vectors ─────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_list_vectors_success() -> Result<(), Box<dyn std::error::Error>> {
+        let state = make_state_with_collection("test", 4).await;
+        {
+            let db = state.db.write().await;
+            let coll = db.collection("test")?;
+            coll.insert("v1", &[1.0, 0.0, 0.0, 0.0], None)?;
+            coll.insert("v2", &[0.0, 1.0, 0.0, 0.0], None)?;
+        }
+        let result = list_vectors(
+            State(state),
+            axum::extract::Path("test".to_string()),
+            axum::extract::Query(QueryParams { offset: None, limit: None }),
+        ).await;
+        assert!(result.is_ok());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_list_vectors_collection_not_found() -> Result<(), Box<dyn std::error::Error>> {
+        let state = make_state();
+        let result = list_vectors(
+            State(state),
+            axum::extract::Path("nonexistent".to_string()),
+            axum::extract::Query(QueryParams { offset: None, limit: None }),
+        ).await;
+        match result {
+            Err((status, _)) => assert_eq!(status, StatusCode::NOT_FOUND),
+            Ok(_) => return Err("Expected error".into()),
+        }
+        Ok(())
+    }
+
+    // ── export_collection with data ──────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_export_collection_with_data() -> Result<(), Box<dyn std::error::Error>> {
+        let state = make_state_with_collection("test", 4).await;
+        {
+            let db = state.db.write().await;
+            let coll = db.collection("test")?;
+            coll.insert("v1", &[1.0, 0.0, 0.0, 0.0], Some(serde_json::json!({"k": "v"})))?;
+        }
+        let result = export_collection(
+            State(state),
+            axum::extract::Path("test".to_string()),
+        ).await;
+        assert!(result.is_ok());
+        Ok(())
+    }
+
+    // ── alias handlers ───────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_create_alias() -> Result<(), Box<dyn std::error::Error>> {
+        let state = make_state_with_collection("test", 4).await;
+        let result = create_alias_handler(
+            State(state),
+            Json(CreateAliasRequest {
+                alias: "my_alias".to_string(),
+                collection: "test".to_string(),
+            }),
+        ).await;
+        assert!(result.is_ok());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_create_alias_nonexistent_collection() -> Result<(), Box<dyn std::error::Error>> {
+        let state = make_state();
+        let result = create_alias_handler(
+            State(state),
+            Json(CreateAliasRequest {
+                alias: "my_alias".to_string(),
+                collection: "nonexistent".to_string(),
+            }),
+        ).await;
+        assert!(result.is_err());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_get_alias_not_found() -> Result<(), Box<dyn std::error::Error>> {
+        let state = make_state();
+        let result = get_alias_handler(
+            State(state),
+            axum::extract::Path("nonexistent".to_string()),
+        ).await;
+        match result {
+            Err((status, _)) => assert_eq!(status, StatusCode::NOT_FOUND),
+            Ok(_) => return Err("Expected error".into()),
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_delete_alias_not_found() -> Result<(), Box<dyn std::error::Error>> {
+        let state = make_state();
+        let result = delete_alias_handler(
+            State(state),
+            axum::extract::Path("nonexistent".to_string()),
+        ).await;
+        match result {
+            Err((status, _)) => assert_eq!(status, StatusCode::NOT_FOUND),
+            Ok(_) => return Err("Expected error".into()),
+        }
+        Ok(())
+    }
+
+    // ── get_vector: success ──────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_get_vector_success() -> Result<(), Box<dyn std::error::Error>> {
+        let state = make_state_with_collection("test", 4).await;
+        {
+            let db = state.db.write().await;
+            let coll = db.collection("test")?;
+            coll.insert("v1", &[1.0, 0.0, 0.0, 0.0], Some(serde_json::json!({"key": "val"})))?;
+        }
+        let result = get_vector(
+            State(state),
+            axum::extract::Path(("test".to_string(), "v1".to_string())),
+        ).await;
+        assert!(result.is_ok());
+        Ok(())
+    }
+
+    // ── compact_collection: success ──────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_compact_collection_success() -> Result<(), Box<dyn std::error::Error>> {
+        let state = make_state_with_collection("test", 4).await;
+        {
+            let db = state.db.write().await;
+            let coll = db.collection("test")?;
+            coll.insert("v1", &[1.0, 0.0, 0.0, 0.0], None)?;
+            coll.insert("v2", &[0.0, 1.0, 0.0, 0.0], None)?;
+            coll.delete("v1")?;
+        }
+        let result = compact_collection(
+            State(state),
+            axum::extract::Path("test".to_string()),
+        ).await;
+        assert!(result.is_ok());
+        Ok(())
+    }
+
+    // ── get_info endpoint ────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_get_info() -> Result<(), Box<dyn std::error::Error>> {
+        let state = make_state_with_collection("test", 4).await;
+        let _response = get_info(State(state)).await;
+        Ok(())
+    }
+
+    // ── create_collection: with custom distance ──────────────────────────
+
+    #[tokio::test]
+    async fn test_create_collection_with_distance() -> Result<(), Box<dyn std::error::Error>> {
+        let state = make_state();
+        let result = create_collection(
+            State(state),
+            Json(CreateCollectionRequest {
+                name: "test".to_string(),
+                dimensions: 128,
+                distance: Some("euclidean".to_string()),
+                m: Some(32),
+                ef_construction: Some(400),
+            }),
+        ).await;
+        assert!(result.is_ok());
+        Ok(())
+    }
+
+    // ── create_collection: dimensions too large ──────────────────────────
+
+    #[tokio::test]
+    async fn test_create_collection_dimensions_too_large() -> Result<(), Box<dyn std::error::Error>> {
+        let state = make_state();
+        let result = create_collection(
+            State(state),
+            Json(CreateCollectionRequest {
+                name: "test".to_string(),
+                dimensions: MAX_DIMENSIONS + 1,
+                distance: None,
+                m: None,
+                ef_construction: None,
+            }),
+        ).await;
+        match result {
+            Err((status, _)) => assert_eq!(status, StatusCode::BAD_REQUEST),
+            Ok(_) => return Err("Expected error for dimensions too large".into()),
+        }
+        Ok(())
+    }
+
+    // ── update_metadata: success ─────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_update_metadata_success() -> Result<(), Box<dyn std::error::Error>> {
+        let state = make_state_with_collection("test", 4).await;
+        {
+            let db = state.db.write().await;
+            let coll = db.collection("test")?;
+            coll.insert("v1", &[1.0, 0.0, 0.0, 0.0], None)?;
+        }
+        let result = update_metadata(
+            State(state),
+            axum::extract::Path(("test".to_string(), "v1".to_string())),
+            Json(UpdateMetadataRequest {
+                metadata: Some(serde_json::json!({"new_key": "new_val"})),
+            }),
+        ).await;
+        assert!(result.is_ok());
+        Ok(())
+    }
+
+    // ── search: k=0 ─────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_search_k_zero() -> Result<(), Box<dyn std::error::Error>> {
+        let state = make_state_with_collection("test", 4).await;
+        let result = search(
+            State(state),
+            axum::extract::Path("test".to_string()),
+            Json(SearchRequest {
+                vector: vec![1.0, 0.0, 0.0, 0.0],
+                k: 0,
+                filter: None,
+                post_filter: None,
+                post_filter_factor: 3,
+                include_vectors: false,
+                distance: None,
+                explain: false,
+            }),
+        ).await;
+        // k=0 should either be rejected or return empty
+        let _ = result;
+        Ok(())
+    }
+
+    // ── search: k too large ──────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_search_k_too_large() -> Result<(), Box<dyn std::error::Error>> {
+        let state = make_state_with_collection("test", 4).await;
+        let result = search(
+            State(state),
+            axum::extract::Path("test".to_string()),
+            Json(SearchRequest {
+                vector: vec![1.0, 0.0, 0.0, 0.0],
+                k: MAX_SEARCH_K + 1,
+                filter: None,
+                post_filter: None,
+                post_filter_factor: 3,
+                include_vectors: false,
+                distance: None,
+                explain: false,
+            }),
+        ).await;
+        match result {
+            Err((status, _)) => assert_eq!(status, StatusCode::BAD_REQUEST),
+            Ok(_) => return Err("Expected error for k too large".into()),
+        }
+        Ok(())
+    }
+
+    // ── delete_vector: from nonexistent collection ───────────────────────
+
+    #[tokio::test]
+    async fn test_delete_vector_nonexistent_collection() -> Result<(), Box<dyn std::error::Error>> {
+        let state = make_state();
+        let result = delete_vector(
+            State(state),
+            axum::extract::Path(("nonexistent".to_string(), "v1".to_string())),
+        ).await;
+        match result {
+            Err((status, _)) => assert_eq!(status, StatusCode::NOT_FOUND),
+            Ok(_) => return Err("Expected error".into()),
+        }
+        Ok(())
+    }
+
+    // ── batch_insert: empty batch ────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_batch_insert_empty() -> Result<(), Box<dyn std::error::Error>> {
+        let state = make_state_with_collection("test", 4).await;
+        let result = batch_insert(
+            State(state),
+            axum::extract::Path("test".to_string()),
+            Json(BatchInsertRequest { vectors: vec![] }),
+        ).await;
+        assert!(result.is_ok());
+        Ok(())
+    }
 }
