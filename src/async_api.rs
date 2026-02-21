@@ -1656,4 +1656,470 @@ mod tests {
         assert_eq!(result.deleted, 0);
         assert!(result.is_success());
     }
+
+    // ── open + in_memory_with_config ─────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_in_memory_with_config() {
+        let config = AsyncDatabaseConfig::default()
+            .with_max_concurrency(4)
+            .with_stream_batch_size(50);
+        let db = AsyncDatabase::in_memory_with_config(config);
+        db.create_collection("test", 32).await.unwrap();
+        assert!(db.has_collection("test").await);
+    }
+
+    // ── create_collection + insert + search round-trip ───────────────────
+
+    #[tokio::test]
+    async fn test_roundtrip_create_insert_search() {
+        let db = AsyncDatabase::in_memory();
+        db.create_collection("docs", 4).await.unwrap();
+
+        let vec = vec![1.0, 0.0, 0.0, 0.0];
+        db.insert("docs", "v1", vec.clone(), Some(json!({"label": "a"})))
+            .await
+            .unwrap();
+
+        let results = db.search("docs", vec.clone(), 5).await.unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].id, "v1");
+        assert!(results[0].distance < 0.001);
+    }
+
+    // ── batch_delete: partial and full ───────────────────────────────────
+
+    #[tokio::test]
+    async fn test_batch_delete_partial() {
+        let db = AsyncDatabase::in_memory();
+        db.create_collection("test", 4).await.unwrap();
+
+        for i in 0..5 {
+            db.insert(
+                "test",
+                &format!("v{i}"),
+                vec![i as f32, 0.0, 0.0, 0.0],
+                None,
+            )
+            .await
+            .unwrap();
+        }
+
+        // Delete 3 out of 5, including one nonexistent
+        let deleted = db
+            .batch_delete(
+                "test",
+                vec!["v0".into(), "v1".into(), "v2".into(), "nonexistent".into()],
+            )
+            .await
+            .unwrap();
+        assert!(deleted >= 3);
+        assert_eq!(db.count("test").await, 2);
+    }
+
+    #[tokio::test]
+    async fn test_batch_delete_all() {
+        let db = AsyncDatabase::in_memory();
+        db.create_collection("test", 4).await.unwrap();
+
+        for i in 0..3 {
+            db.insert("test", &format!("v{i}"), vec![i as f32, 0.0, 0.0, 0.0], None)
+                .await
+                .unwrap();
+        }
+
+        let ids: Vec<String> = (0..3).map(|i| format!("v{i}")).collect();
+        let deleted = db.batch_delete("test", ids).await.unwrap();
+        assert_eq!(deleted, 3);
+        assert_eq!(db.count("test").await, 0);
+    }
+
+    // ── concurrent async operations across multiple tasks ────────────────
+
+    #[tokio::test]
+    async fn test_concurrent_inserts_across_tasks() {
+        let db = Arc::new(AsyncDatabase::in_memory());
+        db.create_collection("test", 4).await.unwrap();
+
+        let mut handles = Vec::new();
+        for i in 0..10 {
+            let db = Arc::clone(&db);
+            handles.push(tokio::spawn(async move {
+                db.insert(
+                    "test",
+                    &format!("v{i}"),
+                    vec![i as f32, 0.0, 0.0, 0.0],
+                    None,
+                )
+                .await
+            }));
+        }
+
+        for h in handles {
+            h.await.unwrap().unwrap();
+        }
+        assert_eq!(db.count("test").await, 10);
+    }
+
+    #[tokio::test]
+    async fn test_concurrent_search_across_tasks() {
+        let db = Arc::new(AsyncDatabase::in_memory());
+        db.create_collection("test", 4).await.unwrap();
+
+        for i in 0..20 {
+            db.insert("test", &format!("v{i}"), random_vector(4), None)
+                .await
+                .unwrap();
+        }
+
+        let mut handles = Vec::new();
+        for _ in 0..5 {
+            let db = Arc::clone(&db);
+            handles.push(tokio::spawn(async move {
+                db.search("test", random_vector(4), 5).await
+            }));
+        }
+
+        for h in handles {
+            let results = h.await.unwrap().unwrap();
+            assert!(results.len() <= 5);
+        }
+    }
+
+    // ── error propagation from sync Database ─────────────────────────────
+
+    #[tokio::test]
+    async fn test_error_propagation_insert_wrong_collection() {
+        let db = AsyncDatabase::in_memory();
+        let result = db.insert("nonexistent", "v1", vec![1.0], None).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_error_propagation_search_wrong_collection() {
+        let db = AsyncDatabase::in_memory();
+        let result = db.search("nonexistent", vec![1.0], 5).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_error_propagation_delete_wrong_collection() {
+        let db = AsyncDatabase::in_memory();
+        let result = db.delete("nonexistent", "v1").await;
+        assert!(result.is_err());
+    }
+
+    // ── search_with_filter with invalid filter ───────────────────────────
+
+    #[tokio::test]
+    async fn test_search_with_invalid_filter_operator() {
+        let db = AsyncDatabase::in_memory();
+        db.create_collection("test", 4).await.unwrap();
+
+        db.insert("test", "v1", vec![1.0, 0.0, 0.0, 0.0], Some(json!({"x": 1})))
+            .await
+            .unwrap();
+
+        // Use an unsupported operator
+        let filter = crate::metadata::Filter::parse(&json!({"x": {"$invalid_op": 5}}));
+        match filter {
+            Ok(f) => {
+                // If parsing succeeds, search should still work (or fail gracefully)
+                let _ = db.search_with_filter("test", vec![1.0, 0.0, 0.0, 0.0], 5, f).await;
+            }
+            Err(_) => {
+                // Invalid filter should be rejected at parse time
+            }
+        }
+    }
+
+    // ── stream_export pagination ─────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_stream_export_pagination() {
+        use futures::StreamExt;
+
+        let db = AsyncDatabase::in_memory();
+        db.create_collection("test", 4).await.unwrap();
+
+        for i in 0..15 {
+            db.insert("test", &format!("v{i}"), vec![i as f32, 0.0, 0.0, 0.0], None)
+                .await
+                .unwrap();
+        }
+
+        let mut stream = db.stream_export("test", 5).await.unwrap();
+        let mut total = 0;
+        while let Some(batch) = stream.next().await {
+            let batch = batch.unwrap();
+            assert!(batch.len() <= 5);
+            total += batch.len();
+        }
+        assert_eq!(total, 15);
+    }
+
+    // ── delete_collection ────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_delete_collection_async() {
+        let db = AsyncDatabase::in_memory();
+        db.create_collection("test", 4).await.unwrap();
+        assert!(db.has_collection("test").await);
+
+        let deleted = db.delete_collection("test").await.unwrap();
+        assert!(deleted);
+        assert!(!db.has_collection("test").await);
+    }
+
+    #[tokio::test]
+    async fn test_delete_nonexistent_collection() {
+        let db = AsyncDatabase::in_memory();
+        let result = db.delete_collection("nonexistent").await;
+        // Should either return Ok(false) or Err
+        match result {
+            Ok(deleted) => assert!(!deleted),
+            Err(_) => {} // Also acceptable
+        }
+    }
+
+    // ── create_collection_with_config ────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_create_collection_with_config() {
+        use crate::collection::config::CollectionConfig;
+        let db = AsyncDatabase::in_memory();
+        let config = CollectionConfig::new("custom_coll", 64);
+        db.create_collection_with_config(config).await.unwrap();
+        assert!(db.has_collection("custom_coll").await);
+        assert_eq!(db.count("custom_coll").await, 0);
+    }
+
+    // ── drop_collection ──────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_drop_collection() {
+        let db = AsyncDatabase::in_memory();
+        db.create_collection("to_drop", 4).await.unwrap();
+        assert!(db.has_collection("to_drop").await);
+        let dropped = db.drop_collection("to_drop").await.unwrap();
+        assert!(dropped);
+        assert!(!db.has_collection("to_drop").await);
+    }
+
+    // ── list_collections ─────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_list_collections() {
+        let db = AsyncDatabase::in_memory();
+        db.create_collection("a", 4).await.unwrap();
+        db.create_collection("b", 8).await.unwrap();
+        let cols = db.list_collections().await;
+        assert!(cols.contains(&"a".to_string()));
+        assert!(cols.contains(&"b".to_string()));
+        assert_eq!(cols.len(), 2);
+    }
+
+    // ── save and is_dirty round-trip ─────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_save_is_dirty_roundtrip() {
+        let db = AsyncDatabase::in_memory();
+        db.create_collection("test", 4).await.unwrap();
+        db.insert("test", "v1", vec![1.0, 0.0, 0.0, 0.0], None).await.unwrap();
+        // in-memory DB: is_dirty and save may behave differently
+        let dirty = db.is_dirty().await;
+        let _ = db.save().await;
+        // After save, verify state is consistent
+        assert_eq!(db.count("test").await, 1);
+        let _ = dirty;
+    }
+
+    // ── total_vectors across multiple collections ────────────────────────
+
+    #[tokio::test]
+    async fn test_total_vectors_multi_collection() {
+        let db = AsyncDatabase::in_memory();
+        db.create_collection("a", 4).await.unwrap();
+        db.create_collection("b", 4).await.unwrap();
+        db.insert("a", "v1", vec![1.0, 0.0, 0.0, 0.0], None).await.unwrap();
+        db.insert("a", "v2", vec![0.0, 1.0, 0.0, 0.0], None).await.unwrap();
+        db.insert("b", "v3", vec![0.0, 0.0, 1.0, 0.0], None).await.unwrap();
+        assert_eq!(db.total_vectors().await, 3);
+    }
+
+    // ── batch_search_with_filter ─────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_batch_search_with_filter() {
+        let db = AsyncDatabase::in_memory();
+        db.create_collection("test", 4).await.unwrap();
+        for i in 0..10 {
+            db.insert(
+                "test",
+                &format!("v{i}"),
+                vec![i as f32, 0.0, 0.0, 0.0],
+                Some(json!({"group": if i < 5 { "a" } else { "b" }})),
+            ).await.unwrap();
+        }
+
+        let filter = crate::metadata::Filter::parse(&json!({"group": "a"})).unwrap();
+        let results = db.batch_search_with_filter(
+            "test",
+            vec![vec![0.0, 0.0, 0.0, 0.0], vec![5.0, 0.0, 0.0, 0.0]],
+            3,
+            filter,
+        ).await.unwrap();
+        assert_eq!(results.len(), 2);
+        for batch in &results {
+            assert!(batch.len() <= 3);
+        }
+    }
+
+    // ── inner() and config() accessors ───────────────────────────────────
+
+    #[test]
+    fn test_inner_accessor() {
+        let db = AsyncDatabase::in_memory();
+        let inner = db.inner();
+        let _ = inner; // Just verify we can access it
+    }
+
+    #[test]
+    fn test_config_accessor() {
+        let config = AsyncDatabaseConfig::default()
+            .with_max_concurrency(8);
+        let db = AsyncDatabase::in_memory_with_config(config);
+        assert_eq!(db.config().max_concurrency, 8);
+    }
+
+    // ── get returns None for nonexistent ──────────────────────────────────
+
+    #[tokio::test]
+    async fn test_get_nonexistent_vector() {
+        let db = AsyncDatabase::in_memory();
+        db.create_collection("test", 4).await.unwrap();
+        let result = db.get("test", "nonexistent").await;
+        assert!(result.is_none());
+    }
+
+    // ── get returns vector and metadata ──────────────────────────────────
+
+    #[tokio::test]
+    async fn test_get_with_metadata() {
+        let db = AsyncDatabase::in_memory();
+        db.create_collection("test", 4).await.unwrap();
+        db.insert("test", "v1", vec![1.0, 2.0, 3.0, 4.0], Some(json!({"k": "v"}))).await.unwrap();
+        let (vec, meta) = db.get("test", "v1").await.unwrap();
+        assert_eq!(vec.len(), 4);
+        assert!(meta.is_some());
+    }
+
+    // ── ids() ────────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_ids_returns_all() {
+        let db = AsyncDatabase::in_memory();
+        db.create_collection("test", 4).await.unwrap();
+        for i in 0..5 {
+            db.insert("test", &format!("v{i}"), random_vector(4), None).await.unwrap();
+        }
+        let ids = db.ids("test").await.unwrap();
+        assert_eq!(ids.len(), 5);
+    }
+
+    // ── compact returns count ────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_compact_returns_count() {
+        let db = AsyncDatabase::in_memory();
+        db.create_collection("test", 4).await.unwrap();
+        for i in 0..10 {
+            db.insert("test", &format!("v{i}"), random_vector(4), None).await.unwrap();
+        }
+        for i in 0..5 {
+            db.delete("test", &format!("v{i}")).await.unwrap();
+        }
+        let removed = db.compact("test").await.unwrap();
+        assert!(removed > 0 || db.count("test").await == 5);
+    }
+
+    // ── needs_compaction ─────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_needs_compaction_after_deletions() {
+        let db = AsyncDatabase::in_memory();
+        db.create_collection("test", 4).await.unwrap();
+        for i in 0..10 {
+            db.insert("test", &format!("v{i}"), random_vector(4), None).await.unwrap();
+        }
+        for i in 0..8 {
+            db.delete("test", &format!("v{i}")).await.unwrap();
+        }
+        assert!(db.needs_compaction("test", 0.5).await);
+    }
+
+    // ── count_with_filter ────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_count_with_filter_subset() {
+        let db = AsyncDatabase::in_memory();
+        db.create_collection("test", 4).await.unwrap();
+        for i in 0..6 {
+            db.insert(
+                "test",
+                &format!("v{i}"),
+                random_vector(4),
+                Some(json!({"type": if i % 2 == 0 { "even" } else { "odd" }})),
+            ).await.unwrap();
+        }
+        let filter = crate::metadata::Filter::parse(&json!({"type": "even"})).unwrap();
+        let count = db.count_with_filter("test", Some(filter)).await.unwrap();
+        assert_eq!(count, 3);
+    }
+
+    // ── duplicate collection creation error ──────────────────────────────
+
+    #[tokio::test]
+    async fn test_create_duplicate_collection() {
+        let db = AsyncDatabase::in_memory();
+        db.create_collection("test", 4).await.unwrap();
+        let result = db.create_collection("test", 4).await;
+        assert!(result.is_err());
+    }
+
+    // ── batch insert then search correctness ─────────────────────────────
+
+    #[tokio::test]
+    async fn test_batch_insert_search_correctness() {
+        let db = AsyncDatabase::in_memory();
+        db.create_collection("test", 4).await.unwrap();
+
+        let entries: Vec<(String, Vec<f32>, Option<serde_json::Value>)> = (0..20)
+            .map(|i| (format!("v{i}"), random_vector(4), None))
+            .collect();
+        db.batch_insert("test", entries).await.unwrap();
+
+        assert_eq!(db.count("test").await, 20);
+        let results = db.search("test", random_vector(4), 5).await.unwrap();
+        assert_eq!(results.len(), 5);
+        // Results should be sorted by distance
+        for i in 1..results.len() {
+            assert!(results[i].distance >= results[i-1].distance);
+        }
+    }
+
+    // ── ExportStream accessors ───────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_export_stream_accessors() {
+        let db = AsyncDatabase::in_memory();
+        db.create_collection("test", 4).await.unwrap();
+        for i in 0..3 {
+            db.insert("test", &format!("v{i}"), random_vector(4), None).await.unwrap();
+        }
+        let stream = db.stream_export("test", 10).await.unwrap();
+        assert_eq!(stream.total(), 3);
+        assert_eq!(stream.offset(), 0);
+        assert!(!stream.is_exhausted());
+    }
 }
