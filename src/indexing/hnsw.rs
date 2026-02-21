@@ -1571,4 +1571,452 @@ mod tests {
         let stats = index.prefetch_stats();
         assert!(stats.training_samples > 0);
     }
+
+    // ── search_radius tests ──────────────────────────────────────────────
+
+    #[test]
+    fn test_search_radius() {
+        let mut index = HnswIndex::with_distance(DistanceFunction::Euclidean);
+        let dim = 4;
+
+        let vectors = vec![
+            vec![0.0, 0.0, 0.0, 0.0],
+            vec![0.1, 0.0, 0.0, 0.0],
+            vec![10.0, 0.0, 0.0, 0.0],
+        ];
+
+        for (id, vec) in vectors.iter().enumerate() {
+            index.insert(id, vec, &vectors).unwrap();
+        }
+
+        let results = index.search_radius(&[0.0, 0.0, 0.0, 0.0], 0.5, &vectors).unwrap();
+        // Only vectors within distance 0.5 should be returned
+        assert!(results.len() >= 1);
+        for (_, dist) in &results {
+            assert!(*dist <= 0.5);
+        }
+    }
+
+    #[test]
+    fn test_search_radius_with_stats() {
+        let mut index = HnswIndex::with_distance(DistanceFunction::Euclidean);
+        let dim = 4;
+        let vectors: Vec<Vec<f32>> = (0..20).map(|_| random_vector(dim)).collect();
+
+        for (id, vec) in vectors.iter().enumerate() {
+            index.insert(id, vec, &vectors).unwrap();
+        }
+
+        let (results, stats) = index.search_radius_with_stats(&vectors[0], 1.0, &vectors).unwrap();
+        assert!(!results.is_empty());
+        assert!(stats.visited_nodes > 0);
+    }
+
+    // ── search_with_trace test ───────────────────────────────────────────
+
+    #[test]
+    fn test_search_with_trace() {
+        let mut index = HnswIndex::with_distance(DistanceFunction::Euclidean);
+        let dim = 16;
+        let vectors: Vec<Vec<f32>> = (0..50).map(|_| random_vector(dim)).collect();
+
+        for (id, vec) in vectors.iter().enumerate() {
+            index.insert(id, vec, &vectors).unwrap();
+        }
+
+        let (results, trace) = index.search_with_trace(&vectors[0], 5, &vectors).unwrap();
+        assert!(!results.is_empty());
+        assert!(trace.entry_point.is_some());
+        assert!(!trace.hops.is_empty());
+    }
+
+    #[test]
+    fn test_search_with_trace_empty_index() {
+        let index = HnswIndex::with_distance(DistanceFunction::Euclidean);
+        let (results, trace) = index.search_with_trace(&[1.0, 2.0], 5, &[]).unwrap();
+        assert!(results.is_empty());
+        assert!(trace.entry_point.is_none());
+    }
+
+    // ── search_with_ef edge cases ────────────────────────────────────────
+
+    #[test]
+    fn test_search_with_ef_less_than_k() {
+        let mut index = HnswIndex::with_distance(DistanceFunction::Euclidean);
+        let dim = 8;
+        let vectors: Vec<Vec<f32>> = (0..30).map(|_| random_vector(dim)).collect();
+
+        for (id, vec) in vectors.iter().enumerate() {
+            index.insert(id, vec, &vectors).unwrap();
+        }
+
+        // ef < k: should still return results (ef is expanded internally)
+        let results = index.search_with_ef(&vectors[0], 10, 2, &vectors).unwrap();
+        assert!(!results.is_empty());
+    }
+
+    #[test]
+    fn test_search_with_ef_zero() {
+        let mut index = HnswIndex::with_distance(DistanceFunction::Euclidean);
+        let dim = 4;
+        let vectors: Vec<Vec<f32>> = (0..10).map(|_| random_vector(dim)).collect();
+
+        for (id, vec) in vectors.iter().enumerate() {
+            index.insert(id, vec, &vectors).unwrap();
+        }
+
+        // ef = 0: should handle gracefully
+        let results = index.search_with_ef(&vectors[0], 5, 0, &vectors);
+        // Either returns results or an error, should not panic
+        let _ = results;
+    }
+
+    // ── insert after delete: graph reconnection ──────────────────────────
+
+    #[test]
+    fn test_insert_after_delete() {
+        let mut index = HnswIndex::with_distance(DistanceFunction::Euclidean);
+        let dim = 8;
+        let mut vectors: Vec<Vec<f32>> = (0..20).map(|_| random_vector(dim)).collect();
+
+        for (id, vec) in vectors.iter().enumerate() {
+            index.insert(id, vec, &vectors).unwrap();
+        }
+
+        // Delete several vectors
+        for i in 0..10 {
+            index.delete(i).unwrap();
+        }
+
+        // Insert new vectors
+        let new_vec = random_vector(dim);
+        vectors.push(new_vec.clone());
+        index.insert(20, &new_vec, &vectors).unwrap();
+
+        // Search should work and not return deleted vectors
+        let results = index.search(&new_vec, 5, &vectors).unwrap();
+        for (id, _) in &results {
+            assert!(!index.is_deleted(*id));
+        }
+    }
+
+    // ── compaction + search interleaving ──────────────────────────────────
+
+    #[test]
+    fn test_compaction_then_search() {
+        let mut index = HnswIndex::with_distance(DistanceFunction::Euclidean);
+        let dim = 8;
+        let vectors: Vec<Vec<f32>> = (0..30).map(|_| random_vector(dim)).collect();
+
+        for (id, vec) in vectors.iter().enumerate() {
+            index.insert(id, vec, &vectors).unwrap();
+        }
+
+        // Delete every other vector
+        for i in (0..30).step_by(2) {
+            index.delete(i).unwrap();
+        }
+
+        let id_map = index.compact(&vectors).unwrap();
+        assert_eq!(index.deleted_count(), 0);
+
+        // Search after compaction should still work
+        let query = random_vector(dim);
+        let results = index.search(&query, 5, &vectors).unwrap();
+        assert!(results.len() <= 5);
+    }
+
+    // ── HnswConfig::builder() edge cases ─────────────────────────────────
+
+    #[test]
+    fn test_hnsw_config_builder_default() {
+        let config = HnswConfig::builder();
+        assert_eq!(config.m, 16);
+        assert_eq!(config.ef_construction, 200);
+        assert_eq!(config.ef_search, 50);
+    }
+
+    #[test]
+    fn test_hnsw_config_builder_custom() {
+        let config = HnswConfig::builder()
+            .m(32)
+            .ef_construction(400)
+            .ef_search(100);
+        assert_eq!(config.m, 32);
+        assert_eq!(config.ef_construction, 400);
+        assert_eq!(config.ef_search, 100);
+        assert_eq!(config.m_max_0, 64); // 2 * m
+    }
+
+    #[test]
+    fn test_hnsw_config_builder_m_zero() {
+        // m=0 should still create a valid config object (may degrade search)
+        let config = HnswConfig::builder().m(0);
+        assert_eq!(config.m, 0);
+    }
+
+    #[test]
+    fn test_hnsw_config_builder_custom_ml() {
+        let config = HnswConfig::builder().m(16).ml(0.5);
+        assert!((config.ml - 0.5).abs() < 1e-6);
+    }
+
+    // ── BitSet edge cases ────────────────────────────────────────────────
+
+    #[test]
+    fn test_bitset_remove_nonexistent() {
+        let mut bitset = BitSet::new();
+        assert!(!bitset.remove(&42));
+        assert_eq!(bitset.len(), 0);
+    }
+
+    #[test]
+    fn test_bitset_insert_duplicates() {
+        let mut bitset = BitSet::new();
+        assert!(bitset.insert(5)); // new
+        assert!(!bitset.insert(5)); // duplicate
+        assert_eq!(bitset.len(), 1);
+    }
+
+    #[test]
+    fn test_bitset_large_ids() {
+        let mut bitset = BitSet::new();
+        bitset.insert(100_000);
+        assert!(bitset.contains(&100_000));
+        assert!(!bitset.contains(&99_999));
+        assert_eq!(bitset.len(), 1);
+    }
+
+    #[test]
+    fn test_bitset_clear() {
+        let mut bitset = BitSet::new();
+        for i in 0..10 {
+            bitset.insert(i);
+        }
+        assert_eq!(bitset.len(), 10);
+        bitset.clear();
+        assert_eq!(bitset.len(), 0);
+        assert!(bitset.is_empty());
+    }
+
+    // ── is_deleted consistency after compaction ───────────────────────────
+
+    #[test]
+    fn test_is_deleted_after_compaction() {
+        let mut index = HnswIndex::with_distance(DistanceFunction::Euclidean);
+        let dim = 4;
+        let vectors: Vec<Vec<f32>> = (0..10).map(|_| random_vector(dim)).collect();
+
+        for (id, vec) in vectors.iter().enumerate() {
+            index.insert(id, vec, &vectors).unwrap();
+        }
+
+        index.delete(3).unwrap();
+        index.delete(7).unwrap();
+        assert!(index.is_deleted(3));
+        assert!(index.is_deleted(7));
+
+        index.compact(&vectors).unwrap();
+        assert_eq!(index.deleted_count(), 0);
+        // After compaction, no ID should be deleted
+        for i in 0..index.len() {
+            assert!(!index.is_deleted(i));
+        }
+    }
+
+    // ── search in single-element index ───────────────────────────────────
+
+    #[test]
+    fn test_search_single_element() {
+        let mut index = HnswIndex::with_distance(DistanceFunction::Euclidean);
+        let vectors = vec![vec![1.0, 0.0, 0.0]];
+        index.insert(0, &vectors[0], &vectors).unwrap();
+
+        let results = index.search(&[1.0, 0.0, 0.0], 5, &vectors).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].0, 0);
+        assert!(results[0].1 < 0.001);
+    }
+
+    // ── search in all-deleted index ──────────────────────────────────────
+
+    #[test]
+    fn test_search_all_deleted() {
+        let mut index = HnswIndex::with_distance(DistanceFunction::Euclidean);
+        let dim = 4;
+        let vectors: Vec<Vec<f32>> = (0..5).map(|_| random_vector(dim)).collect();
+
+        for (id, vec) in vectors.iter().enumerate() {
+            index.insert(id, vec, &vectors).unwrap();
+        }
+
+        for i in 0..5 {
+            index.delete(i).unwrap();
+        }
+
+        let results = index.search(&vectors[0], 5, &vectors).unwrap();
+        assert!(results.is_empty(), "Search with all deleted should return empty");
+    }
+
+    // ── double delete ────────────────────────────────────────────────────
+
+    #[test]
+    fn test_double_delete() {
+        let mut index = HnswIndex::with_distance(DistanceFunction::Euclidean);
+        let vectors = vec![random_vector(4)];
+        index.insert(0, &vectors[0], &vectors).unwrap();
+
+        assert!(index.delete(0).unwrap());
+        assert!(!index.delete(0).unwrap()); // already deleted
+    }
+
+    // ── search_with_ef_stats ─────────────────────────────────────────────
+
+    #[test]
+    fn test_search_with_ef_stats() {
+        let mut index = HnswIndex::with_distance(DistanceFunction::Euclidean);
+        let dim = 16;
+        let vectors: Vec<Vec<f32>> = (0..50).map(|_| random_vector(dim)).collect();
+        for (id, vec) in vectors.iter().enumerate() {
+            index.insert(id, vec, &vectors).unwrap();
+        }
+        let (results, stats) = index.search_with_ef_stats(&vectors[0], 5, 100, &vectors).unwrap();
+        assert!(!results.is_empty());
+        assert!(stats.visited_nodes > 0);
+        assert!(stats.traversal_time_us > 0 || stats.visited_nodes > 0);
+    }
+
+    // ── estimated_memory ─────────────────────────────────────────────────
+
+    #[test]
+    fn test_estimated_memory() {
+        let mut index = HnswIndex::with_distance(DistanceFunction::Euclidean);
+        let vectors: Vec<Vec<f32>> = (0..20).map(|_| random_vector(8)).collect();
+        let empty_mem = index.estimated_memory();
+        for (id, vec) in vectors.iter().enumerate() {
+            index.insert(id, vec, &vectors).unwrap();
+        }
+        let full_mem = index.estimated_memory();
+        assert!(full_mem > empty_mem);
+    }
+
+    // ── cosine distance ──────────────────────────────────────────────────
+
+    #[test]
+    fn test_hnsw_cosine_distance() {
+        let mut index = HnswIndex::with_distance(DistanceFunction::Cosine);
+        let dim = 8;
+        let vectors = vec![
+            vec![1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            vec![0.9, 0.1, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            vec![0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0],
+        ];
+        for (id, vec) in vectors.iter().enumerate() {
+            index.insert(id, vec, &vectors).unwrap();
+        }
+        let results = index.search(&vectors[0], 3, &vectors).unwrap();
+        assert_eq!(results[0].0, 0); // self is closest
+        assert_eq!(results[1].0, 1); // similar direction
+    }
+
+    // ── HnswConfig with specific m_max_0 ────────────────────────────────
+
+    #[test]
+    fn test_hnsw_config_custom_m_max_0() {
+        let config = HnswConfig::builder().m(16).m_max_0(48);
+        assert_eq!(config.m_max_0, 48);
+    }
+
+    // ── needs_compaction thresholds ──────────────────────────────────────
+
+    #[test]
+    fn test_needs_compaction_threshold() {
+        let mut index = HnswIndex::with_distance(DistanceFunction::Euclidean);
+        let vectors: Vec<Vec<f32>> = (0..10).map(|_| random_vector(4)).collect();
+        for (id, vec) in vectors.iter().enumerate() {
+            index.insert(id, vec, &vectors).unwrap();
+        }
+        assert!(!index.needs_compaction(0.1));
+        // Delete 50%
+        for i in 0..5 {
+            index.delete(i).unwrap();
+        }
+        assert!(index.needs_compaction(0.3)); // 50% > 30%
+        assert!(!index.needs_compaction(0.6)); // 50% < 60%
+    }
+
+    // ── search with high ef returns more candidates ─────────────────────
+
+    #[test]
+    fn test_search_high_ef() {
+        let mut index = HnswIndex::with_distance(DistanceFunction::Euclidean);
+        let dim = 16;
+        let vectors: Vec<Vec<f32>> = (0..100).map(|_| random_vector(dim)).collect();
+        for (id, vec) in vectors.iter().enumerate() {
+            index.insert(id, vec, &vectors).unwrap();
+        }
+        let low_ef = index.search_with_ef(&vectors[0], 10, 10, &vectors).unwrap();
+        let high_ef = index.search_with_ef(&vectors[0], 10, 200, &vectors).unwrap();
+        assert_eq!(low_ef.len(), 10);
+        assert_eq!(high_ef.len(), 10);
+        // Both should find the query itself
+        assert!(low_ef.iter().any(|(id, _)| *id == 0));
+        assert!(high_ef.iter().any(|(id, _)| *id == 0));
+    }
+
+    // ── HnswIndex::new constructor ───────────────────────────────────────
+
+    #[test]
+    fn test_hnsw_new_with_config() {
+        let config = HnswConfig::builder().m(32).ef_construction(400).ef_search(100);
+        let index = HnswIndex::new(config.clone(), DistanceFunction::Euclidean);
+        assert!(index.is_empty());
+        let stats = index.stats();
+        assert_eq!(stats.num_vectors, 0);
+    }
+
+    // ── search_radius on empty index ─────────────────────────────────────
+
+    #[test]
+    fn test_search_radius_empty() {
+        let index = HnswIndex::with_distance(DistanceFunction::Euclidean);
+        let results = index.search_radius(&[1.0, 0.0], 1.0, &[]).unwrap();
+        assert!(results.is_empty());
+    }
+
+    // ── insert same vector multiple times (different IDs) ────────────────
+
+    #[test]
+    fn test_insert_same_vector_different_ids() {
+        let mut index = HnswIndex::with_distance(DistanceFunction::Euclidean);
+        let v = vec![1.0, 0.0, 0.0, 0.0];
+        let vectors = vec![v.clone(), v.clone(), v.clone()];
+        for (id, vec) in vectors.iter().enumerate() {
+            index.insert(id, vec, &vectors).unwrap();
+        }
+        assert_eq!(index.len(), 3);
+        let results = index.search(&v, 3, &vectors).unwrap();
+        assert_eq!(results.len(), 3);
+        // All should have 0 distance
+        for (_, dist) in &results {
+            assert!(*dist < 0.001);
+        }
+    }
+
+    // ── BitSet multiple operations ───────────────────────────────────────
+
+    #[test]
+    fn test_bitset_operations_sequence() {
+        let mut bitset = BitSet::new();
+        for i in 0..100 {
+            bitset.insert(i);
+        }
+        assert_eq!(bitset.len(), 100);
+        for i in (0..100).step_by(2) {
+            bitset.remove(&i);
+        }
+        assert_eq!(bitset.len(), 50);
+        assert!(!bitset.contains(&0));
+        assert!(bitset.contains(&1));
+    }
 }
