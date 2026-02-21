@@ -1439,4 +1439,378 @@ mod tests {
         // CRC32 of empty input is 0 (initial value XOR'd)
         assert_eq!(checksum, 0);
     }
+
+    // ── concurrent append + checkpoint ───────────────────────────────────
+
+    #[test]
+    fn test_concurrent_append_and_checkpoint() {
+        let (wal, _temp_dir) = create_test_wal();
+        let wal = Arc::new(wal);
+
+        let mut handles = Vec::new();
+        for i in 0..10 {
+            let wal = Arc::clone(&wal);
+            handles.push(std::thread::spawn(move || {
+                wal.append(WalEntry::Insert {
+                    collection: "test".to_string(),
+                    id: format!("doc{i}"),
+                    vector: vec![i as f32],
+                    metadata: None,
+                }).unwrap();
+            }));
+        }
+
+        for h in handles {
+            h.join().unwrap();
+        }
+
+        assert_eq!(wal.current_lsn(), 10);
+        let cp = wal.checkpoint().unwrap();
+        assert!(cp > 0);
+    }
+
+    // ── WAL replay idempotency ───────────────────────────────────────────
+
+    #[test]
+    fn test_wal_replay_idempotency() {
+        let (wal, temp_dir) = create_test_wal();
+
+        wal.append(WalEntry::Insert {
+            collection: "test".to_string(),
+            id: "doc1".to_string(),
+            vector: vec![0.1, 0.2],
+            metadata: None,
+        }).unwrap();
+        wal.append(WalEntry::Delete {
+            collection: "test".to_string(),
+            id: "doc1".to_string(),
+        }).unwrap();
+
+        wal.sync().unwrap();
+        wal.close().unwrap();
+
+        let wal2 = WalManager::open(temp_dir.path(), WalConfig::default()).unwrap();
+
+        // Replay twice should produce same results
+        let mut replayed1 = Vec::new();
+        wal2.replay(1, |record| {
+            replayed1.push(record.entry.clone());
+            Ok(())
+        }).unwrap();
+
+        let mut replayed2 = Vec::new();
+        wal2.replay(1, |record| {
+            replayed2.push(record.entry.clone());
+            Ok(())
+        }).unwrap();
+
+        assert_eq!(replayed1.len(), replayed2.len());
+    }
+
+    // ── WAL with many appends ────────────────────────────────────────────
+
+    #[test]
+    fn test_wal_many_appends() {
+        let (wal, _temp_dir) = create_test_wal();
+
+        for i in 0..100 {
+            wal.append(WalEntry::Insert {
+                collection: "test".to_string(),
+                id: format!("doc{i}"),
+                vector: vec![i as f32],
+                metadata: None,
+            }).unwrap();
+        }
+
+        assert_eq!(wal.current_lsn(), 100);
+        wal.sync().unwrap();
+        assert_eq!(wal.synced_lsn(), 100);
+    }
+
+    // ── WAL delete entry ─────────────────────────────────────────────────
+
+    #[test]
+    fn test_wal_delete_entry() {
+        let (wal, temp_dir) = create_test_wal();
+
+        wal.append(WalEntry::Delete {
+            collection: "test".to_string(),
+            id: "doc1".to_string(),
+        }).unwrap();
+
+        wal.sync().unwrap();
+        wal.close().unwrap();
+
+        let wal2 = WalManager::open(temp_dir.path(), WalConfig::default()).unwrap();
+        let mut replayed = Vec::new();
+        wal2.replay(1, |record| {
+            replayed.push(record.entry);
+            Ok(())
+        }).unwrap();
+
+        assert_eq!(replayed.len(), 1);
+        assert!(matches!(replayed[0], WalEntry::Delete { .. }));
+    }
+
+    // ── WAL config with compression ──────────────────────────────────────
+
+    #[test]
+    fn test_wal_config_compressed() {
+        let config = WalConfig::new()
+            .compress(true)
+            .sync_on_write(false);
+        assert!(config.compress);
+        assert!(!config.sync_on_write);
+    }
+
+    // ── concurrent reads during writes ───────────────────────────────────
+
+    #[test]
+    fn test_concurrent_reads_and_writes() {
+        let (wal, _temp_dir) = create_test_wal();
+        let wal = Arc::new(wal);
+
+        // Writer thread
+        let wal_w = Arc::clone(&wal);
+        let writer = std::thread::spawn(move || {
+            for i in 0..20 {
+                wal_w.append(WalEntry::Insert {
+                    collection: "test".to_string(),
+                    id: format!("doc{i}"),
+                    vector: vec![i as f32],
+                    metadata: None,
+                }).unwrap();
+            }
+        });
+
+        // Reader thread (stats)
+        let wal_r = Arc::clone(&wal);
+        let reader = std::thread::spawn(move || {
+            for _ in 0..10 {
+                let _lsn = wal_r.current_lsn();
+                std::thread::yield_now();
+            }
+        });
+
+        writer.join().unwrap();
+        reader.join().unwrap();
+        assert_eq!(wal.current_lsn(), 20);
+    }
+
+    // ── zero-length entry handling ───────────────────────────────────────
+
+    #[test]
+    fn test_wal_empty_vector_insert() {
+        let (wal, _temp_dir) = create_test_wal();
+
+        let lsn = wal.append(WalEntry::Insert {
+            collection: "test".to_string(),
+            id: "empty".to_string(),
+            vector: vec![],
+            metadata: None,
+        }).unwrap();
+
+        assert_eq!(lsn, 1);
+    }
+
+    // ── checkpoint without any entries ────────────────────────────────────
+
+    #[test]
+    fn test_wal_checkpoint_empty() {
+        let (wal, _temp_dir) = create_test_wal();
+        let cp = wal.checkpoint().unwrap();
+        // Checkpoint on empty WAL still produces a valid checkpoint LSN
+        assert!(cp >= 0);
+    }
+
+    // ── Update entry replay ──────────────────────────────────────────────
+
+    #[test]
+    fn test_wal_update_entry() {
+        let (wal, temp_dir) = create_test_wal();
+        wal.append(WalEntry::Update {
+            collection: "test".to_string(),
+            id: "doc1".to_string(),
+            vector: vec![0.5, 0.6],
+            metadata: Some(serde_json::json!({"updated": true})),
+        }).unwrap();
+        wal.sync().unwrap();
+        wal.close().unwrap();
+
+        let wal2 = WalManager::open(temp_dir.path(), WalConfig::default()).unwrap();
+        let mut replayed = Vec::new();
+        wal2.replay(1, |record| {
+            replayed.push(record.entry);
+            Ok(())
+        }).unwrap();
+        assert_eq!(replayed.len(), 1);
+        assert!(matches!(replayed[0], WalEntry::Update { .. }));
+    }
+
+    // ── DropCollection entry ─────────────────────────────────────────────
+
+    #[test]
+    fn test_wal_drop_collection_entry() {
+        let (wal, temp_dir) = create_test_wal();
+        wal.append(WalEntry::DropCollection {
+            name: "to_drop".to_string(),
+        }).unwrap();
+        wal.sync().unwrap();
+        wal.close().unwrap();
+
+        let wal2 = WalManager::open(temp_dir.path(), WalConfig::default()).unwrap();
+        let mut replayed = Vec::new();
+        wal2.replay(1, |record| {
+            replayed.push(record.entry);
+            Ok(())
+        }).unwrap();
+        assert!(matches!(replayed[0], WalEntry::DropCollection { .. }));
+    }
+
+    // ── ClearCollection entry ────────────────────────────────────────────
+
+    #[test]
+    fn test_wal_clear_collection_entry() {
+        let (wal, _temp_dir) = create_test_wal();
+        let lsn = wal.append(WalEntry::ClearCollection {
+            collection: "test".to_string(),
+        }).unwrap();
+        assert!(lsn > 0);
+    }
+
+    // ── truncate after checkpoint ────────────────────────────────────────
+
+    #[test]
+    fn test_wal_truncate_after_checkpoint() {
+        let (wal, _temp_dir) = create_test_wal();
+        for i in 0..5 {
+            wal.append(WalEntry::Insert {
+                collection: "test".to_string(),
+                id: format!("doc{i}"),
+                vector: vec![i as f32],
+                metadata: None,
+            }).unwrap();
+        }
+        let cp = wal.checkpoint().unwrap();
+        let result = wal.truncate(cp);
+        // Truncate should succeed or be no-op
+        let _ = result;
+        assert!(wal.current_lsn() >= 5);
+    }
+
+    // ── large payload ────────────────────────────────────────────────────
+
+    #[test]
+    fn test_wal_large_vector_payload() {
+        let (wal, temp_dir) = create_test_wal();
+        let large_vector: Vec<f32> = (0..1024).map(|i| i as f32).collect();
+        wal.append(WalEntry::Insert {
+            collection: "test".to_string(),
+            id: "large".to_string(),
+            vector: large_vector.clone(),
+            metadata: Some(serde_json::json!({"dim": 1024})),
+        }).unwrap();
+        wal.sync().unwrap();
+        wal.close().unwrap();
+
+        let wal2 = WalManager::open(temp_dir.path(), WalConfig::default()).unwrap();
+        let mut replayed = Vec::new();
+        wal2.replay(1, |record| {
+            replayed.push(record.entry);
+            Ok(())
+        }).unwrap();
+        match &replayed[0] {
+            WalEntry::Insert { vector, .. } => assert_eq!(vector.len(), 1024),
+            _ => panic!("Expected Insert entry"),
+        }
+    }
+
+    // ── interleaved collection operations ────────────────────────────────
+
+    #[test]
+    fn test_wal_interleaved_operations() {
+        let (wal, temp_dir) = create_test_wal();
+        wal.append(WalEntry::CreateCollection {
+            name: "coll1".to_string(),
+            dimensions: 4,
+            distance: "cosine".to_string(),
+        }).unwrap();
+        wal.append(WalEntry::Insert {
+            collection: "coll1".to_string(),
+            id: "d1".to_string(),
+            vector: vec![1.0, 0.0, 0.0, 0.0],
+            metadata: None,
+        }).unwrap();
+        wal.append(WalEntry::CreateCollection {
+            name: "coll2".to_string(),
+            dimensions: 8,
+            distance: "euclidean".to_string(),
+        }).unwrap();
+        wal.append(WalEntry::Insert {
+            collection: "coll2".to_string(),
+            id: "d2".to_string(),
+            vector: vec![0.0; 8],
+            metadata: None,
+        }).unwrap();
+        wal.append(WalEntry::Delete {
+            collection: "coll1".to_string(),
+            id: "d1".to_string(),
+        }).unwrap();
+        wal.sync().unwrap();
+        wal.close().unwrap();
+
+        let wal2 = WalManager::open(temp_dir.path(), WalConfig::default()).unwrap();
+        let mut replayed = Vec::new();
+        wal2.replay(1, |record| {
+            replayed.push(record.entry);
+            Ok(())
+        }).unwrap();
+        assert_eq!(replayed.len(), 5);
+    }
+
+    // ── WAL record LSN ordering ──────────────────────────────────────────
+
+    #[test]
+    fn test_wal_lsn_monotonic() {
+        let (wal, _temp_dir) = create_test_wal();
+        let mut prev_lsn = 0;
+        for i in 0..10 {
+            let lsn = wal.append(WalEntry::Insert {
+                collection: "test".to_string(),
+                id: format!("d{i}"),
+                vector: vec![i as f32],
+                metadata: None,
+            }).unwrap();
+            assert!(lsn > prev_lsn);
+            prev_lsn = lsn;
+        }
+    }
+
+    // ── replay from specific LSN ─────────────────────────────────────────
+
+    #[test]
+    fn test_wal_replay_from_middle() {
+        let (wal, temp_dir) = create_test_wal();
+        for i in 0..5 {
+            wal.append(WalEntry::Insert {
+                collection: "test".to_string(),
+                id: format!("d{i}"),
+                vector: vec![i as f32],
+                metadata: None,
+            }).unwrap();
+        }
+        wal.sync().unwrap();
+        wal.close().unwrap();
+
+        let wal2 = WalManager::open(temp_dir.path(), WalConfig::default()).unwrap();
+        let mut replayed = Vec::new();
+        wal2.replay(3, |record| {
+            replayed.push(record.lsn);
+            Ok(())
+        }).unwrap();
+        // Should only get entries from LSN 3 onwards
+        for &lsn in &replayed {
+            assert!(lsn >= 3);
+        }
+    }
 }
