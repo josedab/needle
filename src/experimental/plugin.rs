@@ -45,7 +45,7 @@
 
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use thiserror::Error;
 
@@ -178,6 +178,17 @@ pub trait Plugin: Send + Sync {
 
     /// Called when the plugin is unloaded from a [`PluginManager`].
     fn on_unload(&mut self) -> HookResult<()>;
+
+    /// Return the plugin manifest including dependency information.
+    fn manifest(&self) -> PluginManifest {
+        PluginManifest::new(
+            self.name(),
+            self.version(),
+            "",
+            self.description(),
+            self.plugin_type(),
+        )
+    }
 }
 
 /// A single search result as seen by search hooks.
@@ -352,6 +363,126 @@ impl PluginManager {
     /// Returns `true` if no plugins are registered.
     pub fn is_empty(&self) -> bool {
         self.plugins.read().is_empty()
+    }
+
+    /// Register multiple plugins respecting dependency order.
+    ///
+    /// Performs topological sort on plugin dependencies and registers them
+    /// in the correct order. Returns an error if there is a circular
+    /// dependency or a missing dependency.
+    pub fn register_with_dependencies(
+        &self,
+        mut plugins: Vec<Box<dyn Plugin>>,
+    ) -> HookResult<usize> {
+        // Build dependency graph
+        let mut dep_map: HashMap<String, Vec<String>> = HashMap::new();
+        let mut name_map: HashMap<String, usize> = HashMap::new();
+
+        for (i, p) in plugins.iter().enumerate() {
+            let name = p.name().to_string();
+            let deps = p.manifest().dependencies.clone();
+            dep_map.insert(name.clone(), deps);
+            name_map.insert(name, i);
+        }
+
+        // Topological sort (Kahn's algorithm)
+        let mut in_degree: HashMap<String, usize> = HashMap::new();
+        for (name, deps) in &dep_map {
+            in_degree.entry(name.clone()).or_insert(0);
+            for dep in deps {
+                *in_degree.entry(dep.clone()).or_insert(0) += 0;
+                if name_map.contains_key(dep) {
+                    *in_degree.entry(name.clone()).or_insert(0) += 1;
+                }
+            }
+        }
+
+        let mut queue: Vec<String> = in_degree
+            .iter()
+            .filter(|(_, &deg)| deg == 0)
+            .map(|(name, _)| name.clone())
+            .collect();
+        queue.sort(); // deterministic order
+
+        let mut order = Vec::new();
+        while let Some(name) = queue.pop() {
+            order.push(name.clone());
+            for (other, deps) in &dep_map {
+                if deps.contains(&name) {
+                    if let Some(deg) = in_degree.get_mut(other) {
+                        *deg = deg.saturating_sub(1);
+                        if *deg == 0 {
+                            queue.push(other.clone());
+                        }
+                    }
+                }
+            }
+        }
+
+        if order.len() < dep_map.len() {
+            return Err(PluginError::MissingDependency(
+                "Circular dependency detected".into(),
+            ));
+        }
+
+        // Check for missing external dependencies
+        let known_names: HashSet<&String> = name_map.keys().collect();
+        let loaded: std::collections::HashSet<String> =
+            self.plugins.read().keys().cloned().collect();
+
+        for (name, deps) in &dep_map {
+            for dep in deps {
+                if !known_names.contains(dep) && !loaded.contains(dep) {
+                    return Err(PluginError::MissingDependency(format!(
+                        "Plugin '{}' requires '{}' which is not available",
+                        name, dep
+                    )));
+                }
+            }
+        }
+
+        // Register in dependency order
+        // We need to extract plugins by name from the vec
+        let mut plugin_map: HashMap<String, Box<dyn Plugin>> = HashMap::new();
+        for p in plugins.drain(..) {
+            plugin_map.insert(p.name().to_string(), p);
+        }
+
+        let mut registered = 0;
+        for name in &order {
+            if let Some(plugin) = plugin_map.remove(name) {
+                self.register(plugin)?;
+                registered += 1;
+            }
+        }
+
+        Ok(registered)
+    }
+
+    /// Hot-reload a plugin: unregister the old version and register the new one.
+    ///
+    /// If registration of the new plugin fails, the old plugin is NOT restored
+    /// (it was already unloaded). Returns the old plugin on success.
+    pub fn hot_reload(
+        &self,
+        new_plugin: Box<dyn Plugin>,
+    ) -> HookResult<Box<dyn Plugin>> {
+        let name = new_plugin.name().to_string();
+
+        // Unregister old
+        let old = self.unregister(&name)?;
+
+        // Register new
+        if let Err(e) = self.register(new_plugin) {
+            // Try to restore old plugin on failure
+            let _ = self.register(old);
+            return Err(PluginError::LifecycleError(format!(
+                "Hot-reload failed for '{}': {}",
+                name, e
+            )));
+        }
+
+        Ok(old)
     }
 }
 
@@ -887,5 +1018,71 @@ mod tests {
         assert_eq!(result.id, "vec-1");
         assert!((result.distance - 0.42).abs() < 1e-6);
         assert!(result.metadata.is_some());
+    }
+
+    #[test]
+    fn test_dependency_resolution() {
+        struct PluginA;
+        impl Plugin for PluginA {
+            fn name(&self) -> &str { "plugin-a" }
+            fn version(&self) -> &str { "1.0.0" }
+            fn description(&self) -> &str { "Base plugin" }
+            fn plugin_type(&self) -> PluginType { PluginType::Custom }
+            fn on_load(&mut self) -> HookResult<()> { Ok(()) }
+            fn on_unload(&mut self) -> HookResult<()> { Ok(()) }
+        }
+
+        struct PluginB;
+        impl Plugin for PluginB {
+            fn name(&self) -> &str { "plugin-b" }
+            fn version(&self) -> &str { "1.0.0" }
+            fn description(&self) -> &str { "Depends on A" }
+            fn plugin_type(&self) -> PluginType { PluginType::Custom }
+            fn on_load(&mut self) -> HookResult<()> { Ok(()) }
+            fn on_unload(&mut self) -> HookResult<()> { Ok(()) }
+            fn manifest(&self) -> PluginManifest {
+                PluginManifest::new("plugin-b", "1.0.0", "", "Depends on A", PluginType::Custom)
+                    .with_dependencies(vec!["plugin-a".into()])
+            }
+        }
+
+        let manager = PluginManager::new();
+        // Register B before A - should resolve via dependency ordering
+        let plugins: Vec<Box<dyn Plugin>> = vec![Box::new(PluginB), Box::new(PluginA)];
+        let count = manager.register_with_dependencies(plugins).unwrap();
+        assert_eq!(count, 2);
+        assert_eq!(manager.len(), 2);
+    }
+
+    #[test]
+    fn test_missing_dependency_error() {
+        struct PluginC;
+        impl Plugin for PluginC {
+            fn name(&self) -> &str { "plugin-c" }
+            fn version(&self) -> &str { "1.0.0" }
+            fn description(&self) -> &str { "Depends on missing" }
+            fn plugin_type(&self) -> PluginType { PluginType::Custom }
+            fn on_load(&mut self) -> HookResult<()> { Ok(()) }
+            fn on_unload(&mut self) -> HookResult<()> { Ok(()) }
+            fn manifest(&self) -> PluginManifest {
+                PluginManifest::new("plugin-c", "1.0.0", "", "Missing dep", PluginType::Custom)
+                    .with_dependencies(vec!["nonexistent".into()])
+            }
+        }
+
+        let manager = PluginManager::new();
+        let result = manager.register_with_dependencies(vec![Box::new(PluginC)]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_hot_reload() {
+        let manager = PluginManager::new();
+        manager.register(Box::new(DummyPlugin::new())).unwrap();
+
+        // Hot-reload with a new dummy instance
+        let old = manager.hot_reload(Box::new(DummyPlugin::new())).unwrap();
+        assert_eq!(old.name(), "dummy");
+        assert_eq!(manager.len(), 1);
     }
 }
