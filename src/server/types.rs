@@ -624,3 +624,635 @@ fn is_private_ip(ip: &std::net::IpAddr) -> bool {
     }
 }
 
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+    use axum::http::StatusCode;
+    use serde_json::json;
+
+    // ── CreateCollectionRequest deserialization ───────────────────────────
+
+    #[test]
+    fn test_create_collection_request_minimal() {
+        let json = json!({"name": "test", "dimensions": 128});
+        let req: CreateCollectionRequest = serde_json::from_value(json).unwrap();
+        assert_eq!(req.name, "test");
+        assert_eq!(req.dimensions, 128);
+        assert!(req.distance.is_none());
+        assert!(req.m.is_none());
+        assert!(req.ef_construction.is_none());
+    }
+
+    #[test]
+    fn test_create_collection_request_full() {
+        let json = json!({
+            "name": "test",
+            "dimensions": 384,
+            "distance": "cosine",
+            "m": 32,
+            "ef_construction": 400
+        });
+        let req: CreateCollectionRequest = serde_json::from_value(json).unwrap();
+        assert_eq!(req.name, "test");
+        assert_eq!(req.dimensions, 384);
+        assert_eq!(req.distance.as_deref(), Some("cosine"));
+        assert_eq!(req.m, Some(32));
+        assert_eq!(req.ef_construction, Some(400));
+    }
+
+    #[test]
+    fn test_create_collection_request_extra_fields_ignored() {
+        let json = json!({"name": "test", "dimensions": 4, "extra_field": "ignored"});
+        let req: CreateCollectionRequest = serde_json::from_value(json).unwrap();
+        assert_eq!(req.name, "test");
+    }
+
+    #[test]
+    fn test_create_collection_request_missing_required() {
+        let json = json!({"name": "test"});
+        let result = serde_json::from_value::<CreateCollectionRequest>(json);
+        assert!(result.is_err());
+    }
+
+    // ── SearchRequest deserialization ─────────────────────────────────────
+
+    #[test]
+    fn test_search_request_minimal() {
+        let json = json!({"vector": [1.0, 0.0, 0.0]});
+        let req: SearchRequest = serde_json::from_value(json).unwrap();
+        assert_eq!(req.vector, vec![1.0, 0.0, 0.0]);
+        assert_eq!(req.k, 10); // default
+        assert!(req.filter.is_none());
+        assert!(!req.include_vectors);
+        assert!(!req.explain);
+    }
+
+    #[test]
+    fn test_search_request_all_optional_fields() {
+        let json = json!({
+            "vector": [1.0, 0.0],
+            "k": 5,
+            "filter": {"category": "books"},
+            "post_filter": {"price": {"$lt": 50}},
+            "post_filter_factor": 5,
+            "include_vectors": true,
+            "explain": true,
+            "distance": "euclidean"
+        });
+        let req: SearchRequest = serde_json::from_value(json).unwrap();
+        assert_eq!(req.k, 5);
+        assert!(req.filter.is_some());
+        assert!(req.post_filter.is_some());
+        assert_eq!(req.post_filter_factor, 5);
+        assert!(req.include_vectors);
+        assert!(req.explain);
+        assert_eq!(req.distance.as_deref(), Some("euclidean"));
+    }
+
+    // ── ApiError::from(NeedleError) mapping ──────────────────────────────
+
+    #[test]
+    fn test_api_error_from_collection_not_found() {
+        let err = NeedleError::CollectionNotFound("test".into());
+        let (status, Json(api_err)) = <(StatusCode, Json<ApiError>)>::from(err);
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(api_err.code, "COLLECTION_NOT_FOUND");
+    }
+
+    #[test]
+    fn test_api_error_from_vector_not_found() {
+        let err = NeedleError::VectorNotFound("v1".into());
+        let (status, Json(api_err)) = <(StatusCode, Json<ApiError>)>::from(err);
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(api_err.code, "VECTOR_NOT_FOUND");
+    }
+
+    #[test]
+    fn test_api_error_from_collection_already_exists() {
+        let err = NeedleError::CollectionAlreadyExists("test".into());
+        let (status, Json(api_err)) = <(StatusCode, Json<ApiError>)>::from(err);
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(api_err.code, "COLLECTION_EXISTS");
+    }
+
+    #[test]
+    fn test_api_error_from_vector_already_exists() {
+        let err = NeedleError::VectorAlreadyExists("v1".into());
+        let (status, Json(api_err)) = <(StatusCode, Json<ApiError>)>::from(err);
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(api_err.code, "VECTOR_EXISTS");
+    }
+
+    #[test]
+    fn test_api_error_from_dimension_mismatch() {
+        let err = NeedleError::DimensionMismatch { expected: 128, got: 64 };
+        let (status, Json(api_err)) = <(StatusCode, Json<ApiError>)>::from(err);
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(api_err.code, "DIMENSION_MISMATCH");
+    }
+
+    #[test]
+    fn test_api_error_from_invalid_vector() {
+        let err = NeedleError::InvalidVector("contains NaN".into());
+        let (status, Json(api_err)) = <(StatusCode, Json<ApiError>)>::from(err);
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(api_err.code, "INVALID_VECTOR");
+    }
+
+    #[test]
+    fn test_api_error_from_invalid_config() {
+        let err = NeedleError::InvalidConfig("bad config".into());
+        let (status, Json(api_err)) = <(StatusCode, Json<ApiError>)>::from(err);
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(api_err.code, "INVALID_CONFIG");
+    }
+
+    #[test]
+    fn test_api_error_from_alias_not_found() {
+        let err = NeedleError::AliasNotFound("a1".into());
+        let (status, Json(api_err)) = <(StatusCode, Json<ApiError>)>::from(err);
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(api_err.code, "ALIAS_NOT_FOUND");
+    }
+
+    #[test]
+    fn test_api_error_from_alias_already_exists() {
+        let err = NeedleError::AliasAlreadyExists("a1".into());
+        let (status, Json(api_err)) = <(StatusCode, Json<ApiError>)>::from(err);
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(api_err.code, "ALIAS_EXISTS");
+    }
+
+    #[test]
+    fn test_api_error_from_collection_has_aliases() {
+        let err = NeedleError::CollectionHasAliases("test".into());
+        let (status, Json(api_err)) = <(StatusCode, Json<ApiError>)>::from(err);
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(api_err.code, "COLLECTION_HAS_ALIASES");
+    }
+
+    #[test]
+    fn test_api_error_from_io_error() {
+        let err = NeedleError::Io(std::io::Error::new(std::io::ErrorKind::NotFound, "file not found"));
+        let (status, Json(api_err)) = <(StatusCode, Json<ApiError>)>::from(err);
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(api_err.code, "INTERNAL_ERROR");
+        assert_eq!(api_err.error, "An internal error occurred");
+    }
+
+    // ── InsertRequest / BatchInsertRequest ────────────────────────────────
+
+    #[test]
+    fn test_insert_request_deserialization() {
+        let json = json!({"id": "v1", "vector": [1.0, 2.0, 3.0]});
+        let req: InsertRequest = serde_json::from_value(json).unwrap();
+        assert_eq!(req.id, "v1");
+        assert_eq!(req.vector, vec![1.0, 2.0, 3.0]);
+        assert!(req.metadata.is_none());
+    }
+
+    #[test]
+    fn test_insert_request_with_metadata() {
+        let json = json!({"id": "v1", "vector": [1.0], "metadata": {"key": "val"}});
+        let req: InsertRequest = serde_json::from_value(json).unwrap();
+        assert!(req.metadata.is_some());
+    }
+
+    #[test]
+    fn test_batch_insert_request() {
+        let json = json!({
+            "vectors": [
+                {"id": "v1", "vector": [1.0]},
+                {"id": "v2", "vector": [2.0]}
+            ]
+        });
+        let req: BatchInsertRequest = serde_json::from_value(json).unwrap();
+        assert_eq!(req.vectors.len(), 2);
+    }
+
+    #[test]
+    fn test_insert_request_empty_vector() {
+        let json = json!({"id": "v1", "vector": []});
+        let req: InsertRequest = serde_json::from_value(json).unwrap();
+        assert!(req.vector.is_empty());
+    }
+
+    // ── SearchResponse serialization round-trip ──────────────────────────
+
+    #[test]
+    fn test_search_response_serialization() {
+        let resp = SearchResponse {
+            results: vec![SearchResultResponse {
+                id: "v1".to_string(),
+                distance: 0.5,
+                score: 0.95,
+                metadata: Some(json!({"key": "val"})),
+                vector: None,
+            }],
+            explanation: None,
+        };
+        let json = serde_json::to_value(&resp).unwrap();
+        assert_eq!(json["results"][0]["id"], "v1");
+        assert_eq!(json["results"][0]["distance"], 0.5);
+        assert!(json.get("explanation").is_none());
+    }
+
+    #[test]
+    fn test_search_response_with_explanation() {
+        let resp = SearchResponse {
+            results: vec![],
+            explanation: Some(SearchExplanation {
+                query_norm: 1.0,
+                distance_metric: "cosine".to_string(),
+                top_dimensions: vec![],
+                profiling: None,
+            }),
+        };
+        let json = serde_json::to_value(&resp).unwrap();
+        assert!(json.get("explanation").is_some());
+    }
+
+    // ── QueryParams defaults ─────────────────────────────────────────────
+
+    #[test]
+    fn test_query_params_defaults() {
+        let json = json!({});
+        let params: QueryParams = serde_json::from_value(json).unwrap();
+        assert!(params.offset.is_none());
+        assert!(params.limit.is_none());
+    }
+
+    #[test]
+    fn test_query_params_with_values() {
+        let json = json!({"offset": 10, "limit": 50});
+        let params: QueryParams = serde_json::from_value(json).unwrap();
+        assert_eq!(params.offset, Some(10));
+        assert_eq!(params.limit, Some(50));
+    }
+
+    // ── RadiusSearchRequest ──────────────────────────────────────────────
+
+    #[test]
+    fn test_radius_search_request_defaults() {
+        let json = json!({"vector": [1.0, 0.0], "max_distance": 0.5});
+        let req: RadiusSearchRequest = serde_json::from_value(json).unwrap();
+        assert_eq!(req.limit, 1000);
+        assert!(!req.include_vectors);
+    }
+
+    #[test]
+    fn test_radius_search_request_zero_radius() {
+        let json = json!({"vector": [1.0], "max_distance": 0.0});
+        let req: RadiusSearchRequest = serde_json::from_value(json).unwrap();
+        assert_eq!(req.max_distance, 0.0);
+    }
+
+    #[test]
+    fn test_radius_search_request_negative_radius() {
+        let json = json!({"vector": [1.0], "max_distance": -1.0});
+        let req: RadiusSearchRequest = serde_json::from_value(json).unwrap();
+        assert_eq!(req.max_distance, -1.0);
+    }
+
+    // ── ApiError construction ────────────────────────────────────────────
+
+    #[test]
+    fn test_api_error_new() {
+        let err = ApiError::new("something went wrong", "BAD_REQUEST");
+        assert_eq!(err.error, "something went wrong");
+        assert_eq!(err.code, "BAD_REQUEST");
+        assert!(err.help.is_empty());
+    }
+
+    #[test]
+    fn test_api_error_serialization() {
+        let err = ApiError::new("test error", "TEST_CODE");
+        let json = serde_json::to_value(&err).unwrap();
+        assert_eq!(json["error"], "test error");
+        assert_eq!(json["code"], "TEST_CODE");
+        assert!(json.get("help").is_none());
+    }
+
+    // ── CreateWebhookRequest URL validation ──────────────────────────────
+
+    #[test]
+    fn test_webhook_url_validation_public() {
+        let req = CreateWebhookRequest {
+            url: "https://example.com/webhook".to_string(),
+            secret: None,
+            collections: vec![],
+            event_types: vec!["insert".to_string()],
+        };
+        assert!(req.validate_url().is_ok());
+    }
+
+    #[test]
+    fn test_webhook_url_validation_localhost_rejected() {
+        let req = CreateWebhookRequest {
+            url: "http://localhost/webhook".to_string(),
+            secret: None,
+            collections: vec![],
+            event_types: vec!["insert".to_string()],
+        };
+        assert!(req.validate_url().is_err());
+    }
+
+    #[test]
+    fn test_webhook_url_validation_private_ip_rejected() {
+        let req = CreateWebhookRequest {
+            url: "http://192.168.1.1/webhook".to_string(),
+            secret: None,
+            collections: vec![],
+            event_types: vec!["insert".to_string()],
+        };
+        assert!(req.validate_url().is_err());
+    }
+
+    // ── BatchSearchRequest ───────────────────────────────────────────────
+
+    #[test]
+    fn test_batch_search_request_deserialization() {
+        let json = json!({
+            "vectors": [[1.0, 0.0], [0.0, 1.0]],
+            "k": 5,
+            "filter": {"category": "books"}
+        });
+        let req: BatchSearchRequest = serde_json::from_value(json).unwrap();
+        assert_eq!(req.vectors.len(), 2);
+        assert_eq!(req.k, 5);
+        assert!(req.filter.is_some());
+    }
+
+    #[test]
+    fn test_batch_search_request_defaults() {
+        let json = json!({"vectors": [[1.0]]});
+        let req: BatchSearchRequest = serde_json::from_value(json).unwrap();
+        assert_eq!(req.k, 10); // default
+        assert!(req.filter.is_none());
+    }
+
+    // ── UpsertRequest ────────────────────────────────────────────────────
+
+    #[test]
+    fn test_upsert_request_deserialization() {
+        let json = json!({
+            "id": "u1",
+            "vector": [1.0, 2.0, 3.0],
+            "metadata": {"key": "val"},
+            "ttl_seconds": 3600
+        });
+        let req: UpsertRequest = serde_json::from_value(json).unwrap();
+        assert_eq!(req.id, "u1");
+        assert_eq!(req.vector.len(), 3);
+        assert!(req.metadata.is_some());
+        assert_eq!(req.ttl_seconds, Some(3600));
+    }
+
+    #[test]
+    fn test_upsert_request_minimal() {
+        let json = json!({"id": "u1", "vector": [1.0]});
+        let req: UpsertRequest = serde_json::from_value(json).unwrap();
+        assert!(req.metadata.is_none());
+        assert!(req.ttl_seconds.is_none());
+    }
+
+    // ── StreamingInsertRequest / StreamingVector ─────────────────────────
+
+    #[test]
+    fn test_streaming_insert_request() {
+        let json = json!({
+            "vectors": [
+                {"id": "s1", "vector": [1.0, 0.0]},
+                {"id": "s2", "vector": [0.0, 1.0], "metadata": {"k": "v"}}
+            ],
+            "sequence_id": "seq-001",
+            "flush": true
+        });
+        let req: StreamingInsertRequest = serde_json::from_value(json).unwrap();
+        assert_eq!(req.vectors.len(), 2);
+        assert_eq!(req.sequence_id, Some("seq-001".to_string()));
+        assert!(req.flush);
+    }
+
+    #[test]
+    fn test_streaming_insert_defaults() {
+        let json = json!({"vectors": []});
+        let req: StreamingInsertRequest = serde_json::from_value(json).unwrap();
+        assert!(req.vectors.is_empty());
+        assert!(req.sequence_id.is_none());
+        assert!(!req.flush);
+    }
+
+    // ── GraphSearchRequest ───────────────────────────────────────────────
+
+    #[test]
+    fn test_graph_search_request() {
+        let json = json!({
+            "vector": [1.0, 0.0, 0.0],
+            "k": 5,
+            "max_hops": 3
+        });
+        let req: GraphSearchRequest = serde_json::from_value(json).unwrap();
+        assert_eq!(req.vector.len(), 3);
+        assert_eq!(req.k, 5);
+    }
+
+    // ── MatryoshkaSearchRequest ──────────────────────────────────────────
+
+    #[test]
+    fn test_matryoshka_search_request() {
+        let json = json!({
+            "vector": [1.0, 0.0, 0.0, 0.0],
+            "k": 10,
+            "coarse_dims": 64,
+            "oversample": 4
+        });
+        let req: MatryoshkaSearchRequest = serde_json::from_value(json).unwrap();
+        assert_eq!(req.vector.len(), 4);
+        assert_eq!(req.k, 10);
+    }
+
+    // ── CacheLookupRequest / CacheStoreRequest ──────────────────────────
+
+    #[test]
+    fn test_cache_lookup_request() {
+        let json = json!({"vector": [1.0, 0.0], "threshold": 0.95});
+        let req: CacheLookupRequest = serde_json::from_value(json).unwrap();
+        assert_eq!(req.vector.len(), 2);
+    }
+
+    #[test]
+    fn test_cache_store_request() {
+        let json = json!({
+            "vector": [1.0],
+            "response": "cached answer",
+            "model": "gpt-4",
+            "ttl_seconds": 600
+        });
+        let req: CacheStoreRequest = serde_json::from_value(json).unwrap();
+        assert_eq!(req.model, Some("gpt-4".to_string()));
+    }
+
+    // ── TimeTravelSearchRequest ──────────────────────────────────────────
+
+    #[test]
+    fn test_time_travel_search_request() {
+        let json = json!({
+            "vector": [1.0, 0.0],
+            "k": 5,
+            "snapshot": "snap_v1"
+        });
+        let req: TimeTravelSearchRequest = serde_json::from_value(json).unwrap();
+        assert_eq!(req.k, 5);
+    }
+
+    // ── SnapshotDiffRequest ──────────────────────────────────────────────
+
+    #[test]
+    fn test_snapshot_diff_request() {
+        let json = json!({"from": "snap1", "to": "snap2"});
+        let req: SnapshotDiffRequest = serde_json::from_value(json).unwrap();
+        assert_eq!(req.from, "snap1");
+        assert_eq!(req.to, "snap2");
+    }
+
+    // ── BenchmarkRequest ─────────────────────────────────────────────────
+
+    #[test]
+    fn test_benchmark_request() {
+        let json = json!({"num_queries": 100, "k": 10});
+        let req: BenchmarkRequest = serde_json::from_value(json).unwrap();
+        assert_eq!(req.num_queries, 100);
+        assert_eq!(req.k, 10);
+    }
+
+    // ── RememberRequest / RecallRequest ──────────────────────────────────
+
+    #[test]
+    fn test_remember_request() {
+        let json = json!({
+            "content": "important fact",
+            "vector": [1.0, 0.0, 0.0, 0.0]
+        });
+        let req: RememberRequest = serde_json::from_value(json).unwrap();
+        assert_eq!(req.content, "important fact");
+    }
+
+    #[test]
+    fn test_recall_request() {
+        let json = json!({
+            "vector": [1.0, 0.0],
+            "k": 5
+        });
+        let req: RecallRequest = serde_json::from_value(json).unwrap();
+        assert_eq!(req.k, 5);
+    }
+
+    // ── VectorResponse serialization ─────────────────────────────────────
+
+    #[test]
+    fn test_vector_response_serialization() {
+        let resp = VectorResponse {
+            id: "v1".to_string(),
+            vector: vec![1.0, 0.0],
+            metadata: Some(json!({"key": "val"})),
+        };
+        let json = serde_json::to_value(&resp).unwrap();
+        assert_eq!(json["id"], "v1");
+        assert_eq!(json["vector"], json!([1.0, 0.0]));
+    }
+
+    // ── CollectionInfo serialization ─────────────────────────────────────
+
+    #[test]
+    fn test_collection_info_serialization() {
+        let info = CollectionInfo {
+            name: "test".to_string(),
+            dimensions: 128,
+            count: 1000,
+            deleted_count: 50,
+        };
+        let json = serde_json::to_value(&info).unwrap();
+        assert_eq!(json["name"], "test");
+        assert_eq!(json["dimensions"], 128);
+        assert_eq!(json["count"], 1000);
+        assert_eq!(json["deleted_count"], 50);
+    }
+
+    // ── AliasInfo serialization ──────────────────────────────────────────
+
+    #[test]
+    fn test_alias_info_serialization() {
+        let info = AliasInfo {
+            alias: "my_alias".to_string(),
+            collection: "my_coll".to_string(),
+        };
+        let json = serde_json::to_value(&info).unwrap();
+        assert_eq!(json["alias"], "my_alias");
+        assert_eq!(json["collection"], "my_coll");
+    }
+
+    // ── CreateAliasRequest ───────────────────────────────────────────────
+
+    #[test]
+    fn test_create_alias_request() {
+        let json = json!({"alias": "a1", "collection": "c1"});
+        let req: CreateAliasRequest = serde_json::from_value(json).unwrap();
+        assert_eq!(req.alias, "a1");
+        assert_eq!(req.collection, "c1");
+    }
+
+    // ── UpdateAliasRequest ───────────────────────────────────────────────
+
+    #[test]
+    fn test_update_alias_request() {
+        let json = json!({"collection": "new_coll"});
+        let req: UpdateAliasRequest = serde_json::from_value(json).unwrap();
+        assert_eq!(req.collection, "new_coll");
+    }
+
+    // ── UpdateMetadataRequest ────────────────────────────────────────────
+
+    #[test]
+    fn test_update_metadata_request_null() {
+        let json = json!({"metadata": null});
+        let req: UpdateMetadataRequest = serde_json::from_value(json).unwrap();
+        assert!(req.metadata.is_none());
+    }
+
+    // ── InsertRequest with ttl ───────────────────────────────────────────
+
+    #[test]
+    fn test_insert_request_with_ttl() {
+        let json = json!({"id": "v1", "vector": [1.0], "ttl_seconds": 300});
+        let req: InsertRequest = serde_json::from_value(json).unwrap();
+        assert_eq!(req.ttl_seconds, Some(300));
+    }
+
+    // ── SearchRequest with distance override ─────────────────────────────
+
+    #[test]
+    fn test_search_request_with_distance_override() {
+        let json = json!({
+            "vector": [1.0],
+            "distance": "manhattan",
+            "k": 3
+        });
+        let req: SearchRequest = serde_json::from_value(json).unwrap();
+        assert_eq!(req.distance.as_deref(), Some("manhattan"));
+    }
+
+    // ── CostEstimateRequest ──────────────────────────────────────────────
+
+    #[test]
+    fn test_cost_estimate_request() {
+        let json = json!({
+            "vector": [1.0, 0.0],
+            "k": 10
+        });
+        let req: CostEstimateRequest = serde_json::from_value(json).unwrap();
+        assert_eq!(req.k, 10);
+    }
+}
+
