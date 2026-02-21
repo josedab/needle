@@ -108,6 +108,12 @@ pub struct AdaptiveIndexConfig {
     pub latency_window_size: usize,
     /// If true, automatically migrate when a recommendation changes.
     pub auto_migrate: bool,
+    /// Minimum satisfaction rate before triggering migration pressure (0.0–1.0).
+    pub satisfaction_threshold: f32,
+    /// Number of negative feedback samples before migration is forced.
+    pub migration_pressure_threshold: u64,
+    /// Minimum feedback samples before satisfaction rate is evaluated.
+    pub feedback_min_samples: u64,
 }
 
 impl Default for AdaptiveIndexConfig {
@@ -124,6 +130,9 @@ impl Default for AdaptiveIndexConfig {
             high_filter_pct_threshold: 0.5,
             latency_window_size: 100,
             auto_migrate: false,
+            satisfaction_threshold: 0.7,
+            migration_pressure_threshold: 5,
+            feedback_min_samples: 10,
         }
     }
 }
@@ -150,6 +159,12 @@ pub struct WorkloadProfile {
     filter_query_count: u64,
     #[serde(skip)]
     recent_latencies_us: VecDeque<u64>,
+    #[serde(skip)]
+    pub(crate) feedback_total: u64,
+    #[serde(skip)]
+    pub(crate) feedback_satisfied: u64,
+    #[serde(skip)]
+    pub(crate) migration_pressure: u64,
 }
 
 impl WorkloadProfile {
@@ -712,6 +727,66 @@ impl AdaptiveIndex {
             })
             .collect()
     }
+
+    /// Record user feedback on search quality for online learning.
+    ///
+    /// `satisfied` indicates whether the search result met the user's needs.
+    /// The adaptive index uses this feedback to adjust its strategy weights:
+    /// if the current strategy consistently under-performs, a migration is
+    /// recommended sooner.
+    pub fn record_feedback(&mut self, satisfied: bool) {
+        let mut profile = self.profile.write();
+        profile.feedback_total += 1;
+        if satisfied {
+            profile.feedback_satisfied += 1;
+        }
+
+        // If satisfaction rate drops below threshold, force a re-evaluation
+        if profile.feedback_total >= self.config.feedback_min_samples {
+            let satisfaction_rate =
+                profile.feedback_satisfied as f64 / profile.feedback_total as f64;
+            if satisfaction_rate < self.config.satisfaction_threshold as f64 {
+                profile.migration_pressure += 1;
+            } else {
+                profile.migration_pressure = profile.migration_pressure.saturating_sub(1);
+            }
+        }
+    }
+
+    /// Current satisfaction rate from user feedback (0.0 to 1.0).
+    /// Returns `None` if no feedback has been recorded yet.
+    pub fn satisfaction_rate(&self) -> Option<f64> {
+        let profile = self.profile.read();
+        if profile.feedback_total == 0 {
+            None
+        } else {
+            Some(profile.feedback_satisfied as f64 / profile.feedback_total as f64)
+        }
+    }
+
+    /// Check whether accumulated negative feedback warrants a strategy change
+    /// and apply the migration if `auto_migrate` is enabled.
+    /// Returns `true` if a migration was performed.
+    pub fn apply_feedback_migration(&mut self) -> bool {
+        let should_migrate = {
+            let profile = self.profile.read();
+            profile.migration_pressure >= self.config.migration_pressure_threshold
+        };
+
+        if should_migrate && self.config.auto_migrate {
+            let rec = self.analyze_workload();
+            if rec.recommended != self.active_strategy {
+                if self.migrate_index(rec.recommended).is_ok() {
+                    let mut profile = self.profile.write();
+                    profile.migration_pressure = 0;
+                    profile.feedback_total = 0;
+                    profile.feedback_satisfied = 0;
+                    return true;
+                }
+            }
+        }
+        false
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -981,5 +1056,45 @@ mod tests {
         idx.insert("a", &[1.0, 0.0, 0.0, 0.0]).unwrap();
         assert!(!idx.is_empty());
         assert_eq!(idx.len(), 1);
+    }
+
+    #[test]
+    fn test_feedback_tracking() {
+        let mut idx = make_index(4);
+        idx.insert("a", &[1.0, 0.0, 0.0, 0.0]).unwrap();
+
+        assert!(idx.satisfaction_rate().is_none());
+
+        idx.record_feedback(true);
+        idx.record_feedback(true);
+        idx.record_feedback(false);
+
+        let rate = idx.satisfaction_rate().unwrap();
+        assert!((rate - 2.0 / 3.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_feedback_migration_pressure() {
+        let cfg = AdaptiveIndexConfig {
+            brute_force_max_vectors: 0, // disable brute-force
+            auto_migrate: true,
+            feedback_min_samples: 3,
+            satisfaction_threshold: 0.8,
+            migration_pressure_threshold: 2,
+            ..Default::default()
+        };
+        let mut idx =
+            AdaptiveIndex::new(4, DistanceFunction::Cosine, IndexStrategy::BruteForce, cfg);
+        idx.insert("a", &[1.0, 0.0, 0.0, 0.0]).unwrap();
+
+        // Send mostly negative feedback
+        for _ in 0..5 {
+            idx.record_feedback(false);
+        }
+
+        let migrated = idx.apply_feedback_migration();
+        // Should have migrated because satisfaction_rate < threshold
+        assert!(migrated);
+        assert_eq!(idx.active_strategy(), IndexStrategy::Hnsw);
     }
 }
