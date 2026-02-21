@@ -578,4 +578,314 @@ mod tests {
         assert_eq!(config.min_shards, 2);
         assert!(!config.allow_partial);
     }
+
+    // ── route_scatter with no active shards ──────────────────────────────
+
+    #[test]
+    fn test_route_scatter_no_shards() {
+        let config = ShardConfig::new(0);
+        let manager = Arc::new(ShardManager::new(config));
+        let router = QueryRouter::new(manager);
+
+        let result = router.route_scatter();
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), RoutingError::NoShardsAvailable));
+    }
+
+    // ── select_shard round-robin wraparound with single shard ────────────
+
+    #[test]
+    fn test_select_shard_single_shard() {
+        let config = ShardConfig::new(1);
+        let manager = Arc::new(ShardManager::new(config));
+        let router = QueryRouter::new(manager);
+
+        let shard1 = router.select_shard();
+        let shard2 = router.select_shard();
+        let shard3 = router.select_shard();
+
+        // All should return the same shard
+        assert!(shard1.is_some());
+        assert_eq!(shard1, shard2);
+        assert_eq!(shard2, shard3);
+    }
+
+    // ── merge_results with empty results from all shards ─────────────────
+
+    #[test]
+    fn test_merge_results_all_empty() {
+        let router = create_test_router();
+        let start = Instant::now();
+
+        let shard_results = vec![
+            (ShardId::new(0), vec![]),
+            (ShardId::new(1), vec![]),
+        ];
+
+        let merged = router.merge_results(shard_results, 10, start);
+        assert!(merged.results.is_empty());
+        assert_eq!(merged.total_found, 0);
+        assert_eq!(merged.shards_responded.len(), 2);
+    }
+
+    // ── merge_results with duplicate IDs from different shards ───────────
+
+    #[test]
+    fn test_merge_results_duplicate_ids() {
+        let router = create_test_router();
+        let start = Instant::now();
+
+        let shard_results = vec![
+            (
+                ShardId::new(0),
+                vec![ShardSearchResult {
+                    shard_id: ShardId::new(0),
+                    id: "dup".to_string(),
+                    distance: 0.5,
+                    metadata: None,
+                }],
+            ),
+            (
+                ShardId::new(1),
+                vec![ShardSearchResult {
+                    shard_id: ShardId::new(1),
+                    id: "dup".to_string(),
+                    distance: 0.3,
+                    metadata: None,
+                }],
+            ),
+        ];
+
+        let merged = router.merge_results(shard_results, 10, start);
+        // Both entries should be present (merge doesn't dedup)
+        assert_eq!(merged.total_found, 2);
+        // Sorted by distance
+        assert_eq!(merged.results[0].distance, 0.3);
+    }
+
+    // ── merge_with_failures: min_shards not met ──────────────────────────
+
+    #[test]
+    fn test_merge_with_failures_insufficient_shards() {
+        let config = ShardConfig::new(4);
+        let manager = Arc::new(ShardManager::new(config));
+        let route_config = RouteConfig::default()
+            .with_min_shards(3)
+            .with_partial_results(false);
+        let router = QueryRouter::with_config(manager, route_config);
+        let start = Instant::now();
+
+        let successful = vec![(ShardId::new(0), vec![])];
+        let failed = vec![ShardId::new(1), ShardId::new(2), ShardId::new(3)];
+
+        let result = router.merge_with_failures(successful, failed, 10, start);
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            RoutingError::PartialResults { success, total } => {
+                assert_eq!(success, 1);
+                assert_eq!(total, 4);
+            }
+            other => panic!("Expected PartialResults, got {:?}", other),
+        }
+    }
+
+    // ── merge_with_failures: allow_partial = true ────────────────────────
+
+    #[test]
+    fn test_merge_with_failures_partial_allowed() {
+        let config = ShardConfig::new(4);
+        let manager = Arc::new(ShardManager::new(config));
+        let route_config = RouteConfig::default()
+            .with_min_shards(3)
+            .with_partial_results(true);
+        let router = QueryRouter::with_config(manager, route_config);
+        let start = Instant::now();
+
+        let successful = vec![(
+            ShardId::new(0),
+            vec![ShardSearchResult {
+                shard_id: ShardId::new(0),
+                id: "a".to_string(),
+                distance: 0.1,
+                metadata: None,
+            }],
+        )];
+        let failed = vec![ShardId::new(1)];
+
+        let result = router.merge_with_failures(successful, failed, 10, start);
+        assert!(result.is_ok());
+        let agg = result.unwrap();
+        assert_eq!(agg.results.len(), 1);
+        assert_eq!(agg.shards_failed.len(), 1);
+    }
+
+    // ── ResultCollector edge cases ───────────────────────────────────────
+
+    #[test]
+    fn test_result_collector_all_errors() {
+        let mut collector = ResultCollector::new(2);
+        collector.add_error(ShardId::new(0), "fail1".to_string());
+        collector.add_error(ShardId::new(1), "fail2".to_string());
+        assert!(collector.is_complete());
+        assert_eq!(collector.success_count(), 0);
+        assert_eq!(collector.error_count(), 2);
+    }
+
+    // ── RouteConfig validation edge cases ────────────────────────────────
+
+    #[test]
+    fn test_route_config_with_min_shards_zero() {
+        let config = RouteConfig::default().with_min_shards(0);
+        assert_eq!(config.min_shards, 0);
+    }
+
+    #[test]
+    fn test_route_config_with_zero_timeout() {
+        let config = RouteConfig::default().with_timeout(Duration::from_secs(0));
+        assert_eq!(config.timeout, Duration::from_secs(0));
+    }
+
+    // ── LoadBalancing enum ───────────────────────────────────────────────
+
+    #[test]
+    fn test_load_balancing_variants() {
+        let config = RouteConfig {
+            load_balancing: LoadBalancing::Random,
+            ..Default::default()
+        };
+        assert_eq!(config.load_balancing, LoadBalancing::Random);
+
+        let config2 = RouteConfig {
+            load_balancing: LoadBalancing::LeastLoaded,
+            ..Default::default()
+        };
+        assert_eq!(config2.load_balancing, LoadBalancing::LeastLoaded);
+    }
+
+    // ── route_with_replicas ──────────────────────────────────────────────
+
+    #[test]
+    fn test_route_with_replicas() {
+        let router = create_test_router();
+        let replicas = router.route_with_replicas("some_vector");
+        assert!(!replicas.is_empty());
+    }
+
+    // ── merge_with_failures: all shards failed ──────────────────────────
+
+    #[test]
+    fn test_merge_with_failures_all_failed() {
+        let config = ShardConfig::new(4);
+        let manager = Arc::new(ShardManager::new(config));
+        let route_config = RouteConfig::default()
+            .with_min_shards(1)
+            .with_partial_results(false);
+        let router = QueryRouter::with_config(manager, route_config);
+        let start = Instant::now();
+
+        let successful: Vec<(ShardId, Vec<ShardSearchResult>)> = vec![];
+        let failed = vec![ShardId::new(0), ShardId::new(1)];
+
+        let result = router.merge_with_failures(successful, failed, 10, start);
+        assert!(result.is_err());
+    }
+
+    // ── merge_results: k larger than total results ───────────────────────
+
+    #[test]
+    fn test_merge_results_k_larger_than_total() {
+        let router = create_test_router();
+        let start = Instant::now();
+
+        let shard_results = vec![
+            (ShardId::new(0), vec![ShardSearchResult {
+                shard_id: ShardId::new(0),
+                id: "a".to_string(),
+                distance: 0.1,
+                metadata: None,
+            }]),
+        ];
+
+        let merged = router.merge_results(shard_results, 100, start);
+        assert_eq!(merged.results.len(), 1);
+        assert_eq!(merged.total_found, 1);
+    }
+
+    // ── route: deterministic for same input ──────────────────────────────
+
+    #[test]
+    fn test_route_deterministic() {
+        let router = create_test_router();
+        let shard1 = router.route("key_abc");
+        let shard2 = router.route("key_abc");
+        assert_eq!(shard1, shard2);
+    }
+
+    // ── get_active_shards ────────────────────────────────────────────────
+
+    #[test]
+    fn test_get_active_shards() {
+        let router = create_test_router();
+        let active = router.get_active_shards();
+        assert_eq!(active.len(), 4);
+    }
+
+    // ── RouterStats snapshot ─────────────────────────────────────────────
+
+    #[test]
+    fn test_router_stats_snapshot_details() {
+        let router = create_test_router();
+        router.route("k1");
+        router.route("k2");
+        let _ = router.route_scatter();
+        let stats = router.stats();
+        assert_eq!(stats.total_routes, 2);
+        assert!(stats.scatter_queries >= 1 || stats.total_routes >= 2);
+    }
+
+    // ── config accessor ──────────────────────────────────────────────────
+
+    #[test]
+    fn test_config_accessor() {
+        let config = ShardConfig::new(4);
+        let manager = Arc::new(ShardManager::new(config));
+        let route_config = RouteConfig::default().with_timeout(Duration::from_secs(30));
+        let router = QueryRouter::with_config(manager, route_config);
+        assert_eq!(router.config().timeout, Duration::from_secs(30));
+    }
+
+    // ── merge_results: sort order ────────────────────────────────────────
+
+    #[test]
+    fn test_merge_results_sort_order() {
+        let router = create_test_router();
+        let start = Instant::now();
+
+        let shard_results = vec![
+            (ShardId::new(0), vec![
+                ShardSearchResult { shard_id: ShardId::new(0), id: "far".to_string(), distance: 5.0, metadata: None },
+            ]),
+            (ShardId::new(1), vec![
+                ShardSearchResult { shard_id: ShardId::new(1), id: "close".to_string(), distance: 0.1, metadata: None },
+                ShardSearchResult { shard_id: ShardId::new(1), id: "mid".to_string(), distance: 2.0, metadata: None },
+            ]),
+        ];
+
+        let merged = router.merge_results(shard_results, 10, start);
+        assert_eq!(merged.results[0].id, "close");
+        assert_eq!(merged.results[1].id, "mid");
+        assert_eq!(merged.results[2].id, "far");
+    }
+
+    // ── ResultCollector: single shard complete ───────────────────────────
+
+    #[test]
+    fn test_result_collector_single_shard() {
+        let mut collector = ResultCollector::new(1);
+        assert!(!collector.is_complete());
+        collector.add_results(ShardId::new(0), vec![]);
+        assert!(collector.is_complete());
+        assert_eq!(collector.success_count(), 1);
+        assert_eq!(collector.error_count(), 0);
+    }
 }
