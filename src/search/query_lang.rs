@@ -40,7 +40,7 @@ use crate::metadata::{Filter, FilterOperator};
 use crate::SearchResult;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -1998,6 +1998,234 @@ impl CostBasedOptimizer {
 }
 
 // ============================================================================
+// Aggregation Functions
+// ============================================================================
+
+/// Aggregation function for NeedleQL queries.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum AggregateFunction {
+    /// Count vectors
+    Count,
+    /// Count distinct values of a metadata field
+    CountDistinct(String),
+    /// Average of a numeric metadata field
+    Avg(String),
+    /// Minimum of a numeric metadata field
+    Min(String),
+    /// Maximum of a numeric metadata field
+    Max(String),
+    /// Sum of a numeric metadata field
+    Sum(String),
+}
+
+impl AggregateFunction {
+    /// Parse an aggregation function from a string like "COUNT(*)" or "AVG(price)".
+    pub fn parse(s: &str) -> std::result::Result<Self, QueryError> {
+        let s = s.trim();
+        let upper = s.to_uppercase();
+
+        if upper == "COUNT(*)" || upper == "COUNT" {
+            return Ok(AggregateFunction::Count);
+        }
+
+        // Match FUNC(field) pattern
+        if let Some(paren_start) = s.find('(') {
+            if let Some(paren_end) = s.find(')') {
+                let func = s[..paren_start].trim().to_uppercase();
+                let field = s[paren_start + 1..paren_end].trim().to_string();
+
+                if field.is_empty() {
+                    return Err(QueryError::SemanticError {
+                        message: "Aggregation function requires a field name".into(),
+                    });
+                }
+
+                return match func.as_str() {
+                    "COUNT_DISTINCT" | "COUNT DISTINCT" => {
+                        Ok(AggregateFunction::CountDistinct(field))
+                    }
+                    "AVG" => Ok(AggregateFunction::Avg(field)),
+                    "MIN" => Ok(AggregateFunction::Min(field)),
+                    "MAX" => Ok(AggregateFunction::Max(field)),
+                    "SUM" => Ok(AggregateFunction::Sum(field)),
+                    _ => Err(QueryError::SemanticError {
+                        message: format!("Unknown aggregation function: {}", func),
+                    }),
+                };
+            }
+        }
+
+        Err(QueryError::InvalidLiteral {
+            value: format!("Invalid aggregation syntax: {}", s),
+        })
+    }
+
+    /// Apply the aggregation to a set of result metadata values.
+    pub fn apply(&self, values: &[Option<&serde_json::Value>]) -> serde_json::Value {
+        match self {
+            AggregateFunction::Count => serde_json::json!(values.len()),
+            AggregateFunction::CountDistinct(_) => {
+                let unique: HashSet<String> = values
+                    .iter()
+                    .filter_map(|v| v.map(|x| x.to_string()))
+                    .collect();
+                serde_json::json!(unique.len())
+            }
+            AggregateFunction::Avg(field) => {
+                let nums: Vec<f64> = values
+                    .iter()
+                    .filter_map(|v| v.and_then(|x| x.as_f64()))
+                    .collect();
+                if nums.is_empty() {
+                    serde_json::json!(null)
+                } else {
+                    let avg = nums.iter().sum::<f64>() / nums.len() as f64;
+                    serde_json::json!(avg)
+                }
+            }
+            AggregateFunction::Min(_) => {
+                values
+                    .iter()
+                    .filter_map(|v| v.and_then(|x| x.as_f64()))
+                    .min_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+                    .map_or(serde_json::json!(null), |v| serde_json::json!(v))
+            }
+            AggregateFunction::Max(_) => {
+                values
+                    .iter()
+                    .filter_map(|v| v.and_then(|x| x.as_f64()))
+                    .max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+                    .map_or(serde_json::json!(null), |v| serde_json::json!(v))
+            }
+            AggregateFunction::Sum(_) => {
+                let total: f64 = values
+                    .iter()
+                    .filter_map(|v| v.and_then(|x| x.as_f64()))
+                    .sum();
+                serde_json::json!(total)
+            }
+        }
+    }
+}
+
+// ============================================================================
+// Interactive REPL Support
+// ============================================================================
+
+/// A NeedleQL session that maintains state across multiple queries.
+///
+/// Used for interactive REPL mode in the CLI (`needle query`).
+pub struct QuerySession {
+    /// Named parameters persisted across queries.
+    parameters: HashMap<String, LiteralValue>,
+    /// History of executed queries.
+    history: Vec<String>,
+    /// Default collection name (avoids repeating FROM clause).
+    pub default_collection: Option<String>,
+    /// Maximum results per query.
+    pub default_limit: u64,
+}
+
+impl QuerySession {
+    pub fn new() -> Self {
+        Self {
+            parameters: HashMap::new(),
+            history: Vec::new(),
+            default_collection: None,
+            default_limit: 10,
+        }
+    }
+
+    /// Set a named parameter that persists across queries.
+    pub fn set_param(&mut self, name: &str, value: LiteralValue) {
+        self.parameters.insert(name.to_string(), value);
+    }
+
+    /// Get a named parameter.
+    pub fn get_param(&self, name: &str) -> Option<&LiteralValue> {
+        self.parameters.get(name)
+    }
+
+    /// Clear all parameters.
+    pub fn clear_params(&mut self) {
+        self.parameters.clear();
+    }
+
+    /// Parse and record a query in history.
+    pub fn parse_query(&mut self, input: &str) -> std::result::Result<Query, QueryError> {
+        let trimmed = input.trim();
+        if trimmed.is_empty() {
+            return Err(QueryError::InvalidLiteral {
+                value: "Empty query".into(),
+            });
+        }
+
+        // Handle special REPL commands
+        if trimmed.starts_with('\\') || trimmed.starts_with('.') {
+            return Err(QueryError::InvalidLiteral {
+                value: format!(
+                    "Unknown command: {}. Use .help for available commands.",
+                    trimmed
+                ),
+            });
+        }
+
+        // Inject default collection if FROM is missing
+        let query_str = if !trimmed.to_uppercase().contains("FROM")
+            && self.default_collection.is_some()
+        {
+            let coll = self.default_collection.as_ref().unwrap();
+            if trimmed.to_uppercase().starts_with("SELECT") {
+                trimmed.replacen("SELECT", &format!("SELECT"), 1)
+                    + &format!(" FROM {}", coll)
+            } else {
+                format!("SELECT * FROM {} {}", coll, trimmed)
+            }
+        } else {
+            trimmed.to_string()
+        };
+
+        let query = QueryParser::parse(&query_str)?;
+        self.history.push(trimmed.to_string());
+        Ok(query)
+    }
+
+    /// Get query history.
+    pub fn history(&self) -> &[String] {
+        &self.history
+    }
+
+    /// Get available REPL commands as help text.
+    pub fn help_text() -> &'static str {
+        concat!(
+            "NeedleQL Interactive Shell Commands:\n",
+            "  .use <collection>  - Set default collection\n",
+            "  .params            - Show current parameters\n",
+            "  .set <name> <val>  - Set a parameter\n",
+            "  .history           - Show query history\n",
+            "  .clear             - Clear parameters\n",
+            "  .help              - Show this help\n",
+            "  .quit              - Exit the shell\n",
+            "\n",
+            "NeedleQL Syntax:\n",
+            "  SELECT * FROM <collection>\n",
+            "    WHERE <field> <op> <value>\n",
+            "    AND vector SIMILAR TO $query\n",
+            "    WITH TIME_DECAY(EXPONENTIAL, 24h)\n",
+            "    ORDER BY distance ASC\n",
+            "    LIMIT 10 OFFSET 0\n",
+            "  EXPLAIN ANALYZE SELECT ...\n",
+        )
+    }
+}
+
+impl Default for QuerySession {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+// ============================================================================
 // Tests
 // ============================================================================
 
@@ -2519,5 +2747,97 @@ mod tests {
         stats.selectivity.insert("category".into(), 0.01);
         let plan = CostBasedOptimizer::optimize(&query, &stats);
         assert_eq!(plan.strategy, SearchStrategy::FilterThenIndex);
+    }
+
+    // Aggregation function tests
+
+    #[test]
+    fn test_aggregate_parse_count() {
+        let agg = AggregateFunction::parse("COUNT(*)").unwrap();
+        assert_eq!(agg, AggregateFunction::Count);
+    }
+
+    #[test]
+    fn test_aggregate_parse_avg() {
+        let agg = AggregateFunction::parse("AVG(price)").unwrap();
+        assert_eq!(agg, AggregateFunction::Avg("price".into()));
+    }
+
+    #[test]
+    fn test_aggregate_parse_min_max_sum() {
+        assert_eq!(
+            AggregateFunction::parse("MIN(score)").unwrap(),
+            AggregateFunction::Min("score".into())
+        );
+        assert_eq!(
+            AggregateFunction::parse("MAX(score)").unwrap(),
+            AggregateFunction::Max("score".into())
+        );
+        assert_eq!(
+            AggregateFunction::parse("SUM(quantity)").unwrap(),
+            AggregateFunction::Sum("quantity".into())
+        );
+    }
+
+    #[test]
+    fn test_aggregate_apply() {
+        let v1 = serde_json::json!(10.0);
+        let v2 = serde_json::json!(20.0);
+        let v3 = serde_json::json!(30.0);
+        let vals: Vec<Option<&serde_json::Value>> = vec![Some(&v1), Some(&v2), Some(&v3)];
+        assert_eq!(AggregateFunction::Count.apply(&vals), serde_json::json!(3));
+        assert_eq!(
+            AggregateFunction::Avg("x".into()).apply(&vals),
+            serde_json::json!(20.0)
+        );
+        assert_eq!(
+            AggregateFunction::Sum("x".into()).apply(&vals),
+            serde_json::json!(60.0)
+        );
+        assert_eq!(
+            AggregateFunction::Min("x".into()).apply(&vals),
+            serde_json::json!(10.0)
+        );
+        assert_eq!(
+            AggregateFunction::Max("x".into()).apply(&vals),
+            serde_json::json!(30.0)
+        );
+    }
+
+    // REPL session tests
+
+    #[test]
+    fn test_query_session_basic() {
+        let mut session = QuerySession::new();
+        session.default_collection = Some("docs".into());
+
+        let query = session
+            .parse_query("SELECT * FROM docs WHERE category = 'books' LIMIT 5")
+            .unwrap();
+        assert_eq!(query.from.collection, "docs");
+        assert_eq!(session.history().len(), 1);
+    }
+
+    #[test]
+    fn test_query_session_params() {
+        let mut session = QuerySession::new();
+        session.set_param("limit", LiteralValue::Number(10.0));
+
+        assert!(session.get_param("limit").is_some());
+        session.clear_params();
+        assert!(session.get_param("limit").is_none());
+    }
+
+    #[test]
+    fn test_query_session_empty_query() {
+        let mut session = QuerySession::new();
+        assert!(session.parse_query("").is_err());
+    }
+
+    #[test]
+    fn test_query_session_help() {
+        let help = QuerySession::help_text();
+        assert!(help.contains("NeedleQL"));
+        assert!(help.contains("SELECT"));
     }
 }
