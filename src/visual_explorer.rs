@@ -758,6 +758,168 @@ impl CollectionBrowser {
 }
 
 // ---------------------------------------------------------------------------
+// Cluster Detection
+// ---------------------------------------------------------------------------
+
+/// Result of cluster detection on projected vectors.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClusterResult {
+    /// Number of clusters found.
+    pub num_clusters: usize,
+    /// Cluster assignment for each vector (index → cluster_id).
+    pub assignments: Vec<usize>,
+    /// Number of vectors per cluster.
+    pub cluster_sizes: Vec<usize>,
+}
+
+/// Simple density-based cluster detection for visualized vector spaces.
+pub struct ClusterDetector;
+
+impl ClusterDetector {
+    /// Detect clusters using a simple distance-threshold approach.
+    ///
+    /// Vectors within `distance_threshold` (cosine distance) of each other
+    /// are grouped into the same cluster.
+    pub fn detect(vectors: &[Vec<f32>], distance_threshold: f32) -> ClusterResult {
+        let n = vectors.len();
+        if n == 0 {
+            return ClusterResult {
+                num_clusters: 0,
+                assignments: Vec::new(),
+                cluster_sizes: Vec::new(),
+            };
+        }
+
+        let mut assignments = vec![usize::MAX; n];
+        let mut next_cluster = 0;
+
+        for i in 0..n {
+            if assignments[i] != usize::MAX {
+                continue;
+            }
+            // Start a new cluster
+            assignments[i] = next_cluster;
+            let mut queue = vec![i];
+
+            while let Some(current) = queue.pop() {
+                for j in 0..n {
+                    if assignments[j] != usize::MAX {
+                        continue;
+                    }
+                    let dist = cosine_distance(&vectors[current], &vectors[j]);
+                    if dist <= distance_threshold {
+                        assignments[j] = next_cluster;
+                        queue.push(j);
+                    }
+                }
+            }
+            next_cluster += 1;
+        }
+
+        let mut cluster_sizes = vec![0usize; next_cluster];
+        for &c in &assignments {
+            if c < next_cluster {
+                cluster_sizes[c] += 1;
+            }
+        }
+
+        ClusterResult {
+            num_clusters: next_cluster,
+            assignments,
+            cluster_sizes,
+        }
+    }
+}
+
+fn cosine_distance(a: &[f32], b: &[f32]) -> f32 {
+    let dot: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
+    let norm_a: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
+    let norm_b: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
+    if norm_a == 0.0 || norm_b == 0.0 {
+        return 1.0;
+    }
+    1.0 - (dot / (norm_a * norm_b))
+}
+
+// ---------------------------------------------------------------------------
+// Performance Dashboard
+// ---------------------------------------------------------------------------
+
+/// Real-time performance metrics snapshot.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DashboardSnapshot {
+    pub total_queries: u64,
+    pub total_inserts: u64,
+    pub avg_query_latency_ms: f64,
+    pub p50_query_latency_ms: u64,
+    pub p99_query_latency_ms: u64,
+    pub queries_per_second: f64,
+}
+
+/// Collects and summarizes real-time performance metrics.
+pub struct PerformanceDashboard {
+    query_latencies: std::collections::VecDeque<u64>,
+    insert_count: u64,
+    window_size: usize,
+}
+
+impl PerformanceDashboard {
+    pub fn new(window_size: usize) -> Self {
+        Self {
+            query_latencies: std::collections::VecDeque::with_capacity(window_size),
+            insert_count: 0,
+            window_size,
+        }
+    }
+
+    /// Record a query latency in milliseconds.
+    pub fn record_query(&mut self, latency_ms: u64) {
+        if self.query_latencies.len() >= self.window_size {
+            self.query_latencies.pop_front();
+        }
+        self.query_latencies.push_back(latency_ms);
+    }
+
+    /// Record an insert operation.
+    pub fn record_insert(&mut self, _latency_ms: u64) {
+        self.insert_count += 1;
+    }
+
+    /// Get a snapshot of current performance metrics.
+    pub fn snapshot(&self) -> DashboardSnapshot {
+        let total_queries = self.query_latencies.len() as u64;
+        let avg = if total_queries == 0 {
+            0.0
+        } else {
+            self.query_latencies.iter().sum::<u64>() as f64 / total_queries as f64
+        };
+
+        let mut sorted: Vec<u64> = self.query_latencies.iter().copied().collect();
+        sorted.sort_unstable();
+
+        let p50 = Self::percentile(&sorted, 50);
+        let p99 = Self::percentile(&sorted, 99);
+
+        DashboardSnapshot {
+            total_queries,
+            total_inserts: self.insert_count,
+            avg_query_latency_ms: avg,
+            p50_query_latency_ms: p50,
+            p99_query_latency_ms: p99,
+            queries_per_second: 0.0, // Would need wall-clock tracking for real QPS
+        }
+    }
+
+    fn percentile(sorted: &[u64], pct: usize) -> u64 {
+        if sorted.is_empty() {
+            return 0;
+        }
+        let idx = (pct * sorted.len() / 100).min(sorted.len() - 1);
+        sorted[idx]
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -978,5 +1140,37 @@ mod tests {
         });
         let result = proj.project(&vecs).unwrap();
         assert_eq!(result.point_count, 10);
+    }
+
+    #[test]
+    fn test_cluster_detection() {
+        // Create 2 clear clusters
+        let mut vecs = Vec::new();
+        for i in 0..10 {
+            vecs.push(vec![1.0 + i as f32 * 0.01, 0.0, 0.0, 0.0]);
+        }
+        for i in 0..10 {
+            vecs.push(vec![0.0, 0.0, 0.0, 1.0 + i as f32 * 0.01]);
+        }
+
+        let clusters = ClusterDetector::detect(&vecs, 0.5);
+        assert!(clusters.num_clusters >= 2);
+        assert_eq!(clusters.assignments.len(), 20);
+    }
+
+    #[test]
+    fn test_performance_dashboard() {
+        let mut dash = PerformanceDashboard::new(100);
+
+        dash.record_query(5);
+        dash.record_query(10);
+        dash.record_query(3);
+        dash.record_insert(1);
+
+        let snapshot = dash.snapshot();
+        assert_eq!(snapshot.total_queries, 3);
+        assert_eq!(snapshot.total_inserts, 1);
+        assert!(snapshot.avg_query_latency_ms > 0.0);
+        assert_eq!(snapshot.p99_query_latency_ms, 10);
     }
 }
