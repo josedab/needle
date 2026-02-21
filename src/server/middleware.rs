@@ -456,4 +456,303 @@ mod tests {
         assert!(matches!(classify_stability("/webhooks"), StabilityTier::Experimental));
         assert!(matches!(classify_stability("/collections/docs/cache/lookup"), StabilityTier::Experimental));
     }
+
+    // ── extract_collection_from_path ─────────────────────────────────────
+
+    #[test]
+    fn test_extract_collection_from_path_valid() {
+        assert_eq!(
+            extract_collection_from_path("/collections/my_coll/vectors"),
+            Some("my_coll".to_string())
+        );
+    }
+
+    #[test]
+    fn test_extract_collection_from_path_root() {
+        assert_eq!(
+            extract_collection_from_path("/collections/test"),
+            Some("test".to_string())
+        );
+    }
+
+    #[test]
+    fn test_extract_collection_from_path_no_collection() {
+        assert_eq!(extract_collection_from_path("/health"), None);
+        assert_eq!(extract_collection_from_path("/save"), None);
+    }
+
+    #[test]
+    fn test_extract_collection_from_path_empty() {
+        assert_eq!(extract_collection_from_path("/"), None);
+    }
+
+    // ── requires_admin ───────────────────────────────────────────────────
+
+    #[test]
+    fn test_requires_admin_save_post() {
+        assert!(requires_admin("/save", &Method::POST));
+    }
+
+    #[test]
+    fn test_requires_admin_save_get() {
+        assert!(!requires_admin("/save", &Method::GET));
+    }
+
+    #[test]
+    fn test_requires_admin_webhooks() {
+        assert!(requires_admin("/webhooks", &Method::POST));
+        assert!(requires_admin("/webhooks/123", &Method::DELETE));
+    }
+
+    #[test]
+    fn test_requires_admin_regular_path() {
+        assert!(!requires_admin("/collections", &Method::POST));
+        assert!(!requires_admin("/health", &Method::GET));
+    }
+
+    // ── infer_permission_from_request ─────────────────────────────────────
+
+    #[test]
+    fn test_infer_permission_read() {
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("/health")
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(infer_permission_from_request(&req), crate::security::Permission::Read);
+    }
+
+    #[test]
+    fn test_infer_permission_write() {
+        let req = Request::builder()
+            .method(Method::POST)
+            .uri("/collections")
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(infer_permission_from_request(&req), crate::security::Permission::Write);
+    }
+
+    #[test]
+    fn test_infer_permission_delete() {
+        let req = Request::builder()
+            .method(Method::DELETE)
+            .uri("/collections/test")
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(infer_permission_from_request(&req), crate::security::Permission::Delete);
+    }
+
+    // ── extract_client_ip ────────────────────────────────────────────────
+
+    #[test]
+    fn test_extract_client_ip_no_extensions() {
+        let req = Request::builder()
+            .uri("/health")
+            .body(Body::empty())
+            .unwrap();
+        let ip = extract_client_ip(&req, &[]);
+        assert_eq!(ip, IpAddr::V4(Ipv4Addr::LOCALHOST));
+    }
+
+    // ── stability tier as_str ────────────────────────────────────────────
+
+    #[test]
+    fn test_stability_tier_as_str() {
+        assert_eq!(StabilityTier::Stable.as_str(), "stable");
+        assert_eq!(StabilityTier::Beta.as_str(), "beta");
+        assert_eq!(StabilityTier::Experimental.as_str(), "experimental");
+    }
+
+    // ── build_cors_layer ─────────────────────────────────────────────────
+
+    #[test]
+    fn test_build_cors_disabled() {
+        let config = CorsConfig {
+            enabled: false,
+            allowed_origins: None,
+            allow_credentials: false,
+            max_age_secs: 3600,
+        };
+        let layer = build_cors_layer(&config);
+        assert!(layer.is_ok());
+    }
+
+    #[test]
+    fn test_build_cors_wildcard() {
+        let config = CorsConfig {
+            enabled: true,
+            allowed_origins: None, // None = allow all
+            allow_credentials: false,
+            max_age_secs: 3600,
+        };
+        let layer = build_cors_layer(&config);
+        assert!(layer.is_ok());
+    }
+
+    // ── create_rate_limiter ──────────────────────────────────────────────
+
+    #[test]
+    fn test_create_rate_limiter_disabled() {
+        let config = RateLimitConfig {
+            enabled: false,
+            requests_per_second: 100,
+            burst_size: 200,
+        };
+        let limiter = create_rate_limiter(&config);
+        assert!(limiter.is_none());
+    }
+
+    #[test]
+    fn test_create_rate_limiter_enabled() {
+        let config = RateLimitConfig {
+            enabled: true,
+            requests_per_second: 100,
+            burst_size: 200,
+        };
+        let limiter = create_rate_limiter(&config);
+        assert!(limiter.is_some());
+    }
+
+    // ── CorsConfig with specific origins ─────────────────────────────────
+
+    #[test]
+    fn test_build_cors_specific_origins() {
+        let config = CorsConfig {
+            enabled: true,
+            allowed_origins: Some(vec![
+                "https://example.com".to_string(),
+                "https://app.example.com".to_string(),
+            ]),
+            allow_credentials: true,
+            max_age_secs: 7200,
+        };
+        let layer = build_cors_layer(&config);
+        assert!(layer.is_ok());
+    }
+
+    #[test]
+    fn test_build_cors_empty_origins() {
+        let config = CorsConfig {
+            enabled: true,
+            allowed_origins: Some(vec![]),
+            allow_credentials: false,
+            max_age_secs: 3600,
+        };
+        let layer = build_cors_layer(&config);
+        assert!(layer.is_ok());
+    }
+
+    // ── infer_permission HEAD ────────────────────────────────────────────
+
+    #[test]
+    fn test_infer_permission_head() {
+        let req = Request::builder()
+            .method(Method::HEAD)
+            .uri("/health")
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(infer_permission_from_request(&req), crate::security::Permission::Read);
+    }
+
+    // ── infer_permission PUT ─────────────────────────────────────────────
+
+    #[test]
+    fn test_infer_permission_put() {
+        let req = Request::builder()
+            .method(Method::PUT)
+            .uri("/collections/test/vectors")
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(infer_permission_from_request(&req), crate::security::Permission::Write);
+    }
+
+    // ── requires_admin: aliases ──────────────────────────────────────────
+
+    #[test]
+    fn test_requires_admin_aliases() {
+        assert!(requires_admin("/aliases", &Method::POST));
+        assert!(requires_admin("/aliases/my_alias", &Method::DELETE));
+        assert!(!requires_admin("/aliases", &Method::GET));
+    }
+
+    // ── extract_collection_from_path: nested paths ───────────────────────
+
+    #[test]
+    fn test_extract_collection_from_path_deep() {
+        assert_eq!(
+            extract_collection_from_path("/collections/my-coll/vectors/v1"),
+            Some("my-coll".to_string())
+        );
+        assert_eq!(
+            extract_collection_from_path("/collections/test/search"),
+            Some("test".to_string())
+        );
+    }
+
+    // ── classify_stability: additional paths ─────────────────────────────
+
+    #[test]
+    fn test_classify_stability_additional() {
+        assert!(matches!(classify_stability("/info"), StabilityTier::Stable));
+        assert!(matches!(classify_stability("/metrics"), StabilityTier::Stable));
+        assert!(matches!(classify_stability("/collections/x/vectors/y"), StabilityTier::Stable));
+        assert!(matches!(classify_stability("/collections/x/snapshots"), StabilityTier::Beta));
+        assert!(matches!(classify_stability("/collections/x/ingest"), StabilityTier::Experimental));
+        assert!(matches!(classify_stability("/collections/x/benchmark"), StabilityTier::Experimental));
+    }
+
+    // ── try_authenticate: no credentials ─────────────────────────────────
+
+    #[test]
+    fn test_try_authenticate_no_credentials() {
+        let req = Request::builder()
+            .uri("/health")
+            .body(Body::empty())
+            .unwrap();
+        let auth_config = AuthConfig::default();
+        let result = try_authenticate(&req, &auth_config);
+        assert!(result.is_none());
+    }
+
+    // ── try_authenticate: invalid api key ────────────────────────────────
+
+    #[test]
+    fn test_try_authenticate_invalid_api_key() {
+        let mut req = Request::builder()
+            .uri("/collections")
+            .body(Body::empty())
+            .unwrap();
+        req.headers_mut().insert("x-api-key", "invalid-key".parse().unwrap());
+        let auth_config = AuthConfig::default();
+        let result = try_authenticate(&req, &auth_config);
+        assert!(result.is_none());
+    }
+
+    // ── extract_client_ip: with x-forwarded-for ──────────────────────────
+
+    #[test]
+    fn test_extract_client_ip_default_fallback() {
+        let req = Request::builder()
+            .header("x-forwarded-for", "1.2.3.4")
+            .uri("/health")
+            .body(Body::empty())
+            .unwrap();
+        // Without ConnectInfo extension, should fall back to localhost
+        // (trusted_proxies check fails without extension)
+        let ip = extract_client_ip(&req, &[]);
+        assert_eq!(ip, IpAddr::V4(Ipv4Addr::LOCALHOST));
+    }
+
+    // ── create_rate_limiter: parameters ──────────────────────────────────
+
+    #[test]
+    fn test_rate_limiter_high_burst() {
+        let config = RateLimitConfig {
+            enabled: true,
+            requests_per_second: 1000,
+            burst_size: 5000,
+        };
+        let limiter = create_rate_limiter(&config);
+        assert!(limiter.is_some());
+    }
 }
