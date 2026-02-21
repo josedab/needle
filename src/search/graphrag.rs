@@ -1049,4 +1049,408 @@ mod tests {
         assert_eq!(part_of.len(), 1);
         assert_eq!(part_of[0].target_id, "B");
     }
+
+    // ── multi_hop_search: depth > graph diameter ─────────────────────────
+
+    #[test]
+    fn test_multi_hop_search_depth_exceeds_diameter() {
+        let mut g = GraphRAG::new(GraphRAGConfig::default());
+        // Short chain: a -> b -> c
+        for id in &["a", "b", "c"] {
+            g.add_entity(make_entity(id, id, None)).unwrap();
+        }
+        g.add_relationship(Relationship {
+            source_id: "a".into(), target_id: "b".into(),
+            relation_type: RelationType::RelatedTo, weight: 1.0,
+            properties: HashMap::new(),
+        }).unwrap();
+        g.add_relationship(Relationship {
+            source_id: "b".into(), target_id: "c".into(),
+            relation_type: RelationType::RelatedTo, weight: 1.0,
+            properties: HashMap::new(),
+        }).unwrap();
+
+        // Depth 10 >> diameter 2
+        let results = g.multi_hop_search("a", 10, 100);
+        assert_eq!(results.len(), 2); // b, c (no more to find)
+    }
+
+    // ── multi_hop_search: graph with cycles ──────────────────────────────
+
+    #[test]
+    fn test_multi_hop_search_with_cycles() {
+        let mut g = GraphRAG::new(GraphRAGConfig::default());
+        for id in &["a", "b", "c"] {
+            g.add_entity(make_entity(id, id, None)).unwrap();
+        }
+        // Create cycle: a -> b -> c -> a
+        for (s, t) in &[("a", "b"), ("b", "c"), ("c", "a")] {
+            g.add_relationship(Relationship {
+                source_id: s.to_string(), target_id: t.to_string(),
+                relation_type: RelationType::RelatedTo, weight: 1.0,
+                properties: HashMap::new(),
+            }).unwrap();
+        }
+
+        let results = g.multi_hop_search("a", 5, 100);
+        // Should not infinite loop; should find b and c
+        assert!(results.len() >= 2);
+        let ids: HashSet<String> = results.iter().map(|r| r.entity.id.clone()).collect();
+        assert!(ids.contains("b"));
+        assert!(ids.contains("c"));
+    }
+
+    // ── detect_communities: disconnected components ──────────────────────
+
+    #[test]
+    fn test_detect_communities_disconnected() {
+        let mut g = GraphRAG::new(GraphRAGConfig {
+            min_community_size: 2,
+            ..Default::default()
+        });
+
+        // Component 1: a--b
+        g.add_entity(make_entity("a", "A", None)).unwrap();
+        g.add_entity(make_entity("b", "B", None)).unwrap();
+        g.add_relationship(Relationship {
+            source_id: "a".into(), target_id: "b".into(),
+            relation_type: RelationType::RelatedTo, weight: 1.0,
+            properties: HashMap::new(),
+        }).unwrap();
+
+        // Component 2: c--d
+        g.add_entity(make_entity("c", "C", None)).unwrap();
+        g.add_entity(make_entity("d", "D", None)).unwrap();
+        g.add_relationship(Relationship {
+            source_id: "c".into(), target_id: "d".into(),
+            relation_type: RelationType::RelatedTo, weight: 1.0,
+            properties: HashMap::new(),
+        }).unwrap();
+
+        let communities = g.detect_communities();
+        // Should detect at least 2 communities
+        assert!(communities.len() >= 2);
+    }
+
+    // ── detect_communities: single-node graph ────────────────────────────
+
+    #[test]
+    fn test_detect_communities_single_node() {
+        let mut g = GraphRAG::new(GraphRAGConfig {
+            min_community_size: 1,
+            ..Default::default()
+        });
+        g.add_entity(make_entity("solo", "Solo", None)).unwrap();
+
+        let communities = g.detect_communities();
+        // Single node may or may not form a community depending on min_size
+        let total_members: usize = communities.iter().map(|c| c.member_ids.len()).sum();
+        assert!(total_members <= 1);
+    }
+
+    // ── get_neighbors: isolated node ─────────────────────────────────────
+
+    #[test]
+    fn test_get_neighbors_isolated_node() {
+        let mut g = GraphRAG::new(GraphRAGConfig::default());
+        g.add_entity(make_entity("isolated", "Isolated", None)).unwrap();
+        let neighbors = g.get_neighbors("isolated");
+        assert!(neighbors.is_empty());
+    }
+
+    // ── get_neighbors: nonexistent node ──────────────────────────────────
+
+    #[test]
+    fn test_get_neighbors_nonexistent() {
+        let g = GraphRAG::new(GraphRAGConfig::default());
+        let neighbors = g.get_neighbors("nonexistent");
+        assert!(neighbors.is_empty());
+    }
+
+    // ── add_relationship: nonexistent entity IDs ─────────────────────────
+
+    #[test]
+    fn test_add_relationship_nonexistent_source() {
+        let mut g = GraphRAG::new(GraphRAGConfig::default());
+        g.add_entity(make_entity("b", "B", None)).unwrap();
+        // add_relationship doesn't validate entity existence - it just adds to adjacency
+        let result = g.add_relationship(Relationship {
+            source_id: "nonexistent".into(),
+            target_id: "b".into(),
+            relation_type: RelationType::RelatedTo,
+            weight: 1.0,
+            properties: HashMap::new(),
+        });
+        // Should succeed (adjacency graph is permissive)
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_add_relationship_nonexistent_target() {
+        let mut g = GraphRAG::new(GraphRAGConfig::default());
+        g.add_entity(make_entity("a", "A", None)).unwrap();
+        let result = g.add_relationship(Relationship {
+            source_id: "a".into(),
+            target_id: "nonexistent".into(),
+            relation_type: RelationType::RelatedTo,
+            weight: 1.0,
+            properties: HashMap::new(),
+        });
+        assert!(result.is_ok());
+    }
+
+    // ── extract_entities_from_text: edge cases ───────────────────────────
+
+    #[test]
+    fn test_extract_entities_empty_text() {
+        let g = GraphRAG::new(GraphRAGConfig::default());
+        let entities = g.extract_entities_from_text("");
+        assert!(entities.is_empty());
+    }
+
+    #[test]
+    fn test_extract_entities_special_characters() {
+        let g = GraphRAG::new(GraphRAGConfig::default());
+        let entities = g.extract_entities_from_text("!@#$%^&*()");
+        // Should not panic; may or may not extract entities
+        let _ = entities;
+    }
+
+    // ── search combining vector + graph ──────────────────────────────────
+
+    #[test]
+    fn test_search_graphrag_combined() {
+        let dim = 32;
+        let mut g = GraphRAG::new(GraphRAGConfig {
+            dimensions: dim,
+            vector_weight: 0.5,
+            graph_weight: 0.5,
+            ..Default::default()
+        });
+
+        // Add entities with embeddings and relationships
+        for i in 0..5 {
+            g.add_entity(make_entity(
+                &format!("e{i}"),
+                &format!("Entity{i}"),
+                Some(random_vec(dim, i)),
+            )).unwrap();
+        }
+        g.add_relationship(Relationship {
+            source_id: "e0".into(), target_id: "e1".into(),
+            relation_type: RelationType::RelatedTo, weight: 1.0,
+            properties: HashMap::new(),
+        }).unwrap();
+
+        let query = random_vec(dim, 0);
+        let results = g.search(&query, 3, None).unwrap();
+        assert!(!results.is_empty());
+        // e0 should be closest by vector similarity
+        assert_eq!(results[0].entity.id, "e0");
+    }
+
+    // ── multi_hop_search from nonexistent start ──────────────────────────
+
+    #[test]
+    fn test_multi_hop_search_nonexistent_start() {
+        let mut g = GraphRAG::new(GraphRAGConfig::default());
+        g.add_entity(make_entity("a", "A", None)).unwrap();
+        let results = g.multi_hop_search("nonexistent", 3, 10);
+        assert!(results.is_empty());
+    }
+
+    // ── weighted_traversal ───────────────────────────────────────────────
+
+    #[test]
+    fn test_weighted_traversal_basic() {
+        let mut g = GraphRAG::new(GraphRAGConfig::default());
+        for id in &["a", "b", "c", "d"] {
+            g.add_entity(make_entity(id, id, None)).unwrap();
+        }
+        g.add_relationship(Relationship {
+            source_id: "a".into(), target_id: "b".into(),
+            relation_type: RelationType::RelatedTo, weight: 0.9,
+            properties: HashMap::new(),
+        }).unwrap();
+        g.add_relationship(Relationship {
+            source_id: "b".into(), target_id: "c".into(),
+            relation_type: RelationType::RelatedTo, weight: 0.5,
+            properties: HashMap::new(),
+        }).unwrap();
+        g.add_relationship(Relationship {
+            source_id: "a".into(), target_id: "d".into(),
+            relation_type: RelationType::RelatedTo, weight: 0.1,
+            properties: HashMap::new(),
+        }).unwrap();
+
+        let results = g.weighted_traversal("a", 3, 10);
+        assert!(!results.is_empty());
+        // b should rank higher than d (higher weight)
+        let b_score = results.iter().find(|r| r.entity.id == "b").map(|r| r.combined_score);
+        let d_score = results.iter().find(|r| r.entity.id == "d").map(|r| r.combined_score);
+        assert!(b_score > d_score);
+    }
+
+    #[test]
+    fn test_weighted_traversal_nonexistent_start() {
+        let g = GraphRAG::new(GraphRAGConfig::default());
+        let results = g.weighted_traversal("nonexistent", 3, 10);
+        assert!(results.is_empty());
+    }
+
+    // ── compute_importance ───────────────────────────────────────────────
+
+    #[test]
+    fn test_compute_importance() {
+        let mut g = GraphRAG::new(GraphRAGConfig::default());
+        for id in &["hub", "spoke1", "spoke2", "spoke3"] {
+            g.add_entity(make_entity(id, id, None)).unwrap();
+        }
+        // hub connects to all spokes
+        for spoke in &["spoke1", "spoke2", "spoke3"] {
+            g.add_relationship(Relationship {
+                source_id: "hub".into(), target_id: spoke.to_string(),
+                relation_type: RelationType::RelatedTo, weight: 1.0,
+                properties: HashMap::new(),
+            }).unwrap();
+        }
+
+        let importance = g.compute_importance(10, 0.85);
+        assert_eq!(importance.len(), 4);
+        // All scores should be positive
+        for (_, score) in &importance {
+            assert!(*score > 0.0);
+        }
+    }
+
+    #[test]
+    fn test_compute_importance_empty_graph() {
+        let g = GraphRAG::new(GraphRAGConfig::default());
+        let importance = g.compute_importance(10, 0.85);
+        assert!(importance.is_empty());
+    }
+
+    // ── entity_type classification ───────────────────────────────────────
+
+    #[test]
+    fn test_entity_types() {
+        let mut g = GraphRAG::new(GraphRAGConfig::default());
+        let person = Entity {
+            id: "p1".to_string(),
+            name: "Alice".to_string(),
+            entity_type: EntityType::Person,
+            embedding: None,
+            properties: HashMap::new(),
+            community_id: None,
+        };
+        g.add_entity(person).unwrap();
+        assert_eq!(g.entities["p1"].entity_type, EntityType::Person);
+
+        let org = Entity {
+            id: "o1".to_string(),
+            name: "Acme".to_string(),
+            entity_type: EntityType::Organization,
+            embedding: None,
+            properties: HashMap::new(),
+            community_id: None,
+        };
+        g.add_entity(org).unwrap();
+        assert_eq!(g.entities["o1"].entity_type, EntityType::Organization);
+    }
+
+    // ── entity/relationship counts ───────────────────────────────────────
+
+    #[test]
+    fn test_counts() {
+        let mut g = GraphRAG::new(GraphRAGConfig::default());
+        assert_eq!(g.entity_count(), 0);
+        assert_eq!(g.relationship_count(), 0);
+        assert_eq!(g.community_count(), 0);
+
+        g.add_entity(make_entity("a", "A", None)).unwrap();
+        g.add_entity(make_entity("b", "B", None)).unwrap();
+        assert_eq!(g.entity_count(), 2);
+
+        g.add_relationship(Relationship {
+            source_id: "a".into(), target_id: "b".into(),
+            relation_type: RelationType::RelatedTo, weight: 1.0,
+            properties: HashMap::new(),
+        }).unwrap();
+        assert_eq!(g.relationship_count(), 1);
+    }
+
+    // ── search_graphrag combined ─────────────────────────────────────────
+
+    #[test]
+    fn test_search_graphrag_with_hops() {
+        let dim = 32;
+        let mut g = GraphRAG::new(GraphRAGConfig {
+            dimensions: dim,
+            max_hops: 2,
+            vector_weight: 0.7,
+            graph_weight: 0.3,
+            ..Default::default()
+        });
+
+        for i in 0..5 {
+            g.add_entity(make_entity(
+                &format!("e{i}"),
+                &format!("Entity{i}"),
+                Some(random_vec(dim, i)),
+            )).unwrap();
+        }
+        // Chain: e0 -> e1 -> e2
+        g.add_relationship(Relationship {
+            source_id: "e0".into(), target_id: "e1".into(),
+            relation_type: RelationType::RelatedTo, weight: 1.0,
+            properties: HashMap::new(),
+        }).unwrap();
+        g.add_relationship(Relationship {
+            source_id: "e1".into(), target_id: "e2".into(),
+            relation_type: RelationType::RelatedTo, weight: 1.0,
+            properties: HashMap::new(),
+        }).unwrap();
+
+        let query = random_vec(dim, 0);
+        let results = g.search_graphrag(&query, 5).unwrap();
+        assert!(!results.is_empty());
+    }
+
+    // ── duplicate entity ID ──────────────────────────────────────────────
+
+    #[test]
+    fn test_add_duplicate_entity() {
+        let mut g = GraphRAG::new(GraphRAGConfig::default());
+        g.add_entity(make_entity("e1", "First", None)).unwrap();
+        let result = g.add_entity(make_entity("e1", "Duplicate", None));
+        // Should either overwrite or error
+        let _ = result;
+        assert_eq!(g.entity_count(), 1);
+    }
+
+    // ── multiple relationship types ──────────────────────────────────────
+
+    #[test]
+    fn test_multiple_relationship_types() {
+        let mut g = GraphRAG::new(GraphRAGConfig::default());
+        g.add_entity(make_entity("a", "A", None)).unwrap();
+        g.add_entity(make_entity("b", "B", None)).unwrap();
+
+        g.add_relationship(Relationship {
+            source_id: "a".into(), target_id: "b".into(),
+            relation_type: RelationType::Contains, weight: 1.0,
+            properties: HashMap::new(),
+        }).unwrap();
+        g.add_relationship(Relationship {
+            source_id: "a".into(), target_id: "b".into(),
+            relation_type: RelationType::References, weight: 0.5,
+            properties: HashMap::new(),
+        }).unwrap();
+
+        assert_eq!(g.relationship_count(), 2);
+        let contains = g.filter_relationships(&RelationType::Contains);
+        assert_eq!(contains.len(), 1);
+        let references = g.filter_relationships(&RelationType::References);
+        assert_eq!(references.len(), 1);
+    }
 }
