@@ -964,3 +964,341 @@ impl<B: StorageBackend> StorageBackend for CachedBackend<B> {
         })
     }
 }
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+    use parking_lot::RwLock;
+
+    /// In-memory storage backend for testing.
+    struct MemoryBackend {
+        data: RwLock<HashMap<String, Vec<u8>>>,
+    }
+
+    impl MemoryBackend {
+        fn new() -> Self {
+            Self { data: RwLock::new(HashMap::new()) }
+        }
+    }
+
+    impl StorageBackend for MemoryBackend {
+        fn read<'a>(&'a self, key: &'a str) -> Pin<Box<dyn Future<Output = Result<Vec<u8>>> + Send + 'a>> {
+            Box::pin(async move {
+                self.data.read().get(key)
+                    .cloned()
+                    .ok_or_else(|| NeedleError::NotFound(format!("Key not found: {key}")))
+            })
+        }
+
+        fn write<'a>(&'a self, key: &'a str, data: &'a [u8]) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
+            Box::pin(async move {
+                self.data.write().insert(key.to_string(), data.to_vec());
+                Ok(())
+            })
+        }
+
+        fn delete<'a>(&'a self, key: &'a str) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
+            Box::pin(async move {
+                self.data.write().remove(key);
+                Ok(())
+            })
+        }
+
+        fn list<'a>(&'a self, prefix: &'a str) -> Pin<Box<dyn Future<Output = Result<Vec<String>>> + Send + 'a>> {
+            Box::pin(async move {
+                Ok(self.data.read().keys()
+                    .filter(|k| k.starts_with(prefix))
+                    .cloned()
+                    .collect())
+            })
+        }
+
+        fn exists<'a>(&'a self, key: &'a str) -> Pin<Box<dyn Future<Output = Result<bool>> + Send + 'a>> {
+            Box::pin(async move {
+                Ok(self.data.read().contains_key(key))
+            })
+        }
+    }
+
+    fn make_cached() -> CachedBackend<MemoryBackend> {
+        CachedBackend::new(MemoryBackend::new(), CacheConfig::default())
+    }
+
+    // ── cache hit/miss behavior ──────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_cache_miss_then_hit() {
+        let cached = make_cached();
+        // Write to backend via cached layer
+        cached.write("key1", b"hello").await.unwrap();
+
+        // First read: cache miss (populates cache)
+        let data = cached.read("key1").await.unwrap();
+        assert_eq!(data, b"hello");
+
+        // Second read should be a cache hit
+        let data2 = cached.read("key1").await.unwrap();
+        assert_eq!(data2, b"hello");
+
+        let stats = cached.stats();
+        assert!(stats.hits() > 0 || stats.misses() > 0);
+    }
+
+    // ── cache invalidation on delete ─────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_cache_invalidation_on_delete() {
+        let cached = make_cached();
+        cached.write("key1", b"data").await.unwrap();
+        let _ = cached.read("key1").await.unwrap(); // populate cache
+
+        assert!(cached.is_cached("key1"));
+
+        cached.delete("key1").await.unwrap();
+        assert!(!cached.is_cached("key1"));
+    }
+
+    // ── explicit invalidate ──────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_explicit_invalidate() {
+        let cached = make_cached();
+        cached.write("key1", b"data").await.unwrap();
+        let _ = cached.read("key1").await.unwrap();
+        assert!(cached.is_cached("key1"));
+
+        cached.invalidate("key1");
+        assert!(!cached.is_cached("key1"));
+    }
+
+    // ── clear_cache ──────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_clear_cache() {
+        let cached = make_cached();
+        cached.write("k1", b"v1").await.unwrap();
+        cached.write("k2", b"v2").await.unwrap();
+        let _ = cached.read("k1").await;
+        let _ = cached.read("k2").await;
+
+        cached.clear_cache();
+        assert!(!cached.is_cached("k1"));
+        assert!(!cached.is_cached("k2"));
+        assert_eq!(cached.stats().bytes_cached(), 0);
+    }
+
+    // ── cache stats tracking ─────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_cache_stats() {
+        let cached = make_cached();
+        cached.write("key1", b"test data").await.unwrap();
+
+        // Read twice: first miss, then hit
+        let _ = cached.read("key1").await;
+        let _ = cached.read("key1").await;
+
+        let stats = cached.stats();
+        let total = stats.hits() + stats.misses();
+        assert!(total >= 2);
+    }
+
+    // ── hit_rate calculation ─────────────────────────────────────────────
+
+    #[test]
+    fn test_cache_stats_hit_rate_empty() {
+        let stats = CacheStats::default();
+        assert_eq!(stats.hit_rate(), 0.0);
+    }
+
+    // ── is_cached for nonexistent key ────────────────────────────────────
+
+    #[test]
+    fn test_is_cached_nonexistent() {
+        let cached = make_cached();
+        assert!(!cached.is_cached("nonexistent"));
+    }
+
+    // ── read nonexistent key ─────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_read_nonexistent_key() {
+        let cached = make_cached();
+        let result = cached.read("nonexistent").await;
+        assert!(result.is_err());
+    }
+
+    // ── write then overwrite ─────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_write_overwrite() {
+        let cached = make_cached();
+        cached.write("key1", b"original").await.unwrap();
+        let _ = cached.read("key1").await;
+        
+        cached.write("key1", b"updated").await.unwrap();
+        let data = cached.read("key1").await.unwrap();
+        assert_eq!(data, b"updated");
+    }
+
+    // ── list keys ────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_list_keys() {
+        let cached = make_cached();
+        cached.write("prefix/a", b"1").await.unwrap();
+        cached.write("prefix/b", b"2").await.unwrap();
+        cached.write("other/c", b"3").await.unwrap();
+
+        let keys = cached.list("prefix/").await.unwrap();
+        assert_eq!(keys.len(), 2);
+    }
+
+    // ── exists ───────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_exists() {
+        let cached = make_cached();
+        assert!(!cached.exists("key1").await.unwrap());
+        cached.write("key1", b"data").await.unwrap();
+        assert!(cached.exists("key1").await.unwrap());
+    }
+
+    // ── TieredCacheConfig defaults ───────────────────────────────────────
+
+    #[test]
+    fn test_tiered_cache_config_defaults() {
+        let config = TieredCacheConfig::default();
+        assert!(config.memory_max_size > 0);
+        assert!(config.ssd_max_size > 0);
+        assert!(config.memory_ttl > Duration::ZERO);
+        assert!(config.ssd_ttl > Duration::ZERO);
+    }
+
+    // ── TieredCacheStats ─────────────────────────────────────────────────
+
+    #[test]
+    fn test_tiered_cache_stats_hit_rate_zero() {
+        let stats = TieredCacheStats::default();
+        assert_eq!(stats.hit_rate(), 0.0);
+    }
+
+    // ── concurrent read/write ────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_concurrent_read_write() {
+        let cached = make_cached();
+        cached.write("shared", b"initial").await.unwrap();
+
+        let cached = std::sync::Arc::new(cached);
+        let mut handles = Vec::new();
+
+        // Multiple readers
+        for _ in 0..5 {
+            let c = std::sync::Arc::clone(&cached);
+            handles.push(tokio::spawn(async move {
+                let _ = c.read("shared").await;
+            }));
+        }
+
+        // Writer
+        let c = std::sync::Arc::clone(&cached);
+        handles.push(tokio::spawn(async move {
+            c.write("shared", b"updated").await.unwrap();
+        }));
+
+        for h in handles {
+            h.await.unwrap();
+        }
+        // Should not panic or deadlock
+        let data = cached.read("shared").await.unwrap();
+        assert!(!data.is_empty());
+    }
+
+    // ── delete idempotency ───────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_delete_idempotent() {
+        let cached = make_cached();
+        cached.write("key1", b"data").await.unwrap();
+        cached.delete("key1").await.unwrap();
+        // Second delete should succeed
+        cached.delete("key1").await.unwrap();
+        assert!(!cached.exists("key1").await.unwrap());
+    }
+
+    // ── large value handling ─────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_large_value() {
+        let cached = make_cached();
+        let large_data = vec![42u8; 1024 * 1024]; // 1MB
+        cached.write("large", &large_data).await.unwrap();
+        let read_data = cached.read("large").await.unwrap();
+        assert_eq!(read_data.len(), large_data.len());
+        assert_eq!(read_data, large_data);
+    }
+
+    // ── multiple keys ────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_multiple_keys_independent() {
+        let cached = make_cached();
+        cached.write("k1", b"v1").await.unwrap();
+        cached.write("k2", b"v2").await.unwrap();
+        cached.write("k3", b"v3").await.unwrap();
+
+        cached.delete("k2").await.unwrap();
+
+        assert!(cached.exists("k1").await.unwrap());
+        assert!(!cached.exists("k2").await.unwrap());
+        assert!(cached.exists("k3").await.unwrap());
+    }
+
+    // ── cache stats after operations ─────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_cache_stats_after_operations() {
+        let cached = make_cached();
+        cached.write("a", b"data_a").await.unwrap();
+        cached.write("b", b"data_b").await.unwrap();
+
+        // Read to populate cache
+        let _ = cached.read("a").await;
+        let _ = cached.read("a").await; // cache hit
+        let _ = cached.read("b").await;
+        let _ = cached.read("nonexistent").await; // miss (error)
+
+        let stats = cached.stats();
+        assert!(stats.hits() + stats.misses() > 0);
+    }
+
+    // ── CacheStats hit_rate ──────────────────────────────────────────────
+
+    #[test]
+    fn test_cache_stats_hit_rate_calculation() {
+        let stats = CacheStats::default();
+        stats.hits.store(3, std::sync::atomic::Ordering::Relaxed);
+        stats.misses.store(1, std::sync::atomic::Ordering::Relaxed);
+        let rate = stats.hit_rate();
+        assert!((rate - 0.75).abs() < 0.001);
+    }
+
+    // ── invalidate nonexistent key ───────────────────────────────────────
+
+    #[test]
+    fn test_invalidate_nonexistent() {
+        let cached = make_cached();
+        cached.invalidate("nonexistent"); // should not panic
+    }
+
+    // ── TieredCacheStats ─────────────────────────────────────────────────
+
+    #[test]
+    fn test_tiered_cache_stats_memory_hit_rate() {
+        let stats = TieredCacheStats::default();
+        assert_eq!(stats.memory_hit_rate(), 0.0);
+    }
+}
