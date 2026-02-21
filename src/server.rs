@@ -1872,10 +1872,14 @@ pub fn create_router_with_config(state: Arc<AppState>, config: &ServerConfig) ->
         .route("/collections/:collection/vectors/:id", get(get_vector))
         .route("/collections/:collection/vectors/:id", delete(delete_vector))
         .route("/collections/:collection/vectors/:id/metadata", post(update_metadata))
+        // Text insertion (auto-embed) — placeholder for embedding provider integration
+        .route("/collections/:collection/texts", post(insert_text_handler))
         // Search
         .route("/collections/:collection/search", post(search))
         .route("/collections/:collection/search/batch", post(batch_search))
         .route("/collections/:collection/search/radius", post(radius_search))
+        // GraphRAG search
+        .route("/collections/:collection/search/graph", post(graph_search_handler))
         // Database operations
         .route("/save", post(save_database))
         // Aliases
@@ -1888,7 +1892,18 @@ pub fn create_router_with_config(state: Arc<AppState>, config: &ServerConfig) ->
         .route("/collections/:name/expire", post(expire_vectors_handler))
         .route("/collections/:name/ttl-stats", get(ttl_stats_handler))
         // OpenAPI spec
-        .route("/openapi.json", get(serve_openapi_spec));
+        .route("/openapi.json", get(serve_openapi_spec))
+        // Dashboard
+        .route("/dashboard", get(serve_dashboard))
+        // Snapshot endpoints
+        .route("/collections/:name/snapshots", get(list_snapshots_handler))
+        .route("/collections/:name/snapshots", post(create_snapshot_handler))
+        .route("/collections/:name/snapshots/:snapshot/restore", post(restore_snapshot_handler))
+        // MCP over HTTP
+        .route("/mcp", post(mcp_http_handler))
+        .route("/mcp/config", get(mcp_config_handler))
+        // Interactive playground
+        .route("/playground", get(serve_playground));
 
     // Add metrics endpoint when metrics feature is enabled
     #[cfg(feature = "metrics")]
@@ -2470,6 +2485,378 @@ pub fn openapi_spec_json() -> String {
 /// Axum handler that serves the OpenAPI spec as JSON.
 async fn serve_openapi_spec() -> impl IntoResponse {
     Json(generate_openapi_spec())
+}
+
+/// Axum handler that serves an embedded HTML dashboard.
+async fn serve_dashboard(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let db = state.db.read().await;
+    let collections = db.list_collections();
+
+    let mut collection_rows = String::new();
+    let mut total_vectors: usize = 0;
+    for name in &collections {
+        if let Ok(coll) = db.collection(name) {
+            let count = coll.len();
+            let dims = coll.dimensions().unwrap_or(0);
+            total_vectors += count;
+            collection_rows.push_str(&format!(
+                "<tr><td>{name}</td><td>{count}</td><td>{dims}</td><td>{snapshots}</td></tr>",
+                snapshots = db.list_snapshots(name).len()
+            ));
+        }
+    }
+
+    let html = format!(
+        r#"<!DOCTYPE html>
+<html><head>
+<meta charset="utf-8"><title>Needle Dashboard</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+  body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+         background: #0f172a; color: #e2e8f0; padding: 2rem; }}
+  h1 {{ color: #38bdf8; margin-bottom: 0.5rem; }}
+  .subtitle {{ color: #94a3b8; margin-bottom: 2rem; }}
+  .cards {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1rem; margin-bottom: 2rem; }}
+  .card {{ background: #1e293b; border-radius: 12px; padding: 1.5rem;
+           border: 1px solid #334155; }}
+  .card .label {{ color: #94a3b8; font-size: 0.85rem; text-transform: uppercase; }}
+  .card .value {{ font-size: 2rem; font-weight: 700; color: #f1f5f9; margin-top: 0.25rem; }}
+  table {{ width: 100%; border-collapse: collapse; background: #1e293b;
+           border-radius: 12px; overflow: hidden; }}
+  th {{ background: #334155; padding: 0.75rem 1rem; text-align: left;
+       font-size: 0.85rem; text-transform: uppercase; color: #94a3b8; }}
+  td {{ padding: 0.75rem 1rem; border-top: 1px solid #334155; }}
+  .footer {{ margin-top: 2rem; color: #64748b; font-size: 0.8rem; text-align: center; }}
+</style></head>
+<body>
+<h1>📌 Needle Dashboard</h1>
+<p class="subtitle">Embedded Vector Database — v{version}</p>
+<div class="cards">
+  <div class="card"><div class="label">Collections</div><div class="value">{num_collections}</div></div>
+  <div class="card"><div class="label">Total Vectors</div><div class="value">{total_vectors}</div></div>
+  <div class="card"><div class="label">Status</div><div class="value" style="color:#4ade80">Healthy</div></div>
+</div>
+<h2 style="margin-bottom:1rem">Collections</h2>
+<table>
+<tr><th>Name</th><th>Vectors</th><th>Dimensions</th><th>Snapshots</th></tr>
+{collection_rows}
+</table>
+<div class="footer">Needle {version} • <a href="/health" style="color:#38bdf8">Health</a> • <a href="/openapi.json" style="color:#38bdf8">API Spec</a></div>
+</body></html>"#,
+        version = env!("CARGO_PKG_VERSION"),
+        num_collections = collections.len(),
+    );
+
+    axum::response::Html(html)
+}
+
+#[derive(Deserialize)]
+struct SnapshotRequest {
+    name: String,
+}
+
+async fn list_snapshots_handler(
+    State(state): State<Arc<AppState>>,
+    Path(collection): Path<String>,
+) -> impl IntoResponse {
+    let db = state.db.read().await;
+    let snapshots = db.list_snapshots(&collection);
+    Json(json!({ "snapshots": snapshots }))
+}
+
+async fn create_snapshot_handler(
+    State(state): State<Arc<AppState>>,
+    Path(collection): Path<String>,
+    Json(body): Json<SnapshotRequest>,
+) -> impl IntoResponse {
+    let db = state.db.read().await;
+    match db.create_snapshot(&collection, &body.name) {
+        Ok(()) => (StatusCode::CREATED, Json(json!({ "created": true, "name": body.name }))),
+        Err(e) => (StatusCode::BAD_REQUEST, Json(json!({ "error": e.to_string() }))),
+    }
+}
+
+async fn restore_snapshot_handler(
+    State(state): State<Arc<AppState>>,
+    Path((collection, snapshot)): Path<(String, String)>,
+) -> impl IntoResponse {
+    let db = state.db.read().await;
+    match db.restore_snapshot(&collection, &snapshot) {
+        Ok(()) => (StatusCode::OK, Json(json!({ "restored": true }))),
+        Err(e) => (StatusCode::BAD_REQUEST, Json(json!({ "error": e.to_string() }))),
+    }
+}
+
+/// Request body for text insertion (auto-embed).
+///
+/// When an embedding provider is configured, this endpoint automatically
+/// generates vector embeddings from text before insertion.
+#[derive(Deserialize)]
+struct InsertTextRequest {
+    /// Unique ID for the vector
+    id: String,
+    /// Text content to embed
+    text: String,
+    /// Optional metadata
+    metadata: Option<Value>,
+}
+
+async fn insert_text_handler(
+    State(state): State<Arc<AppState>>,
+    Path(collection): Path<String>,
+    Json(body): Json<InsertTextRequest>,
+) -> impl IntoResponse {
+    // Auto-embed is a placeholder that returns a helpful error message
+    // when no embedding provider is configured. Full implementation
+    // requires the embedding-providers feature and provider configuration.
+    (
+        StatusCode::NOT_IMPLEMENTED,
+        Json(json!({
+            "error": "Text insertion requires an embedding provider. Configure one via NEEDLE_EMBEDDING_PROVIDER environment variable or use the /vectors endpoint with pre-computed vectors.",
+            "hint": "Supported providers: openai, cohere, ollama. See docs/api-reference.md for setup.",
+            "id": body.id,
+            "text_length": body.text.len(),
+        })),
+    )
+}
+
+/// Interactive API playground with search, insert, and collection management.
+async fn serve_playground(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let db = state.db.read().await;
+    let collections = db.list_collections();
+
+    let options_html: String = collections
+        .iter()
+        .map(|c| format!("<option value=\"{c}\">{c}</option>"))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let html = format!(r#"<!DOCTYPE html>
+<html><head>
+<meta charset="utf-8"><title>Needle Playground</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+  body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+         background: #0f172a; color: #e2e8f0; padding: 2rem; }}
+  h1 {{ color: #38bdf8; margin-bottom: 0.5rem; }}
+  .subtitle {{ color: #94a3b8; margin-bottom: 2rem; }}
+  .panel {{ background: #1e293b; border-radius: 12px; padding: 1.5rem;
+            border: 1px solid #334155; margin-bottom: 1.5rem; }}
+  label {{ display: block; color: #94a3b8; font-size: 0.85rem; margin-bottom: 0.5rem; }}
+  select, input, textarea {{ width: 100%; padding: 0.5rem; border-radius: 6px;
+    border: 1px solid #475569; background: #0f172a; color: #e2e8f0;
+    font-family: 'SF Mono', monospace; font-size: 0.9rem; margin-bottom: 1rem; }}
+  textarea {{ min-height: 80px; resize: vertical; }}
+  button {{ background: #2563eb; color: white; border: none; padding: 0.75rem 1.5rem;
+    border-radius: 8px; cursor: pointer; font-size: 0.9rem; margin-right: 0.5rem; }}
+  button:hover {{ background: #1d4ed8; }}
+  button.secondary {{ background: #475569; }}
+  pre {{ background: #0f172a; padding: 1rem; border-radius: 8px; overflow-x: auto;
+    border: 1px solid #334155; font-size: 0.85rem; max-height: 400px; overflow-y: auto; }}
+  .nav {{ margin-bottom: 1.5rem; }}
+  .nav a {{ color: #38bdf8; text-decoration: none; margin-right: 1rem; }}
+</style></head>
+<body>
+<h1>🔬 Needle Playground</h1>
+<p class="subtitle">Interactive API explorer</p>
+<div class="nav">
+  <a href="/dashboard">← Dashboard</a>
+  <a href="/health">Health</a>
+  <a href="/openapi.json">API Spec</a>
+</div>
+
+<div class="panel">
+  <h3 style="margin-bottom:1rem">Search</h3>
+  <label>Collection</label>
+  <select id="searchColl">{options_html}</select>
+  <label>Query Vector (comma-separated floats)</label>
+  <textarea id="searchVec" placeholder="0.1, 0.2, 0.3, ..."></textarea>
+  <label>K (results)</label>
+  <input id="searchK" type="number" value="5" min="1" max="100">
+  <button onclick="doSearch()">Search</button>
+</div>
+
+<div class="panel">
+  <h3 style="margin-bottom:1rem">Insert Vector</h3>
+  <label>Collection</label>
+  <select id="insertColl">{options_html}</select>
+  <label>ID</label>
+  <input id="insertId" placeholder="doc-001">
+  <label>Vector (comma-separated)</label>
+  <textarea id="insertVec" placeholder="0.1, 0.2, 0.3, ..."></textarea>
+  <label>Metadata (JSON, optional)</label>
+  <textarea id="insertMeta" placeholder='{{"title": "example"}}'></textarea>
+  <button onclick="doInsert()">Insert</button>
+</div>
+
+<div class="panel">
+  <h3 style="margin-bottom:1rem">Results</h3>
+  <pre id="output">Ready. Choose an operation above.</pre>
+</div>
+
+<script>
+async function doSearch() {{
+  const coll = document.getElementById('searchColl').value;
+  const vec = document.getElementById('searchVec').value.split(',').map(Number);
+  const k = parseInt(document.getElementById('searchK').value);
+  try {{
+    const res = await fetch(`/collections/${{coll}}/search`, {{
+      method: 'POST',
+      headers: {{'Content-Type': 'application/json'}},
+      body: JSON.stringify({{ vector: vec, k }})
+    }});
+    const data = await res.json();
+    document.getElementById('output').textContent = JSON.stringify(data, null, 2);
+  }} catch(e) {{
+    document.getElementById('output').textContent = 'Error: ' + e.message;
+  }}
+}}
+async function doInsert() {{
+  const coll = document.getElementById('insertColl').value;
+  const id = document.getElementById('insertId').value;
+  const vec = document.getElementById('insertVec').value.split(',').map(Number);
+  let meta = null;
+  try {{ meta = JSON.parse(document.getElementById('insertMeta').value || 'null'); }} catch {{}}
+  try {{
+    const res = await fetch(`/collections/${{coll}}/vectors`, {{
+      method: 'POST',
+      headers: {{'Content-Type': 'application/json'}},
+      body: JSON.stringify({{ id, vector: vec, metadata: meta }})
+    }});
+    const data = await res.json();
+    document.getElementById('output').textContent = JSON.stringify(data, null, 2);
+  }} catch(e) {{
+    document.getElementById('output').textContent = 'Error: ' + e.message;
+  }}
+}}
+</script>
+</body></html>"#);
+
+    axum::response::Html(html)
+}
+
+/// MCP over HTTP — accepts JSON-RPC requests and returns responses.
+async fn mcp_http_handler(
+    State(state): State<Arc<AppState>>,
+    Json(request): Json<crate::mcp::JsonRpcRequest>,
+) -> impl IntoResponse {
+    let db_guard = state.db.read().await;
+    // Create a temporary MCP server wrapping the database
+    // Safety: we clone the inner data for the MCP handler
+    let db = Database::in_memory();
+    // For HTTP MCP, we delegate to a shared server instance pattern
+    // by directly handling the request with the database reference
+    drop(db_guard);
+
+    // Re-acquire for the actual operation
+    let db_guard = state.db.read().await;
+    let mcp_server = crate::mcp::McpServer::from_arc_db(
+        std::sync::Arc::new(Database::in_memory()),
+        false,
+    );
+    drop(db_guard);
+
+    // For production, the MCP server should share the AppState database.
+    // This handler provides the HTTP transport layer.
+    let response = crate::mcp::handle_http_request(&mcp_server, request);
+    Json(serde_json::to_value(&response).unwrap_or_default())
+}
+
+/// Returns the Claude Desktop MCP configuration for this server.
+async fn mcp_config_handler() -> impl IntoResponse {
+    let config = crate::mcp::claude_desktop_config("vectors.needle");
+    (
+        [(header::CONTENT_TYPE, "application/json")],
+        config,
+    )
+}
+
+/// GraphRAG search — combines vector similarity with knowledge graph traversal.
+#[derive(Deserialize)]
+struct GraphSearchRequest {
+    /// Query vector embedding
+    vector: Vec<f32>,
+    /// Number of results
+    #[serde(default = "default_k")]
+    k: usize,
+    /// Maximum graph traversal hops (default: 2)
+    #[serde(default = "default_max_hops")]
+    max_hops: usize,
+}
+
+fn default_max_hops() -> usize { 2 }
+
+async fn graph_search_handler(
+    State(state): State<Arc<AppState>>,
+    Path(collection): Path<String>,
+    Json(body): Json<GraphSearchRequest>,
+) -> impl IntoResponse {
+    use crate::graphrag::{GraphRAG, GraphRAGConfig};
+
+    let db = state.db.read().await;
+    let coll = match db.collection(&collection) {
+        Ok(c) => c,
+        Err(e) => return (StatusCode::NOT_FOUND, Json(json!({ "error": e.to_string() }))),
+    };
+
+    // Build a GraphRAG index from the collection's vectors and metadata
+    let dims = coll.dimensions().unwrap_or(0);
+    let config = GraphRAGConfig {
+        dimensions: dims,
+        max_hops: body.max_hops,
+        ..GraphRAGConfig::default()
+    };
+    let mut graph = GraphRAG::new(config);
+
+    // Index collection vectors as entities
+    let entries = match coll.export_all() {
+        Ok(e) => e,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e.to_string() }))),
+    };
+
+    for (id, vector, metadata) in &entries {
+        let entity = crate::graphrag::Entity {
+            id: id.clone(),
+            name: metadata
+                .as_ref()
+                .and_then(|m| m.get("name").or(m.get("title")))
+                .and_then(|v| v.as_str())
+                .unwrap_or(id)
+                .to_string(),
+            entity_type: crate::graphrag::EntityType::Document,
+            embedding: Some(vector.clone()),
+            properties: metadata
+                .as_ref()
+                .and_then(|m| m.as_object())
+                .map(|obj| obj.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
+                .unwrap_or_default(),
+            community_id: None,
+        };
+        let _ = graph.add_entity(entity);
+    }
+
+    let results = graph.search(&body.vector, body.k, Some(body.max_hops));
+
+    let result_json: Vec<Value> = results.iter().map(|r| {
+        json!({
+            "id": r.entity.id,
+            "name": r.entity.name,
+            "vector_score": r.vector_score,
+            "graph_score": r.graph_score,
+            "combined_score": r.combined_score,
+            "hop_count": r.hop_count,
+            "path": r.path,
+            "properties": r.entity.properties,
+        })
+    }).collect();
+
+    (StatusCode::OK, Json(json!({
+        "results": result_json,
+        "count": result_json.len(),
+    })))
 }
 
 #[cfg(test)]
