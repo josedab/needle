@@ -763,6 +763,7 @@ impl Default for AccessControl {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 
