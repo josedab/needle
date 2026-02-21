@@ -612,6 +612,225 @@ pub struct SyncState {
     pub known_peers: Vec<ReplicaId>,
 }
 
+// ── Bandwidth-Aware Sync ─────────────────────────────────────────────────────
+
+/// Configuration for bandwidth-aware synchronization.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SyncConfig {
+    /// Maximum bytes per sync batch (0 = unlimited).
+    pub max_batch_bytes: usize,
+    /// Maximum operations per batch (0 = unlimited).
+    pub max_ops_per_batch: usize,
+    /// Priority for which vectors to sync first.
+    pub priority: SyncPriority,
+    /// Filter to selectively sync only matching vector IDs.
+    pub id_prefix_filter: Option<String>,
+}
+
+impl Default for SyncConfig {
+    fn default() -> Self {
+        Self {
+            max_batch_bytes: 0,
+            max_ops_per_batch: 1000,
+            priority: SyncPriority::Chronological,
+            id_prefix_filter: None,
+        }
+    }
+}
+
+/// Priority ordering for sync operations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SyncPriority {
+    /// Send oldest operations first (FIFO).
+    Chronological,
+    /// Send newest operations first (most recent data arrives first).
+    ReverseChronological,
+}
+
+/// A bandwidth-constrained batch of operations for sync.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SyncBatch {
+    /// The operations in this batch.
+    pub operations: Vec<TimestampedOp>,
+    /// Whether more batches remain after this one.
+    pub has_more: bool,
+    /// Estimated size of this batch in bytes.
+    pub estimated_bytes: usize,
+    /// Resume token to continue from in the next batch.
+    pub resume_token: Option<HLC>,
+}
+
+impl VectorCRDT {
+    /// Generate a bandwidth-aware delta for a peer, respecting size limits.
+    ///
+    /// Use `resume_token` from the previous batch's response to continue
+    /// where the last batch left off.
+    pub fn delta_batched(
+        &self,
+        peer: ReplicaId,
+        config: &SyncConfig,
+        resume_token: Option<HLC>,
+    ) -> SyncBatch {
+        let since = resume_token.or_else(|| self.peer_sync_state.get(&peer).copied());
+
+        let all_ops: Vec<&TimestampedOp> = if let Some(ref since_ts) = since {
+            self.operation_log
+                .range(since_ts..)
+                .map(|(_, op)| op)
+                .filter(|op| op.origin != self.replica_id || resume_token.is_some())
+                .collect()
+        } else {
+            self.operation_log.values().collect()
+        };
+
+        // Apply selective filter
+        let filtered_ops: Vec<&TimestampedOp> = if let Some(ref prefix) = config.id_prefix_filter {
+            all_ops
+                .into_iter()
+                .filter(|op| op.op.affected_id().map_or(true, |id| id.starts_with(prefix)))
+                .collect()
+        } else {
+            all_ops
+        };
+
+        // Apply priority ordering
+        let mut sorted_ops = filtered_ops;
+        if config.priority == SyncPriority::ReverseChronological {
+            sorted_ops.reverse();
+        }
+
+        let mut batch_ops = Vec::new();
+        let mut total_bytes = 0;
+        let max_ops = if config.max_ops_per_batch == 0 {
+            usize::MAX
+        } else {
+            config.max_ops_per_batch
+        };
+
+        for op in &sorted_ops {
+            let op_size = Self::estimate_op_size(op);
+            if config.max_batch_bytes > 0 && total_bytes + op_size > config.max_batch_bytes {
+                break;
+            }
+            if batch_ops.len() >= max_ops {
+                break;
+            }
+            batch_ops.push((*op).clone());
+            total_bytes += op_size;
+        }
+
+        let has_more = batch_ops.len() < sorted_ops.len();
+        let resume = batch_ops.last().map(|op| op.timestamp);
+
+        SyncBatch {
+            operations: batch_ops,
+            has_more,
+            estimated_bytes: total_bytes,
+            resume_token: if has_more { resume } else { None },
+        }
+    }
+
+    /// Estimate the serialized size of an operation in bytes.
+    fn estimate_op_size(op: &TimestampedOp) -> usize {
+        match &op.op {
+            Operation::Add { id, vector, metadata } => {
+                id.len() + vector.len() * 4 + metadata.len() * 32 + 16
+            }
+            Operation::Update { id, vector } => id.len() + vector.len() * 4 + 16,
+            Operation::Delete { id } => id.len() + 16,
+            Operation::UpdateMetadata { id, key, value } => {
+                id.len()
+                    + key.len()
+                    + value.as_ref().map_or(0, |v| v.len())
+                    + 16
+            }
+        }
+    }
+}
+
+impl Operation {
+    /// Get the vector ID affected by this operation.
+    fn affected_id(&self) -> Option<&str> {
+        match self {
+            Operation::Add { id, .. }
+            | Operation::Update { id, .. }
+            | Operation::Delete { id }
+            | Operation::UpdateMetadata { id, .. } => Some(id),
+        }
+    }
+}
+
+// ── Peer Discovery ───────────────────────────────────────────────────────────
+
+/// Information about a discovered peer.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PeerInfo {
+    /// The peer's replica ID.
+    pub replica_id: ReplicaId,
+    /// Human-readable peer name.
+    pub name: String,
+    /// Network address (e.g., "192.168.1.5:8080").
+    pub address: String,
+    /// Timestamp when this peer was last seen (seconds since epoch).
+    pub last_seen: u64,
+    /// Number of vectors this peer holds.
+    pub vector_count: usize,
+}
+
+/// Simple peer registry for discovery.
+pub struct PeerRegistry {
+    peers: HashMap<ReplicaId, PeerInfo>,
+    /// Peers older than this (seconds) are considered stale.
+    stale_threshold_secs: u64,
+}
+
+impl PeerRegistry {
+    pub fn new(stale_threshold_secs: u64) -> Self {
+        Self {
+            peers: HashMap::new(),
+            stale_threshold_secs,
+        }
+    }
+
+    /// Register or update a peer.
+    pub fn upsert(&mut self, info: PeerInfo) {
+        self.peers.insert(info.replica_id, info);
+    }
+
+    /// Get all active (non-stale) peers.
+    pub fn active_peers(&self) -> Vec<&PeerInfo> {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        self.peers
+            .values()
+            .filter(|p| now.saturating_sub(p.last_seen) < self.stale_threshold_secs)
+            .collect()
+    }
+
+    /// Remove stale peers. Returns number removed.
+    pub fn prune_stale(&mut self) -> usize {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let before = self.peers.len();
+        self.peers
+            .retain(|_, p| now.saturating_sub(p.last_seen) < self.stale_threshold_secs);
+        before - self.peers.len()
+    }
+
+    /// Total number of registered peers.
+    pub fn len(&self) -> usize {
+        self.peers.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.peers.is_empty()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -853,5 +1072,84 @@ mod tests {
 
         assert_eq!(result.applied, 0);
         assert_eq!(result.skipped, 1);
+    }
+
+    #[test]
+    fn test_bandwidth_limited_sync() {
+        let replica1 = ReplicaId::from(1);
+        let replica2 = ReplicaId::from(2);
+        let mut crdt = VectorCRDT::new(replica1);
+
+        // Add several vectors
+        for i in 0..10 {
+            crdt.add(&format!("vec{i}"), &[i as f32; 4], HashMap::new())
+                .unwrap();
+        }
+
+        let config = SyncConfig {
+            max_ops_per_batch: 3,
+            ..Default::default()
+        };
+
+        let batch1 = crdt.delta_batched(replica2, &config, None);
+        assert_eq!(batch1.operations.len(), 3);
+        assert!(batch1.has_more);
+        assert!(batch1.resume_token.is_some());
+
+        // Continue from where we left off
+        let batch2 = crdt.delta_batched(replica2, &config, batch1.resume_token);
+        assert!(!batch2.operations.is_empty());
+    }
+
+    #[test]
+    fn test_selective_sync() {
+        let replica1 = ReplicaId::from(1);
+        let replica2 = ReplicaId::from(2);
+        let mut crdt = VectorCRDT::new(replica1);
+
+        crdt.add("docs_1", &[1.0], HashMap::new()).unwrap();
+        crdt.add("docs_2", &[2.0], HashMap::new()).unwrap();
+        crdt.add("images_1", &[3.0], HashMap::new()).unwrap();
+
+        let config = SyncConfig {
+            id_prefix_filter: Some("docs_".into()),
+            ..Default::default()
+        };
+
+        let batch = crdt.delta_batched(replica2, &config, None);
+        assert_eq!(batch.operations.len(), 2);
+    }
+
+    #[test]
+    fn test_peer_registry() {
+        let mut registry = PeerRegistry::new(60);
+
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
+        registry.upsert(PeerInfo {
+            replica_id: ReplicaId::from(1),
+            name: "peer-1".into(),
+            address: "192.168.1.1:8080".into(),
+            last_seen: now,
+            vector_count: 100,
+        });
+
+        registry.upsert(PeerInfo {
+            replica_id: ReplicaId::from(2),
+            name: "peer-2".into(),
+            address: "192.168.1.2:8080".into(),
+            last_seen: now - 120, // stale
+            vector_count: 200,
+        });
+
+        assert_eq!(registry.len(), 2);
+        assert_eq!(registry.active_peers().len(), 1);
+
+        let pruned = registry.prune_stale();
+        assert_eq!(pruned, 1);
+        assert_eq!(registry.len(), 1);
     }
 }
