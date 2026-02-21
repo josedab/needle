@@ -329,19 +329,19 @@ pub(super) async fn security_headers_middleware(
 ) -> Response {
     let mut response = next.run(request).await;
     let headers = response.headers_mut();
-    headers.insert(SECURITY_HEADER_XCTO.0.clone(), SECURITY_HEADER_XCTO.1.parse().expect("static header value")); // allow-expect
-    headers.insert(SECURITY_HEADER_XFO.0.clone(), SECURITY_HEADER_XFO.1.parse().expect("static header value")); // allow-expect
+    headers.insert(SECURITY_HEADER_XCTO.0.clone(), SECURITY_HEADER_XCTO.1.parse().expect("valid static X-Content-Type-Options header")); // allow-expect
+    headers.insert(SECURITY_HEADER_XFO.0.clone(), SECURITY_HEADER_XFO.1.parse().expect("valid static X-Frame-Options header")); // allow-expect
     headers.insert(
         header::STRICT_TRANSPORT_SECURITY,
-        "max-age=63072000; includeSubDomains".parse().expect("static header value"), // allow-expect
+        "max-age=63072000; includeSubDomains".parse().expect("valid static HSTS header"), // allow-expect
     );
     headers.insert(
         header::HeaderName::from_static("x-xss-protection"),
-        "1; mode=block".parse().expect("static header value"), // allow-expect
+        "1; mode=block".parse().expect("valid static X-XSS-Protection header"), // allow-expect
     );
     headers.insert(
         header::HeaderName::from_static("content-security-policy"),
-        "default-src 'none'; frame-ancestors 'none'".parse().expect("static header value"), // allow-expect
+        "default-src 'none'; frame-ancestors 'none'".parse().expect("valid static Content-Security-Policy header"), // allow-expect
     );
     response
 }
@@ -419,7 +419,7 @@ pub(super) async fn api_stability_middleware(
     let mut response = next.run(request).await;
     response.headers_mut().insert(
         STABILITY_HEADER.clone(),
-        tier.as_str().parse().expect("static header value"), // allow-expect
+        tier.as_str().parse().expect("stability tier is a valid header value"), // allow-expect
     );
     response
 }
