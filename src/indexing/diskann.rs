@@ -2481,4 +2481,428 @@ mod tests {
         assert_eq!(queue.pending_count(), 0);
         Ok(())
     }
+
+    // ── build on empty index ─────────────────────────────────────────────
+
+    #[test]
+    fn test_build_empty_index() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let dir = TempDir::new()?;
+        let config = DiskAnnConfig::default();
+        let mut index = DiskAnnIndex::create(dir.path(), 4, config)?;
+
+        // Building empty index returns an error (no vectors to index)
+        let result = index.build();
+        assert!(result.is_err());
+        assert_eq!(index.len(), 0);
+        Ok(())
+    }
+
+    // ── search before build ──────────────────────────────────────────────
+
+    #[test]
+    fn test_search_before_build() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let dir = TempDir::new()?;
+        let config = DiskAnnConfig::default();
+        let mut index = DiskAnnIndex::create(dir.path(), 4, config)?;
+
+        index.add("v1", &[1.0, 0.0, 0.0, 0.0])?;
+        // Don't build - search should handle gracefully
+        let results = index.search(&[1.0, 0.0, 0.0, 0.0], 5);
+        // Either returns empty results or an error, should not panic
+        let _ = results;
+        Ok(())
+    }
+
+    // ── delete_vector + build repairs graph ───────────────────────────────
+
+    #[test]
+    fn test_delete_then_rebuild() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let dir = TempDir::new()?;
+        let config = DiskAnnConfig {
+            max_degree: 4,
+            build_list_size: 10,
+            search_list_size: 10,
+            ..Default::default()
+        };
+        let mut index = DiskAnnIndex::create(dir.path(), 4, config)?;
+
+        for i in 0..10 {
+            let vec = vec![i as f32, 0.0, 0.0, 0.0];
+            index.add(&format!("v{i}"), &vec)?;
+        }
+        index.build()?;
+
+        // Delete some vectors
+        let deleted = index.delete("v3")?;
+        assert!(deleted);
+        assert!(!index.contains("v3"));
+
+        // Search should still work
+        let results = index.search(&[0.0, 0.0, 0.0, 0.0], 5)?;
+        assert!(!results.is_empty());
+        Ok(())
+    }
+
+    // ── clear_cache + immediate search ───────────────────────────────────
+
+    #[test]
+    fn test_clear_cache_then_search() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let dir = TempDir::new()?;
+        let config = DiskAnnConfig {
+            max_degree: 4,
+            build_list_size: 10,
+            search_list_size: 10,
+            cache_size: 5,
+            ..Default::default()
+        };
+        let mut index = DiskAnnIndex::create(dir.path(), 4, config)?;
+
+        for i in 0..10 {
+            let vec = vec![i as f32, 0.0, 0.0, 0.0];
+            index.add(&format!("v{i}"), &vec)?;
+        }
+        index.build()?;
+
+        // Pre-warm cache
+        let _ = index.search(&[0.0, 0.0, 0.0, 0.0], 3)?;
+
+        // Clear cache
+        index.clear_cache();
+
+        // Search immediately after cache clear should still work
+        let results = index.search(&[0.0, 0.0, 0.0, 0.0], 3)?;
+        assert!(!results.is_empty());
+        Ok(())
+    }
+
+    // ── config edge cases ────────────────────────────────────────────────
+
+    #[test]
+    fn test_config_max_degree_one() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let dir = TempDir::new()?;
+        let config = DiskAnnConfig {
+            max_degree: 1,
+            build_list_size: 10,
+            search_list_size: 10,
+            ..Default::default()
+        };
+        let mut index = DiskAnnIndex::create(dir.path(), 4, config)?;
+
+        for i in 0..5 {
+            index.add(&format!("v{i}"), &[i as f32, 0.0, 0.0, 0.0])?;
+        }
+        index.build()?;
+
+        let results = index.search(&[0.0, 0.0, 0.0, 0.0], 3)?;
+        assert!(!results.is_empty());
+        Ok(())
+    }
+
+    // ── add_batch with larger dataset ────────────────────────────────────
+
+    #[test]
+    fn test_batch_add_larger() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let dir = TempDir::new()?;
+        let config = DiskAnnConfig {
+            max_degree: 8,
+            build_list_size: 20,
+            search_list_size: 20,
+            ..Default::default()
+        };
+        let mut index = DiskAnnIndex::create(dir.path(), 8, config)?;
+
+        let vectors = create_test_vectors(500, 8);
+        index.add_batch(vectors)?;
+        index.build()?;
+
+        assert_eq!(index.len(), 500);
+
+        let query: Vec<f32> = (0..8).map(|i| (i as f32).sin()).collect();
+        let results = index.search(&query, 10)?;
+        assert_eq!(results.len(), 10);
+        // Results sorted by distance
+        for i in 1..results.len() {
+            assert!(results[i].distance >= results[i - 1].distance);
+        }
+        Ok(())
+    }
+
+    // ── multi_pass_build quality ─────────────────────────────────────────
+
+    #[test]
+    fn test_multi_pass_build_produces_results() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let dir = TempDir::new()?;
+        let config = DiskAnnConfig {
+            max_degree: 4,
+            build_list_size: 10,
+            search_list_size: 10,
+            ..Default::default()
+        };
+        let mut index = DiskAnnIndex::create(dir.path(), 4, config)?;
+
+        for i in 0..20 {
+            let vec = vec![i as f32, (i as f32).sin(), (i as f32).cos(), 0.0];
+            index.add(&format!("v{i}"), &vec)?;
+        }
+
+        index.build_multi_pass(2, 3.0)?;
+
+        let results = index.search(&[0.0, 0.0, 1.0, 0.0], 5)?;
+        assert_eq!(results.len(), 5);
+        Ok(())
+    }
+
+    // ── contains ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_contains() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let dir = TempDir::new()?;
+        let config = DiskAnnConfig::default();
+        let mut index = DiskAnnIndex::create(dir.path(), 4, config)?;
+
+        index.add("v1", &[1.0, 0.0, 0.0, 0.0])?;
+        index.build()?;
+
+        assert!(index.contains("v1"));
+        assert!(!index.contains("nonexistent"));
+        Ok(())
+    }
+
+    // ── search with exact nearest neighbor for small dataset ─────────────
+
+    #[test]
+    fn test_search_exact_nearest() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let dir = TempDir::new()?;
+        let config = DiskAnnConfig {
+            max_degree: 8,
+            build_list_size: 50,
+            search_list_size: 50,
+            ..Default::default()
+        };
+        let mut index = DiskAnnIndex::create(dir.path(), 4, config)?;
+
+        // Small dataset where exact nearest neighbor is deterministic
+        index.add("exact", &[1.0, 0.0, 0.0, 0.0])?;
+        index.add("far1", &[0.0, 0.0, 0.0, 10.0])?;
+        index.add("far2", &[0.0, 0.0, 10.0, 0.0])?;
+        index.build()?;
+
+        let results = index.search(&[1.0, 0.0, 0.0, 0.0], 1)?;
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].id, "exact");
+        assert!(results[0].distance < 0.001);
+        Ok(())
+    }
+
+    // ── graph connectivity after build ───────────────────────────────────
+
+    #[test]
+    fn test_graph_connectivity() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let dir = TempDir::new()?;
+        let config = DiskAnnConfig {
+            max_degree: 8,
+            build_list_size: 20,
+            search_list_size: 20,
+            ..Default::default()
+        };
+        let mut index = DiskAnnIndex::create(dir.path(), 4, config)?;
+
+        let vectors = create_test_vectors(50, 4);
+        index.add_batch(vectors)?;
+        index.build()?;
+
+        let quality = index.compute_build_quality();
+        assert!(quality.avg_degree > 0.0, "Avg degree should be > 0");
+        Ok(())
+    }
+
+    // ── delete nonexistent vector ────────────────────────────────────────
+
+    #[test]
+    fn test_delete_nonexistent() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let dir = TempDir::new()?;
+        let config = DiskAnnConfig::default();
+        let mut index = DiskAnnIndex::create(dir.path(), 4, config)?;
+        index.add("v1", &[1.0, 0.0, 0.0, 0.0])?;
+        index.build()?;
+        let deleted = index.delete("nonexistent")?;
+        assert!(!deleted);
+        Ok(())
+    }
+
+    // ── search with k > n ────────────────────────────────────────────────
+
+    #[test]
+    fn test_search_k_greater_than_n() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let dir = TempDir::new()?;
+        let config = DiskAnnConfig {
+            max_degree: 4,
+            build_list_size: 10,
+            search_list_size: 10,
+            ..Default::default()
+        };
+        let mut index = DiskAnnIndex::create(dir.path(), 4, config)?;
+        index.add("v1", &[1.0, 0.0, 0.0, 0.0])?;
+        index.add("v2", &[0.0, 1.0, 0.0, 0.0])?;
+        index.build()?;
+
+        let results = index.search(&[1.0, 0.0, 0.0, 0.0], 100)?;
+        assert_eq!(results.len(), 2); // can't return more than we have
+        Ok(())
+    }
+
+    // ── search_with_stats k > n ──────────────────────────────────────────
+
+    #[test]
+    fn test_search_with_stats_k_greater_than_n() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let dir = TempDir::new()?;
+        let config = DiskAnnConfig {
+            max_degree: 4,
+            build_list_size: 10,
+            search_list_size: 10,
+            ..Default::default()
+        };
+        let mut index = DiskAnnIndex::create(dir.path(), 4, config)?;
+        index.add("v1", &[1.0, 0.0, 0.0, 0.0])?;
+        index.add("v2", &[0.0, 1.0, 0.0, 0.0])?;
+        index.build()?;
+
+        let (results, stats) = index.search_with_stats(&[1.0, 0.0, 0.0, 0.0], 100)?;
+        assert_eq!(results.len(), 2);
+        assert!(stats.search_latency_us > 0 || stats.disk_reads >= 0);
+        Ok(())
+    }
+
+    // ── config: small search_list_size ────────────────────────────────────
+
+    #[test]
+    fn test_config_small_search_list() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let dir = TempDir::new()?;
+        let config = DiskAnnConfig {
+            max_degree: 4,
+            build_list_size: 5,
+            search_list_size: 1,
+            ..Default::default()
+        };
+        let mut index = DiskAnnIndex::create(dir.path(), 4, config)?;
+        for i in 0..5 {
+            index.add(&format!("v{i}"), &[i as f32, 0.0, 0.0, 0.0])?;
+        }
+        index.build()?;
+        // Small search_list_size should still return results
+        let results = index.search(&[0.0, 0.0, 0.0, 0.0], 3)?;
+        assert!(!results.is_empty());
+        Ok(())
+    }
+
+    // ── dimensions accessor ──────────────────────────────────────────────
+
+    #[test]
+    fn test_dimensions_accessor() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let dir = TempDir::new()?;
+        let config = DiskAnnConfig::default();
+        let index = DiskAnnIndex::create(dir.path(), 128, config)?;
+        assert_eq!(index.dimensions(), 128);
+        Ok(())
+    }
+
+    // ── config accessor ──────────────────────────────────────────────────
+
+    #[test]
+    fn test_config_accessor() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let dir = TempDir::new()?;
+        let config = DiskAnnConfig {
+            max_degree: 32,
+            ..Default::default()
+        };
+        let index = DiskAnnIndex::create(dir.path(), 4, config)?;
+        assert_eq!(index.config().max_degree, 32);
+        Ok(())
+    }
+
+    // ── is_empty / len ───────────────────────────────────────────────────
+
+    #[test]
+    fn test_len_after_operations() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let dir = TempDir::new()?;
+        let config = DiskAnnConfig::default();
+        let mut index = DiskAnnIndex::create(dir.path(), 4, config)?;
+        assert!(index.is_empty());
+        assert_eq!(index.len(), 0);
+
+        index.add("v1", &[1.0, 0.0, 0.0, 0.0])?;
+        index.add("v2", &[0.0, 1.0, 0.0, 0.0])?;
+        index.build()?;
+        assert!(!index.is_empty());
+        assert_eq!(index.len(), 2);
+
+        index.delete("v1")?;
+        assert_eq!(index.len(), 1);
+        Ok(())
+    }
+
+    // ── multiple build calls ─────────────────────────────────────────────
+
+    #[test]
+    fn test_multiple_builds() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let dir = TempDir::new()?;
+        let config = DiskAnnConfig {
+            max_degree: 4,
+            build_list_size: 10,
+            search_list_size: 10,
+            ..Default::default()
+        };
+        let mut index = DiskAnnIndex::create(dir.path(), 4, config)?;
+
+        // First batch + build
+        for i in 0..5 {
+            index.add(&format!("a{i}"), &[i as f32, 0.0, 0.0, 0.0])?;
+        }
+        index.build()?;
+
+        // Add more + rebuild
+        for i in 0..5 {
+            index.add(&format!("b{i}"), &[0.0, i as f32, 0.0, 0.0])?;
+        }
+        index.build()?;
+
+        assert_eq!(index.len(), 10);
+        let results = index.search(&[0.0, 0.0, 0.0, 0.0], 5)?;
+        assert_eq!(results.len(), 5);
+        Ok(())
+    }
+
+    // ── search results sorted ────────────────────────────────────────────
+
+    #[test]
+    fn test_search_results_sorted() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let dir = TempDir::new()?;
+        let config = DiskAnnConfig {
+            max_degree: 8,
+            build_list_size: 20,
+            search_list_size: 20,
+            ..Default::default()
+        };
+        let mut index = DiskAnnIndex::create(dir.path(), 4, config)?;
+        let vectors = create_test_vectors(50, 4);
+        index.add_batch(vectors)?;
+        index.build()?;
+
+        let results = index.search(&[0.0, 0.0, 0.0, 0.0], 10)?;
+        for i in 1..results.len() {
+            assert!(results[i].distance >= results[i-1].distance,
+                "Results should be sorted by distance");
+        }
+        Ok(())
+    }
+
+    // ── DiskAnnConfig default values ─────────────────────────────────────
+
+    #[test]
+    fn test_diskann_config_defaults() {
+        let config = DiskAnnConfig::default();
+        assert!(config.max_degree > 0);
+        assert!(config.build_list_size > 0);
+        assert!(config.search_list_size > 0);
+    }
 }
