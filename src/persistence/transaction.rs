@@ -1,4 +1,3 @@
-#![allow(clippy::unwrap_used)]
 //! MVCC-based Snapshot Isolation & Transactions for Needle.
 //!
 //! Provides multi-version concurrency control so that concurrent readers and
@@ -554,138 +553,144 @@ mod tests {
     // ---- Transaction (standalone) -----------------------------------------
 
     #[test]
-    fn transaction_begin_commit_rollback() {
+    fn transaction_begin_commit_rollback() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let snap = SnapshotView::new(TransactionId(1), HashSet::new());
         let mut txn = Transaction::begin(TransactionId(1), snap);
 
         assert_eq!(txn.status, TransactionStatus::Active);
-        txn.commit().unwrap();
+        txn.commit()?;
         assert_eq!(txn.status, TransactionStatus::Committed);
+        Ok(())
     }
 
     #[test]
-    fn transaction_rollback_clears_sets() {
+    fn transaction_rollback_clears_sets() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let snap = SnapshotView::new(TransactionId(1), HashSet::new());
         let mut txn = Transaction::begin(TransactionId(1), snap);
 
-        txn.insert("a".into(), vec![1.0], None).unwrap();
+        txn.insert("a".into(), vec![1.0], None)?;
         txn.record_read("b".into());
         assert!(!txn.write_set.is_empty());
         assert!(!txn.read_set.is_empty());
 
-        txn.rollback().unwrap();
+        txn.rollback()?;
         assert!(txn.write_set.is_empty());
         assert!(txn.read_set.is_empty());
         assert_eq!(txn.status, TransactionStatus::Aborted);
+        Ok(())
     }
 
     #[test]
-    fn transaction_double_commit_fails() {
+    fn transaction_double_commit_fails() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let snap = SnapshotView::new(TransactionId(1), HashSet::new());
         let mut txn = Transaction::begin(TransactionId(1), snap);
-        txn.commit().unwrap();
+        txn.commit()?;
         assert!(txn.commit().is_err());
+        Ok(())
     }
 
     #[test]
-    fn transaction_commit_after_rollback_fails() {
+    fn transaction_commit_after_rollback_fails() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let snap = SnapshotView::new(TransactionId(1), HashSet::new());
         let mut txn = Transaction::begin(TransactionId(1), snap);
-        txn.rollback().unwrap();
+        txn.rollback()?;
         assert!(txn.commit().is_err());
+        Ok(())
     }
 
     #[test]
-    fn transaction_rollback_after_commit_fails() {
+    fn transaction_rollback_after_commit_fails() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let snap = SnapshotView::new(TransactionId(1), HashSet::new());
         let mut txn = Transaction::begin(TransactionId(1), snap);
-        txn.commit().unwrap();
+        txn.commit()?;
         assert!(txn.rollback().is_err());
+        Ok(())
     }
 
     #[test]
-    fn transaction_double_rollback_fails() {
+    fn transaction_double_rollback_fails() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let snap = SnapshotView::new(TransactionId(1), HashSet::new());
         let mut txn = Transaction::begin(TransactionId(1), snap);
-        txn.rollback().unwrap();
+        txn.rollback()?;
         assert!(txn.rollback().is_err());
+        Ok(())
     }
 
     #[test]
-    fn transaction_write_after_commit_fails() {
+    fn transaction_write_after_commit_fails() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let snap = SnapshotView::new(TransactionId(1), HashSet::new());
         let mut txn = Transaction::begin(TransactionId(1), snap);
-        txn.commit().unwrap();
+        txn.commit()?;
         assert!(txn.insert("x".into(), vec![1.0], None).is_err());
         assert!(txn.delete("x".into()).is_err());
         assert!(txn.update("x".into(), None, None).is_err());
+        Ok(())
     }
 
     #[test]
-    fn transaction_written_ids() {
+    fn transaction_written_ids() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let snap = SnapshotView::new(TransactionId(1), HashSet::new());
         let mut txn = Transaction::begin(TransactionId(1), snap);
-        txn.insert("a".into(), vec![1.0], None).unwrap();
-        txn.delete("b".into()).unwrap();
-        txn.update("c".into(), Some(vec![2.0]), None).unwrap();
+        txn.insert("a".into(), vec![1.0], None)?;
+        txn.delete("b".into())?;
+        txn.update("c".into(), Some(vec![2.0]), None)?;
 
         let ids = txn.written_ids();
         assert!(ids.contains("a"));
         assert!(ids.contains("b"));
         assert!(ids.contains("c"));
         assert_eq!(ids.len(), 3);
+        Ok(())
     }
 
     // ---- TransactionManager -----------------------------------------------
 
     #[test]
-    fn manager_begin_and_commit() {
+    fn manager_begin_and_commit() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let mgr = TransactionManager::new();
-        let tx = mgr.begin().unwrap();
+        let tx = mgr.begin()?;
 
-        mgr.with_transaction_mut(tx, |txn| txn.insert("v1".into(), sample_vector(4), None))
-            .unwrap();
+        mgr.with_transaction_mut(tx, |txn| txn.insert("v1".into(), sample_vector(4), None))?;
 
-        mgr.commit(tx).unwrap();
+        mgr.commit(tx)?;
 
         let log = mgr.committed_log();
         assert_eq!(log.len(), 1);
         assert_eq!(log[0].0, tx);
         assert_eq!(log[0].1.len(), 1);
+        Ok(())
     }
 
     #[test]
-    fn manager_begin_and_rollback() {
+    fn manager_begin_and_rollback() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let mgr = TransactionManager::new();
-        let tx = mgr.begin().unwrap();
+        let tx = mgr.begin()?;
 
-        mgr.with_transaction_mut(tx, |txn| txn.insert("v1".into(), sample_vector(4), None))
-            .unwrap();
+        mgr.with_transaction_mut(tx, |txn| txn.insert("v1".into(), sample_vector(4), None))?;
 
-        mgr.rollback(tx).unwrap();
+        mgr.rollback(tx)?;
 
         assert!(mgr.committed_log().is_empty());
         let stats = mgr.stats();
         assert_eq!(stats.total_aborted, 1);
         assert_eq!(stats.active_count, 0);
+        Ok(())
     }
 
     #[test]
-    fn manager_write_write_conflict_detection() {
+    fn manager_write_write_conflict_detection() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let mgr = TransactionManager::new();
 
         // tx1 and tx2 start concurrently
-        let tx1 = mgr.begin().unwrap();
-        let tx2 = mgr.begin().unwrap();
+        let tx1 = mgr.begin()?;
+        let tx2 = mgr.begin()?;
 
         // Both write to the same ID
-        mgr.with_transaction_mut(tx1, |txn| txn.insert("shared".into(), vec![1.0], None))
-            .unwrap();
-        mgr.with_transaction_mut(tx2, |txn| txn.insert("shared".into(), vec![2.0], None))
-            .unwrap();
+        mgr.with_transaction_mut(tx1, |txn| txn.insert("shared".into(), vec![1.0], None))?;
+        mgr.with_transaction_mut(tx2, |txn| txn.insert("shared".into(), vec![2.0], None))?;
 
         // tx1 commits first — succeeds
-        mgr.commit(tx1).unwrap();
+        mgr.commit(tx1)?;
 
         // tx2 tries to commit — conflict
         let result = mgr.commit(tx2);
@@ -700,68 +705,68 @@ mod tests {
         assert_eq!(stats.total_committed, 1);
         assert_eq!(stats.total_aborted, 1);
         assert_eq!(stats.total_conflicts, 1);
+        Ok(())
     }
 
     #[test]
-    fn manager_no_conflict_on_different_ids() {
+    fn manager_no_conflict_on_different_ids() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let mgr = TransactionManager::new();
 
-        let tx1 = mgr.begin().unwrap();
-        let tx2 = mgr.begin().unwrap();
+        let tx1 = mgr.begin()?;
+        let tx2 = mgr.begin()?;
 
-        mgr.with_transaction_mut(tx1, |txn| txn.insert("a".into(), vec![1.0], None))
-            .unwrap();
-        mgr.with_transaction_mut(tx2, |txn| txn.insert("b".into(), vec![2.0], None))
-            .unwrap();
+        mgr.with_transaction_mut(tx1, |txn| txn.insert("a".into(), vec![1.0], None))?;
+        mgr.with_transaction_mut(tx2, |txn| txn.insert("b".into(), vec![2.0], None))?;
 
-        mgr.commit(tx1).unwrap();
-        mgr.commit(tx2).unwrap();
+        mgr.commit(tx1)?;
+        mgr.commit(tx2)?;
 
         let stats = mgr.stats();
         assert_eq!(stats.total_committed, 2);
         assert_eq!(stats.total_conflicts, 0);
+        Ok(())
     }
 
     #[test]
-    fn manager_snapshot_isolation_visibility() {
+    fn manager_snapshot_isolation_visibility() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let mgr = TransactionManager::new();
 
         // tx1 inserts and commits
-        let tx1 = mgr.begin().unwrap();
-        mgr.with_transaction_mut(tx1, |txn| txn.insert("v1".into(), vec![1.0], None))
-            .unwrap();
-        mgr.commit(tx1).unwrap();
+        let tx1 = mgr.begin()?;
+        mgr.with_transaction_mut(tx1, |txn| txn.insert("v1".into(), vec![1.0], None))?;
+        mgr.commit(tx1)?;
 
         // tx2 starts after tx1 committed — should see tx1
-        let tx2 = mgr.begin().unwrap();
-        let snap2 = mgr.get_snapshot(tx2).unwrap();
+        let tx2 = mgr.begin()?;
+        let snap2 = mgr.get_snapshot(tx2)?;
         assert!(snap2.is_visible(tx1));
 
         // tx3 started before tx1 committed — should NOT see tx1
         // (simulate by checking that tx2's snapshot doesn't include tx2 itself)
         assert!(!snap2.is_visible(tx2));
 
-        mgr.rollback(tx2).unwrap();
+        mgr.rollback(tx2)?;
+        Ok(())
     }
 
     #[test]
-    fn manager_uncommitted_txn_not_visible() {
+    fn manager_uncommitted_txn_not_visible() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let mgr = TransactionManager::new();
 
         // tx1 begins but does NOT commit
-        let tx1 = mgr.begin().unwrap();
-        mgr.with_transaction_mut(tx1, |txn| txn.insert("v1".into(), vec![1.0], None))
-            .unwrap();
+        let tx1 = mgr.begin()?;
+        mgr.with_transaction_mut(tx1, |txn| txn.insert("v1".into(), vec![1.0], None))?;
 
         // tx2 starts while tx1 is still active
-        let tx2 = mgr.begin().unwrap();
-        let snap2 = mgr.get_snapshot(tx2).unwrap();
+        let tx2 = mgr.begin()?;
+        let snap2 = mgr.get_snapshot(tx2)?;
 
         // tx1 is not committed → not visible to tx2
         assert!(!snap2.is_visible(tx1));
 
-        mgr.rollback(tx1).unwrap();
-        mgr.rollback(tx2).unwrap();
+        mgr.rollback(tx1)?;
+        mgr.rollback(tx2)?;
+        Ok(())
     }
 
     #[test]
@@ -779,58 +784,62 @@ mod tests {
     }
 
     #[test]
-    fn manager_double_commit_via_manager_fails() {
+    fn manager_double_commit_via_manager_fails() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let mgr = TransactionManager::new();
-        let tx = mgr.begin().unwrap();
-        mgr.commit(tx).unwrap();
+        let tx = mgr.begin()?;
+        mgr.commit(tx)?;
         // tx was removed from active set after commit
         assert!(mgr.commit(tx).is_err());
+        Ok(())
     }
 
     #[test]
-    fn manager_commit_after_rollback_via_manager_fails() {
+    fn manager_commit_after_rollback_via_manager_fails() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let mgr = TransactionManager::new();
-        let tx = mgr.begin().unwrap();
-        mgr.rollback(tx).unwrap();
+        let tx = mgr.begin()?;
+        mgr.rollback(tx)?;
         assert!(mgr.commit(tx).is_err());
+        Ok(())
     }
 
     #[test]
-    fn manager_stats_tracking() {
+    fn manager_stats_tracking() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let mgr = TransactionManager::new();
 
-        let tx1 = mgr.begin().unwrap();
-        let tx2 = mgr.begin().unwrap();
-        let tx3 = mgr.begin().unwrap();
+        let tx1 = mgr.begin()?;
+        let tx2 = mgr.begin()?;
+        let tx3 = mgr.begin()?;
 
         assert_eq!(mgr.stats().active_count, 3);
 
-        mgr.commit(tx1).unwrap();
+        mgr.commit(tx1)?;
         assert_eq!(mgr.stats().active_count, 2);
         assert_eq!(mgr.stats().total_committed, 1);
 
-        mgr.rollback(tx2).unwrap();
+        mgr.rollback(tx2)?;
         assert_eq!(mgr.stats().active_count, 1);
         assert_eq!(mgr.stats().total_aborted, 1);
 
-        mgr.commit(tx3).unwrap();
+        mgr.commit(tx3)?;
         assert_eq!(mgr.stats().active_count, 0);
         assert_eq!(mgr.stats().total_committed, 2);
+        Ok(())
     }
 
     #[test]
-    fn manager_empty_transaction_commits() {
+    fn manager_empty_transaction_commits() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let mgr = TransactionManager::new();
-        let tx = mgr.begin().unwrap();
+        let tx = mgr.begin()?;
         // No writes — should still commit fine
-        mgr.commit(tx).unwrap();
+        mgr.commit(tx)?;
         assert_eq!(mgr.stats().total_committed, 1);
+        Ok(())
     }
 
     #[test]
-    fn manager_multiple_writes_same_txn() {
+    fn manager_multiple_writes_same_txn() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let mgr = TransactionManager::new();
-        let tx = mgr.begin().unwrap();
+        let tx = mgr.begin()?;
 
         mgr.with_transaction_mut(tx, |txn| {
             txn.insert("a".into(), vec![1.0], None)?;
@@ -841,45 +850,43 @@ mod tests {
             )?;
             txn.delete("b".into())?;
             Ok(())
-        })
-        .unwrap();
+        })?;
 
-        mgr.commit(tx).unwrap();
+        mgr.commit(tx)?;
 
         let log = mgr.committed_log();
         assert_eq!(log[0].1.len(), 3);
+        Ok(())
     }
 
     #[test]
-    fn manager_concurrent_readers_dont_conflict() {
+    fn manager_concurrent_readers_dont_conflict() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let mgr = TransactionManager::new();
 
         // Commit some initial data
-        let setup = mgr.begin().unwrap();
-        mgr.with_transaction_mut(setup, |txn| txn.insert("v1".into(), vec![1.0], None))
-            .unwrap();
-        mgr.commit(setup).unwrap();
+        let setup = mgr.begin()?;
+        mgr.with_transaction_mut(setup, |txn| txn.insert("v1".into(), vec![1.0], None))?;
+        mgr.commit(setup)?;
 
         // Multiple read-only transactions
-        let r1 = mgr.begin().unwrap();
-        let r2 = mgr.begin().unwrap();
+        let r1 = mgr.begin()?;
+        let r2 = mgr.begin()?;
 
         mgr.with_transaction_mut(r1, |txn| {
             txn.record_read("v1".into());
             Ok(())
-        })
-        .unwrap();
+        })?;
         mgr.with_transaction_mut(r2, |txn| {
             txn.record_read("v1".into());
             Ok(())
-        })
-        .unwrap();
+        })?;
 
         // Both commit without conflict
-        mgr.commit(r1).unwrap();
-        mgr.commit(r2).unwrap();
+        mgr.commit(r1)?;
+        mgr.commit(r2)?;
         assert_eq!(mgr.stats().total_committed, 3);
         assert_eq!(mgr.stats().total_conflicts, 0);
+        Ok(())
     }
 
     #[test]
@@ -907,7 +914,7 @@ mod tests {
     }
 
     #[test]
-    fn manager_thread_safety() {
+    fn manager_thread_safety() -> std::result::Result<(), Box<dyn std::error::Error>> {
         use std::sync::Arc;
         use std::thread;
 
@@ -917,40 +924,40 @@ mod tests {
         for i in 0..10 {
             let mgr = Arc::clone(&mgr);
             handles.push(thread::spawn(move || {
-                let tx = mgr.begin().unwrap();
+                let tx = mgr.begin()?;
                 mgr.with_transaction_mut(tx, |txn| {
                     txn.insert(format!("thread-{i}"), vec![i as f32], None)
-                })
-                .unwrap();
-                mgr.commit(tx).unwrap();
+                })?;
+                mgr.commit(tx)?;
+                Ok::<(), NeedleError>(())
             }));
         }
 
         for h in handles {
-            h.join().unwrap();
+            h.join().map_err(|_| "thread panicked")?.map_err(|e: NeedleError| e)?;
         }
 
         let stats = mgr.stats();
         assert_eq!(stats.total_committed, 10);
         assert_eq!(stats.active_count, 0);
+        Ok(())
     }
 
     #[test]
-    fn manager_conflict_with_delete_and_update() {
+    fn manager_conflict_with_delete_and_update() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let mgr = TransactionManager::new();
 
-        let tx1 = mgr.begin().unwrap();
-        let tx2 = mgr.begin().unwrap();
+        let tx1 = mgr.begin()?;
+        let tx2 = mgr.begin()?;
 
         // tx1 deletes "x", tx2 updates "x"
-        mgr.with_transaction_mut(tx1, |txn| txn.delete("x".into()))
-            .unwrap();
-        mgr.with_transaction_mut(tx2, |txn| txn.update("x".into(), Some(vec![1.0]), None))
-            .unwrap();
+        mgr.with_transaction_mut(tx1, |txn| txn.delete("x".into()))?;
+        mgr.with_transaction_mut(tx2, |txn| txn.update("x".into(), Some(vec![1.0]), None))?;
 
-        mgr.commit(tx1).unwrap();
+        mgr.commit(tx1)?;
         assert!(mgr.commit(tx2).is_err());
         assert_eq!(mgr.stats().total_conflicts, 1);
+        Ok(())
     }
 
     #[test]

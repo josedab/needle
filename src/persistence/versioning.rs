@@ -1375,38 +1375,40 @@ impl VectorRepo {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)]
+
 mod tests {
     use super::*;
 
     #[test]
-    fn test_create_repo() {
+    fn test_create_repo() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let repo = VectorRepo::new("test", 128);
         assert_eq!(repo.current_branch(), "main");
         assert_eq!(repo.list_vectors().len(), 0);
+        Ok(())
     }
 
     #[test]
-    fn test_add_vector() {
+    fn test_add_vector() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let mut repo = VectorRepo::new("test", 4);
 
         repo.add("vec1", &[1.0, 2.0, 3.0, 4.0], HashMap::new())
-            .unwrap();
+            ?;
 
         let status = repo.status();
         assert_eq!(status.staged_added, 1);
+        Ok(())
     }
 
     #[test]
-    fn test_commit() {
+    fn test_commit() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let mut repo = VectorRepo::new("test", 4);
 
         repo.add("vec1", &[1.0, 2.0, 3.0, 4.0], HashMap::new())
-            .unwrap();
+            ?;
         repo.add("vec2", &[5.0, 6.0, 7.0, 8.0], HashMap::new())
-            .unwrap();
+            ?;
 
-        let hash = repo.commit("Initial commit").unwrap();
+        let hash = repo.commit("Initial commit")?;
 
         assert!(!hash.is_empty());
         assert_eq!(repo.list_vectors().len(), 2);
@@ -1414,135 +1416,143 @@ mod tests {
         let status = repo.status();
         assert_eq!(status.staged_added, 0);
         assert_eq!(status.total_commits, 1);
+        Ok(())
     }
 
     #[test]
-    fn test_dimension_mismatch() {
+    fn test_dimension_mismatch() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let mut repo = VectorRepo::new("test", 4);
 
         let result = repo.add("vec1", &[1.0, 2.0, 3.0], HashMap::new());
         assert!(result.is_err());
+        Ok(())
     }
 
     #[test]
-    fn test_get_vector() {
+    fn test_get_vector() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let mut repo = VectorRepo::new("test", 4);
 
         repo.add("vec1", &[1.0, 2.0, 3.0, 4.0], HashMap::new())
-            .unwrap();
-        repo.commit("Add vec1").unwrap();
+            ?;
+        repo.commit("Add vec1")?;
 
-        let entry = repo.get_latest("vec1").unwrap();
+        let entry = repo.get_latest("vec1")?;
         assert_eq!(entry.vector, vec![1.0, 2.0, 3.0, 4.0]);
+        Ok(())
     }
 
     #[test]
-    fn test_update_vector() {
+    fn test_update_vector() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let mut repo = VectorRepo::new("test", 4);
 
         repo.add("vec1", &[1.0, 2.0, 3.0, 4.0], HashMap::new())
-            .unwrap();
-        repo.commit("Add vec1").unwrap();
+            ?;
+        repo.commit("Add vec1")?;
 
-        repo.update("vec1", &[9.0, 8.0, 7.0, 6.0]).unwrap();
-        repo.commit("Update vec1").unwrap();
+        repo.update("vec1", &[9.0, 8.0, 7.0, 6.0])?;
+        repo.commit("Update vec1")?;
 
-        let entry = repo.get_latest("vec1").unwrap();
+        let entry = repo.get_latest("vec1")?;
         assert_eq!(entry.vector, vec![9.0, 8.0, 7.0, 6.0]);
+        Ok(())
     }
 
     #[test]
-    fn test_delete_vector() {
+    fn test_delete_vector() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let mut repo = VectorRepo::new("test", 4);
 
         repo.add("vec1", &[1.0, 2.0, 3.0, 4.0], HashMap::new())
-            .unwrap();
-        repo.commit("Add vec1").unwrap();
+            ?;
+        repo.commit("Add vec1")?;
 
-        repo.delete("vec1").unwrap();
-        repo.commit("Delete vec1").unwrap();
+        repo.delete("vec1")?;
+        repo.commit("Delete vec1")?;
 
         let result = repo.get_latest("vec1");
         assert!(result.is_err());
+        Ok(())
     }
 
     #[test]
-    fn test_get_at_commit() {
+    fn test_get_at_commit() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let mut repo = VectorRepo::new("test", 4);
 
         repo.add("vec1", &[1.0, 2.0, 3.0, 4.0], HashMap::new())
-            .unwrap();
-        let commit1 = repo.commit("V1").unwrap();
+            ?;
+        let commit1 = repo.commit("V1")?;
 
-        repo.update("vec1", &[9.0, 8.0, 7.0, 6.0]).unwrap();
-        let _commit2 = repo.commit("V2").unwrap();
+        repo.update("vec1", &[9.0, 8.0, 7.0, 6.0])?;
+        let _commit2 = repo.commit("V2")?;
 
         // Get at first commit
-        let old = repo.get_at("vec1", &commit1).unwrap();
+        let old = repo.get_at("vec1", &commit1)?;
         assert_eq!(old.vector, vec![1.0, 2.0, 3.0, 4.0]);
 
         // Get latest
-        let new = repo.get_latest("vec1").unwrap();
+        let new = repo.get_latest("vec1")?;
         assert_eq!(new.vector, vec![9.0, 8.0, 7.0, 6.0]);
+        Ok(())
     }
 
     #[test]
-    fn test_log() {
+    fn test_log() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let mut repo = VectorRepo::new("test", 4);
 
         repo.add("vec1", &[1.0, 2.0, 3.0, 4.0], HashMap::new())
-            .unwrap();
-        repo.commit("Commit 1").unwrap();
+            ?;
+        repo.commit("Commit 1")?;
 
         repo.add("vec2", &[5.0, 6.0, 7.0, 8.0], HashMap::new())
-            .unwrap();
-        repo.commit("Commit 2").unwrap();
+            ?;
+        repo.commit("Commit 2")?;
 
         let history = repo.log(None);
         assert_eq!(history.len(), 2);
         assert_eq!(history[0].message, "Commit 2");
         assert_eq!(history[1].message, "Commit 1");
+        Ok(())
     }
 
     #[test]
-    fn test_branching() {
+    fn test_branching() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let mut repo = VectorRepo::new("test", 4);
 
         repo.add("vec1", &[1.0, 2.0, 3.0, 4.0], HashMap::new())
-            .unwrap();
-        repo.commit("Main commit").unwrap();
+            ?;
+        repo.commit("Main commit")?;
 
-        repo.create_branch("feature").unwrap();
-        repo.checkout("feature").unwrap();
+        repo.create_branch("feature")?;
+        repo.checkout("feature")?;
 
         assert_eq!(repo.current_branch(), "feature");
 
         repo.add("vec2", &[5.0, 6.0, 7.0, 8.0], HashMap::new())
-            .unwrap();
-        repo.commit("Feature commit").unwrap();
+            ?;
+        repo.commit("Feature commit")?;
 
         // Feature branch has vec2
         assert_eq!(repo.list_vectors().len(), 2);
 
         // Switch back to main
-        repo.checkout("main").unwrap();
+        repo.checkout("main")?;
         assert_eq!(repo.list_vectors().len(), 1);
+        Ok(())
     }
 
     #[test]
-    fn test_diff() {
+    fn test_diff() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let mut repo = VectorRepo::new("test", 4);
 
         repo.add("vec1", &[1.0, 2.0, 3.0, 4.0], HashMap::new())
-            .unwrap();
-        let commit1 = repo.commit("Add vec1").unwrap();
+            ?;
+        let commit1 = repo.commit("Add vec1")?;
 
         repo.add("vec2", &[5.0, 6.0, 7.0, 8.0], HashMap::new())
-            .unwrap();
-        repo.update("vec1", &[9.0, 8.0, 7.0, 6.0]).unwrap();
-        let commit2 = repo.commit("Changes").unwrap();
+            ?;
+        repo.update("vec1", &[9.0, 8.0, 7.0, 6.0])?;
+        let commit2 = repo.commit("Changes")?;
 
-        let diffs = repo.diff(&commit1, &commit2).unwrap();
+        let diffs = repo.diff(&commit1, &commit2)?;
 
         let added: Vec<_> = diffs
             .iter()
@@ -1555,141 +1565,150 @@ mod tests {
 
         assert_eq!(added.len(), 1);
         assert_eq!(modified.len(), 1);
+        Ok(())
     }
 
     #[test]
-    fn test_rollback() {
+    fn test_rollback() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let mut repo = VectorRepo::new("test", 4);
 
         repo.add("vec1", &[1.0, 2.0, 3.0, 4.0], HashMap::new())
-            .unwrap();
-        let commit1 = repo.commit("V1").unwrap();
+            ?;
+        let commit1 = repo.commit("V1")?;
 
-        repo.update("vec1", &[9.0, 8.0, 7.0, 6.0]).unwrap();
-        repo.commit("V2").unwrap();
+        repo.update("vec1", &[9.0, 8.0, 7.0, 6.0])?;
+        repo.commit("V2")?;
 
         // Rollback to commit1
-        repo.rollback(&commit1).unwrap();
+        repo.rollback(&commit1)?;
 
-        let entry = repo.get_latest("vec1").unwrap();
+        let entry = repo.get_latest("vec1")?;
         assert_eq!(entry.vector, vec![1.0, 2.0, 3.0, 4.0]);
+        Ok(())
     }
 
     #[test]
-    fn test_merge() {
+    fn test_merge() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let mut repo = VectorRepo::new("test", 4);
 
         repo.add("vec1", &[1.0, 2.0, 3.0, 4.0], HashMap::new())
-            .unwrap();
-        repo.commit("Main").unwrap();
+            ?;
+        repo.commit("Main")?;
 
-        repo.create_branch("feature").unwrap();
-        repo.checkout("feature").unwrap();
+        repo.create_branch("feature")?;
+        repo.checkout("feature")?;
 
         repo.add("vec2", &[5.0, 6.0, 7.0, 8.0], HashMap::new())
-            .unwrap();
-        repo.commit("Feature").unwrap();
+            ?;
+        repo.commit("Feature")?;
 
-        repo.checkout("main").unwrap();
-        let result = repo.merge("feature").unwrap();
+        repo.checkout("main")?;
+        let result = repo.merge("feature")?;
 
         assert!(result.success);
         assert_eq!(result.added, 1);
         assert_eq!(repo.list_vectors().len(), 2);
+        Ok(())
     }
 
     #[test]
-    fn test_search() {
+    fn test_search() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let mut repo = VectorRepo::new("test", 4);
 
         repo.add("a", &[1.0, 0.0, 0.0, 0.0], HashMap::new())
-            .unwrap();
+            ?;
         repo.add("b", &[0.0, 1.0, 0.0, 0.0], HashMap::new())
-            .unwrap();
+            ?;
         repo.add("c", &[1.0, 1.0, 0.0, 0.0], HashMap::new())
-            .unwrap();
-        repo.commit("Vectors").unwrap();
+            ?;
+        repo.commit("Vectors")?;
 
-        let results = repo.search(&[1.0, 0.0, 0.0, 0.0], 2).unwrap();
+        let results = repo.search(&[1.0, 0.0, 0.0, 0.0], 2)?;
 
         assert_eq!(results.len(), 2);
         assert_eq!(results[0].id, "a"); // Exact match
+        Ok(())
     }
 
     #[test]
-    fn test_search_at_commit() {
+    fn test_search_at_commit() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let mut repo = VectorRepo::new("test", 4);
 
         repo.add("a", &[1.0, 0.0, 0.0, 0.0], HashMap::new())
-            .unwrap();
-        let commit1 = repo.commit("V1").unwrap();
+            ?;
+        let commit1 = repo.commit("V1")?;
 
-        repo.update("a", &[0.0, 1.0, 0.0, 0.0]).unwrap();
-        repo.commit("V2").unwrap();
+        repo.update("a", &[0.0, 1.0, 0.0, 0.0])?;
+        repo.commit("V2")?;
 
         // Search at old commit
-        let results = repo.search_at(&[1.0, 0.0, 0.0, 0.0], &commit1, 1).unwrap();
+        let results = repo.search_at(&[1.0, 0.0, 0.0, 0.0], &commit1, 1)?;
         assert!(results[0].similarity > 0.99);
 
         // Search at current (different vector)
-        let results = repo.search(&[1.0, 0.0, 0.0, 0.0], 1).unwrap();
+        let results = repo.search(&[1.0, 0.0, 0.0, 0.0], 1)?;
         assert!(results[0].similarity < 0.1);
+        Ok(())
     }
 
     #[test]
-    fn test_cannot_commit_empty() {
+    fn test_cannot_commit_empty() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let mut repo = VectorRepo::new("test", 4);
 
         let result = repo.commit("Empty");
         assert!(result.is_err());
+        Ok(())
     }
 
     #[test]
-    fn test_cannot_checkout_with_changes() {
+    fn test_cannot_checkout_with_changes() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let mut repo = VectorRepo::new("test", 4);
 
         repo.add("vec1", &[1.0, 2.0, 3.0, 4.0], HashMap::new())
-            .unwrap();
-        repo.commit("Main").unwrap();
+            ?;
+        repo.commit("Main")?;
 
-        repo.create_branch("feature").unwrap();
+        repo.create_branch("feature")?;
 
         repo.add("vec2", &[5.0, 6.0, 7.0, 8.0], HashMap::new())
-            .unwrap();
+            ?;
         // Don't commit
 
         let result = repo.checkout("feature");
         assert!(result.is_err());
+        Ok(())
     }
 
     #[test]
-    fn test_list_branches() {
+    fn test_list_branches() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let mut repo = VectorRepo::new("test", 4);
 
         repo.add("vec1", &[1.0, 2.0, 3.0, 4.0], HashMap::new())
-            .unwrap();
-        repo.commit("Init").unwrap();
+            ?;
+        repo.commit("Init")?;
 
-        repo.create_branch("feature1").unwrap();
-        repo.create_branch("feature2").unwrap();
+        repo.create_branch("feature1")?;
+        repo.create_branch("feature2")?;
 
         let branches = repo.list_branches();
         assert_eq!(branches.len(), 3);
+        Ok(())
     }
 
     #[test]
-    fn test_metadata() {
+    fn test_metadata() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let mut repo = VectorRepo::new("test", 4);
 
         let mut meta = HashMap::new();
         meta.insert("category".to_string(), "test".to_string());
         meta.insert("source".to_string(), "unit_test".to_string());
 
-        repo.add("vec1", &[1.0, 2.0, 3.0, 4.0], meta).unwrap();
-        repo.commit("With metadata").unwrap();
+        repo.add("vec1", &[1.0, 2.0, 3.0, 4.0], meta)?;
+        repo.commit("With metadata")?;
 
-        let entry = repo.get_latest("vec1").unwrap();
+        let entry = repo.get_latest("vec1")?;
         assert_eq!(entry.metadata.get("category"), Some(&"test".to_string()));
+        Ok(())
     }
 
     // ========================================================================
@@ -1697,122 +1716,129 @@ mod tests {
     // ========================================================================
 
     #[test]
-    fn test_parse_relative_time_ago() {
+    fn test_parse_relative_time_ago() -> std::result::Result<(), Box<dyn std::error::Error>> {
         // Test "X units ago" parsing
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .unwrap()
+            ?
             .as_secs();
 
-        let result = parse_relative_time("1 hour ago").unwrap();
+        let result = parse_relative_time("1 hour ago")?;
         assert!(result > now - 3700 && result < now - 3500);
 
-        let result = parse_relative_time("2 days ago").unwrap();
+        let result = parse_relative_time("2 days ago")?;
         assert!(result > now - 2 * 86400 - 100 && result < now - 2 * 86400 + 100);
+        Ok(())
     }
 
     #[test]
-    fn test_parse_relative_time_now() {
+    fn test_parse_relative_time_now() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .unwrap()
+            ?
             .as_secs();
 
-        let result = parse_relative_time("now").unwrap();
+        let result = parse_relative_time("now")?;
         assert!(result >= now - 1 && result <= now + 1);
+        Ok(())
     }
 
     #[test]
-    fn test_parse_relative_time_yesterday() {
+    fn test_parse_relative_time_yesterday() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .unwrap()
+            ?
             .as_secs();
 
-        let result = parse_relative_time("yesterday").unwrap();
+        let result = parse_relative_time("yesterday")?;
         assert!(result > now - 86500 && result < now - 86300);
+        Ok(())
     }
 
     #[test]
-    fn test_parse_datetime() {
+    fn test_parse_datetime() -> std::result::Result<(), Box<dyn std::error::Error>> {
         // Test ISO 8601 format
-        let result = parse_datetime("2024-01-15T10:30:00Z").unwrap();
+        let result = parse_datetime("2024-01-15T10:30:00Z")?;
         assert!(result > 0); // Should parse successfully
 
-        let result = parse_datetime("2024-01-15 10:30:00").unwrap();
+        let result = parse_datetime("2024-01-15 10:30:00")?;
         assert!(result > 0);
+        Ok(())
     }
 
     #[test]
-    fn test_timespec_to_timestamp() {
+    fn test_timespec_to_timestamp() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let ts = TimeSpec::Timestamp(1705312200);
-        assert_eq!(ts.to_timestamp().unwrap(), 1705312200);
+        assert_eq!(ts.to_timestamp()?, 1705312200);
 
         let dt = TimeSpec::DateTime("2024-01-15T10:30:00Z".to_string());
         assert!(dt.to_timestamp().is_ok());
 
         let rel = TimeSpec::Relative("1 hour ago".to_string());
         assert!(rel.to_timestamp().is_ok());
+        Ok(())
     }
 
     #[test]
-    fn test_find_commit_at_time() {
+    fn test_find_commit_at_time() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let mut repo = VectorRepo::new("test", 4);
 
         repo.add("vec1", &[1.0, 2.0, 3.0, 4.0], HashMap::new())
-            .unwrap();
-        let commit1 = repo.commit("V1").unwrap();
-        let ts1 = repo.commits.get(&commit1).unwrap().timestamp;
+            ?;
+        let commit1 = repo.commit("V1")?;
+        let ts1 = repo.commits.get(&commit1).ok_or("commit not found")?.timestamp;
 
         // Use TimeSpec::Commit for exact commit lookup
         let found = repo
             .find_commit_at_time(&TimeSpec::Commit(commit1.clone()))
-            .unwrap();
+            ?;
         assert!(found.is_some());
-        assert_eq!(found.unwrap().hash, commit1);
+        assert_eq!(found.ok_or("commit not found")?.hash, commit1);
 
         // Ensure we can find a commit at a given timestamp
-        let found = repo.find_commit_at_time(&TimeSpec::Timestamp(ts1)).unwrap();
+        let found = repo.find_commit_at_time(&TimeSpec::Timestamp(ts1))?;
         assert!(found.is_some());
 
         // Far past should return None
-        let found = repo.find_commit_at_time(&TimeSpec::Timestamp(0)).unwrap();
+        let found = repo.find_commit_at_time(&TimeSpec::Timestamp(0))?;
         assert!(found.is_none());
+        Ok(())
     }
 
     #[test]
-    fn test_search_at_time() {
+    fn test_search_at_time() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let mut repo = VectorRepo::new("test", 4);
 
         repo.add("a", &[1.0, 0.0, 0.0, 0.0], HashMap::new())
-            .unwrap();
-        let commit1 = repo.commit("V1").unwrap();
+            ?;
+        let commit1 = repo.commit("V1")?;
 
-        repo.update("a", &[0.0, 1.0, 0.0, 0.0]).unwrap();
-        repo.commit("V2").unwrap();
+        repo.update("a", &[0.0, 1.0, 0.0, 0.0])?;
+        repo.commit("V2")?;
 
         // Search at first commit (using commit-based lookup)
         let results = repo
             .search_at_time(&[1.0, 0.0, 0.0, 0.0], &TimeSpec::Commit(commit1), 1)
-            .unwrap();
+            ?;
 
         // Should find vector with high similarity (it was [1,0,0,0] at that time)
         assert!(results[0].similarity > 0.99);
+        Ok(())
     }
 
     #[test]
-    fn test_vector_history() {
+    fn test_vector_history() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let mut repo = VectorRepo::new("test", 4);
 
         repo.add("vec1", &[1.0, 0.0, 0.0, 0.0], HashMap::new())
-            .unwrap();
-        repo.commit("Added").unwrap();
+            ?;
+        repo.commit("Added")?;
 
-        repo.update("vec1", &[0.5, 0.5, 0.0, 0.0]).unwrap();
-        repo.commit("Modified").unwrap();
+        repo.update("vec1", &[0.5, 0.5, 0.0, 0.0])?;
+        repo.commit("Modified")?;
 
-        repo.update("vec1", &[0.0, 1.0, 0.0, 0.0]).unwrap();
-        repo.commit("Modified again").unwrap();
+        repo.update("vec1", &[0.0, 1.0, 0.0, 0.0])?;
+        repo.commit("Modified again")?;
 
         let history = repo.vector_history("vec1");
 
@@ -1824,36 +1850,38 @@ mod tests {
         // Check similarity tracking
         assert!(history[1].similarity_to_previous.is_some());
         assert!(history[2].similarity_to_previous.is_some());
+        Ok(())
     }
 
     #[test]
-    fn test_get_at_time() {
+    fn test_get_at_time() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let mut repo = VectorRepo::new("test", 4);
 
         repo.add("vec1", &[1.0, 2.0, 3.0, 4.0], HashMap::new())
-            .unwrap();
-        let commit1 = repo.commit("V1").unwrap();
+            ?;
+        let commit1 = repo.commit("V1")?;
 
-        repo.update("vec1", &[9.0, 8.0, 7.0, 6.0]).unwrap();
-        repo.commit("V2").unwrap();
+        repo.update("vec1", &[9.0, 8.0, 7.0, 6.0])?;
+        repo.commit("V2")?;
 
         // Get at commit1 (using commit-based lookup)
         let entry = repo
             .get_at_time("vec1", &TimeSpec::Commit(commit1))
-            .unwrap();
+            ?;
         assert_eq!(entry.vector, vec![1.0, 2.0, 3.0, 4.0]);
+        Ok(())
     }
 
     #[test]
-    fn test_compare_at_times() {
+    fn test_compare_at_times() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let mut repo = VectorRepo::new("test", 4);
 
         repo.add("vec1", &[1.0, 0.0, 0.0, 0.0], HashMap::new())
-            .unwrap();
-        let commit1 = repo.commit("V1").unwrap();
+            ?;
+        let commit1 = repo.commit("V1")?;
 
-        repo.update("vec1", &[0.0, 1.0, 0.0, 0.0]).unwrap();
-        let commit2 = repo.commit("V2").unwrap();
+        repo.update("vec1", &[0.0, 1.0, 0.0, 0.0])?;
+        let commit2 = repo.commit("V2")?;
 
         // Use commit-based time specs for precise comparison
         let diff = repo
@@ -1862,24 +1890,25 @@ mod tests {
                 &TimeSpec::Commit(commit1),
                 &TimeSpec::Commit(commit2),
             )
-            .unwrap();
+            ?;
 
         assert_eq!(diff.change_type, ChangeType::Modified);
-        assert!(diff.similarity.unwrap() < 0.1); // Orthogonal vectors
+        assert!(diff.similarity.ok_or("expected similarity value")? < 0.1); // Orthogonal vectors
+        Ok(())
     }
 
     #[test]
-    fn test_changes_between_times() {
+    fn test_changes_between_times() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let mut repo = VectorRepo::new("test", 4);
 
         repo.add("vec1", &[1.0, 0.0, 0.0, 0.0], HashMap::new())
-            .unwrap();
-        let commit1 = repo.commit("V1").unwrap();
+            ?;
+        let commit1 = repo.commit("V1")?;
 
         repo.add("vec2", &[0.0, 1.0, 0.0, 0.0], HashMap::new())
-            .unwrap();
-        repo.update("vec1", &[0.5, 0.5, 0.0, 0.0]).unwrap();
-        let commit2 = repo.commit("V2").unwrap();
+            ?;
+        repo.update("vec1", &[0.5, 0.5, 0.0, 0.0])?;
+        let commit2 = repo.commit("V2")?;
 
         // Use commit-based time specs
         let range = TimeRange {
@@ -1887,7 +1916,7 @@ mod tests {
             end: TimeSpec::Commit(commit2),
         };
 
-        let changes = repo.changes_between(&range).unwrap();
+        let changes = repo.changes_between(&range)?;
 
         let added: Vec<_> = changes
             .iter()
@@ -1900,53 +1929,55 @@ mod tests {
 
         assert_eq!(added.len(), 1);
         assert_eq!(modified.len(), 1);
+        Ok(())
     }
 
     #[test]
-    fn test_commits_in_range() {
+    fn test_commits_in_range() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let mut repo = VectorRepo::new("test", 4);
 
         repo.add("vec1", &[1.0, 0.0, 0.0, 0.0], HashMap::new())
-            .unwrap();
-        repo.commit("V1").unwrap();
+            ?;
+        repo.commit("V1")?;
 
         repo.add("vec2", &[0.0, 1.0, 0.0, 0.0], HashMap::new())
-            .unwrap();
-        repo.commit("V2").unwrap();
+            ?;
+        repo.commit("V2")?;
 
         repo.add("vec3", &[0.0, 0.0, 1.0, 0.0], HashMap::new())
-            .unwrap();
-        repo.commit("V3").unwrap();
+            ?;
+        repo.commit("V3")?;
 
         // Get all commits (use wide timestamp range)
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .unwrap()
+            ?
             .as_secs();
 
         let range = TimeRange {
             start: TimeSpec::Timestamp(now - 10),
             end: TimeSpec::Timestamp(now + 10),
         };
-        let commits = repo.commits_in_range(&range).unwrap();
+        let commits = repo.commits_in_range(&range)?;
         assert_eq!(commits.len(), 3);
+        Ok(())
     }
 
     #[test]
-    fn test_time_travel_with_deletion() {
+    fn test_time_travel_with_deletion() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let mut repo = VectorRepo::new("test", 4);
 
         repo.add("vec1", &[1.0, 2.0, 3.0, 4.0], HashMap::new())
-            .unwrap();
-        let commit1 = repo.commit("Added").unwrap();
+            ?;
+        let commit1 = repo.commit("Added")?;
 
-        repo.delete("vec1").unwrap();
-        let commit2 = repo.commit("Deleted").unwrap();
+        repo.delete("vec1")?;
+        let commit2 = repo.commit("Deleted")?;
 
         // Can still retrieve at commit1 using commit-based lookup
         let entry = repo
             .get_at_time("vec1", &TimeSpec::Commit(commit1))
-            .unwrap();
+            ?;
         assert_eq!(entry.vector, vec![1.0, 2.0, 3.0, 4.0]);
 
         // Cannot retrieve at commit2 (deleted)
@@ -1957,5 +1988,6 @@ mod tests {
         let history = repo.vector_history("vec1");
         assert_eq!(history.len(), 2);
         assert_eq!(history[1].change_type, ChangeType::Deleted);
+        Ok(())
     }
 }

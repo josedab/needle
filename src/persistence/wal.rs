@@ -932,20 +932,19 @@ impl<T> WalApplicator<T> {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use tempfile::TempDir;
 
-    fn create_test_wal() -> (WalManager, TempDir) {
-        let temp_dir = TempDir::new().unwrap();
-        let wal = WalManager::open(temp_dir.path(), WalConfig::default()).unwrap();
-        (wal, temp_dir)
+    fn create_test_wal() -> std::result::Result<(WalManager, TempDir), Box<dyn std::error::Error>> {
+        let temp_dir = TempDir::new()?;
+        let wal = WalManager::open(temp_dir.path(), WalConfig::default())?;
+        Ok((wal, temp_dir))
     }
 
     #[test]
-    fn test_wal_append_and_read() {
-        let (wal, _temp_dir) = create_test_wal();
+    fn test_wal_append_and_read() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let (wal, _temp_dir) = create_test_wal()?;
 
         // Append entries
         let lsn1 = wal
@@ -954,8 +953,7 @@ mod tests {
                 id: "doc1".to_string(),
                 vector: vec![0.1, 0.2, 0.3],
                 metadata: None,
-            })
-            .unwrap();
+            })?;
 
         let lsn2 = wal
             .append(WalEntry::Insert {
@@ -963,95 +961,92 @@ mod tests {
                 id: "doc2".to_string(),
                 vector: vec![0.4, 0.5, 0.6],
                 metadata: Some(serde_json::json!({"key": "value"})),
-            })
-            .unwrap();
+            })?;
 
         assert_eq!(lsn1, 1);
         assert_eq!(lsn2, 2);
         assert_eq!(wal.current_lsn(), 2);
+        Ok(())
     }
 
     #[test]
-    fn test_wal_sync() {
-        let (wal, _temp_dir) = create_test_wal();
+    fn test_wal_sync() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let (wal, _temp_dir) = create_test_wal()?;
 
         wal.append(WalEntry::Insert {
             collection: "test".to_string(),
             id: "doc1".to_string(),
             vector: vec![0.1, 0.2],
             metadata: None,
-        })
-        .unwrap();
+        })?;
 
-        wal.sync().unwrap();
+        wal.sync()?;
         assert_eq!(wal.synced_lsn(), 1);
+        Ok(())
     }
 
     #[test]
-    fn test_wal_checkpoint() {
-        let (wal, _temp_dir) = create_test_wal();
+    fn test_wal_checkpoint() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let (wal, _temp_dir) = create_test_wal()?;
 
         wal.append(WalEntry::Insert {
             collection: "test".to_string(),
             id: "doc1".to_string(),
             vector: vec![0.1],
             metadata: None,
-        })
-        .unwrap();
+        })?;
 
-        let checkpoint_lsn = wal.checkpoint().unwrap();
+        let checkpoint_lsn = wal.checkpoint()?;
         assert!(checkpoint_lsn > 0);
         assert_eq!(wal.checkpoint_lsn(), checkpoint_lsn);
+        Ok(())
     }
 
     #[test]
-    fn test_wal_replay() {
-        let (wal, temp_dir) = create_test_wal();
+    fn test_wal_replay() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let (wal, temp_dir) = create_test_wal()?;
 
         // Write some entries
         wal.append(WalEntry::CreateCollection {
             name: "test".to_string(),
             dimensions: 3,
             distance: "cosine".to_string(),
-        })
-        .unwrap();
+        })?;
 
         wal.append(WalEntry::Insert {
             collection: "test".to_string(),
             id: "doc1".to_string(),
             vector: vec![0.1, 0.2, 0.3],
             metadata: None,
-        })
-        .unwrap();
+        })?;
 
         wal.append(WalEntry::Delete {
             collection: "test".to_string(),
             id: "doc1".to_string(),
-        })
-        .unwrap();
+        })?;
 
-        wal.sync().unwrap();
-        wal.close().unwrap();
+        wal.sync()?;
+        wal.close()?;
 
         // Reopen and replay
-        let wal2 = WalManager::open(temp_dir.path(), WalConfig::default()).unwrap();
+        let wal2 = WalManager::open(temp_dir.path(), WalConfig::default())?;
         let mut replayed = Vec::new();
 
         wal2.replay(1, |record| {
             replayed.push(record.entry);
             Ok(())
-        })
-        .unwrap();
+        })?;
 
         assert_eq!(replayed.len(), 3);
         assert!(matches!(replayed[0], WalEntry::CreateCollection { .. }));
         assert!(matches!(replayed[1], WalEntry::Insert { .. }));
         assert!(matches!(replayed[2], WalEntry::Delete { .. }));
+        Ok(())
     }
 
     #[test]
-    fn test_wal_batch_insert() {
-        let (wal, _temp_dir) = create_test_wal();
+    fn test_wal_batch_insert() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let (wal, _temp_dir) = create_test_wal()?;
 
         let entries = vec![
             BatchEntry {
@@ -1070,40 +1065,39 @@ mod tests {
             .append(WalEntry::BatchInsert {
                 collection: "test".to_string(),
                 entries,
-            })
-            .unwrap();
+            })?;
 
         assert_eq!(lsn, 1);
+        Ok(())
     }
 
     #[test]
-    fn test_wal_stats() {
-        let (wal, _temp_dir) = create_test_wal();
+    fn test_wal_stats() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let (wal, _temp_dir) = create_test_wal()?;
 
         wal.append(WalEntry::Insert {
             collection: "test".to_string(),
             id: "doc1".to_string(),
             vector: vec![0.1],
             metadata: None,
-        })
-        .unwrap();
+        })?;
 
         wal.append(WalEntry::Insert {
             collection: "test".to_string(),
             id: "doc2".to_string(),
             vector: vec![0.2],
             metadata: None,
-        })
-        .unwrap();
+        })?;
 
-        let stats = wal.stats().unwrap();
+        let stats = wal.stats()?;
         assert_eq!(stats.entries_written, 2);
         assert!(stats.bytes_written > 0);
         assert_eq!(stats.current_lsn, 2);
+        Ok(())
     }
 
     #[test]
-    fn test_wal_config_builder() {
+    fn test_wal_config_builder() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let config = WalConfig::new()
             .segment_size(128 * 1024 * 1024)
             .sync_on_write(true)
@@ -1114,10 +1108,11 @@ mod tests {
         assert!(config.sync_on_write);
         assert_eq!(config.max_segments, 5);
         assert!(config.compress);
+        Ok(())
     }
 
     #[test]
-    fn test_crc32_checksum() {
+    fn test_crc32_checksum() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let data = b"hello world";
         let checksum = crc32_checksum(data);
         assert_ne!(checksum, 0);
@@ -1127,86 +1122,85 @@ mod tests {
 
         // Different data should produce different checksum
         assert_ne!(checksum, crc32_checksum(b"hello worlD"));
+        Ok(())
     }
 
     #[test]
-    fn test_wal_transaction_markers() {
-        let (wal, temp_dir) = create_test_wal();
+    fn test_wal_transaction_markers() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let (wal, temp_dir) = create_test_wal()?;
 
         let txn_id = 12345;
 
-        wal.append(WalEntry::TxnBegin { txn_id }).unwrap();
+        wal.append(WalEntry::TxnBegin { txn_id })?;
 
         wal.append(WalEntry::Insert {
             collection: "test".to_string(),
             id: "doc1".to_string(),
             vector: vec![0.1],
             metadata: None,
-        })
-        .unwrap();
+        })?;
 
-        wal.append(WalEntry::TxnCommit { txn_id }).unwrap();
+        wal.append(WalEntry::TxnCommit { txn_id })?;
 
         // Sync and close before replaying
-        wal.sync().unwrap();
-        wal.close().unwrap();
+        wal.sync()?;
+        wal.close()?;
 
         // Reopen and replay
-        let wal2 = WalManager::open(temp_dir.path(), WalConfig::default()).unwrap();
+        let wal2 = WalManager::open(temp_dir.path(), WalConfig::default())?;
         let mut replayed = Vec::new();
         wal2.replay(1, |record| {
             replayed.push(record.entry);
             Ok(())
-        })
-        .unwrap();
+        })?;
 
         assert_eq!(replayed.len(), 3);
         assert!(matches!(replayed[0], WalEntry::TxnBegin { txn_id: 12345 }));
         assert!(matches!(replayed[2], WalEntry::TxnCommit { txn_id: 12345 }));
+        Ok(())
     }
 
     // ── Crash recovery tests ─────────────────────────────────────────────
 
     #[test]
-    fn test_wal_crash_then_replay() {
-        let temp_dir = TempDir::new().unwrap();
+    fn test_wal_crash_then_replay() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let temp_dir = TempDir::new()?;
 
         // Phase 1: write data, simulate crash (drop without checkpoint)
         {
-            let wal = WalManager::open(temp_dir.path(), WalConfig::default()).unwrap();
+            let wal = WalManager::open(temp_dir.path(), WalConfig::default())?;
             for i in 0..5 {
                 wal.append(WalEntry::Insert {
                     collection: "docs".to_string(),
                     id: format!("doc{}", i),
                     vector: vec![i as f32],
                     metadata: None,
-                })
-                .unwrap();
+                })?;
             }
-            wal.sync().unwrap();
-            wal.close().unwrap();
+            wal.sync()?;
+            wal.close()?;
             // "crash": drop without cleanup
         }
 
         // Phase 2: reopen and replay all entries
         {
-            let wal = WalManager::open(temp_dir.path(), WalConfig::default()).unwrap();
+            let wal = WalManager::open(temp_dir.path(), WalConfig::default())?;
             let mut count = 0;
             wal.replay(1, |_record| {
                 count += 1;
                 Ok(())
-            })
-            .unwrap();
+            })?;
             assert_eq!(count, 5, "All 5 entries should be replayed after crash");
         }
+        Ok(())
     }
 
     #[test]
-    fn test_wal_replay_from_checkpoint() {
-        let temp_dir = TempDir::new().unwrap();
+    fn test_wal_replay_from_checkpoint() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let temp_dir = TempDir::new()?;
 
         {
-            let wal = WalManager::open(temp_dir.path(), WalConfig::default()).unwrap();
+            let wal = WalManager::open(temp_dir.path(), WalConfig::default())?;
 
             // Write 3 entries before checkpoint
             for i in 0..3 {
@@ -1215,11 +1209,10 @@ mod tests {
                     id: format!("pre{}", i),
                     vector: vec![i as f32],
                     metadata: None,
-                })
-                .unwrap();
+                })?;
             }
 
-            let checkpoint_lsn = wal.checkpoint().unwrap();
+            let checkpoint_lsn = wal.checkpoint()?;
 
             // Write 2 entries after checkpoint
             for i in 0..2 {
@@ -1228,147 +1221,139 @@ mod tests {
                     id: format!("post{}", i),
                     vector: vec![i as f32],
                     metadata: None,
-                })
-                .unwrap();
+                })?;
             }
 
-            wal.sync().unwrap();
-            wal.close().unwrap();
+            wal.sync()?;
+            wal.close()?;
 
             // Replay only from checkpoint (should get checkpoint + 2 post entries)
-            let wal2 = WalManager::open(temp_dir.path(), WalConfig::default()).unwrap();
+            let wal2 = WalManager::open(temp_dir.path(), WalConfig::default())?;
             let mut replayed = Vec::new();
             wal2.replay(checkpoint_lsn, |record| {
                 replayed.push(record.entry.clone());
                 Ok(())
-            })
-            .unwrap();
+            })?;
 
             // Should replay entries at and after checkpoint_lsn
             assert!(!replayed.is_empty());
         }
+        Ok(())
     }
 
     #[test]
-    fn test_wal_corrupted_segment_stops_replay() {
-        let temp_dir = TempDir::new().unwrap();
+    fn test_wal_corrupted_segment_stops_replay() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let temp_dir = TempDir::new()?;
 
         // Write valid entries
         {
-            let wal = WalManager::open(temp_dir.path(), WalConfig::default()).unwrap();
+            let wal = WalManager::open(temp_dir.path(), WalConfig::default())?;
             wal.append(WalEntry::Insert {
                 collection: "test".to_string(),
                 id: "doc1".to_string(),
                 vector: vec![0.1],
                 metadata: None,
-            })
-            .unwrap();
-            wal.sync().unwrap();
-            wal.close().unwrap();
+            })?;
+            wal.sync()?;
+            wal.close()?;
         }
 
         // Corrupt the segment file by appending garbage
         let segment_files: Vec<_> = fs::read_dir(temp_dir.path())
-            .unwrap()
+            ?
             .filter_map(|e| e.ok())
             .filter(|e| e.path().extension().map(|ext| ext == "wal").unwrap_or(false))
             .collect();
 
         if let Some(seg) = segment_files.first() {
-            let mut file = OpenOptions::new().append(true).open(seg.path()).unwrap();
-            file.write_all(&[0xFF, 0xFF, 0x00, 0x00]).unwrap();
-            file.write_all(b"corrupted data here!!!").unwrap();
-            file.sync_all().unwrap();
+            let mut file = OpenOptions::new().append(true).open(seg.path())?;
+            file.write_all(&[0xFF, 0xFF, 0x00, 0x00])?;
+            file.write_all(b"corrupted data here!!!")?;
+            file.sync_all()?;
         }
 
         // Reopen WAL in a separate thread so panic doesn't affect test
         let path = temp_dir.path().to_path_buf();
-        let result = std::thread::spawn(move || {
-            let wal = WalManager::open(&path, WalConfig::default()).unwrap();
+        let result = std::thread::spawn(move || -> std::result::Result<usize, Box<dyn std::error::Error + Send + Sync>> {
+            let wal = WalManager::open(&path, WalConfig::default())?;
             let mut valid_count = 0;
             let _ = wal.replay(1, |_record| {
                 valid_count += 1;
                 Ok(())
             });
-            valid_count
+            Ok(valid_count)
         }).join();
 
         // Either we recovered entries or the thread panicked on corruption.
         // Count of 0 is also acceptable since corruption may prevent reading
         // any entries from the segment.
         match result {
-            Ok(_count) => { /* any count is acceptable with corruption */ }
-            Err(_) => { /* panic on corruption is acceptable */ }
+            Ok(Ok(_count)) => { /* any count is acceptable with corruption */ }
+            Ok(Err(_)) | Err(_) => { /* error or panic on corruption is acceptable */ }
         }
+        Ok(())
     }
 
     #[test]
-    fn test_wal_empty_replay() {
-        let (wal, _temp_dir) = create_test_wal();
+    fn test_wal_empty_replay() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let (wal, _temp_dir) = create_test_wal()?;
 
         let mut count = 0;
         wal.replay(1, |_| {
             count += 1;
             Ok(())
-        })
-        .unwrap();
+        })?;
 
         assert_eq!(count, 0, "Empty WAL should replay zero entries");
+        Ok(())
     }
 
     #[test]
-    fn test_wal_multiple_entry_types_replay() {
-        let (wal, temp_dir) = create_test_wal();
+    fn test_wal_multiple_entry_types_replay() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let (wal, temp_dir) = create_test_wal()?;
 
         wal.append(WalEntry::CreateCollection {
             name: "docs".to_string(),
             dimensions: 128,
             distance: "cosine".to_string(),
-        })
-        .unwrap();
+        })?;
 
         wal.append(WalEntry::Insert {
             collection: "docs".to_string(),
             id: "v1".to_string(),
             vector: vec![0.1; 128],
             metadata: Some(serde_json::json!({"key": "val"})),
-        })
-        .unwrap();
+        })?;
 
         wal.append(WalEntry::Update {
             collection: "docs".to_string(),
             id: "v1".to_string(),
             vector: vec![0.2; 128],
             metadata: None,
-        })
-        .unwrap();
+        })?;
 
         wal.append(WalEntry::Delete {
             collection: "docs".to_string(),
             id: "v1".to_string(),
-        })
-        .unwrap();
+        })?;
 
         wal.append(WalEntry::ClearCollection {
             collection: "docs".to_string(),
-        })
-        .unwrap();
+        })?;
 
         wal.append(WalEntry::DropCollection {
             name: "docs".to_string(),
-        })
-        .unwrap();
+        })?;
 
-        wal.sync().unwrap();
-        wal.close().unwrap();
+        wal.sync()?;
+        wal.close()?;
 
-        let wal2 = WalManager::open(temp_dir.path(), WalConfig::default()).unwrap();
+        let wal2 = WalManager::open(temp_dir.path(), WalConfig::default())?;
         let mut replayed = Vec::new();
         wal2.replay(1, |record| {
             replayed.push(record.entry);
             Ok(())
-        })
-        .unwrap();
+        })?;
 
         assert_eq!(replayed.len(), 6);
         assert!(matches!(replayed[0], WalEntry::CreateCollection { .. }));
@@ -1377,13 +1362,14 @@ mod tests {
         assert!(matches!(replayed[3], WalEntry::Delete { .. }));
         assert!(matches!(replayed[4], WalEntry::ClearCollection { .. }));
         assert!(matches!(replayed[5], WalEntry::DropCollection { .. }));
+        Ok(())
     }
 
     #[test]
-    fn test_wal_sync_on_write() {
-        let temp_dir = TempDir::new().unwrap();
+    fn test_wal_sync_on_write() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let temp_dir = TempDir::new()?;
         let config = WalConfig::new().sync_on_write(true);
-        let wal = WalManager::open(temp_dir.path(), config).unwrap();
+        let wal = WalManager::open(temp_dir.path(), config)?;
 
         let lsn = wal
             .append(WalEntry::Insert {
@@ -1391,128 +1377,132 @@ mod tests {
                 id: "doc1".to_string(),
                 vector: vec![0.1],
                 metadata: None,
-            })
-            .unwrap();
+            })?;
 
         // With sync_on_write, synced_lsn should be updated immediately
         assert_eq!(wal.synced_lsn(), lsn);
+        Ok(())
     }
 
     #[test]
-    fn test_wal_multiple_checkpoints() {
-        let (wal, _temp_dir) = create_test_wal();
+    fn test_wal_multiple_checkpoints() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let (wal, _temp_dir) = create_test_wal()?;
 
         wal.append(WalEntry::Insert {
             collection: "test".to_string(),
             id: "doc1".to_string(),
             vector: vec![0.1],
             metadata: None,
-        })
-        .unwrap();
+        })?;
 
-        let cp1 = wal.checkpoint().unwrap();
+        let cp1 = wal.checkpoint()?;
 
         wal.append(WalEntry::Insert {
             collection: "test".to_string(),
             id: "doc2".to_string(),
             vector: vec![0.2],
             metadata: None,
-        })
-        .unwrap();
+        })?;
 
-        let cp2 = wal.checkpoint().unwrap();
+        let cp2 = wal.checkpoint()?;
 
         assert!(cp2 > cp1, "Second checkpoint should have higher LSN");
         assert_eq!(wal.checkpoint_lsn(), cp2);
+        Ok(())
     }
 
     #[test]
-    fn test_crc32_deterministic() {
+    fn test_crc32_deterministic() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let data = b"test data for checksum";
         let c1 = crc32_checksum(data);
         let c2 = crc32_checksum(data);
         assert_eq!(c1, c2);
+        Ok(())
     }
 
     #[test]
-    fn test_crc32_empty_input() {
+    fn test_crc32_empty_input() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let checksum = crc32_checksum(b"");
         // CRC32 of empty input is 0 (initial value XOR'd)
         assert_eq!(checksum, 0);
+        Ok(())
     }
 
     // ── concurrent append + checkpoint ───────────────────────────────────
 
     #[test]
-    fn test_concurrent_append_and_checkpoint() {
-        let (wal, _temp_dir) = create_test_wal();
+    fn test_concurrent_append_and_checkpoint() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let (wal, _temp_dir) = create_test_wal()?;
         let wal = Arc::new(wal);
 
         let mut handles = Vec::new();
         for i in 0..10 {
             let wal = Arc::clone(&wal);
-            handles.push(std::thread::spawn(move || {
+            handles.push(std::thread::spawn(move || -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 wal.append(WalEntry::Insert {
                     collection: "test".to_string(),
                     id: format!("doc{i}"),
                     vector: vec![i as f32],
                     metadata: None,
-                }).unwrap();
+                })?;
+                Ok(())
             }));
         }
 
         for h in handles {
-            h.join().unwrap();
+            h.join().map_err(|_| "thread panicked".to_string())?.map_err(|e| e as Box<dyn std::error::Error>)?;
         }
 
         assert_eq!(wal.current_lsn(), 10);
-        let cp = wal.checkpoint().unwrap();
+        let cp = wal.checkpoint()?;
         assert!(cp > 0);
+        Ok(())
     }
 
     // ── WAL replay idempotency ───────────────────────────────────────────
 
     #[test]
-    fn test_wal_replay_idempotency() {
-        let (wal, temp_dir) = create_test_wal();
+    fn test_wal_replay_idempotency() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let (wal, temp_dir) = create_test_wal()?;
 
         wal.append(WalEntry::Insert {
             collection: "test".to_string(),
             id: "doc1".to_string(),
             vector: vec![0.1, 0.2],
             metadata: None,
-        }).unwrap();
+        })?;
         wal.append(WalEntry::Delete {
             collection: "test".to_string(),
             id: "doc1".to_string(),
-        }).unwrap();
+        })?;
 
-        wal.sync().unwrap();
-        wal.close().unwrap();
+        wal.sync()?;
+        wal.close()?;
 
-        let wal2 = WalManager::open(temp_dir.path(), WalConfig::default()).unwrap();
+        let wal2 = WalManager::open(temp_dir.path(), WalConfig::default())?;
 
         // Replay twice should produce same results
         let mut replayed1 = Vec::new();
         wal2.replay(1, |record| {
             replayed1.push(record.entry.clone());
             Ok(())
-        }).unwrap();
+        })?;
 
         let mut replayed2 = Vec::new();
         wal2.replay(1, |record| {
             replayed2.push(record.entry.clone());
             Ok(())
-        }).unwrap();
+        })?;
 
         assert_eq!(replayed1.len(), replayed2.len());
+        Ok(())
     }
 
     // ── WAL with many appends ────────────────────────────────────────────
 
     #[test]
-    fn test_wal_many_appends() {
-        let (wal, _temp_dir) = create_test_wal();
+    fn test_wal_many_appends() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let (wal, _temp_dir) = create_test_wal()?;
 
         for i in 0..100 {
             wal.append(WalEntry::Insert {
@@ -1520,68 +1510,72 @@ mod tests {
                 id: format!("doc{i}"),
                 vector: vec![i as f32],
                 metadata: None,
-            }).unwrap();
+            })?;
         }
 
         assert_eq!(wal.current_lsn(), 100);
-        wal.sync().unwrap();
+        wal.sync()?;
         assert_eq!(wal.synced_lsn(), 100);
+        Ok(())
     }
 
     // ── WAL delete entry ─────────────────────────────────────────────────
 
     #[test]
-    fn test_wal_delete_entry() {
-        let (wal, temp_dir) = create_test_wal();
+    fn test_wal_delete_entry() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let (wal, temp_dir) = create_test_wal()?;
 
         wal.append(WalEntry::Delete {
             collection: "test".to_string(),
             id: "doc1".to_string(),
-        }).unwrap();
+        })?;
 
-        wal.sync().unwrap();
-        wal.close().unwrap();
+        wal.sync()?;
+        wal.close()?;
 
-        let wal2 = WalManager::open(temp_dir.path(), WalConfig::default()).unwrap();
+        let wal2 = WalManager::open(temp_dir.path(), WalConfig::default())?;
         let mut replayed = Vec::new();
         wal2.replay(1, |record| {
             replayed.push(record.entry);
             Ok(())
-        }).unwrap();
+        })?;
 
         assert_eq!(replayed.len(), 1);
         assert!(matches!(replayed[0], WalEntry::Delete { .. }));
+        Ok(())
     }
 
     // ── WAL config with compression ──────────────────────────────────────
 
     #[test]
-    fn test_wal_config_compressed() {
+    fn test_wal_config_compressed() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let config = WalConfig::new()
             .compress(true)
             .sync_on_write(false);
         assert!(config.compress);
         assert!(!config.sync_on_write);
+        Ok(())
     }
 
     // ── concurrent reads during writes ───────────────────────────────────
 
     #[test]
-    fn test_concurrent_reads_and_writes() {
-        let (wal, _temp_dir) = create_test_wal();
+    fn test_concurrent_reads_and_writes() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let (wal, _temp_dir) = create_test_wal()?;
         let wal = Arc::new(wal);
 
         // Writer thread
         let wal_w = Arc::clone(&wal);
-        let writer = std::thread::spawn(move || {
+        let writer = std::thread::spawn(move || -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
             for i in 0..20 {
                 wal_w.append(WalEntry::Insert {
                     collection: "test".to_string(),
                     id: format!("doc{i}"),
                     vector: vec![i as f32],
                     metadata: None,
-                }).unwrap();
+                })?;
             }
+            Ok(())
         });
 
         // Reader thread (stats)
@@ -1593,187 +1587,196 @@ mod tests {
             }
         });
 
-        writer.join().unwrap();
-        reader.join().unwrap();
+        writer.join().map_err(|_| "thread panicked".to_string())?.map_err(|e| e as Box<dyn std::error::Error>)?;
+        reader.join().map_err(|_| "thread panicked".to_string())?;
         assert_eq!(wal.current_lsn(), 20);
+        Ok(())
     }
 
     // ── zero-length entry handling ───────────────────────────────────────
 
     #[test]
-    fn test_wal_empty_vector_insert() {
-        let (wal, _temp_dir) = create_test_wal();
+    fn test_wal_empty_vector_insert() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let (wal, _temp_dir) = create_test_wal()?;
 
         let lsn = wal.append(WalEntry::Insert {
             collection: "test".to_string(),
             id: "empty".to_string(),
             vector: vec![],
             metadata: None,
-        }).unwrap();
+        })?;
 
         assert_eq!(lsn, 1);
+        Ok(())
     }
 
     // ── checkpoint without any entries ────────────────────────────────────
 
     #[test]
-    fn test_wal_checkpoint_empty() {
-        let (wal, _temp_dir) = create_test_wal();
-        let cp = wal.checkpoint().unwrap();
+    fn test_wal_checkpoint_empty() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let (wal, _temp_dir) = create_test_wal()?;
+        let cp = wal.checkpoint()?;
         // Checkpoint on empty WAL still produces a valid checkpoint LSN
         assert!(cp >= 0);
+        Ok(())
     }
 
     // ── Update entry replay ──────────────────────────────────────────────
 
     #[test]
-    fn test_wal_update_entry() {
-        let (wal, temp_dir) = create_test_wal();
+    fn test_wal_update_entry() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let (wal, temp_dir) = create_test_wal()?;
         wal.append(WalEntry::Update {
             collection: "test".to_string(),
             id: "doc1".to_string(),
             vector: vec![0.5, 0.6],
             metadata: Some(serde_json::json!({"updated": true})),
-        }).unwrap();
-        wal.sync().unwrap();
-        wal.close().unwrap();
+        })?;
+        wal.sync()?;
+        wal.close()?;
 
-        let wal2 = WalManager::open(temp_dir.path(), WalConfig::default()).unwrap();
+        let wal2 = WalManager::open(temp_dir.path(), WalConfig::default())?;
         let mut replayed = Vec::new();
         wal2.replay(1, |record| {
             replayed.push(record.entry);
             Ok(())
-        }).unwrap();
+        })?;
         assert_eq!(replayed.len(), 1);
         assert!(matches!(replayed[0], WalEntry::Update { .. }));
+        Ok(())
     }
 
     // ── DropCollection entry ─────────────────────────────────────────────
 
     #[test]
-    fn test_wal_drop_collection_entry() {
-        let (wal, temp_dir) = create_test_wal();
+    fn test_wal_drop_collection_entry() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let (wal, temp_dir) = create_test_wal()?;
         wal.append(WalEntry::DropCollection {
             name: "to_drop".to_string(),
-        }).unwrap();
-        wal.sync().unwrap();
-        wal.close().unwrap();
+        })?;
+        wal.sync()?;
+        wal.close()?;
 
-        let wal2 = WalManager::open(temp_dir.path(), WalConfig::default()).unwrap();
+        let wal2 = WalManager::open(temp_dir.path(), WalConfig::default())?;
         let mut replayed = Vec::new();
         wal2.replay(1, |record| {
             replayed.push(record.entry);
             Ok(())
-        }).unwrap();
+        })?;
         assert!(matches!(replayed[0], WalEntry::DropCollection { .. }));
+        Ok(())
     }
 
     // ── ClearCollection entry ────────────────────────────────────────────
 
     #[test]
-    fn test_wal_clear_collection_entry() {
-        let (wal, _temp_dir) = create_test_wal();
+    fn test_wal_clear_collection_entry() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let (wal, _temp_dir) = create_test_wal()?;
         let lsn = wal.append(WalEntry::ClearCollection {
             collection: "test".to_string(),
-        }).unwrap();
+        })?;
         assert!(lsn > 0);
+        Ok(())
     }
 
     // ── truncate after checkpoint ────────────────────────────────────────
 
     #[test]
-    fn test_wal_truncate_after_checkpoint() {
-        let (wal, _temp_dir) = create_test_wal();
+    fn test_wal_truncate_after_checkpoint() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let (wal, _temp_dir) = create_test_wal()?;
         for i in 0..5 {
             wal.append(WalEntry::Insert {
                 collection: "test".to_string(),
                 id: format!("doc{i}"),
                 vector: vec![i as f32],
                 metadata: None,
-            }).unwrap();
+            })?;
         }
-        let cp = wal.checkpoint().unwrap();
+        let cp = wal.checkpoint()?;
         let result = wal.truncate(cp);
         // Truncate should succeed or be no-op
         let _ = result;
         assert!(wal.current_lsn() >= 5);
+        Ok(())
     }
 
     // ── large payload ────────────────────────────────────────────────────
 
     #[test]
-    fn test_wal_large_vector_payload() {
-        let (wal, temp_dir) = create_test_wal();
+    fn test_wal_large_vector_payload() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let (wal, temp_dir) = create_test_wal()?;
         let large_vector: Vec<f32> = (0..1024).map(|i| i as f32).collect();
         wal.append(WalEntry::Insert {
             collection: "test".to_string(),
             id: "large".to_string(),
             vector: large_vector.clone(),
             metadata: Some(serde_json::json!({"dim": 1024})),
-        }).unwrap();
-        wal.sync().unwrap();
-        wal.close().unwrap();
+        })?;
+        wal.sync()?;
+        wal.close()?;
 
-        let wal2 = WalManager::open(temp_dir.path(), WalConfig::default()).unwrap();
+        let wal2 = WalManager::open(temp_dir.path(), WalConfig::default())?;
         let mut replayed = Vec::new();
         wal2.replay(1, |record| {
             replayed.push(record.entry);
             Ok(())
-        }).unwrap();
+        })?;
         match &replayed[0] {
             WalEntry::Insert { vector, .. } => assert_eq!(vector.len(), 1024),
-            _ => panic!("Expected Insert entry"),
+            other => unreachable!("Expected Insert entry, got {:?}", other),
         }
+        Ok(())
     }
 
     // ── interleaved collection operations ────────────────────────────────
 
     #[test]
-    fn test_wal_interleaved_operations() {
-        let (wal, temp_dir) = create_test_wal();
+    fn test_wal_interleaved_operations() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let (wal, temp_dir) = create_test_wal()?;
         wal.append(WalEntry::CreateCollection {
             name: "coll1".to_string(),
             dimensions: 4,
             distance: "cosine".to_string(),
-        }).unwrap();
+        })?;
         wal.append(WalEntry::Insert {
             collection: "coll1".to_string(),
             id: "d1".to_string(),
             vector: vec![1.0, 0.0, 0.0, 0.0],
             metadata: None,
-        }).unwrap();
+        })?;
         wal.append(WalEntry::CreateCollection {
             name: "coll2".to_string(),
             dimensions: 8,
             distance: "euclidean".to_string(),
-        }).unwrap();
+        })?;
         wal.append(WalEntry::Insert {
             collection: "coll2".to_string(),
             id: "d2".to_string(),
             vector: vec![0.0; 8],
             metadata: None,
-        }).unwrap();
+        })?;
         wal.append(WalEntry::Delete {
             collection: "coll1".to_string(),
             id: "d1".to_string(),
-        }).unwrap();
-        wal.sync().unwrap();
-        wal.close().unwrap();
+        })?;
+        wal.sync()?;
+        wal.close()?;
 
-        let wal2 = WalManager::open(temp_dir.path(), WalConfig::default()).unwrap();
+        let wal2 = WalManager::open(temp_dir.path(), WalConfig::default())?;
         let mut replayed = Vec::new();
         wal2.replay(1, |record| {
             replayed.push(record.entry);
             Ok(())
-        }).unwrap();
+        })?;
         assert_eq!(replayed.len(), 5);
+        Ok(())
     }
 
     // ── WAL record LSN ordering ──────────────────────────────────────────
 
     #[test]
-    fn test_wal_lsn_monotonic() {
-        let (wal, _temp_dir) = create_test_wal();
+    fn test_wal_lsn_monotonic() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let (wal, _temp_dir) = create_test_wal()?;
         let mut prev_lsn = 0;
         for i in 0..10 {
             let lsn = wal.append(WalEntry::Insert {
@@ -1781,37 +1784,39 @@ mod tests {
                 id: format!("d{i}"),
                 vector: vec![i as f32],
                 metadata: None,
-            }).unwrap();
+            })?;
             assert!(lsn > prev_lsn);
             prev_lsn = lsn;
         }
+        Ok(())
     }
 
     // ── replay from specific LSN ─────────────────────────────────────────
 
     #[test]
-    fn test_wal_replay_from_middle() {
-        let (wal, temp_dir) = create_test_wal();
+    fn test_wal_replay_from_middle() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let (wal, temp_dir) = create_test_wal()?;
         for i in 0..5 {
             wal.append(WalEntry::Insert {
                 collection: "test".to_string(),
                 id: format!("d{i}"),
                 vector: vec![i as f32],
                 metadata: None,
-            }).unwrap();
+            })?;
         }
-        wal.sync().unwrap();
-        wal.close().unwrap();
+        wal.sync()?;
+        wal.close()?;
 
-        let wal2 = WalManager::open(temp_dir.path(), WalConfig::default()).unwrap();
+        let wal2 = WalManager::open(temp_dir.path(), WalConfig::default())?;
         let mut replayed = Vec::new();
         wal2.replay(3, |record| {
             replayed.push(record.lsn);
             Ok(())
-        }).unwrap();
+        })?;
         // Should only get entries from LSN 3 onwards
         for &lsn in &replayed {
             assert!(lsn >= 3);
         }
+        Ok(())
     }
 }
