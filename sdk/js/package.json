@@ -1,18 +1,30 @@
 {
   "name": "@anthropic/needle",
   "version": "0.1.0",
-  "description": "Browser-native vector database SDK with IndexedDB persistence",
+  "description": "Embedded vector database for JavaScript — WASM-powered with IndexedDB persistence",
   "main": "dist/needle.js",
   "module": "dist/needle.mjs",
   "types": "dist/needle.d.ts",
-  "files": ["dist/", "README.md"],
+  "files": ["dist/", "pkg/", "README.md"],
   "scripts": {
-    "build": "tsc",
-    "typecheck": "tsc --noEmit"
+    "build": "npm run build:wasm && tsc",
+    "build:wasm": "wasm-pack build ../../ --target bundler --features wasm --out-dir sdk/js/pkg --scope anthropic",
+    "build:web": "wasm-pack build ../../ --target web --features wasm --out-dir sdk/js/pkg-web",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist/ pkg/ pkg-web/"
   },
-  "keywords": ["vector", "database", "search", "embeddings", "wasm", "browser"],
+  "keywords": ["vector", "database", "search", "embeddings", "wasm", "browser", "ai", "hnsw"],
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/anthropics/needle",
+    "directory": "sdk/js"
+  },
+  "homepage": "https://needle.dev",
   "devDependencies": {
     "typescript": "^5.0.0"
+  },
+  "engines": {
+    "node": ">=18"
   }
 }
