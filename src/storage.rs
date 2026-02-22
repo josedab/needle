@@ -727,7 +727,13 @@ impl VectorStore {
             NeedleError::Corruption("Invalid vector store: dimensions bytes".into())
         })?) as usize;
 
-        let expected_size = 12 + count * dimensions * 4;
+        let expected_size = count
+            .checked_mul(dimensions)
+            .and_then(|v| v.checked_mul(4))
+            .and_then(|v| v.checked_add(12))
+            .ok_or_else(|| {
+                NeedleError::Corruption("Vector data size overflow".into())
+            })?;
         if bytes.len() < expected_size {
             return Err(NeedleError::Corruption("Incomplete vector data".into()));
         }
