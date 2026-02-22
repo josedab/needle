@@ -1,7 +1,7 @@
 {
   "name": "Needle Dev",
   "image": "mcr.microsoft.com/devcontainers/rust:1",
-  "postCreateCommand": "rustup install 1.85 && rustup default 1.85 && cargo build && cargo test --lib",
+  "postCreateCommand": "rustup install 1.85 && rustup default 1.85 && make setup && cargo check --features full && cargo test --lib",
   "postStartCommand": "cargo install cargo-watch",
   "forwardPorts": [8080],
   "customizations": {
