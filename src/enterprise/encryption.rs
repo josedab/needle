@@ -60,8 +60,8 @@ impl Default for EncryptionConfig {
             algorithm: EncryptionAlgorithm::AES256GCM,
             key_size: 256,
             searchable: true,
-            noise_level: 0.01,
-            projection_dims: 64,
+            noise_level: 0.1,
+            projection_dims: 128,
         }
     }
 }
@@ -162,7 +162,7 @@ impl KeyManager {
     }
 
     /// Initialize random projection matrix.
-    pub fn init_projection(&mut self, input_dims: usize, output_dims: usize) {
+    pub fn init_projection(&mut self, input_dims: usize, output_dims: usize) -> Result<()> {
         type HmacSha256 = hmac::Hmac<Sha256>;
 
         let mut matrix = Vec::with_capacity(output_dims);
@@ -173,7 +173,7 @@ impl KeyManager {
                 // Deterministic random based on master key via HMAC-SHA256
                 let msg = format!("projection:{}:{}", i, j);
                 let mut mac = <HmacSha256 as Mac>::new_from_slice(&self.master_key.bytes)
-                    .expect("HMAC accepts any key length");
+                    .map_err(|_| NeedleError::Encryption("Invalid HMAC key length".into()))?;
                 mac.update(msg.as_bytes());
                 let result = mac.finalize().into_bytes();
 
@@ -194,6 +194,7 @@ impl KeyManager {
         }
 
         self.projection_matrix = Some(matrix);
+        Ok(())
     }
 
     /// Get projection matrix.
@@ -493,9 +494,9 @@ impl VectorEncryptor {
     }
 
     /// Initialize for a given vector dimension.
-    pub fn initialize(&mut self, input_dims: usize) {
+    pub fn initialize(&mut self, input_dims: usize) -> Result<()> {
         self.key_manager
-            .init_projection(input_dims, self.config.projection_dims);
+            .init_projection(input_dims, self.config.projection_dims)
     }
 }
 
@@ -866,7 +867,7 @@ mod tests {
     #[test]
     fn test_searchable_embedding() {
         let mut encryptor = create_encryptor();
-        encryptor.initialize(4);
+        encryptor.initialize(4).unwrap();
 
         let encrypted = encryptor
             .encrypt("vec1", &[1.0, 2.0, 3.0, 4.0], HashMap::new())
@@ -878,7 +879,7 @@ mod tests {
     #[test]
     fn test_search_encrypted() {
         let mut encryptor = create_encryptor();
-        encryptor.initialize(4);
+        encryptor.initialize(4).unwrap();
 
         let vectors = [
             ([1.0, 0.0, 0.0, 0.0], "a"),
@@ -914,7 +915,7 @@ mod tests {
         let key = vec![0u8; 32];
         let mut manager = KeyManager::new(&key).unwrap();
 
-        manager.init_projection(128, 32);
+        manager.init_projection(128, 32).unwrap();
 
         let matrix = manager.projection_matrix().unwrap();
         assert_eq!(matrix.len(), 32);
@@ -972,7 +973,7 @@ mod tests {
     fn test_noise_addition() {
         let mut encryptor = create_encryptor();
         encryptor.config.noise_level = 0.1;
-        encryptor.initialize(4);
+        encryptor.initialize(4).unwrap();
 
         // Encrypt same vector twice - search embeddings should differ slightly
         let encrypted1 = encryptor
