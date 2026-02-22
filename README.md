@@ -699,6 +699,18 @@ make check          # or: just check
 cargo test --features full
 ```
 
+### Testing shortcuts
+
+| Command | Description |
+|---------|-------------|
+| `make test-unit` | Unit tests only (`cargo test --lib`) — fastest feedback |
+| `make test-integration` | Integration tests with all features enabled |
+| `make test-changed` | Run tests only for modules you've modified (git-aware) |
+| `make test-single NAME=x` | Run a single test by name with output (`--nocapture`) |
+| `make test-watch` | Re-run unit tests on every file save (TDD workflow, requires `cargo-watch`) |
+
+> **Coverage targets:** 75% project / 80% per-patch (configured in [`codecov.yml`](codecov.yml)).
+
 ## Benchmarks
 
 Run benchmarks:
