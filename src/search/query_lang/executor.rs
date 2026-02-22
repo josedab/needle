@@ -367,3 +367,10 @@ impl QueryExecutor {
         Self::build_filter(&where_clause.expression, context)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // TODO: Add tests for this module
+}

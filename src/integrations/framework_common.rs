@@ -107,3 +107,10 @@ pub(crate) fn distance_to_score(distance: f32, distance_fn: DistanceFunction) ->
         DistanceFunction::DotProduct => (distance + 1.0) / 2.0,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // TODO: Add tests for this module
+}

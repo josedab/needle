@@ -233,3 +233,10 @@ impl Default for QuerySession {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // TODO: Add tests for this module
+}

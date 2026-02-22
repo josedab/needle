@@ -150,3 +150,10 @@ pub struct FederationHealth {
     pub unhealthy_instances: usize,
     pub avg_latency_ms: f64,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // TODO: Add tests for this module
+}

@@ -399,3 +399,10 @@ pub use crate::wal::{Lsn, WalConfig, WalManager, WalStats};
 pub use crate::zero_copy::{
     ArrowBatch, ArrowField, SharedMemoryHandle, VectorBatch, ZeroCopyBuffer,
 };
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // TODO: Add tests for this module
+}

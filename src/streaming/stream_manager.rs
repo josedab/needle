@@ -425,3 +425,10 @@ pub struct StreamStats {
     /// Number of active change streams
     pub active_streams: usize,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // TODO: Add tests for this module
+}

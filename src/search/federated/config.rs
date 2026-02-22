@@ -111,3 +111,10 @@ pub enum MergeStrategy {
     /// Consensus-based (deduplicate by ID)
     Consensus,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // TODO: Add tests for this module
+}

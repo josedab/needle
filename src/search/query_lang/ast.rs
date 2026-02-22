@@ -199,3 +199,10 @@ pub enum SortOrder {
     Asc,
     Desc,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // TODO: Add tests for this module
+}

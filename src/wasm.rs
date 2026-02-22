@@ -2120,3 +2120,10 @@ export function useNeedleDb(dbName: string) {
 "#
     .to_string()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // TODO: Add tests for this module
+}

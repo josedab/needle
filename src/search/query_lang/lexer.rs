@@ -376,3 +376,10 @@ impl Lexer {
         token
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // TODO: Add tests for this module
+}

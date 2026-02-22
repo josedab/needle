@@ -32,3 +32,10 @@ pub use crate::streaming::{
     ResumeToken, StreamError, StreamManager, StreamManagerConfig, StreamResult, StreamStats,
     Subscriber,
 };
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // TODO: Add tests for this module
+}

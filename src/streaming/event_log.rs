@@ -348,3 +348,10 @@ impl EventLogSnapshot {
         self.events.is_empty()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // TODO: Add tests for this module
+}
