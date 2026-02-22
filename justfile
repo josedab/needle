@@ -62,6 +62,15 @@ test-watch:
     fi
     cargo watch -x 'test --lib'
 
+# Continuous clippy lint on save (requires: cargo install cargo-watch)
+lint-watch:
+    #!/usr/bin/env bash
+    if ! command -v cargo-watch &> /dev/null; then
+        echo "Error: cargo-watch not found. Install with: cargo install cargo-watch"
+        exit 1
+    fi
+    cargo watch -x 'clippy --all-targets --features full -- -D warnings'
+
 # Full pre-commit check: format, lint, test
 check: fmt-check lint test
 
@@ -112,7 +121,22 @@ serve:
     @echo "Starting Needle server on 127.0.0.1:{{ env_var_or_default("NEEDLE_PORT", "8080") }}"
     @echo "Tip: change port with NEEDLE_PORT={{ env_var_or_default("NEEDLE_PORT", "9090") }} just serve"
     @echo "Tip: RUST_LOG=debug just serve (for verbose logging)"
+    @echo "Tip: 'just serve-env' to auto-load .env before starting"
     RUST_LOG={{ env_var_or_default("RUST_LOG", "info") }} cargo run --features server -- serve -a 127.0.0.1:{{ env_var_or_default("NEEDLE_PORT", "8080") }}
+
+# Run HTTP server with .env auto-loaded
+serve-env:
+    #!/usr/bin/env bash
+    if [ -f .env ]; then
+        echo "Loading .env…"
+        set -a && source .env && set +a
+    elif [ -f .env.example ]; then
+        echo "No .env found — loading .env.example as fallback"
+        set -a && source .env.example && set +a
+    else
+        echo "No .env or .env.example found — starting with defaults"
+    fi
+    RUST_LOG="${RUST_LOG:-info}" cargo run --features server -- serve -a "${NEEDLE_ADDRESS:-127.0.0.1:${NEEDLE_PORT:-8080}}"
 
 # Run the quickstart demo (builds, seeds, searches)
 demo:

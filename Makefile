@@ -2,7 +2,7 @@
 # Usage: make <recipe>
 
 .PHONY: help quick check check-all build build-all build-release test test-unit test-integration \
-        fmt fmt-check lint lint-fix lint-dirty lint-new watch test-watch serve demo doctor doc bench clean playground setup setup-tools dev test-single coverage \
+        fmt fmt-check lint lint-fix lint-dirty lint-new watch test-watch lint-watch serve serve-env demo doctor doc bench clean playground setup setup-tools dev test-single coverage \
         new-module verify-docs check-quick check-local test-feature count-debt test-changed open-docs \
         docker-up docker-down docker-build docker-logs test-coverage-check
 
@@ -32,7 +32,9 @@ help:
 	@echo "  make lint-new      — Lint filtering out known service/experimental warnings"
 	@echo "  make watch         — Continuous check on file changes (requires cargo-watch)"
 	@echo "  make test-watch    — Continuous test on save — TDD workflow (requires cargo-watch)"
+	@echo "  make lint-watch    — Continuous clippy lint on save (requires cargo-watch)"
 	@echo "  make serve         — Run HTTP server locally (NEEDLE_PORT=9090 make serve)"
+	@echo "  make serve-env     — Run HTTP server with .env auto-loaded"
 	@echo "  make demo          — Run quickstart demo"
 	@echo "  make doctor        — Check local environment"
 	@echo "  make doc           — Generate and open documentation"
@@ -193,6 +195,11 @@ test-watch:
 	@command -v cargo-watch > /dev/null 2>&1 || { echo "Error: cargo-watch not found. Install with: cargo install cargo-watch"; exit 1; }
 	cargo watch -x 'test --lib'
 
+# Continuous clippy lint on save (requires: cargo install cargo-watch)
+lint-watch:
+	@command -v cargo-watch > /dev/null 2>&1 || { echo "Error: cargo-watch not found. Install with: cargo install cargo-watch"; exit 1; }
+	cargo watch -x 'clippy --all-targets --features full -- -D warnings'
+
 NEEDLE_PORT ?= 8080
 RUST_LOG ?= info
 
@@ -200,7 +207,23 @@ serve:
 	@echo "Starting Needle server on 127.0.0.1:$(NEEDLE_PORT)"
 	@echo "Tip: change port with NEEDLE_PORT=9090 make serve"
 	@echo "Tip: RUST_LOG=debug make serve (for verbose logging)"
+	@echo "Tip: 'make serve-env' to auto-load .env before starting"
 	RUST_LOG=$(RUST_LOG) cargo run --features server -- serve -a 127.0.0.1:$(NEEDLE_PORT)
+
+# Start server with .env file loaded (sources .env.example as fallback if .env doesn't exist)
+serve-env:
+	@if [ -f .env ]; then \
+		echo "Loading .env…"; \
+		set -a && . ./.env && set +a && \
+		RUST_LOG=$${RUST_LOG:-info} cargo run --features server -- serve -a $${NEEDLE_ADDRESS:-127.0.0.1:$(NEEDLE_PORT)}; \
+	elif [ -f .env.example ]; then \
+		echo "No .env found — loading .env.example as fallback"; \
+		set -a && . ./.env.example && set +a && \
+		RUST_LOG=$${RUST_LOG:-info} cargo run --features server -- serve -a $${NEEDLE_ADDRESS:-127.0.0.1:$(NEEDLE_PORT)}; \
+	else \
+		echo "No .env or .env.example found — starting with defaults"; \
+		$(MAKE) serve; \
+	fi
 
 demo:
 	./scripts/quickstart.sh
