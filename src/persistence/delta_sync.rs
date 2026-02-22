@@ -372,7 +372,7 @@ mod tests {
                 assert_eq!(delta.entry_count, 5);
                 assert_eq!(delta.from_lsn, 6);
             }
-            other => panic!("Expected Delta, got {:?}", other),
+            other => unreachable!("Expected Delta, got {:?}", other),
         }
     }
 
@@ -387,7 +387,7 @@ mod tests {
             SyncResponse::UpToDate { current_lsn } => {
                 assert_eq!(current_lsn, 5);
             }
-            other => panic!("Expected UpToDate, got {:?}", other),
+            other => unreachable!("Expected UpToDate, got {:?}", other),
         }
     }
 
@@ -402,7 +402,7 @@ mod tests {
             SyncResponse::SnapshotRequired { replica_lsn, .. } => {
                 assert_eq!(replica_lsn, 1);
             }
-            other => panic!("Expected SnapshotRequired, got {:?}", other),
+            other => unreachable!("Expected SnapshotRequired, got {:?}", other),
         }
     }
 

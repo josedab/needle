@@ -686,7 +686,7 @@ mod tests {
                 assert_eq!(success, 1);
                 assert_eq!(total, 4);
             }
-            other => panic!("Expected PartialResults, got {:?}", other),
+            other => unreachable!("Expected PartialResults, got {:?}", other),
         }
     }
 
