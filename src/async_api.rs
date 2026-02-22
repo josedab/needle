@@ -1161,10 +1161,10 @@ mod tests {
     use serde_json::json;
 
     #[tokio::test]
-    async fn test_async_database_in_memory() {
+    async fn test_async_database_in_memory() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let db = AsyncDatabase::in_memory();
 
-        db.create_collection("documents", 128).await.unwrap();
+        db.create_collection("documents", 128).await?;
 
         let vec = random_vector(128);
         db.insert(
@@ -1173,36 +1173,36 @@ mod tests {
             vec.clone(),
             Some(json!({"title": "Test"})),
         )
-        .await
-        .unwrap();
+        .await?;
 
         assert_eq!(db.count("documents").await, 1);
+        Ok(())
     }
 
     #[tokio::test]
-    async fn test_async_search() {
+    async fn test_async_search() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let db = AsyncDatabase::in_memory();
-        db.create_collection("test", 32).await.unwrap();
+        db.create_collection("test", 32).await?;
 
         // Insert vectors
         for i in 0..100 {
             let vec = random_vector(32);
             db.insert("test", format!("doc{}", i), vec, Some(json!({"index": i})))
-                .await
-                .unwrap();
+                .await?;
         }
 
         // Search
         let query = random_vector(32);
-        let results = db.search("test", query, 10).await.unwrap();
+        let results = db.search("test", query, 10).await?;
 
         assert_eq!(results.len(), 10);
+        Ok(())
     }
 
     #[tokio::test]
-    async fn test_async_search_with_filter() {
+    async fn test_async_search_with_filter() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let db = AsyncDatabase::in_memory();
-        db.create_collection("test", 32).await.unwrap();
+        db.create_collection("test", 32).await?;
 
         // Insert vectors with category metadata
         for i in 0..100 {
@@ -1214,8 +1214,7 @@ mod tests {
                 vec,
                 Some(json!({"index": i, "category": category})),
             )
-            .await
-            .unwrap();
+            .await?;
         }
 
         // Search with filter
@@ -1223,130 +1222,131 @@ mod tests {
         let filter = Filter::eq("category", "even");
         let results = db
             .search_with_filter("test", query, 10, filter)
-            .await
-            .unwrap();
+            .await?;
 
         // All results should have category "even"
         for result in &results {
-            let meta = result.metadata.as_ref().unwrap();
+            let meta = result.metadata.as_ref().ok_or("missing metadata")?;
             assert_eq!(meta["category"], "even");
         }
+        Ok(())
     }
 
     #[tokio::test]
-    async fn test_async_batch_search() {
+    async fn test_async_batch_search() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let db = AsyncDatabase::in_memory();
-        db.create_collection("test", 32).await.unwrap();
+        db.create_collection("test", 32).await?;
 
         // Insert vectors
         for i in 0..100 {
             let vec = random_vector(32);
             db.insert("test", format!("doc{}", i), vec, None)
-                .await
-                .unwrap();
+                .await?;
         }
 
         // Batch search
         let queries: Vec<Vec<f32>> = (0..5).map(|_| random_vector(32)).collect();
-        let results = db.batch_search("test", queries, 10).await.unwrap();
+        let results = db.batch_search("test", queries, 10).await?;
 
         assert_eq!(results.len(), 5);
         for result_set in &results {
             assert_eq!(result_set.len(), 10);
         }
+        Ok(())
     }
 
     #[tokio::test]
-    async fn test_async_get_and_delete() {
+    async fn test_async_get_and_delete() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let db = AsyncDatabase::in_memory();
-        db.create_collection("test", 32).await.unwrap();
+        db.create_collection("test", 32).await?;
 
         let vec = random_vector(32);
         db.insert("test", "doc1", vec.clone(), Some(json!({"title": "Test"})))
-            .await
-            .unwrap();
+            .await?;
 
         // Get
-        let (retrieved_vec, metadata) = db.get("test", "doc1").await.unwrap();
+        let (retrieved_vec, metadata) = db.get("test", "doc1").await.ok_or("vector not found")?;
         assert_eq!(retrieved_vec, vec);
-        assert_eq!(metadata.unwrap()["title"], "Test");
+        assert_eq!(metadata.ok_or("missing metadata")?["title"], "Test");
 
         // Delete
-        assert!(db.delete("test", "doc1").await.unwrap());
+        assert!(db.delete("test", "doc1").await?);
         assert!(db.get("test", "doc1").await.is_none());
+        Ok(())
     }
 
     #[tokio::test]
-    async fn test_async_batch_operations() {
+    async fn test_async_batch_operations() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let db = AsyncDatabase::in_memory();
-        db.create_collection("test", 32).await.unwrap();
+        db.create_collection("test", 32).await?;
 
         // Batch insert
         let entries: Vec<(String, Vec<f32>, Option<Value>)> = (0..10)
             .map(|i| (format!("doc{}", i), random_vector(32), None))
             .collect();
-        db.batch_insert("test", entries).await.unwrap();
+        db.batch_insert("test", entries).await?;
 
         assert_eq!(db.count("test").await, 10);
 
         // Batch delete
         let ids: Vec<String> = (0..5).map(|i| format!("doc{}", i)).collect();
-        let deleted = db.batch_delete("test", ids).await.unwrap();
+        let deleted = db.batch_delete("test", ids).await?;
 
         assert_eq!(deleted, 5);
         assert_eq!(db.count("test").await, 5);
+        Ok(())
     }
 
     #[tokio::test]
-    async fn test_async_export() {
+    async fn test_async_export() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let db = AsyncDatabase::in_memory();
-        db.create_collection("test", 32).await.unwrap();
+        db.create_collection("test", 32).await?;
 
         for i in 0..10 {
             let vec = random_vector(32);
             db.insert("test", format!("doc{}", i), vec, Some(json!({"i": i})))
-                .await
-                .unwrap();
+                .await?;
         }
 
-        let entries = db.export("test").await.unwrap();
+        let entries = db.export("test").await?;
         assert_eq!(entries.len(), 10);
+        Ok(())
     }
 
     #[tokio::test]
-    async fn test_async_stream_export() {
+    async fn test_async_stream_export() -> std::result::Result<(), Box<dyn std::error::Error>> {
         use futures::StreamExt;
 
         let db = AsyncDatabase::in_memory();
-        db.create_collection("test", 32).await.unwrap();
+        db.create_collection("test", 32).await?;
 
         for i in 0..25 {
             let vec = random_vector(32);
             db.insert("test", format!("doc{}", i), vec, None)
-                .await
-                .unwrap();
+                .await?;
         }
 
-        let mut stream = db.stream_export("test", 10).await.unwrap();
+        let mut stream = db.stream_export("test", 10).await?;
         let mut total = 0;
         let mut batch_count = 0;
 
         while let Some(batch) = stream.next().await {
-            let entries = batch.unwrap();
+            let entries = batch?;
             total += entries.len();
             batch_count += 1;
         }
 
         assert_eq!(total, 25);
         assert_eq!(batch_count, 3); // 10 + 10 + 5
+        Ok(())
     }
 
     #[tokio::test]
-    async fn test_async_collection_operations() {
+    async fn test_async_collection_operations() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let db = AsyncDatabase::in_memory();
 
-        db.create_collection("col1", 64).await.unwrap();
-        db.create_collection("col2", 128).await.unwrap();
+        db.create_collection("col1", 64).await?;
+        db.create_collection("col2", 128).await?;
 
         let collections = db.list_collections().await;
         assert_eq!(collections.len(), 2);
@@ -1355,43 +1355,43 @@ mod tests {
         assert!(db.has_collection("col2").await);
         assert!(!db.has_collection("col3").await);
 
-        db.drop_collection("col1").await.unwrap();
+        db.drop_collection("col1").await?;
         assert!(!db.has_collection("col1").await);
+        Ok(())
     }
 
     #[tokio::test]
-    async fn test_async_compact() {
+    async fn test_async_compact() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let db = AsyncDatabase::in_memory();
-        db.create_collection("test", 32).await.unwrap();
+        db.create_collection("test", 32).await?;
 
         // Insert and delete some vectors
         for i in 0..10 {
             let vec = random_vector(32);
             db.insert("test", format!("doc{}", i), vec, None)
-                .await
-                .unwrap();
+                .await?;
         }
 
         for i in 0..5 {
-            db.delete("test", &format!("doc{}", i)).await.unwrap();
+            db.delete("test", &format!("doc{}", i)).await?;
         }
 
         // Compact
-        let removed = db.compact("test").await.unwrap();
+        let removed = db.compact("test").await?;
         assert_eq!(removed, 5);
+        Ok(())
     }
 
     #[tokio::test]
-    async fn test_batch_operation_builder() {
+    async fn test_batch_operation_builder() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let db = AsyncDatabase::in_memory();
-        db.create_collection("test", 32).await.unwrap();
+        db.create_collection("test", 32).await?;
 
         // Insert some initial vectors
         for i in 0..5 {
             let vec = random_vector(32);
             db.insert("test", format!("doc{}", i), vec, None)
-                .await
-                .unwrap();
+                .await?;
         }
 
         // Use batch builder
@@ -1401,35 +1401,35 @@ mod tests {
             .delete("doc0")
             .delete("doc1")
             .execute()
-            .await
-            .unwrap();
+            .await?;
 
         assert_eq!(result.inserted, 2);
         assert_eq!(result.deleted, 2);
         assert!(result.is_success());
         assert_eq!(db.count("test").await, 5); // 5 - 2 + 2 = 5
+        Ok(())
     }
 
     #[tokio::test]
-    async fn test_async_ids() {
+    async fn test_async_ids() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let db = AsyncDatabase::in_memory();
-        db.create_collection("test", 32).await.unwrap();
+        db.create_collection("test", 32).await?;
 
         for i in 0..10 {
             let vec = random_vector(32);
             db.insert("test", format!("doc{}", i), vec, None)
-                .await
-                .unwrap();
+                .await?;
         }
 
-        let ids = db.ids("test").await.unwrap();
+        let ids = db.ids("test").await?;
         assert_eq!(ids.len(), 10);
+        Ok(())
     }
 
     #[tokio::test]
-    async fn test_async_count_with_filter() {
+    async fn test_async_count_with_filter() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let db = AsyncDatabase::in_memory();
-        db.create_collection("test", 32).await.unwrap();
+        db.create_collection("test", 32).await?;
 
         for i in 0..100 {
             let vec = random_vector(32);
@@ -1440,75 +1440,75 @@ mod tests {
                 vec,
                 Some(json!({"category": category})),
             )
-            .await
-            .unwrap();
+            .await?;
         }
 
         let filter = Filter::eq("category", "even");
-        let count = db.count_with_filter("test", Some(filter)).await.unwrap();
+        let count = db.count_with_filter("test", Some(filter)).await?;
         assert_eq!(count, 50);
+        Ok(())
     }
 
     #[tokio::test]
-    async fn test_async_is_dirty() {
+    async fn test_async_is_dirty() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let db = AsyncDatabase::in_memory();
-        db.create_collection("test", 32).await.unwrap();
+        db.create_collection("test", 32).await?;
 
         // Should be dirty after insert
         let vec = random_vector(32);
-        db.insert("test", "doc1", vec, None).await.unwrap();
+        db.insert("test", "doc1", vec, None).await?;
         assert!(db.is_dirty().await);
+        Ok(())
     }
 
     #[tokio::test]
-    async fn test_async_total_vectors() {
+    async fn test_async_total_vectors() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let db = AsyncDatabase::in_memory();
 
-        db.create_collection("col1", 32).await.unwrap();
-        db.create_collection("col2", 32).await.unwrap();
+        db.create_collection("col1", 32).await?;
+        db.create_collection("col2", 32).await?;
 
         for i in 0..10 {
             let vec = random_vector(32);
             db.insert("col1", format!("doc{}", i), vec, None)
-                .await
-                .unwrap();
+                .await?;
         }
 
         for i in 0..5 {
             let vec = random_vector(32);
             db.insert("col2", format!("doc{}", i), vec, None)
-                .await
-                .unwrap();
+                .await?;
         }
 
         assert_eq!(db.total_vectors().await, 15);
+        Ok(())
     }
 
     #[tokio::test]
-    async fn test_async_needs_compaction() {
+    async fn test_async_needs_compaction() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let db = AsyncDatabase::in_memory();
-        db.create_collection("test", 32).await.unwrap();
+        db.create_collection("test", 32).await?;
 
         for i in 0..100 {
             let vec = random_vector(32);
             db.insert("test", format!("doc{}", i), vec, None)
-                .await
-                .unwrap();
+                .await?;
         }
 
         // Delete 50% of vectors
         for i in 0..50 {
-            db.delete("test", &format!("doc{}", i)).await.unwrap();
+            db.delete("test", &format!("doc{}", i)).await?;
         }
 
         // Should need compaction at 30% threshold
         assert!(db.needs_compaction("test", 0.3).await);
+        Ok(())
     }
 
     #[tokio::test]
-    async fn test_concurrent_operations() {
+    async fn test_concurrent_operations() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let db = AsyncDatabase::in_memory();
-        db.create_collection("test", 32).await.unwrap();
+        db.create_collection("test", 32).await?;
 
         // Spawn multiple concurrent insert tasks
         let mut handles = Vec::new();
@@ -1519,180 +1519,190 @@ mod tests {
                     let vec = random_vector(32);
                     db_clone
                         .insert("test", format!("doc_{}_{}", i, j), vec, None)
-                        .await
-                        .unwrap();
+                        .await?;
                 }
+                Ok::<(), crate::error::NeedleError>(())
             });
             handles.push(handle);
         }
 
         // Wait for all tasks
         for handle in handles {
-            handle.await.unwrap();
+            handle.await??;
         }
 
         assert_eq!(db.count("test").await, 100);
+        Ok(())
     }
 
     // AsyncDatabaseConfig tests
     #[test]
-    fn test_async_config_default() {
+    fn test_async_config_default() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let config = AsyncDatabaseConfig::default();
         assert_eq!(config.max_concurrency, 4);
         assert_eq!(config.stream_batch_size, 100);
+        Ok(())
     }
 
     #[test]
-    fn test_async_config_with_max_concurrency() {
+    fn test_async_config_with_max_concurrency() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let config = AsyncDatabaseConfig::default().with_max_concurrency(8);
         assert_eq!(config.max_concurrency, 8);
         assert_eq!(config.stream_batch_size, 100); // unchanged
+        Ok(())
     }
 
     #[test]
-    fn test_async_config_with_stream_batch_size() {
+    fn test_async_config_with_stream_batch_size() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let config = AsyncDatabaseConfig::default().with_stream_batch_size(50);
         assert_eq!(config.max_concurrency, 4); // unchanged
         assert_eq!(config.stream_batch_size, 50);
+        Ok(())
     }
 
     #[test]
-    fn test_async_config_chained() {
+    fn test_async_config_chained() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let config = AsyncDatabaseConfig::default()
             .with_max_concurrency(16)
             .with_stream_batch_size(200);
         assert_eq!(config.max_concurrency, 16);
         assert_eq!(config.stream_batch_size, 200);
+        Ok(())
     }
 
     #[tokio::test]
-    async fn test_collection_not_found_error() {
+    async fn test_collection_not_found_error() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let db = AsyncDatabase::in_memory();
 
         // Searching non-existent collection should return error
         let result = db.search("nonexistent", vec![0.0; 32], 10).await;
         assert!(result.is_err());
+        Ok(())
     }
 
     #[tokio::test]
-    async fn test_dimension_mismatch_error() {
+    async fn test_dimension_mismatch_error() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let db = AsyncDatabase::in_memory();
-        db.create_collection("test", 64).await.unwrap();
+        db.create_collection("test", 64).await?;
 
         // Insert with wrong dimensions
         let result = db.insert("test", "doc1", vec![0.0; 32], None).await;
         assert!(result.is_err());
+        Ok(())
     }
 
     #[tokio::test]
-    async fn test_duplicate_collection_error() {
+    async fn test_duplicate_collection_error() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let db = AsyncDatabase::in_memory();
-        db.create_collection("test", 64).await.unwrap();
+        db.create_collection("test", 64).await?;
 
         // Creating same collection again should error
         let result = db.create_collection("test", 64).await;
         assert!(result.is_err());
+        Ok(())
     }
 
     #[tokio::test]
-    async fn test_batch_search_empty_queries() {
+    async fn test_batch_search_empty_queries() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let db = AsyncDatabase::in_memory();
-        db.create_collection("test", 32).await.unwrap();
+        db.create_collection("test", 32).await?;
 
         // Insert some vectors first
         for i in 0..10 {
             db.insert("test", format!("doc{}", i), random_vector(32), None)
-                .await
-                .unwrap();
+                .await?;
         }
 
         // Batch search with empty query list
-        let results = db.batch_search("test", Vec::new(), 10).await.unwrap();
+        let results = db.batch_search("test", Vec::new(), 10).await?;
         assert!(results.is_empty());
+        Ok(())
     }
 
     #[tokio::test]
-    async fn test_batch_insert_empty() {
+    async fn test_batch_insert_empty() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let db = AsyncDatabase::in_memory();
-        db.create_collection("test", 32).await.unwrap();
+        db.create_collection("test", 32).await?;
 
         // Batch insert with empty list should succeed
         let entries: Vec<(String, Vec<f32>, Option<Value>)> = Vec::new();
-        db.batch_insert("test", entries).await.unwrap();
+        db.batch_insert("test", entries).await?;
 
         assert_eq!(db.count("test").await, 0);
+        Ok(())
     }
 
     #[tokio::test]
-    async fn test_batch_delete_empty() {
+    async fn test_batch_delete_empty() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let db = AsyncDatabase::in_memory();
-        db.create_collection("test", 32).await.unwrap();
+        db.create_collection("test", 32).await?;
 
         // Insert some vectors
         for i in 0..5 {
             db.insert("test", format!("doc{}", i), random_vector(32), None)
-                .await
-                .unwrap();
+                .await?;
         }
 
         // Batch delete with empty list
-        let deleted = db.batch_delete("test", Vec::new()).await.unwrap();
+        let deleted = db.batch_delete("test", Vec::new()).await?;
         assert_eq!(deleted, 0);
         assert_eq!(db.count("test").await, 5); // unchanged
+        Ok(())
     }
 
     #[tokio::test]
-    async fn test_batch_operation_builder_empty() {
+    async fn test_batch_operation_builder_empty() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let db = AsyncDatabase::in_memory();
-        db.create_collection("test", 32).await.unwrap();
+        db.create_collection("test", 32).await?;
 
         // Empty batch operation should succeed
         let result = BatchOperationBuilder::new(&db, "test")
             .execute()
-            .await
-            .unwrap();
+            .await?;
 
         assert_eq!(result.inserted, 0);
         assert_eq!(result.deleted, 0);
         assert!(result.is_success());
+        Ok(())
     }
 
     // ── open + in_memory_with_config ─────────────────────────────────────
 
     #[tokio::test]
-    async fn test_in_memory_with_config() {
+    async fn test_in_memory_with_config() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let config = AsyncDatabaseConfig::default()
             .with_max_concurrency(4)
             .with_stream_batch_size(50);
         let db = AsyncDatabase::in_memory_with_config(config);
-        db.create_collection("test", 32).await.unwrap();
+        db.create_collection("test", 32).await?;
         assert!(db.has_collection("test").await);
+        Ok(())
     }
 
     // ── create_collection + insert + search round-trip ───────────────────
 
     #[tokio::test]
-    async fn test_roundtrip_create_insert_search() {
+    async fn test_roundtrip_create_insert_search() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let db = AsyncDatabase::in_memory();
-        db.create_collection("docs", 4).await.unwrap();
+        db.create_collection("docs", 4).await?;
 
         let vec = vec![1.0, 0.0, 0.0, 0.0];
         db.insert("docs", "v1", vec.clone(), Some(json!({"label": "a"})))
-            .await
-            .unwrap();
+            .await?;
 
-        let results = db.search("docs", vec.clone(), 5).await.unwrap();
+        let results = db.search("docs", vec.clone(), 5).await?;
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].id, "v1");
         assert!(results[0].distance < 0.001);
+        Ok(())
     }
 
     // ── batch_delete: partial and full ───────────────────────────────────
 
     #[tokio::test]
-    async fn test_batch_delete_partial() {
+    async fn test_batch_delete_partial() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let db = AsyncDatabase::in_memory();
-        db.create_collection("test", 4).await.unwrap();
+        db.create_collection("test", 4).await?;
 
         for i in 0..5 {
             db.insert(
@@ -1701,8 +1711,7 @@ mod tests {
                 vec![i as f32, 0.0, 0.0, 0.0],
                 None,
             )
-            .await
-            .unwrap();
+            .await?;
         }
 
         // Delete 3 out of 5, including one nonexistent
@@ -1711,35 +1720,35 @@ mod tests {
                 "test",
                 vec!["v0".into(), "v1".into(), "v2".into(), "nonexistent".into()],
             )
-            .await
-            .unwrap();
+            .await?;
         assert!(deleted >= 3);
         assert_eq!(db.count("test").await, 2);
+        Ok(())
     }
 
     #[tokio::test]
-    async fn test_batch_delete_all() {
+    async fn test_batch_delete_all() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let db = AsyncDatabase::in_memory();
-        db.create_collection("test", 4).await.unwrap();
+        db.create_collection("test", 4).await?;
 
         for i in 0..3 {
             db.insert("test", &format!("v{i}"), vec![i as f32, 0.0, 0.0, 0.0], None)
-                .await
-                .unwrap();
+                .await?;
         }
 
         let ids: Vec<String> = (0..3).map(|i| format!("v{i}")).collect();
-        let deleted = db.batch_delete("test", ids).await.unwrap();
+        let deleted = db.batch_delete("test", ids).await?;
         assert_eq!(deleted, 3);
         assert_eq!(db.count("test").await, 0);
+        Ok(())
     }
 
     // ── concurrent async operations across multiple tasks ────────────────
 
     #[tokio::test]
-    async fn test_concurrent_inserts_across_tasks() {
+    async fn test_concurrent_inserts_across_tasks() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let db = Arc::new(AsyncDatabase::in_memory());
-        db.create_collection("test", 4).await.unwrap();
+        db.create_collection("test", 4).await?;
 
         let mut handles = Vec::new();
         for i in 0..10 {
@@ -1756,20 +1765,20 @@ mod tests {
         }
 
         for h in handles {
-            h.await.unwrap().unwrap();
+            h.await??;
         }
         assert_eq!(db.count("test").await, 10);
+        Ok(())
     }
 
     #[tokio::test]
-    async fn test_concurrent_search_across_tasks() {
+    async fn test_concurrent_search_across_tasks() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let db = Arc::new(AsyncDatabase::in_memory());
-        db.create_collection("test", 4).await.unwrap();
+        db.create_collection("test", 4).await?;
 
         for i in 0..20 {
             db.insert("test", &format!("v{i}"), random_vector(4), None)
-                .await
-                .unwrap();
+                .await?;
         }
 
         let mut handles = Vec::new();
@@ -1781,44 +1790,47 @@ mod tests {
         }
 
         for h in handles {
-            let results = h.await.unwrap().unwrap();
+            let results = h.await??;
             assert!(results.len() <= 5);
         }
+        Ok(())
     }
 
     // ── error propagation from sync Database ─────────────────────────────
 
     #[tokio::test]
-    async fn test_error_propagation_insert_wrong_collection() {
+    async fn test_error_propagation_insert_wrong_collection() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let db = AsyncDatabase::in_memory();
         let result = db.insert("nonexistent", "v1", vec![1.0], None).await;
         assert!(result.is_err());
+        Ok(())
     }
 
     #[tokio::test]
-    async fn test_error_propagation_search_wrong_collection() {
+    async fn test_error_propagation_search_wrong_collection() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let db = AsyncDatabase::in_memory();
         let result = db.search("nonexistent", vec![1.0], 5).await;
         assert!(result.is_err());
+        Ok(())
     }
 
     #[tokio::test]
-    async fn test_error_propagation_delete_wrong_collection() {
+    async fn test_error_propagation_delete_wrong_collection() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let db = AsyncDatabase::in_memory();
         let result = db.delete("nonexistent", "v1").await;
         assert!(result.is_err());
+        Ok(())
     }
 
     // ── search_with_filter with invalid filter ───────────────────────────
 
     #[tokio::test]
-    async fn test_search_with_invalid_filter_operator() {
+    async fn test_search_with_invalid_filter_operator() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let db = AsyncDatabase::in_memory();
-        db.create_collection("test", 4).await.unwrap();
+        db.create_collection("test", 4).await?;
 
         db.insert("test", "v1", vec![1.0, 0.0, 0.0, 0.0], Some(json!({"x": 1})))
-            .await
-            .unwrap();
+            .await?;
 
         // Use an unsupported operator
         let filter = crate::metadata::Filter::parse(&json!({"x": {"$invalid_op": 5}}));
@@ -1831,48 +1843,50 @@ mod tests {
                 // Invalid filter should be rejected at parse time
             }
         }
+        Ok(())
     }
 
     // ── stream_export pagination ─────────────────────────────────────────
 
     #[tokio::test]
-    async fn test_stream_export_pagination() {
+    async fn test_stream_export_pagination() -> std::result::Result<(), Box<dyn std::error::Error>> {
         use futures::StreamExt;
 
         let db = AsyncDatabase::in_memory();
-        db.create_collection("test", 4).await.unwrap();
+        db.create_collection("test", 4).await?;
 
         for i in 0..15 {
             db.insert("test", &format!("v{i}"), vec![i as f32, 0.0, 0.0, 0.0], None)
-                .await
-                .unwrap();
+                .await?;
         }
 
-        let mut stream = db.stream_export("test", 5).await.unwrap();
+        let mut stream = db.stream_export("test", 5).await?;
         let mut total = 0;
         while let Some(batch) = stream.next().await {
-            let batch = batch.unwrap();
+            let batch = batch?;
             assert!(batch.len() <= 5);
             total += batch.len();
         }
         assert_eq!(total, 15);
+        Ok(())
     }
 
     // ── delete_collection ────────────────────────────────────────────────
 
     #[tokio::test]
-    async fn test_delete_collection_async() {
+    async fn test_delete_collection_async() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let db = AsyncDatabase::in_memory();
-        db.create_collection("test", 4).await.unwrap();
+        db.create_collection("test", 4).await?;
         assert!(db.has_collection("test").await);
 
-        let deleted = db.delete_collection("test").await.unwrap();
+        let deleted = db.delete_collection("test").await?;
         assert!(deleted);
         assert!(!db.has_collection("test").await);
+        Ok(())
     }
 
     #[tokio::test]
-    async fn test_delete_nonexistent_collection() {
+    async fn test_delete_nonexistent_collection() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let db = AsyncDatabase::in_memory();
         let result = db.delete_collection("nonexistent").await;
         // Should either return Ok(false) or Err
@@ -1880,246 +1894,264 @@ mod tests {
             Ok(deleted) => assert!(!deleted),
             Err(_) => {} // Also acceptable
         }
+        Ok(())
     }
 
     // ── create_collection_with_config ────────────────────────────────────
 
     #[tokio::test]
-    async fn test_create_collection_with_config() {
+    async fn test_create_collection_with_config() -> std::result::Result<(), Box<dyn std::error::Error>> {
         use crate::collection::config::CollectionConfig;
         let db = AsyncDatabase::in_memory();
         let config = CollectionConfig::new("custom_coll", 64);
-        db.create_collection_with_config(config).await.unwrap();
+        db.create_collection_with_config(config).await?;
         assert!(db.has_collection("custom_coll").await);
         assert_eq!(db.count("custom_coll").await, 0);
+        Ok(())
     }
 
     // ── drop_collection ──────────────────────────────────────────────────
 
     #[tokio::test]
-    async fn test_drop_collection() {
+    async fn test_drop_collection() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let db = AsyncDatabase::in_memory();
-        db.create_collection("to_drop", 4).await.unwrap();
+        db.create_collection("to_drop", 4).await?;
         assert!(db.has_collection("to_drop").await);
-        let dropped = db.drop_collection("to_drop").await.unwrap();
+        let dropped = db.drop_collection("to_drop").await?;
         assert!(dropped);
         assert!(!db.has_collection("to_drop").await);
+        Ok(())
     }
 
     // ── list_collections ─────────────────────────────────────────────────
 
     #[tokio::test]
-    async fn test_list_collections() {
+    async fn test_list_collections() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let db = AsyncDatabase::in_memory();
-        db.create_collection("a", 4).await.unwrap();
-        db.create_collection("b", 8).await.unwrap();
+        db.create_collection("a", 4).await?;
+        db.create_collection("b", 8).await?;
         let cols = db.list_collections().await;
         assert!(cols.contains(&"a".to_string()));
         assert!(cols.contains(&"b".to_string()));
         assert_eq!(cols.len(), 2);
+        Ok(())
     }
 
     // ── save and is_dirty round-trip ─────────────────────────────────────
 
     #[tokio::test]
-    async fn test_save_is_dirty_roundtrip() {
+    async fn test_save_is_dirty_roundtrip() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let db = AsyncDatabase::in_memory();
-        db.create_collection("test", 4).await.unwrap();
-        db.insert("test", "v1", vec![1.0, 0.0, 0.0, 0.0], None).await.unwrap();
+        db.create_collection("test", 4).await?;
+        db.insert("test", "v1", vec![1.0, 0.0, 0.0, 0.0], None).await?;
         // in-memory DB: is_dirty and save may behave differently
         let dirty = db.is_dirty().await;
         let _ = db.save().await;
         // After save, verify state is consistent
         assert_eq!(db.count("test").await, 1);
         let _ = dirty;
+        Ok(())
     }
 
     // ── total_vectors across multiple collections ────────────────────────
 
     #[tokio::test]
-    async fn test_total_vectors_multi_collection() {
+    async fn test_total_vectors_multi_collection() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let db = AsyncDatabase::in_memory();
-        db.create_collection("a", 4).await.unwrap();
-        db.create_collection("b", 4).await.unwrap();
-        db.insert("a", "v1", vec![1.0, 0.0, 0.0, 0.0], None).await.unwrap();
-        db.insert("a", "v2", vec![0.0, 1.0, 0.0, 0.0], None).await.unwrap();
-        db.insert("b", "v3", vec![0.0, 0.0, 1.0, 0.0], None).await.unwrap();
+        db.create_collection("a", 4).await?;
+        db.create_collection("b", 4).await?;
+        db.insert("a", "v1", vec![1.0, 0.0, 0.0, 0.0], None).await?;
+        db.insert("a", "v2", vec![0.0, 1.0, 0.0, 0.0], None).await?;
+        db.insert("b", "v3", vec![0.0, 0.0, 1.0, 0.0], None).await?;
         assert_eq!(db.total_vectors().await, 3);
+        Ok(())
     }
 
     // ── batch_search_with_filter ─────────────────────────────────────────
 
     #[tokio::test]
-    async fn test_batch_search_with_filter() {
+    async fn test_batch_search_with_filter() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let db = AsyncDatabase::in_memory();
-        db.create_collection("test", 4).await.unwrap();
+        db.create_collection("test", 4).await?;
         for i in 0..10 {
             db.insert(
                 "test",
                 &format!("v{i}"),
                 vec![i as f32, 0.0, 0.0, 0.0],
                 Some(json!({"group": if i < 5 { "a" } else { "b" }})),
-            ).await.unwrap();
+            ).await?;
         }
 
-        let filter = crate::metadata::Filter::parse(&json!({"group": "a"})).unwrap();
+        let filter = crate::metadata::Filter::parse(&json!({"group": "a"}))?;
         let results = db.batch_search_with_filter(
             "test",
             vec![vec![0.0, 0.0, 0.0, 0.0], vec![5.0, 0.0, 0.0, 0.0]],
             3,
             filter,
-        ).await.unwrap();
+        ).await?;
         assert_eq!(results.len(), 2);
         for batch in &results {
             assert!(batch.len() <= 3);
         }
+        Ok(())
     }
 
     // ── inner() and config() accessors ───────────────────────────────────
 
     #[test]
-    fn test_inner_accessor() {
+    fn test_inner_accessor() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let db = AsyncDatabase::in_memory();
         let inner = db.inner();
         let _ = inner; // Just verify we can access it
+        Ok(())
     }
 
     #[test]
-    fn test_config_accessor() {
+    fn test_config_accessor() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let config = AsyncDatabaseConfig::default()
             .with_max_concurrency(8);
         let db = AsyncDatabase::in_memory_with_config(config);
         assert_eq!(db.config().max_concurrency, 8);
+        Ok(())
     }
 
     // ── get returns None for nonexistent ──────────────────────────────────
 
     #[tokio::test]
-    async fn test_get_nonexistent_vector() {
+    async fn test_get_nonexistent_vector() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let db = AsyncDatabase::in_memory();
-        db.create_collection("test", 4).await.unwrap();
+        db.create_collection("test", 4).await?;
         let result = db.get("test", "nonexistent").await;
         assert!(result.is_none());
+        Ok(())
     }
 
     // ── get returns vector and metadata ──────────────────────────────────
 
     #[tokio::test]
-    async fn test_get_with_metadata() {
+    async fn test_get_with_metadata() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let db = AsyncDatabase::in_memory();
-        db.create_collection("test", 4).await.unwrap();
-        db.insert("test", "v1", vec![1.0, 2.0, 3.0, 4.0], Some(json!({"k": "v"}))).await.unwrap();
-        let (vec, meta) = db.get("test", "v1").await.unwrap();
+        db.create_collection("test", 4).await?;
+        db.insert("test", "v1", vec![1.0, 2.0, 3.0, 4.0], Some(json!({"k": "v"}))).await?;
+        let (vec, meta) = db.get("test", "v1").await.ok_or("vector not found")?;
         assert_eq!(vec.len(), 4);
         assert!(meta.is_some());
+        Ok(())
     }
 
     // ── ids() ────────────────────────────────────────────────────────────
 
     #[tokio::test]
-    async fn test_ids_returns_all() {
+    async fn test_ids_returns_all() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let db = AsyncDatabase::in_memory();
-        db.create_collection("test", 4).await.unwrap();
+        db.create_collection("test", 4).await?;
         for i in 0..5 {
-            db.insert("test", &format!("v{i}"), random_vector(4), None).await.unwrap();
+            db.insert("test", &format!("v{i}"), random_vector(4), None).await?;
         }
-        let ids = db.ids("test").await.unwrap();
+        let ids = db.ids("test").await?;
         assert_eq!(ids.len(), 5);
+        Ok(())
     }
 
     // ── compact returns count ────────────────────────────────────────────
 
     #[tokio::test]
-    async fn test_compact_returns_count() {
+    async fn test_compact_returns_count() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let db = AsyncDatabase::in_memory();
-        db.create_collection("test", 4).await.unwrap();
+        db.create_collection("test", 4).await?;
         for i in 0..10 {
-            db.insert("test", &format!("v{i}"), random_vector(4), None).await.unwrap();
+            db.insert("test", &format!("v{i}"), random_vector(4), None).await?;
         }
         for i in 0..5 {
-            db.delete("test", &format!("v{i}")).await.unwrap();
+            db.delete("test", &format!("v{i}")).await?;
         }
-        let removed = db.compact("test").await.unwrap();
+        let removed = db.compact("test").await?;
         assert!(removed > 0 || db.count("test").await == 5);
+        Ok(())
     }
 
     // ── needs_compaction ─────────────────────────────────────────────────
 
     #[tokio::test]
-    async fn test_needs_compaction_after_deletions() {
+    async fn test_needs_compaction_after_deletions() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let db = AsyncDatabase::in_memory();
-        db.create_collection("test", 4).await.unwrap();
+        db.create_collection("test", 4).await?;
         for i in 0..10 {
-            db.insert("test", &format!("v{i}"), random_vector(4), None).await.unwrap();
+            db.insert("test", &format!("v{i}"), random_vector(4), None).await?;
         }
         for i in 0..8 {
-            db.delete("test", &format!("v{i}")).await.unwrap();
+            db.delete("test", &format!("v{i}")).await?;
         }
         assert!(db.needs_compaction("test", 0.5).await);
+        Ok(())
     }
 
     // ── count_with_filter ────────────────────────────────────────────────
 
     #[tokio::test]
-    async fn test_count_with_filter_subset() {
+    async fn test_count_with_filter_subset() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let db = AsyncDatabase::in_memory();
-        db.create_collection("test", 4).await.unwrap();
+        db.create_collection("test", 4).await?;
         for i in 0..6 {
             db.insert(
                 "test",
                 &format!("v{i}"),
                 random_vector(4),
                 Some(json!({"type": if i % 2 == 0 { "even" } else { "odd" }})),
-            ).await.unwrap();
+            ).await?;
         }
-        let filter = crate::metadata::Filter::parse(&json!({"type": "even"})).unwrap();
-        let count = db.count_with_filter("test", Some(filter)).await.unwrap();
+        let filter = crate::metadata::Filter::parse(&json!({"type": "even"}))?;
+        let count = db.count_with_filter("test", Some(filter)).await?;
         assert_eq!(count, 3);
+        Ok(())
     }
 
     // ── duplicate collection creation error ──────────────────────────────
 
     #[tokio::test]
-    async fn test_create_duplicate_collection() {
+    async fn test_create_duplicate_collection() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let db = AsyncDatabase::in_memory();
-        db.create_collection("test", 4).await.unwrap();
+        db.create_collection("test", 4).await?;
         let result = db.create_collection("test", 4).await;
         assert!(result.is_err());
+        Ok(())
     }
 
     // ── batch insert then search correctness ─────────────────────────────
 
     #[tokio::test]
-    async fn test_batch_insert_search_correctness() {
+    async fn test_batch_insert_search_correctness() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let db = AsyncDatabase::in_memory();
-        db.create_collection("test", 4).await.unwrap();
+        db.create_collection("test", 4).await?;
 
         let entries: Vec<(String, Vec<f32>, Option<serde_json::Value>)> = (0..20)
             .map(|i| (format!("v{i}"), random_vector(4), None))
             .collect();
-        db.batch_insert("test", entries).await.unwrap();
+        db.batch_insert("test", entries).await?;
 
         assert_eq!(db.count("test").await, 20);
-        let results = db.search("test", random_vector(4), 5).await.unwrap();
+        let results = db.search("test", random_vector(4), 5).await?;
         assert_eq!(results.len(), 5);
         // Results should be sorted by distance
         for i in 1..results.len() {
             assert!(results[i].distance >= results[i-1].distance);
         }
+        Ok(())
     }
 
     // ── ExportStream accessors ───────────────────────────────────────────
 
     #[tokio::test]
-    async fn test_export_stream_accessors() {
+    async fn test_export_stream_accessors() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let db = AsyncDatabase::in_memory();
-        db.create_collection("test", 4).await.unwrap();
+        db.create_collection("test", 4).await?;
         for i in 0..3 {
-            db.insert("test", &format!("v{i}"), random_vector(4), None).await.unwrap();
+            db.insert("test", &format!("v{i}"), random_vector(4), None).await?;
         }
-        let stream = db.stream_export("test", 10).await.unwrap();
+        let stream = db.stream_export("test", 10).await?;
         assert_eq!(stream.total(), 3);
         assert_eq!(stream.offset(), 0);
         assert!(!stream.is_exhausted());
+        Ok(())
     }
 }
