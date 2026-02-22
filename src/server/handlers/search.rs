@@ -15,6 +15,9 @@ use tracing::warn;
 
 use super::MAX_SEARCH_K;
 
+/// Maximum allowed post-filter factor to prevent memory exhaustion.
+const MAX_POST_FILTER_FACTOR: usize = 100;
+
 // ============ Search Handlers ============
 
 /// Search for similar vectors using approximate nearest neighbor search.
@@ -36,6 +39,18 @@ pub(in crate::server) async fn search(
             Json(ApiError::new(
                 format!("k must be between 1 and {MAX_SEARCH_K}"),
                 "INVALID_K",
+            )),
+        ));
+    }
+
+    if req.post_filter_factor == 0 || req.post_filter_factor > MAX_POST_FILTER_FACTOR {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ApiError::new(
+                format!(
+                    "post_filter_factor must be between 1 and {MAX_POST_FILTER_FACTOR}"
+                ),
+                "INVALID_POST_FILTER_FACTOR",
             )),
         ));
     }
