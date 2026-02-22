@@ -44,6 +44,10 @@ test-unit:
 test-integration:
     cargo test --tests --features full
 
+# Run documentation tests only
+test-doc:
+    cargo test --doc --features full
+
 # Continuous check on save (requires: cargo install cargo-watch)
 watch:
     #!/usr/bin/env bash
@@ -94,6 +98,13 @@ build-all:
 # Build release
 build-release:
     cargo build --release --features full
+
+# Build with compilation timing report
+profile-build:
+    cargo build --features full --timings
+    @echo ""
+    @echo "Timing report: target/cargo-timings/cargo-timing.html"
+    @open target/cargo-timings/cargo-timing.html 2>/dev/null || xdg-open target/cargo-timings/cargo-timing.html 2>/dev/null || echo "Open the above file in a browser to view the report."
 
 # Generate documentation
 doc:
@@ -194,12 +205,70 @@ verify-docs:
 new-module DOMAIN MODULE:
     ./scripts/new-module.sh {{DOMAIN}} {{MODULE}}
 
-# Quick CI gate: fmt-check + lint (all-targets) + unit tests (~3 min)
-check-quick: fmt-check lint test-unit
+# Scaffold a new example: just new-example my_search_demo
+new-example NAME:
+    ./scripts/new-example.sh {{NAME}}
+
+# Quick CI gate: fmt-check + lint (all-targets) + unit tests (~3 min), with timing
+check-quick:
+    #!/usr/bin/env bash
+    set -e
+    total_start=$(date +%s)
+    echo "=== just check-quick ==="
+
+    echo ""; echo "[1/3] fmt-check…"
+    step_start=$(date +%s)
+    just fmt-check
+    step_end=$(date +%s)
+    echo "  ↳ fmt-check: $((step_end - step_start))s"
+
+    echo ""; echo "[2/3] lint…"
+    step_start=$(date +%s)
+    just lint
+    step_end=$(date +%s)
+    echo "  ↳ lint: $((step_end - step_start))s"
+
+    echo ""; echo "[3/3] test-unit…"
+    step_start=$(date +%s)
+    just test-unit
+    step_end=$(date +%s)
+    echo "  ↳ test-unit: $((step_end - step_start))s"
+
+    total_end=$(date +%s)
+    echo ""; echo "=== check-quick completed in $((total_end - total_start))s ==="
 
 # Run tests with specific feature flags: just test-feature "server,metrics"
 test-feature FEATURES:
     cargo test --features {{FEATURES}}
+
+# Compile all examples and run those that don't require external services
+verify-examples:
+    #!/usr/bin/env bash
+    set -e
+    echo "=== Compiling all examples (--features full) ==="
+    cargo build --examples --features full
+    echo ""
+    echo "=== Running examples that don't require external services ==="
+    failed=0
+    for example in quickstart basic_usage filtered_search persistence quantization \
+                   multi_tenant multi_vector sparse_vectors image_search sharding \
+                   hybrid_search encryption_usage rag_chatbot metrics_usage diskann_usage; do
+        echo ""
+        echo "→ $example"
+        if cargo run --example "$example" --features full 2>&1; then
+            echo "  ✓ $example passed"
+        else
+            echo "  ✗ $example failed"
+            failed=$((failed + 1))
+        fi
+    done
+    echo ""
+    if [ "$failed" -gt 0 ]; then
+        echo "=== $failed example(s) failed ==="
+        exit 1
+    else
+        echo "=== All examples passed ==="
+    fi
 
 # Show tech debt dashboard (unwrap, expect, let _ = counts in src/)
 count-debt:

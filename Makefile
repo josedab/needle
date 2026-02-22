@@ -4,7 +4,8 @@
 .PHONY: help quick check check-all build build-all build-release test test-unit test-integration \
         fmt fmt-check lint lint-fix lint-dirty lint-new watch test-watch lint-watch serve serve-env demo doctor doc bench clean playground setup setup-tools dev test-single coverage \
         new-module verify-docs check-quick check-local test-feature count-debt test-changed open-docs \
-        docker-up docker-down docker-build docker-logs test-coverage-check
+        docker-up docker-down docker-build docker-logs test-coverage-check \
+        profile-build test-doc new-example verify-examples
 
 help:
 	@echo "Available recipes:"
@@ -51,6 +52,10 @@ help:
 	@echo "  make docker-down   — Stop Docker Compose services"
 	@echo "  make docker-build  — Build Docker image from source"
 	@echo "  make docker-logs   — Tail Docker Compose logs"
+	@echo "  make profile-build — Build with timing/profiling (cargo build --timings)"
+	@echo "  make test-doc      — Run documentation tests (cargo test --doc)"
+	@echo "  make new-example   — Scaffold a new example (NAME=x)"
+	@echo "  make verify-examples — Compile and check all examples"
 	@echo "  make clean         — Clean build artifacts"
 	@echo ""
 	@echo "Feature flag combinations:"
@@ -138,6 +143,15 @@ build-all:
 build-release:
 	cargo build --release --features full
 
+# Build with compilation timing report (opens timing report in browser)
+profile-build:
+	cargo build --features full --timings
+	@echo ""
+	@echo "Timing report: target/cargo-timings/cargo-timing.html"
+	@open target/cargo-timings/cargo-timing.html 2>/dev/null || \
+		xdg-open target/cargo-timings/cargo-timing.html 2>/dev/null || \
+		echo "Open the above file in a browser to view the report."
+
 test:
 	cargo test --features full
 
@@ -146,6 +160,9 @@ test-unit:
 
 test-integration:
 	cargo test --tests --features full
+
+test-doc:
+	cargo test --doc --features full
 
 fmt:
 	cargo fmt
@@ -310,11 +327,65 @@ new-module:
 	@test -n "$(NAME)" || { echo "Usage: make new-module DOMAIN=<domain> NAME=<module_name>"; exit 1; }
 	./scripts/new-module.sh $(DOMAIN) $(NAME)
 
+# Scaffold a new example: make new-example NAME=my_search_demo
+new-example:
+	@test -n "$(NAME)" || { echo "Usage: make new-example NAME=<example_name>"; exit 1; }
+	./scripts/new-example.sh $(NAME)
+
 # Quick CI gate: fmt-check + lint (all-targets) + unit tests (~3 min)
-check-quick: fmt-check lint test-unit
+check-quick:
+	@total_start=$$(date +%s); \
+	echo "=== make check-quick ==="; \
+	\
+	echo ""; echo "[1/3] fmt-check…"; \
+	step_start=$$(date +%s); \
+	$(MAKE) --no-print-directory fmt-check; \
+	step_end=$$(date +%s); \
+	echo "  ↳ fmt-check: $$((step_end - step_start))s"; \
+	\
+	echo ""; echo "[2/3] lint…"; \
+	step_start=$$(date +%s); \
+	$(MAKE) --no-print-directory lint; \
+	step_end=$$(date +%s); \
+	echo "  ↳ lint: $$((step_end - step_start))s"; \
+	\
+	echo ""; echo "[3/3] test-unit…"; \
+	step_start=$$(date +%s); \
+	$(MAKE) --no-print-directory test-unit; \
+	step_end=$$(date +%s); \
+	echo "  ↳ test-unit: $$((step_end - step_start))s"; \
+	\
+	total_end=$$(date +%s); \
+	echo ""; echo "=== check-quick completed in $$((total_end - total_start))s ==="
 
 # Alias for check-quick — recommended pre-push command (mirrors CI fast gate)
 check-local: check-quick
+
+# Compile all examples and run those that don't require external services
+verify-examples:
+	@echo "=== Compiling all examples (--features full) ==="
+	cargo build --examples --features full
+	@echo ""
+	@echo "=== Running examples that don't require external services ==="
+	@failed=0; \
+	for example in quickstart basic_usage filtered_search persistence quantization \
+	               multi_tenant multi_vector sparse_vectors image_search sharding \
+	               hybrid_search encryption_usage rag_chatbot metrics_usage diskann_usage; do \
+		echo ""; echo "→ $$example"; \
+		if cargo run --example "$$example" --features full 2>&1; then \
+			echo "  ✓ $$example passed"; \
+		else \
+			echo "  ✗ $$example failed"; \
+			failed=$$((failed + 1)); \
+		fi; \
+	done; \
+	echo ""; \
+	if [ "$$failed" -gt 0 ]; then \
+		echo "=== $$failed example(s) failed ==="; \
+		exit 1; \
+	else \
+		echo "=== All examples passed ==="; \
+	fi
 
 # Run tests with specific feature flags: make test-feature FEATURES=server,metrics
 test-feature:
