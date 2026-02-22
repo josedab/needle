@@ -186,6 +186,12 @@ pub use services::{
     llm_tools, managed_cloud, multi_writer, realtime_streaming, vector_lineage,
 };
 
+// ── Next-Gen v7 Services ─────────────────────────────────────────────────────
+pub use services::{
+    benchmark_runner, cluster_bootstrap, evidence_collector, model_downloader, pricing, rag_sdk,
+    triage_report, unwrap_audit, vscode_extension, ws_protocol,
+};
+
 // ── Experimental / Advanced ──────────────────────────────────────────────────
 // Features under active development. APIs may change without notice.
 // Enable experimental modules with: --features experimental
