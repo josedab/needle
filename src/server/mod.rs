@@ -1370,6 +1370,8 @@ mod tests {
     use super::*;
     use axum::http::StatusCode;
 
+    const TEST_API_KEY: &str = "test-key";
+
     // RateLimitConfig tests
     #[test]
     fn test_rate_limit_config_default() {
@@ -1562,7 +1564,7 @@ mod tests {
 
     #[test]
     fn test_api_key_with_name() {
-        let key = ApiKey::new("test-key").with_name("Production API Key");
+        let key = ApiKey::new(TEST_API_KEY).with_name("Production API Key");
         assert_eq!(key.name, Some("Production API Key".to_string()));
     }
 
@@ -1586,7 +1588,7 @@ mod tests {
 
     #[test]
     fn test_api_key_to_user() {
-        let key = ApiKey::new("test-key")
+        let key = ApiKey::new(TEST_API_KEY)
             .with_name("Test Key")
             .with_role("writer");
         let user = key.to_user();
@@ -1608,7 +1610,7 @@ mod tests {
 
     #[test]
     fn test_auth_config_with_api_key() {
-        let config = AuthConfig::new().with_api_key(ApiKey::new("test-key"));
+        let config = AuthConfig::new().with_api_key(ApiKey::new(TEST_API_KEY));
         assert_eq!(config.api_keys.len(), 1);
     }
 
@@ -1746,7 +1748,7 @@ mod tests {
     #[test]
     fn test_server_config_with_auth() {
         let auth_config = AuthConfig::new()
-            .with_api_key(ApiKey::new("test-key"))
+            .with_api_key(ApiKey::new(TEST_API_KEY))
             .require_auth(true);
 
         let server_config = ServerConfig::default().with_auth(auth_config);

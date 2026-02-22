@@ -1906,9 +1906,11 @@ impl<'a> AutoEmbedCollection<'a> {
 mod tests {
     use super::*;
 
+    const TEST_API_KEY: &str = "sk-test";
+
     #[test]
     fn test_provider_config() {
-        let openai = ProviderConfig::openai("sk-test");
+        let openai = ProviderConfig::openai(TEST_API_KEY);
         assert_eq!(openai.provider_type, ProviderType::OpenAI);
         assert!(openai.cost_per_1k_tokens > 0.0);
 

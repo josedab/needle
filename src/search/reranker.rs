@@ -749,9 +749,11 @@ pub struct BanditsStats {
 mod tests {
     use super::*;
 
+    const TEST_API_KEY: &str = "test-key";
+
     #[tokio::test]
     async fn test_cohere_reranker() {
-        let reranker = CohereReranker::new("test-key", "rerank-english-v2.0");
+        let reranker = CohereReranker::new(TEST_API_KEY, "rerank-english-v2.0");
 
         let query = "machine learning algorithms";
         let documents = vec![

@@ -434,6 +434,7 @@ pub enum AuthMethod {
 mod tests {
     use super::*;
 
+    const TEST_API_KEY: &str = "test-key";
     const TEST_SECRET: &str = "this-is-a-test-secret-at-least-32-bytes-long!!";
 
     fn auth_config_with_key(key: &str) -> AuthConfig {
@@ -452,8 +453,8 @@ mod tests {
 
     #[test]
     fn test_api_key_new_defaults() {
-        let key = ApiKey::new("test-key");
-        assert_eq!(key.key, "test-key");
+        let key = ApiKey::new(TEST_API_KEY);
+        assert_eq!(key.key, TEST_API_KEY);
         assert!(key.active);
         assert!(key.expires_at.is_none());
         assert_eq!(key.roles, vec!["reader".to_string()]);
