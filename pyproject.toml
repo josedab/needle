@@ -31,3 +31,4 @@ manifest-path = "crates/needle-python/Cargo.toml"
 features = ["needle/python"]
 module-name = "needle"
 python-source = "python"
+python-packages = ["needle_db"]
