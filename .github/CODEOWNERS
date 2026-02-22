@@ -65,5 +65,24 @@
 /benches/ @anthropics/needle-core
 /fuzz/ @anthropics/needle-core
 
+# Next-Gen Services
+/src/services/vector_transactions.rs @anthropics/needle-core
+/src/services/streaming_protocol.rs @anthropics/needle-core
+/src/services/sync_engine.rs @anthropics/needle-core
+/src/services/transactional_api.rs @anthropics/needle-core
+/src/services/live_replication.rs @anthropics/needle-core
+/src/services/inference_engine.rs @anthropics/needle-ml
+/src/services/text_to_vector.rs @anthropics/needle-ml
+/src/services/semantic_cache.rs @anthropics/needle-search
+/src/services/llm_cache_middleware.rs @anthropics/needle-search
+/src/services/query_optimizer.rs @anthropics/needle-search
+/src/services/graph_knowledge_service.rs @anthropics/needle-search
+/src/services/plugin_api.rs @anthropics/needle-maintainers
+/src/services/plugin_ecosystem.rs @anthropics/needle-maintainers
+/src/services/wasm_browser.rs @anthropics/needle-bindings
+/src/services/wasm_persistence.rs @anthropics/needle-bindings
+/src/services/multimodal_collection.rs @anthropics/needle-search
+/src/services/agentic_memory_protocol.rs @anthropics/needle-ml
+
 # Security-sensitive files
 /SECURITY.md @anthropics/needle-security @anthropics/needle-maintainers
