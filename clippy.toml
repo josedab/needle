@@ -1,6 +1,6 @@
 # Clippy configuration for Needle
 # Maximum cognitive complexity for functions
-cognitive-complexity-threshold = 25
+cognitive-complexity-threshold = 20
 
 # Allow slightly longer type names
 type-complexity-threshold = 300
