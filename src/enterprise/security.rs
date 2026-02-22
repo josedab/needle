@@ -37,6 +37,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use tracing::warn;
 
 /// Permissions that can be granted to roles.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -294,6 +295,7 @@ impl AccessController {
         }
     }
     pub fn permissive() -> Self {
+        warn!("AccessController created in permissive mode — all RBAC enforcement is disabled. Do not use in production.");
         Self {
             enforce: false,
             default_allow: true,
