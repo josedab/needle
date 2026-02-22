@@ -5,6 +5,10 @@ edition.workspace = true
 description = "CLI for the Needle vector database"
 license.workspace = true
 
+[lib]
+name = "needle_cli"
+path = "src/lib.rs"
+
 [[bin]]
 name = "needle"
 path = "src/main.rs"
