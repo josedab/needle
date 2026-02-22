@@ -41,6 +41,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
+use tracing::warn;
 
 // ============================================================================
 // Policy Types
@@ -217,6 +218,7 @@ impl AclEngine {
 
     /// Create an engine that allows by default (opt-in deny).
     pub fn allow_by_default() -> Self {
+        warn!("⚠️  Creating ACL engine with allow-by-default — all vector access is permitted unless explicitly denied. Use AclEngine::new() for deny-by-default in production.");
         Self {
             default_effect: Effect::Allow,
             ..Self::new()
