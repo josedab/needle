@@ -39,6 +39,31 @@ pub(in crate::server) fn html_escape(s: &str) -> String {
 const MAX_METADATA_BYTES: usize = 64 * 1024;
 /// Maximum metadata JSON nesting depth.
 const MAX_METADATA_DEPTH: usize = 10;
+/// Maximum vector ID length in bytes.
+const MAX_VECTOR_ID_BYTES: usize = 1024;
+
+/// Validate that a vector ID is safe: non-empty, no control characters, bounded length.
+pub(in crate::server) fn validate_vector_id(id: &str) -> std::result::Result<(), (StatusCode, Json<ApiError>)> {
+    if id.is_empty() || id.len() > MAX_VECTOR_ID_BYTES {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ApiError::new(
+                format!("Vector ID must be between 1 and {MAX_VECTOR_ID_BYTES} bytes"),
+                "INVALID_VECTOR_ID",
+            )),
+        ));
+    }
+    if id.chars().any(|c| c.is_control()) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ApiError::new(
+                "Vector ID must not contain control characters",
+                "INVALID_VECTOR_ID",
+            )),
+        ));
+    }
+    Ok(())
+}
 
 /// Validate that a collection name is safe: alphanumeric, underscore, hyphen, 1-256 chars.
 pub(in crate::server) fn validate_collection_name(name: &str) -> std::result::Result<(), (StatusCode, Json<ApiError>)> {

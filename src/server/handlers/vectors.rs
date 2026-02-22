@@ -13,7 +13,7 @@ use serde_json::{json, Value};
 use std::sync::Arc;
 use tracing::{error, warn};
 
-use super::validate_metadata;
+use super::{validate_metadata, validate_vector_id};
 
 // ============ Vector CRUD ============
 
@@ -26,6 +26,7 @@ pub(in crate::server) async fn insert_vector(
     Path(collection): Path<String>,
     Json(req): Json<InsertRequest>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<ApiError>)> {
+    validate_vector_id(&req.id)?;
     validate_metadata(&req.metadata)?;
 
     let db = state.db.write().await;
@@ -61,6 +62,7 @@ pub(in crate::server) async fn batch_insert(
     }
 
     for item in &req.vectors {
+        validate_vector_id(&item.id)?;
         validate_metadata(&item.metadata)?;
     }
 
