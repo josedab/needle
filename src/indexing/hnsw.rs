@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! Hierarchical Navigable Small World (HNSW) Index
 //!
 //! This module implements the HNSW algorithm for approximate nearest neighbor search,

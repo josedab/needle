@@ -1,6 +1,5 @@
 //! Vector index implementations.
 
-#![allow(clippy::unwrap_used)] // tech debt: 402 unwrap() calls remaining
 use crate::error::Result;
 
 /// Common trait for pluggable vector index backends.

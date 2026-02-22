@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! Multi-Vector Support (ColBERT-style)
 //!
 //! Provides late interaction retrieval where documents are represented as

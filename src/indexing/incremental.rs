@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! Incremental Indexing for HNSW
 //!
 //! Provides the ability to add vectors to an HNSW index without full rebuilds,

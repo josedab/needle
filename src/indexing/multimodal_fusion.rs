@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! Multi-Modal Late Fusion Index
 //!
 //! Cross-modal retrieval supporting image, text, and audio vectors in a single

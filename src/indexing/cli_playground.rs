@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! CLI Developer Playground
 //!
 //! Interactive REPL shell with sample datasets, HNSW visualization, and

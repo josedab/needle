@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! # IVF (Inverted File) Index
 //!
 //! IVF indexing for approximate nearest neighbor search. This module provides

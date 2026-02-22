@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! # Half-Precision Floating Point Support
 //!
 //! This module provides Float16 (IEEE 754 half-precision) and BFloat16 (Brain Float)

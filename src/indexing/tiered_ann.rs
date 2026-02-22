@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! Tiered HNSW-DiskANN Index
 //!
 //! Combines in-memory HNSW for hot data with on-disk DiskANN for cold data,
