@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! ⚠️ **Experimental**: This module is under active development. APIs may change without notice.
 //!
 //! Edge Sync - Offline-first CRDT-based synchronization for vector databases.

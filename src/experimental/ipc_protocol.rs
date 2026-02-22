@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 #![allow(dead_code)]
 #![allow(unsafe_code)]
 

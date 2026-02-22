@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! ⚠️ **Experimental**: This module is under active development. APIs may change without notice.
 //!
 //! Platform Adapters for Edge Runtimes

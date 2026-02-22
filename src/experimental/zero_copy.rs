@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 #![allow(unsafe_code)] // Zero-copy FFI requires unsafe pointer operations
 //! ⚠️ **Experimental**: This module is under active development. APIs may change without notice.
 //!
