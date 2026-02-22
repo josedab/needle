@@ -344,7 +344,7 @@ impl VectorEncryptor {
     /// ChaCha20Poly1305 uses 96-bit (12-byte) nonces.
     fn generate_nonce() -> Vec<u8> {
         let mut nonce = vec![0u8; 12]; // 96-bit nonce for ChaCha20Poly1305
-        rand::thread_rng().fill_bytes(&mut nonce);
+        rand::rngs::OsRng.fill_bytes(&mut nonce);
         nonce
     }
 
