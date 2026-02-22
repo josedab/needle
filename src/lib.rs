@@ -174,6 +174,18 @@ pub use services::{
     otel_tracing, query_replay, smart_auto_embed, snapshot_time_travel, vector_pipeline,
 };
 
+// ── Next-Gen v5 Services ─────────────────────────────────────────────────────
+pub use services::{
+    ann_benchmark, api_stability, cdc_framework, cloud_deploy, community, compliance, format_spec,
+    model_runtime, module_audit, python_sdk,
+};
+
+// ── Next-Gen v6 Services ─────────────────────────────────────────────────────
+pub use services::{
+    adaptive_index_selector, edge_serverless, encrypted_search, gpu_kernels, graph_query,
+    llm_tools, managed_cloud, multi_writer, realtime_streaming, vector_lineage,
+};
+
 // ── Experimental / Advanced ──────────────────────────────────────────────────
 // Features under active development. APIs may change without notice.
 // Enable experimental modules with: --features experimental

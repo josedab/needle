@@ -56,3 +56,27 @@ pub mod query_replay;
 pub mod smart_auto_embed;
 pub mod snapshot_time_travel;
 pub mod vector_pipeline;
+
+// ── Next-Gen v5 Services ─────────────────────────────────────────────────────
+pub mod ann_benchmark;
+pub mod api_stability;
+pub mod cdc_framework;
+pub mod cloud_deploy;
+pub mod community;
+pub mod compliance;
+pub mod format_spec;
+pub mod model_runtime;
+pub mod module_audit;
+pub mod python_sdk;
+
+// ── Next-Gen v6 Services ─────────────────────────────────────────────────────
+pub mod adaptive_index_selector;
+pub mod edge_serverless;
+pub mod encrypted_search;
+pub mod gpu_kernels;
+pub mod graph_query;
+pub mod llm_tools;
+pub mod managed_cloud;
+pub mod multi_writer;
+pub mod realtime_streaming;
+pub mod vector_lineage;
