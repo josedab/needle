@@ -48,8 +48,16 @@ pub(super) fn build_cors_layer(config: &CorsConfig) -> std::result::Result<CorsL
         None => cors.allow_origin(AllowOrigin::any()),
         Some(origins) if origins.is_empty() => cors,
         Some(origins) => {
-            let origins: Vec<_> = origins.iter().filter_map(|o| o.parse().ok()).collect();
-            cors.allow_origin(origins)
+            let mut parsed = Vec::new();
+            for o in origins {
+                match o.parse() {
+                    Ok(origin) => parsed.push(origin),
+                    Err(_) => {
+                        tracing::warn!(origin = %o, "Rejected invalid CORS origin at startup");
+                    }
+                }
+            }
+            cors.allow_origin(parsed)
         }
     };
 
@@ -84,6 +92,9 @@ pub(super) fn create_rate_limiter(config: &RateLimitConfig) -> Option<Arc<PerIpR
 
 
 pub(super) fn extract_client_ip(request: &Request<Body>, trusted_proxies: &[IpAddr]) -> IpAddr {
+    /// Maximum number of IPs to parse from X-Forwarded-For to prevent DoS.
+    const MAX_FORWARDED_IPS: usize = 10;
+
     let remote_ip = request
         .extensions()
         .get::<ConnectInfo<SocketAddr>>()
@@ -97,7 +108,8 @@ pub(super) fn extract_client_ip(request: &Request<Body>, trusted_proxies: &[IpAd
             if let Ok(value) = forwarded_for.to_str() {
                 // Walk right-to-left to find the first IP not in the trusted proxy list
                 let ips: Vec<&str> = value.split(',').collect();
-                for raw_ip in ips.iter().rev() {
+                // Limit parsed entries to prevent DoS via excessively long header
+                for raw_ip in ips.iter().rev().take(MAX_FORWARDED_IPS) {
                     if let Ok(ip) = raw_ip.trim().parse::<IpAddr>() {
                         if !trusted_proxies.contains(&ip) {
                             return ip;
