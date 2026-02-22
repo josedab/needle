@@ -1,0 +1,443 @@
+//! Snapshot-Based Time Travel
+//!
+//! Point-in-time read-only database views using version counters and
+//! CoW-style snapshot chains. Each write increments the version; snapshots
+//! capture the state at a specific version for later query.
+//!
+//! # Example
+//!
+//! ```rust,no_run
+//! use needle::Database;
+//! use needle::services::snapshot_time_travel::{
+//!     VersionedStore, VersionSnapshot, VersionQuery,
+//! };
+//!
+//! let mut store = VersionedStore::new();
+//!
+//! // Insert at version 1
+//! store.insert("doc1", vec![1.0; 4], None);
+//! let v1 = store.current_version();
+//!
+//! // Modify at version 2
+//! store.insert("doc2", vec![2.0; 4], None);
+//!
+//! // Time travel to version 1
+//! let snapshot = store.at_version(v1).unwrap();
+//! assert!(snapshot.contains("doc1"));
+//! assert!(!snapshot.contains("doc2"));
+//! ```
+
+use std::collections::HashMap;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+
+use crate::error::{NeedleError, Result};
+
+// ── Version Entry ────────────────────────────────────────────────────────────
+
+/// A single versioned operation in the log.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum VersionOp {
+    /// Insert a vector.
+    Insert {
+        id: String,
+        vector: Vec<f32>,
+        metadata: Option<Value>,
+    },
+    /// Update a vector.
+    Update {
+        id: String,
+        vector: Vec<f32>,
+        metadata: Option<Value>,
+    },
+    /// Delete a vector.
+    Delete { id: String },
+}
+
+/// A timestamped version entry.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VersionEntry {
+    /// Version number.
+    pub version: u64,
+    /// Operation performed.
+    pub operation: VersionOp,
+    /// Timestamp.
+    pub timestamp: u64,
+}
+
+// ── Snapshot ─────────────────────────────────────────────────────────────────
+
+/// A read-only snapshot at a specific version.
+#[derive(Debug, Clone)]
+pub struct VersionSnapshot {
+    /// Version this snapshot represents.
+    pub version: u64,
+    /// Vectors present at this version.
+    vectors: HashMap<String, (Vec<f32>, Option<Value>)>,
+}
+
+impl VersionSnapshot {
+    /// Check if a vector ID exists in this snapshot.
+    pub fn contains(&self, id: &str) -> bool {
+        self.vectors.contains_key(id)
+    }
+
+    /// Get a vector by ID.
+    pub fn get(&self, id: &str) -> Option<(&[f32], Option<&Value>)> {
+        self.vectors.get(id).map(|(v, m)| (v.as_slice(), m.as_ref()))
+    }
+
+    /// Number of vectors in this snapshot.
+    pub fn len(&self) -> usize {
+        self.vectors.len()
+    }
+
+    /// Whether the snapshot is empty.
+    pub fn is_empty(&self) -> bool {
+        self.vectors.is_empty()
+    }
+
+    /// List all vector IDs.
+    pub fn ids(&self) -> Vec<&str> {
+        self.vectors.keys().map(|s| s.as_str()).collect()
+    }
+
+    /// Search by brute-force distance (for snapshot queries).
+    pub fn search(&self, query: &[f32], k: usize) -> Vec<(String, f32)> {
+        let mut distances: Vec<(String, f32)> = self
+            .vectors
+            .iter()
+            .map(|(id, (vec, _))| {
+                let dist = cosine_distance(query, vec);
+                (id.clone(), dist)
+            })
+            .collect();
+        distances.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+        distances.truncate(k);
+        distances
+    }
+}
+
+// ── Version Query ────────────────────────────────────────────────────────────
+
+/// Query against a specific version.
+#[derive(Debug, Clone)]
+pub struct VersionQuery {
+    /// Target version (None = latest).
+    pub version: Option<u64>,
+    /// Vector ID to retrieve.
+    pub id: Option<String>,
+    /// Search query vector.
+    pub search: Option<Vec<f32>>,
+    /// Number of results for search.
+    pub k: usize,
+}
+
+// ── Version Diff ─────────────────────────────────────────────────────────────
+
+/// Diff between two versions.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VersionDiff {
+    /// From version.
+    pub from: u64,
+    /// To version.
+    pub to: u64,
+    /// IDs added.
+    pub added: Vec<String>,
+    /// IDs removed.
+    pub removed: Vec<String>,
+    /// IDs modified.
+    pub modified: Vec<String>,
+}
+
+// ── Retention Policy ─────────────────────────────────────────────────────────
+
+/// How long to retain version history.
+#[derive(Debug, Clone)]
+pub struct RetentionPolicy {
+    /// Maximum versions to retain.
+    pub max_versions: usize,
+    /// Maximum age in seconds.
+    pub max_age_secs: Option<u64>,
+}
+
+impl Default for RetentionPolicy {
+    fn default() -> Self {
+        Self {
+            max_versions: 10_000,
+            max_age_secs: None,
+        }
+    }
+}
+
+// ── Versioned Store ──────────────────────────────────────────────────────────
+
+/// Versioned vector store with time-travel support.
+pub struct VersionedStore {
+    /// Current state.
+    current: HashMap<String, (Vec<f32>, Option<Value>)>,
+    /// Version log (append-only).
+    log: Vec<VersionEntry>,
+    /// Current version counter.
+    version: u64,
+    /// Retention policy.
+    retention: RetentionPolicy,
+}
+
+impl VersionedStore {
+    /// Create a new versioned store.
+    pub fn new() -> Self {
+        Self {
+            current: HashMap::new(),
+            log: Vec::new(),
+            version: 0,
+            retention: RetentionPolicy::default(),
+        }
+    }
+
+    /// Create with a retention policy.
+    pub fn with_retention(mut self, policy: RetentionPolicy) -> Self {
+        self.retention = policy;
+        self
+    }
+
+    /// Insert a vector, creating a new version.
+    pub fn insert(&mut self, id: &str, vector: Vec<f32>, metadata: Option<Value>) -> u64 {
+        self.version += 1;
+        self.log.push(VersionEntry {
+            version: self.version,
+            operation: VersionOp::Insert {
+                id: id.into(),
+                vector: vector.clone(),
+                metadata: metadata.clone(),
+            },
+            timestamp: now_secs(),
+        });
+        self.current.insert(id.into(), (vector, metadata));
+        self.enforce_retention();
+        self.version
+    }
+
+    /// Update a vector, creating a new version.
+    pub fn update(&mut self, id: &str, vector: Vec<f32>, metadata: Option<Value>) -> Option<u64> {
+        if !self.current.contains_key(id) {
+            return None;
+        }
+        self.version += 1;
+        self.log.push(VersionEntry {
+            version: self.version,
+            operation: VersionOp::Update {
+                id: id.into(),
+                vector: vector.clone(),
+                metadata: metadata.clone(),
+            },
+            timestamp: now_secs(),
+        });
+        self.current.insert(id.into(), (vector, metadata));
+        Some(self.version)
+    }
+
+    /// Delete a vector, creating a new version.
+    pub fn delete(&mut self, id: &str) -> Option<u64> {
+        if self.current.remove(id).is_none() {
+            return None;
+        }
+        self.version += 1;
+        self.log.push(VersionEntry {
+            version: self.version,
+            operation: VersionOp::Delete { id: id.into() },
+            timestamp: now_secs(),
+        });
+        Some(self.version)
+    }
+
+    /// Get the current version number.
+    pub fn current_version(&self) -> u64 {
+        self.version
+    }
+
+    /// Get a read-only snapshot at a specific version.
+    pub fn at_version(&self, version: u64) -> Result<VersionSnapshot> {
+        if version > self.version {
+            return Err(NeedleError::NotFound(format!("Version {version} does not exist (current: {})", self.version)));
+        }
+        let min_version = self.log.first().map(|e| e.version).unwrap_or(0);
+        if version < min_version && min_version > 0 {
+            return Err(NeedleError::NotFound(format!(
+                "Version {version} has been compacted (earliest: {min_version})"
+            )));
+        }
+
+        // Replay log up to target version
+        let mut state: HashMap<String, (Vec<f32>, Option<Value>)> = HashMap::new();
+        for entry in &self.log {
+            if entry.version > version {
+                break;
+            }
+            match &entry.operation {
+                VersionOp::Insert { id, vector, metadata } | VersionOp::Update { id, vector, metadata } => {
+                    state.insert(id.clone(), (vector.clone(), metadata.clone()));
+                }
+                VersionOp::Delete { id } => {
+                    state.remove(id);
+                }
+            }
+        }
+
+        Ok(VersionSnapshot { version, vectors: state })
+    }
+
+    /// Compute diff between two versions.
+    pub fn diff(&self, from: u64, to: u64) -> Result<VersionDiff> {
+        let snap_from = self.at_version(from)?;
+        let snap_to = self.at_version(to)?;
+
+        let from_ids: std::collections::HashSet<&str> = snap_from.ids().into_iter().collect();
+        let to_ids: std::collections::HashSet<&str> = snap_to.ids().into_iter().collect();
+
+        let added: Vec<String> = to_ids.difference(&from_ids).map(|s| s.to_string()).collect();
+        let removed: Vec<String> = from_ids.difference(&to_ids).map(|s| s.to_string()).collect();
+        let modified: Vec<String> = from_ids
+            .intersection(&to_ids)
+            .filter(|id| {
+                let (v1, _) = snap_from.get(id).unwrap();
+                let (v2, _) = snap_to.get(id).unwrap();
+                v1 != v2
+            })
+            .map(|s| s.to_string())
+            .collect();
+
+        Ok(VersionDiff { from, to, added, removed, modified })
+    }
+
+    /// Current vector count.
+    pub fn len(&self) -> usize {
+        self.current.len()
+    }
+
+    /// Whether the store is empty.
+    pub fn is_empty(&self) -> bool {
+        self.current.is_empty()
+    }
+
+    /// Version log length.
+    pub fn log_len(&self) -> usize {
+        self.log.len()
+    }
+
+    fn enforce_retention(&mut self) {
+        while self.log.len() > self.retention.max_versions {
+            self.log.remove(0);
+        }
+    }
+}
+
+impl Default for VersionedStore {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+fn now_secs() -> u64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs()
+}
+
+fn cosine_distance(a: &[f32], b: &[f32]) -> f32 {
+    let dot: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
+    let norm_a: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
+    let norm_b: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
+    if norm_a < f32::EPSILON || norm_b < f32::EPSILON {
+        return 1.0;
+    }
+    1.0 - (dot / (norm_a * norm_b))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_insert_and_version() {
+        let mut store = VersionedStore::new();
+        let v1 = store.insert("a", vec![1.0; 4], None);
+        assert_eq!(v1, 1);
+        let v2 = store.insert("b", vec![2.0; 4], None);
+        assert_eq!(v2, 2);
+        assert_eq!(store.current_version(), 2);
+    }
+
+    #[test]
+    fn test_time_travel() {
+        let mut store = VersionedStore::new();
+        store.insert("a", vec![1.0; 4], None);
+        let v1 = store.current_version();
+        store.insert("b", vec![2.0; 4], None);
+        store.delete("a");
+
+        let snap = store.at_version(v1).unwrap();
+        assert!(snap.contains("a"));
+        assert!(!snap.contains("b"));
+        assert_eq!(snap.len(), 1);
+    }
+
+    #[test]
+    fn test_snapshot_search() {
+        let mut store = VersionedStore::new();
+        store.insert("a", vec![1.0, 0.0, 0.0, 0.0], None);
+        store.insert("b", vec![0.0, 1.0, 0.0, 0.0], None);
+
+        let snap = store.at_version(store.current_version()).unwrap();
+        let results = snap.search(&[1.0, 0.0, 0.0, 0.0], 2);
+        assert_eq!(results[0].0, "a");
+    }
+
+    #[test]
+    fn test_diff() {
+        let mut store = VersionedStore::new();
+        store.insert("a", vec![1.0; 4], None);
+        let v1 = store.current_version();
+        store.insert("b", vec![2.0; 4], None);
+        store.delete("a");
+        let v2 = store.current_version();
+
+        let diff = store.diff(v1, v2).unwrap();
+        assert!(diff.added.contains(&"b".to_string()));
+        assert!(diff.removed.contains(&"a".to_string()));
+    }
+
+    #[test]
+    fn test_update_versioning() {
+        let mut store = VersionedStore::new();
+        store.insert("a", vec![1.0; 4], None);
+        let v1 = store.current_version();
+        store.update("a", vec![9.0; 4], None);
+        let v2 = store.current_version();
+
+        let snap1 = store.at_version(v1).unwrap();
+        let snap2 = store.at_version(v2).unwrap();
+        let (vec1, _) = snap1.get("a").unwrap();
+        let (vec2, _) = snap2.get("a").unwrap();
+        assert!((vec1[0] - 1.0).abs() < 0.01);
+        assert!((vec2[0] - 9.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_version_not_found() {
+        let store = VersionedStore::new();
+        assert!(store.at_version(999).is_err());
+    }
+
+    #[test]
+    fn test_retention() {
+        let mut store = VersionedStore::new().with_retention(RetentionPolicy {
+            max_versions: 3,
+            max_age_secs: None,
+        });
+        for i in 0..10 {
+            store.insert(&format!("v{i}"), vec![i as f32; 4], None);
+        }
+        assert!(store.log_len() <= 3);
+    }
+}

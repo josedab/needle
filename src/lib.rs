@@ -161,6 +161,19 @@ pub use services::{
 pub use search::cost_estimator;
 pub use indexing::{graph_vector_fusion, multimodal_fusion};
 
+// ── Next-Gen v3 Services ─────────────────────────────────────────────────────
+pub use services::{
+    agentic_memory_protocol, graph_knowledge_service, live_replication, llm_cache_middleware,
+    multimodal_collection, plugin_ecosystem, query_optimizer, text_to_vector, transactional_api,
+    wasm_persistence,
+};
+
+// ── Next-Gen v4 Services ─────────────────────────────────────────────────────
+pub use services::{
+    collection_bundle, collection_federation, collection_rbac, drift_monitor, materialized_views,
+    otel_tracing, query_replay, smart_auto_embed, snapshot_time_travel, vector_pipeline,
+};
+
 // ── Experimental / Advanced ──────────────────────────────────────────────────
 // Features under active development. APIs may change without notice.
 // Enable experimental modules with: --features experimental
