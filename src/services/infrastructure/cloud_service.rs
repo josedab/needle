@@ -25,6 +25,7 @@
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use rand::Rng;
 use serde::{Deserialize, Serialize};
 
 use crate::error::{NeedleError, Result};
@@ -351,7 +352,7 @@ impl CloudService {
 
         let id = format!("inst-{:06}", self.next_id);
         self.next_id += 1;
-        let api_key = format!("nk_live_{id}_{}", now_secs());
+        let api_key = generate_api_key(&id);
         self.api_keys.insert(api_key.clone(), id.clone());
 
         let instance = CloudInstance {
@@ -569,7 +570,7 @@ impl CloudService {
         // Remove old key
         self.api_keys.retain(|_, v| v != instance_id);
         // Generate new key
-        let new_key = format!("nk_live_{instance_id}_{}", now_secs());
+        let new_key = generate_api_key(instance_id);
         self.api_keys.insert(new_key.clone(), instance_id.to_string());
         inst.api_key = new_key.clone();
         Ok(new_key)
@@ -605,6 +606,13 @@ fn now_secs() -> u64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs()
+}
+
+/// Generate a cryptographically random API key with high entropy.
+fn generate_api_key(instance_id: &str) -> String {
+    let random_bytes: [u8; 16] = rand::thread_rng().r#gen();
+    let hex: String = random_bytes.iter().map(|b| format!("{b:02x}")).collect();
+    format!("nk_live_{instance_id}_{hex}")
 }
 
 #[cfg(test)]
