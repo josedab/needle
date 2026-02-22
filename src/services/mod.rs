@@ -23,3 +23,12 @@ pub mod streaming_ingest;
 pub mod time_travel_query;
 pub mod visual_explorer;
 pub mod wasm_sdk;
+
+// ── Next-Gen v2 Services ─────────────────────────────────────────────────────
+pub mod inference_engine;
+pub mod plugin_api;
+pub mod semantic_cache;
+pub mod streaming_protocol;
+pub mod sync_engine;
+pub mod vector_transactions;
+pub mod wasm_browser;
