@@ -81,8 +81,8 @@ use tracing::{error, info, warn};
 use crate::metrics::{http_metrics, metrics};
 
 // ── Server defaults ──────────────────────────────────────────────────────────
-/// Default maximum request body size (100 MB).
-const DEFAULT_MAX_BODY_SIZE: usize = 100 * 1024 * 1024;
+/// Default maximum request body size (10 MB).
+const DEFAULT_MAX_BODY_SIZE: usize = 10 * 1024 * 1024;
 /// Default maximum items per batch operation.
 const DEFAULT_MAX_BATCH_SIZE: usize = 10_000;
 /// Default request timeout in seconds.
@@ -1538,7 +1538,7 @@ mod tests {
     #[test]
     fn test_server_config_default() {
         let config = ServerConfig::default();
-        assert_eq!(config.max_body_size, 100 * 1024 * 1024); // 100MB
+        assert_eq!(config.max_body_size, 10 * 1024 * 1024); // 10MB
         assert!(config.db_path.is_none());
         assert!(config.cors_config.enabled);
         assert!(config.rate_limit.enabled);
