@@ -1,0 +1,10 @@
+name = "needle-edge"
+main = "src/index.ts"
+compatibility_date = "2024-01-01"
+
+[vars]
+NEEDLE_DIMENSIONS = "384"
+
+[[kv_namespaces]]
+binding = "NEEDLE_KV"
+id = "your-kv-namespace-id"
