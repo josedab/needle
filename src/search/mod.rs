@@ -9,4 +9,5 @@ pub mod query_explain;
 pub mod query_lang;
 pub mod query_planner;
 pub mod reranker;
+pub mod cost_estimator;
 pub mod routing;
