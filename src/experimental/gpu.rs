@@ -233,41 +233,49 @@ pub struct GpuConfigBuilder {
 }
 
 impl GpuConfigBuilder {
+    #[must_use]
     pub fn preferred_backend(mut self, backend: GpuBackend) -> Self {
         self.config.preferred_backend = backend;
         self
     }
 
+    #[must_use]
     pub fn device_id(mut self, id: usize) -> Self {
         self.config.device_id = Some(id);
         self
     }
 
+    #[must_use]
     pub fn memory_limit_mb(mut self, limit: u64) -> Self {
         self.config.memory_limit_mb = limit;
         self
     }
 
+    #[must_use]
     pub fn enable_async(mut self, enable: bool) -> Self {
         self.config.enable_async = enable;
         self
     }
 
+    #[must_use]
     pub fn batch_size(mut self, size: usize) -> Self {
         self.config.batch_size = size;
         self
     }
 
+    #[must_use]
     pub fn use_fp16(mut self, enable: bool) -> Self {
         self.config.use_fp16 = enable;
         self
     }
 
+    #[must_use]
     pub fn enable_fusion(mut self, enable: bool) -> Self {
         self.config.enable_fusion = enable;
         self
     }
 
+    #[must_use]
     pub fn stream_count(mut self, count: usize) -> Self {
         self.config.stream_count = count;
         self

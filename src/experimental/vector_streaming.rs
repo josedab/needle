@@ -177,36 +177,42 @@ impl ConsumerConfig {
     }
 
     /// Set consumer group ID
+    #[must_use]
     pub fn group_id(mut self, group_id: &str) -> Self {
         self.group_id = group_id.to_string();
         self
     }
 
     /// Set batch size
+    #[must_use]
     pub fn batch_size(mut self, size: usize) -> Self {
         self.batch_size = size;
         self
     }
 
     /// Set auto-commit behavior
+    #[must_use]
     pub fn auto_commit(mut self, enabled: bool) -> Self {
         self.auto_commit = enabled;
         self
     }
 
     /// Set vector format
+    #[must_use]
     pub fn vector_format(mut self, format: VectorFormat) -> Self {
         self.vector_format = format;
         self
     }
 
     /// Enable exactly-once semantics
+    #[must_use]
     pub fn exactly_once(mut self, enabled: bool) -> Self {
         self.exactly_once = enabled;
         self
     }
 
     /// Enable deduplication
+    #[must_use]
     pub fn deduplication(mut self, enabled: bool) -> Self {
         self.deduplication = enabled;
         self
@@ -842,6 +848,7 @@ impl StreamProcessor {
     }
 
     /// Set output producer
+    #[must_use]
     pub fn with_producer(mut self, producer: Arc<VectorProducer>) -> Self {
         self.producer = Some(producer);
         self
@@ -1206,18 +1213,21 @@ impl TransactionalProcessor {
     }
 
     /// Set maximum retries
+    #[must_use]
     pub fn with_max_retries(mut self, retries: u32) -> Self {
         self.max_retries = retries;
         self
     }
 
     /// Set checkpoint interval
+    #[must_use]
     pub fn with_checkpoint_interval(mut self, interval: usize) -> Self {
         self.checkpoint_interval = interval;
         self
     }
 
     /// Attach a backpressure controller to throttle ingestion automatically.
+    #[must_use]
     pub fn with_backpressure(mut self, controller: Arc<BackpressureController>) -> Self {
         self.backpressure = Some(controller);
         self

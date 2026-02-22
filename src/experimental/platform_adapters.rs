@@ -66,6 +66,7 @@ impl CloudflareKvAdapter {
     }
 
     /// Set a key prefix for all operations
+    #[must_use]
     pub fn with_prefix(mut self, prefix: &str) -> Self {
         self.prefix = prefix.to_string();
         self
@@ -162,6 +163,7 @@ impl CloudflareR2Adapter {
     }
 
     /// Set a key prefix
+    #[must_use]
     pub fn with_prefix(mut self, prefix: &str) -> Self {
         self.prefix = prefix.to_string();
         self

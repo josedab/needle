@@ -330,6 +330,7 @@ impl VectorBatchBuilder {
     }
 
     /// Add a vector record to the batch.
+    #[must_use]
     pub fn add(mut self, id: impl Into<String>, vector: &[f32], metadata: Option<Value>) -> Self {
         self.records.push(VectorRecord {
             id: id.into(),
@@ -479,31 +480,37 @@ pub struct StreamingUpsertConfigBuilder {
 }
 
 impl StreamingUpsertConfigBuilder {
+    #[must_use]
     pub fn batch_size(mut self, n: usize) -> Self {
         self.config.batch_size = n;
         self
     }
 
+    #[must_use]
     pub fn max_inflight(mut self, n: usize) -> Self {
         self.config.max_inflight = n;
         self
     }
 
+    #[must_use]
     pub fn backpressure_threshold(mut self, n: u64) -> Self {
         self.config.backpressure_threshold = n;
         self
     }
 
+    #[must_use]
     pub fn backpressure_critical(mut self, n: u64) -> Self {
         self.config.backpressure_critical = n;
         self
     }
 
+    #[must_use]
     pub fn flush_interval(mut self, d: Duration) -> Self {
         self.config.flush_interval = d;
         self
     }
 
+    #[must_use]
     pub fn dedup_within_batch(mut self, yes: bool) -> Self {
         self.config.dedup_within_batch = yes;
         self

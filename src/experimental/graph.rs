@@ -66,6 +66,7 @@ impl GraphConfig {
     }
 
     /// Set similarity threshold
+    #[must_use]
     pub fn with_threshold(mut self, threshold: f32) -> Self {
         self.threshold = Some(threshold);
         self

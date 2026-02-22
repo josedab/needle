@@ -82,26 +82,31 @@ impl PitrServiceConfig {
 }
 
 impl PitrServiceConfigBuilder {
+    #[must_use]
     pub fn backup_dir(mut self, dir: impl Into<PathBuf>) -> Self {
         self.config.backup_dir = dir.into();
         self
     }
 
+    #[must_use]
     pub fn retention_days(mut self, days: u32) -> Self {
         self.config.retention_days = days;
         self
     }
 
+    #[must_use]
     pub fn max_snapshots(mut self, max: usize) -> Self {
         self.config.max_snapshots = max;
         self
     }
 
+    #[must_use]
     pub fn enable_checksums(mut self, enable: bool) -> Self {
         self.config.enable_checksums = enable;
         self
     }
 
+    #[must_use]
     pub fn auto_snapshot_interval_secs(mut self, secs: u64) -> Self {
         self.config.auto_snapshot_interval = Duration::from_secs(secs);
         self

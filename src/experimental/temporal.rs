@@ -587,16 +587,19 @@ impl<'a> TemporalQueryBuilder<'a> {
         }
     }
 
+    #[must_use]
     pub fn k(mut self, k: usize) -> Self {
         self.k = k;
         self
     }
 
+    #[must_use]
     pub fn with_decay(mut self, decay: DecayFunction) -> Self {
         self.decay = Some(decay);
         self
     }
 
+    #[must_use]
     pub fn in_range(mut self, start: u64, end: u64) -> Self {
         self.time_range = Some((start, end));
         self
@@ -618,11 +621,13 @@ impl<'a> TemporalQueryBuilder<'a> {
         self.in_range(now - days * 86400, now)
     }
 
+    #[must_use]
     pub fn as_of(mut self, timestamp: u64) -> Self {
         self.as_of = Some(timestamp);
         self
     }
 
+    #[must_use]
     pub fn with_filter(mut self, filter: Filter) -> Self {
         self.filter = Some(filter);
         self

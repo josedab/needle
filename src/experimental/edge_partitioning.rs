@@ -90,18 +90,21 @@ impl PartitionConfig {
     }
 
     /// Builder: set max vectors per partition
+    #[must_use]
     pub fn with_max_vectors(mut self, count: usize) -> Self {
         self.max_vectors_per_partition = count;
         self
     }
 
     /// Builder: set target partition count
+    #[must_use]
     pub fn with_target_partitions(mut self, count: usize) -> Self {
         self.target_partitions = count;
         self
     }
 
     /// Builder: set search probe count
+    #[must_use]
     pub fn with_probe_count(mut self, count: usize) -> Self {
         self.search_probe_count = count;
         self

@@ -207,30 +207,35 @@ pub struct StreamingIngestConfigBuilder {
 
 impl StreamingIngestConfigBuilder {
     /// Set the target collection.
+    #[must_use]
     pub fn collection(mut self, name: impl Into<String>) -> Self {
         self.inner.collection = name.into();
         self
     }
 
     /// Set batch size.
+    #[must_use]
     pub fn batch_size(mut self, size: usize) -> Self {
         self.inner.batch_size = size.max(1);
         self
     }
 
     /// Set flush interval in milliseconds.
+    #[must_use]
     pub fn flush_interval_ms(mut self, ms: u64) -> Self {
         self.inner.flush_interval_ms = ms;
         self
     }
 
     /// Set maximum buffer size.
+    #[must_use]
     pub fn max_buffer_size(mut self, size: usize) -> Self {
         self.inner.max_buffer_size = size.max(1);
         self
     }
 
     /// Enable exactly-once delivery.
+    #[must_use]
     pub fn enable_exactly_once(mut self, enable: bool) -> Self {
         self.inner.delivery = if enable {
             DeliveryGuarantee::ExactlyOnce
@@ -241,42 +246,49 @@ impl StreamingIngestConfigBuilder {
     }
 
     /// Set delivery guarantee.
+    #[must_use]
     pub fn delivery(mut self, d: DeliveryGuarantee) -> Self {
         self.inner.delivery = d;
         self
     }
 
     /// Enable content-hash deduplication.
+    #[must_use]
     pub fn enable_dedup(mut self, enable: bool) -> Self {
         self.inner.enable_dedup = enable;
         self
     }
 
     /// Set maximum retries before dead-lettering.
+    #[must_use]
     pub fn max_retries(mut self, retries: u32) -> Self {
         self.inner.max_retries = retries;
         self
     }
 
     /// Set source connector.
+    #[must_use]
     pub fn source(mut self, src: SourceConfig) -> Self {
         self.inner.source = Some(src);
         self
     }
 
     /// Set the JSON field path for extracting vectors.
+    #[must_use]
     pub fn vector_field(mut self, field: impl Into<String>) -> Self {
         self.inner.vector_field = Some(field.into());
         self
     }
 
     /// Set the JSON field path for extracting IDs.
+    #[must_use]
     pub fn id_field(mut self, field: impl Into<String>) -> Self {
         self.inner.id_field = Some(field.into());
         self
     }
 
     /// Set the JSON field path for extracting metadata.
+    #[must_use]
     pub fn metadata_field(mut self, field: impl Into<String>) -> Self {
         self.inner.metadata_field = Some(field.into());
         self
@@ -318,12 +330,14 @@ impl IngestRecord {
     }
 
     /// Attach metadata.
+    #[must_use]
     pub fn with_metadata(mut self, meta: Value) -> Self {
         self.metadata = Some(meta);
         self
     }
 
     /// Attach a source sequence ID for exactly-once tracking.
+    #[must_use]
     pub fn with_sequence_id(mut self, seq: u64) -> Self {
         self.sequence_id = Some(seq);
         self

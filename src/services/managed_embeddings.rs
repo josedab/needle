@@ -213,36 +213,42 @@ pub struct PipelineConfigBuilder {
 
 impl PipelineConfigBuilder {
     /// Set target collection.
+    #[must_use]
     pub fn collection(mut self, name: impl Into<String>) -> Self {
         self.inner.collection = name.into();
         self
     }
 
     /// Set embedding provider.
+    #[must_use]
     pub fn provider(mut self, p: ProviderConfig) -> Self {
         self.inner.provider = p;
         self
     }
 
     /// Set batch size.
+    #[must_use]
     pub fn batch_size(mut self, size: usize) -> Self {
         self.inner.batch_size = size.max(1);
         self
     }
 
     /// Set maximum pending items.
+    #[must_use]
     pub fn max_pending(mut self, max: usize) -> Self {
         self.inner.max_pending = max;
         self
     }
 
     /// Control whether original text is stored as metadata.
+    #[must_use]
     pub fn store_original_text(mut self, store: bool) -> Self {
         self.inner.store_original_text = store;
         self
     }
 
     /// Set max text length.
+    #[must_use]
     pub fn max_text_length(mut self, len: usize) -> Self {
         self.inner.max_text_length = len;
         self
