@@ -21,15 +21,16 @@ fn sha256_hex(data: &[u8]) -> String {
 }
 
 /// Constant-time byte slice comparison to prevent timing side-channel attacks.
+/// Compares SHA-256 hashes of both inputs to ensure constant-time behavior
+/// regardless of input lengths, preventing length-leaking side channels.
 fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
-    if a.len() != b.len() {
-        return false;
-    }
+    let hash_a = Sha256::digest(a);
+    let hash_b = Sha256::digest(b);
     let mut diff = 0u8;
-    for (x, y) in a.iter().zip(b.iter()) {
+    for (x, y) in hash_a.iter().zip(hash_b.iter()) {
         diff |= x ^ y;
     }
-    diff == 0
+    diff == 0 && a.len() == b.len()
 }
 
 // ── Core Types ──────────────────────────────────────────────────────────────
