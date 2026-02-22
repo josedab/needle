@@ -40,6 +40,30 @@ use std::time::{Duration, Instant};
 use thiserror::Error;
 use tokio::sync::{Mutex, RwLock, Semaphore};
 
+/// Validate that a base URL uses http or https scheme and does not target
+/// cloud metadata endpoints, to prevent SSRF attacks.
+fn validate_base_url(url: &str) -> std::result::Result<(), EmbeddingProviderError> {
+    if !url.starts_with("https://") && !url.starts_with("http://") {
+        return Err(EmbeddingProviderError::ConfigurationError(format!(
+            "Base URL must use http:// or https:// scheme, got: {}",
+            url
+        )));
+    }
+
+    // Block cloud metadata endpoints (AWS, GCP, Azure link-local)
+    let blocked_hosts = ["169.254.169.254", "[fd00:ec2::254]"];
+    for host in &blocked_hosts {
+        if url.contains(host) {
+            return Err(EmbeddingProviderError::ConfigurationError(format!(
+                "Base URL must not target cloud metadata endpoints: {}",
+                url
+            )));
+        }
+    }
+
+    Ok(())
+}
+
 // ============================================================================
 // Error Types
 // ============================================================================
@@ -99,13 +123,25 @@ impl Default for BatchConfig {
 }
 
 /// OpenAI provider configuration
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct OpenAIConfig {
     pub api_key: String,
     pub model: String,
     pub base_url: String,
     pub timeout: Duration,
     pub dimensions: Option<usize>,
+}
+
+impl std::fmt::Debug for OpenAIConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OpenAIConfig")
+            .field("api_key", &"[REDACTED]")
+            .field("model", &self.model)
+            .field("base_url", &self.base_url)
+            .field("timeout", &self.timeout)
+            .field("dimensions", &self.dimensions)
+            .finish()
+    }
 }
 
 impl OpenAIConfig {
@@ -131,13 +167,25 @@ impl OpenAIConfig {
 }
 
 /// Cohere provider configuration
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct CohereConfig {
     pub api_key: String,
     pub model: String,
     pub base_url: String,
     pub timeout: Duration,
     pub input_type: CohereInputType,
+}
+
+impl std::fmt::Debug for CohereConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CohereConfig")
+            .field("api_key", &"[REDACTED]")
+            .field("model", &self.model)
+            .field("base_url", &self.base_url)
+            .field("timeout", &self.timeout)
+            .field("input_type", &self.input_type)
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -256,10 +304,11 @@ pub struct OpenAIProvider {
 
 impl OpenAIProvider {
     pub fn new(config: OpenAIConfig) -> Self {
+        validate_base_url(&config.base_url).expect("Invalid OpenAI base URL");
         let client = reqwest::Client::builder()
             .timeout(config.timeout)
             .build()
-            .unwrap_or_else(|_| reqwest::Client::new());
+            .expect("Failed to build HTTP client");
         let dimensions = config.dimensions.unwrap_or(1536);
         Self {
             config,
@@ -350,6 +399,7 @@ pub struct CohereProvider {
 
 impl CohereProvider {
     pub fn new(config: CohereConfig) -> Result<Self> {
+        validate_base_url(&config.base_url)?;
         let client = reqwest::Client::builder()
             .timeout(config.timeout)
             .build()
@@ -435,6 +485,7 @@ pub struct OllamaProvider {
 
 impl OllamaProvider {
     pub fn new(config: OllamaConfig) -> Result<Self> {
+        validate_base_url(&config.base_url)?;
         let client = reqwest::Client::builder()
             .timeout(config.timeout)
             .build()
@@ -949,5 +1000,23 @@ mod tests {
             "search_document"
         );
         assert_eq!(OllamaConfig::default().model, "nomic-embed-text");
+    }
+
+    #[test]
+    fn test_validate_base_url_rejects_non_http() {
+        assert!(validate_base_url("ftp://example.com").is_err());
+        assert!(validate_base_url("file:///etc/passwd").is_err());
+    }
+
+    #[test]
+    fn test_validate_base_url_accepts_http_https() {
+        assert!(validate_base_url("https://api.openai.com/v1").is_ok());
+        assert!(validate_base_url("http://localhost:11434").is_ok());
+    }
+
+    #[test]
+    fn test_validate_base_url_rejects_metadata_endpoints() {
+        assert!(validate_base_url("http://169.254.169.254/latest/meta-data").is_err());
+        assert!(validate_base_url("https://169.254.169.254").is_err());
     }
 }

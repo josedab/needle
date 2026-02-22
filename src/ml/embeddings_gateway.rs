@@ -79,7 +79,7 @@ impl std::fmt::Display for ProviderType {
 }
 
 /// Configuration for a single provider
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct ProviderConfig {
     /// Provider type
     pub provider_type: ProviderType,
@@ -105,6 +105,22 @@ pub struct ProviderConfig {
     pub rate_limit_rpm: Option<u32>,
     /// Custom headers
     pub headers: HashMap<String, String>,
+}
+
+impl std::fmt::Debug for ProviderConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ProviderConfig")
+            .field("provider_type", &self.provider_type)
+            .field("api_key", &self.api_key.as_ref().map(|_| "[REDACTED]"))
+            .field("model", &self.model)
+            .field("base_url", &self.base_url)
+            .field("dimensions", &self.dimensions)
+            .field("timeout", &self.timeout)
+            .field("max_batch_size", &self.max_batch_size)
+            .field("priority", &self.priority)
+            .field("enabled", &self.enabled)
+            .finish()
+    }
 }
 
 impl ProviderConfig {
