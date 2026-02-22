@@ -42,7 +42,8 @@ pub use common::*;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use parking_lot::RwLock;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use common::{
@@ -225,7 +226,6 @@ impl GpuAccelerator {
     pub fn metrics(&self) -> GpuMetrics {
         self.metrics
             .read()
-            .expect("metrics lock should not be poisoned")
             .clone()
     }
 
@@ -238,8 +238,7 @@ impl GpuAccelerator {
         let size = element_count * dtype.size_bytes();
         let mut pool = self
             .memory_pool
-            .write()
-            .expect("memory_pool lock should not be poisoned");
+            .write();
 
         let buffer_id = pool
             .allocate(size)
@@ -255,7 +254,6 @@ impl GpuAccelerator {
 
         self.buffers
             .write()
-            .expect("buffers lock should not be poisoned")
             .insert(buffer_id, buffer.clone());
         Ok(buffer)
     }
@@ -264,12 +262,10 @@ impl GpuAccelerator {
     pub fn free_buffer(&self, buffer: &GpuBuffer) -> bool {
         let mut pool = self
             .memory_pool
-            .write()
-            .expect("memory_pool lock should not be poisoned");
+            .write();
         if pool.deallocate(buffer.id) {
             self.buffers
                 .write()
-                .expect("buffers lock should not be poisoned")
                 .remove(&buffer.id);
             true
         } else {
@@ -281,7 +277,6 @@ impl GpuAccelerator {
     pub fn available_memory(&self) -> u64 {
         self.memory_pool
             .read()
-            .expect("memory_pool lock should not be poisoned")
             .available()
     }
 
@@ -836,8 +831,7 @@ impl GpuAccelerator {
     ) {
         let mut metrics = self
             .metrics
-            .write()
-            .expect("metrics lock should not be poisoned");
+            .write();
         metrics.total_operations += 1;
         metrics.total_execution_time += duration;
         metrics.total_memory_transferred += memory;
@@ -1090,8 +1084,7 @@ impl GpuAccelerator {
     pub fn reset_metrics(&self) {
         *self
             .metrics
-            .write()
-            .expect("metrics lock should not be poisoned") = GpuMetrics::default();
+            .write() = GpuMetrics::default();
     }
 
     /// Check if using real GPU (not CPU fallback)
