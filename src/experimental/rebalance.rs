@@ -87,30 +87,35 @@ impl RebalanceConfig {
     }
 
     /// Set maximum concurrent migrations.
+    #[must_use]
     pub fn max_concurrent_migrations(mut self, max: usize) -> Self {
         self.max_concurrent_migrations = max;
         self
     }
 
     /// Set batch size.
+    #[must_use]
     pub fn batch_size(mut self, size: usize) -> Self {
         self.batch_size = size;
         self
     }
 
     /// Set transfer timeout.
+    #[must_use]
     pub fn transfer_timeout(mut self, timeout: Duration) -> Self {
         self.transfer_timeout = timeout;
         self
     }
 
     /// Set throttle rate.
+    #[must_use]
     pub fn throttle_rate(mut self, rate: u64) -> Self {
         self.throttle_rate = rate;
         self
     }
 
     /// Enable or disable transfer verification.
+    #[must_use]
     pub fn verify_transfers(mut self, verify: bool) -> Self {
         self.verify_transfers = verify;
         self

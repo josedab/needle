@@ -274,6 +274,7 @@ impl VectorBatch {
     }
 
     /// Add metadata to batch
+    #[must_use]
     pub fn with_metadata(mut self, metadata: Vec<Option<String>>) -> Self {
         assert_eq!(metadata.len(), self.count);
         self.metadata = Some(metadata);

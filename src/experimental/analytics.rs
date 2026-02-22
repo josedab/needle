@@ -713,12 +713,14 @@ impl QueryTracker {
     }
 
     /// Set the k parameter
+    #[must_use]
     pub fn with_k(mut self, k: usize) -> Self {
         self.k = Some(k);
         self
     }
 
     /// Mark as using a filter
+    #[must_use]
     pub fn with_filter(mut self, complexity: usize) -> Self {
         self.has_filter = true;
         self.filter_complexity = Some(complexity);

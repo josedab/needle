@@ -181,30 +181,35 @@ impl MemoryConfig {
     }
 
     /// Set short-term capacity
+    #[must_use]
     pub fn with_short_term_capacity(mut self, capacity: usize) -> Self {
         self.short_term_capacity = capacity;
         self
     }
 
     /// Set long-term capacity
+    #[must_use]
     pub fn with_long_term_capacity(mut self, capacity: usize) -> Self {
         self.long_term_capacity = capacity;
         self
     }
 
     /// Set decay function
+    #[must_use]
     pub fn with_decay_function(mut self, decay: DecayFunction) -> Self {
         self.decay_function = decay;
         self
     }
 
     /// Set recall threshold
+    #[must_use]
     pub fn with_recall_threshold(mut self, threshold: f32) -> Self {
         self.recall_threshold = threshold;
         self
     }
 
     /// Enable/disable associations
+    #[must_use]
     pub fn with_associations(mut self, enable: bool) -> Self {
         self.enable_associations = enable;
         self
@@ -292,12 +297,14 @@ impl Memory {
     }
 
     /// Add tags
+    #[must_use]
     pub fn with_tags(mut self, tags: Vec<String>) -> Self {
         self.tags = tags;
         self
     }
 
     /// Set source
+    #[must_use]
     pub fn with_source(mut self, source: impl Into<String>) -> Self {
         self.source = Some(source.into());
         self
@@ -935,36 +942,42 @@ impl AgentMemoryBuilder {
     }
 
     /// Set short-term capacity
+    #[must_use]
     pub fn short_term_capacity(mut self, capacity: usize) -> Self {
         self.config.short_term_capacity = capacity;
         self
     }
 
     /// Set long-term capacity
+    #[must_use]
     pub fn long_term_capacity(mut self, capacity: usize) -> Self {
         self.config.long_term_capacity = capacity;
         self
     }
 
     /// Set working memory capacity
+    #[must_use]
     pub fn working_memory_capacity(mut self, capacity: usize) -> Self {
         self.config.working_memory_capacity = capacity;
         self
     }
 
     /// Set decay function
+    #[must_use]
     pub fn decay_function(mut self, decay: DecayFunction) -> Self {
         self.config.decay_function = decay;
         self
     }
 
     /// Set recall threshold
+    #[must_use]
     pub fn recall_threshold(mut self, threshold: f32) -> Self {
         self.config.recall_threshold = threshold;
         self
     }
 
     /// Enable associations
+    #[must_use]
     pub fn with_associations(mut self) -> Self {
         self.config.enable_associations = true;
         self

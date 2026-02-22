@@ -72,21 +72,25 @@ impl TextCollectionConfig {
 }
 
 impl TextCollectionConfigBuilder {
+    #[must_use]
     pub fn name(mut self, name: impl Into<String>) -> Self {
         self.config.name = name.into();
         self
     }
 
+    #[must_use]
     pub fn model(mut self, model_id: impl Into<String>) -> Self {
         self.config.model_id = model_id.into();
         self
     }
 
+    #[must_use]
     pub fn store_text(mut self, store: bool) -> Self {
         self.config.store_text = store;
         self
     }
 
+    #[must_use]
     pub fn cache_dir(mut self, dir: impl Into<String>) -> Self {
         self.config.cache_dir = dir.into();
         self

@@ -64,6 +64,7 @@ impl DeduplicationConfig {
     }
 
     /// Set distance function
+    #[must_use]
     pub fn with_distance(mut self, distance: DistanceFunction) -> Self {
         self.distance = distance;
         self

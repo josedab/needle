@@ -86,36 +86,43 @@ impl IngestionServiceConfig {
 }
 
 impl IngestionServiceConfigBuilder {
+    #[must_use]
     pub fn collection(mut self, name: impl Into<String>) -> Self {
         self.config.collection = name.into();
         self
     }
 
+    #[must_use]
     pub fn batch_size(mut self, size: usize) -> Self {
         self.config.batch_size = size;
         self
     }
 
+    #[must_use]
     pub fn flush_interval_ms(mut self, ms: u64) -> Self {
         self.config.flush_interval = Duration::from_millis(ms);
         self
     }
 
+    #[must_use]
     pub fn max_buffer_size(mut self, size: usize) -> Self {
         self.config.max_buffer_size = size;
         self
     }
 
+    #[must_use]
     pub fn enable_dedup(mut self, enable: bool) -> Self {
         self.config.enable_dedup = enable;
         self
     }
 
+    #[must_use]
     pub fn max_retries(mut self, retries: u32) -> Self {
         self.config.max_retries = retries;
         self
     }
 
+    #[must_use]
     pub fn backpressure_threshold(mut self, threshold: f32) -> Self {
         self.config.backpressure_threshold = threshold.clamp(0.0, 1.0);
         self

@@ -81,21 +81,25 @@ impl PluginRuntimeConfig {
 }
 
 impl PluginRuntimeConfigBuilder {
+    #[must_use]
     pub fn max_plugins(mut self, max: usize) -> Self {
         self.config.max_plugins = max;
         self
     }
 
+    #[must_use]
     pub fn enable_sandboxing(mut self, enable: bool) -> Self {
         self.config.enable_sandboxing = enable;
         self
     }
 
+    #[must_use]
     pub fn max_hook_duration_ms(mut self, ms: u64) -> Self {
         self.config.max_hook_duration_ms = ms;
         self
     }
 
+    #[must_use]
     pub fn enable_metrics(mut self, enable: bool) -> Self {
         self.config.enable_metrics = enable;
         self

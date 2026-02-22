@@ -120,26 +120,31 @@ impl TieredServiceConfig {
 }
 
 impl TieredServiceConfigBuilder {
+    #[must_use]
     pub fn collection(mut self, name: impl Into<String>) -> Self {
         self.config.collection = name.into();
         self
     }
 
+    #[must_use]
     pub fn hot_capacity(mut self, cap: usize) -> Self {
         self.config.policy.hot_capacity = cap;
         self
     }
 
+    #[must_use]
     pub fn warm_after_secs(mut self, secs: u64) -> Self {
         self.config.policy.warm_after = Duration::from_secs(secs);
         self
     }
 
+    #[must_use]
     pub fn cold_after_secs(mut self, secs: u64) -> Self {
         self.config.policy.cold_after = Duration::from_secs(secs);
         self
     }
 
+    #[must_use]
     pub fn promotion_threshold(mut self, threshold: u32) -> Self {
         self.config.policy.promotion_threshold = threshold;
         self
