@@ -363,7 +363,23 @@ impl SyncManager {
         self.manifest.read().segments.len() as u64 + 1
     }
 
+    /// Validate that a sync filename contains no path traversal components.
+    fn validate_sync_filename(filename: &str) -> Result<()> {
+        if filename.is_empty()
+            || filename.contains("..")
+            || filename.contains('/')
+            || filename.contains('\\')
+            || filename.starts_with('.')
+        {
+            return Err(NeedleError::InvalidInput(
+                "Invalid sync filename: path traversal patterns detected".to_string(),
+            ));
+        }
+        Ok(())
+    }
+
     fn write_to_target(&self, filename: &str, data: &[u8]) -> Result<()> {
+        Self::validate_sync_filename(filename)?;
         match &self.config.target {
             SyncTarget::LocalDir(dir) => {
                 std::fs::create_dir_all(dir).map_err(|e| {
@@ -385,6 +401,7 @@ impl SyncManager {
     }
 
     fn read_from_target(&self, filename: &str) -> Result<Vec<u8>> {
+        Self::validate_sync_filename(filename)?;
         match &self.config.target {
             SyncTarget::LocalDir(dir) => std::fs::read(dir.join(filename)).map_err(|e| {
                 NeedleError::InvalidOperation(format!("Failed to read segment: {}", e))

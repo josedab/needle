@@ -709,9 +709,9 @@ impl<B: StorageBackend> StorageBackend for TieredCacheBackend<B> {
 /// Returns an error if the key contains path traversal components (`..`).
 pub(super) fn key_to_filename(key: &str) -> Result<String> {
     // Reject path traversal attempts before any sanitization
-    if key.contains("..") {
+    if key.contains("..") || key.contains('\0') {
         return Err(NeedleError::InvalidInput(
-            "Key contains path traversal component '..'".to_string(),
+            "Key contains path traversal component '..' or null byte".to_string(),
         ));
     }
 
@@ -721,6 +721,14 @@ pub(super) fn key_to_filename(key: &str) -> Result<String> {
     for c in ['/', '\\', ':', '*', '?', '"', '<', '>', '|'] {
         result = result.replace(c, "_");
     }
+
+    // Defense-in-depth: ensure result has no remaining path components
+    if std::path::Path::new(&result).components().count() != 1 {
+        return Err(NeedleError::InvalidInput(
+            "Key resolves to a path outside the cache directory".to_string(),
+        ));
+    }
+
     Ok(result)
 }
 
