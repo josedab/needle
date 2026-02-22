@@ -217,6 +217,10 @@ make doctor        # Check local environment setup
 | `make verify-docs` | Check that all markdown links resolve |
 | `make playground` | Interactive guided walkthrough |
 | `make new-module DOMAIN=x NAME=y` | Scaffold a new service module |
+| `make new-example NAME=x` | Scaffold a new example |
+| `make profile-build` | Build with timing/profiling (`cargo build --timings`) |
+| `make test-doc` | Run documentation tests (`cargo test --doc`) |
+| `make verify-examples` | Compile and run all examples |
 | `make docker-up` | Start Needle via Docker Compose |
 | `make docker-down` | Stop Docker Compose services |
 | `make docker-build` | Build Docker image from source |
@@ -715,6 +719,33 @@ Benchmarks are sensitive to system load. For reliable results:
 # Close other applications, then:
 cargo bench -- --warm-up-time 3
 ```
+
+### Cascading compile errors from `services/`
+
+The `services/` directory (118 files, 58K+ lines) depends heavily on core types
+like `Database`, `Collection`, `CollectionConfig`, and `NeedleError`. Changing a
+core type signature can trigger hundreds of errors across service modules.
+
+**How to resolve:**
+
+1. **Don't panic at the error count.** Most errors will be the same fix repeated
+   across many files. Fix the core type first, then address services.
+
+2. **Focus on non-`services/` errors first.** Fix `src/collection/`, `src/database/`,
+   and `src/indexing/` before touching `src/services/`.
+
+3. **Use feature gating to iterate faster.** Most services are behind
+   `#[cfg(feature = "experimental")]`, so build without `--features full` first:
+   ```bash
+   cargo check              # Core only — fix these errors first
+   cargo check --features full  # Now fix service modules
+   ```
+
+4. **Use `make lint-new`** to filter out known service warnings and focus on your
+   changes.
+
+5. **Batch-fix with search-and-replace** when the change is mechanical (e.g.,
+   renamed method). The service modules are scaffolding with consistent patterns.
 
 ---
 
