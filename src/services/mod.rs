@@ -15,6 +15,36 @@
 //! - **`search/`** — adaptive_index_selector, encrypted_search, needleql_executor, ...
 //! - **`storage/`** — backup_command, hnsw_compactor, snapshot_manager, ...
 //! - **`sync/`** — change_stream, crdt_sync, distributed_federation, ...
+//!
+//! # Architecture
+//!
+//! Services wrap core types ([`crate::Database`], [`crate::Collection`],
+//! [`crate::collection::CollectionConfig`]) to provide higher-level workflows.
+//! They depend on the core layer but never on each other directly — cross-service
+//! communication goes through the `Database` or shared configuration types.
+//!
+//! ```text
+//! ┌─────────────────────────────────────────┐
+//! │            services/ layer              │
+//! │  (pipeline, embedding, search, ...)     │
+//! └──────────────────┬──────────────────────┘
+//!                    │ depends on
+//! ┌──────────────────▼──────────────────────┐
+//! │           core layer                    │
+//! │  Database, Collection, HnswIndex,       │
+//! │  Filter, DistanceFunction, NeedleError  │
+//! └─────────────────────────────────────────┘
+//! ```
+//!
+//! # Feature gating
+//!
+//! Most services are behind `#[cfg(feature = "experimental")]`. The stable
+//! services available with default features are:
+//! - `pipeline::ingestion_service`
+//! - `collection::{multimodal_service, pitr_service, text_collection, vector_namespace}`
+//! - `storage::tiered_service`
+//!
+//! See `README.md` in this directory for the full maturity matrix.
 
 #![allow(missing_docs)]
 
