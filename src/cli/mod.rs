@@ -36,6 +36,11 @@ pub fn print_error(err: &NeedleError) {
             eprintln!("  Hint: {}", hint);
         }
     }
+
+    if std::env::var("RUST_BACKTRACE").is_err() {
+        eprintln!();
+        eprintln!("  Set RUST_BACKTRACE=1 for a detailed backtrace.");
+    }
 }
 
 #[allow(clippy::too_many_lines)]
