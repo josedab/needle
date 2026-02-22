@@ -13,10 +13,11 @@ updates:
     labels:
       - "dependencies"
       - "rust"
-    ignore:
-      # Ignore patch updates for stable crates
-      - dependency-name: "*"
-        update-types: ["version-update:semver-patch"]
+    groups:
+      minor-and-patch:
+        update-types:
+          - "minor"
+          - "patch"
 
   # GitHub Actions
   - package-ecosystem: "github-actions"
