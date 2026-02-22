@@ -448,6 +448,9 @@ impl Filter {
     /// Maximum depth for nested filters to prevent stack overflow
     const MAX_FILTER_DEPTH: usize = 32;
 
+    /// Maximum number of elements in a single $and/$or array
+    const MAX_FILTER_ARRAY_SIZE: usize = 1000;
+
     /// Parse a filter from a JSON value (MongoDB-like syntax)
     ///
     /// Supports:
@@ -509,6 +512,13 @@ impl Filter {
     ) -> std::result::Result<Self, String> {
         match value {
             Value::Array(arr) => {
+                if arr.len() > Self::MAX_FILTER_ARRAY_SIZE {
+                    return Err(format!(
+                        "$and array too large ({} elements, max {})",
+                        arr.len(),
+                        Self::MAX_FILTER_ARRAY_SIZE
+                    ));
+                }
                 let filters: std::result::Result<Vec<Filter>, String> = arr
                     .iter()
                     .map(|v| Self::parse_with_depth(v, depth))
@@ -525,6 +535,13 @@ impl Filter {
     ) -> std::result::Result<Self, String> {
         match value {
             Value::Array(arr) => {
+                if arr.len() > Self::MAX_FILTER_ARRAY_SIZE {
+                    return Err(format!(
+                        "$or array too large ({} elements, max {})",
+                        arr.len(),
+                        Self::MAX_FILTER_ARRAY_SIZE
+                    ));
+                }
                 let filters: std::result::Result<Vec<Filter>, String> = arr
                     .iter()
                     .map(|v| Self::parse_with_depth(v, depth))
