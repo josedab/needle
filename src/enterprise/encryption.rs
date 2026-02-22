@@ -805,81 +805,86 @@ impl KeyRotationManager {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 
-    fn create_encryptor() -> VectorEncryptor {
+    fn create_encryptor() -> std::result::Result<VectorEncryptor, Box<dyn std::error::Error>> {
         let key = vec![0u8; 32];
-        let key_manager = KeyManager::new(&key).unwrap();
+        let key_manager = KeyManager::new(&key)?;
         let config = EncryptionConfig::default();
-        VectorEncryptor::new(config, key_manager)
+        Ok(VectorEncryptor::new(config, key_manager))
     }
 
     #[test]
-    fn test_create_key_manager() {
+    fn test_create_key_manager() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let key = vec![0u8; 32];
         let manager = KeyManager::new(&key);
         assert!(manager.is_ok());
+        Ok(())
     }
 
     #[test]
-    fn test_key_too_short() {
+    fn test_key_too_short() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let key = vec![0u8; 16];
         let result = KeyManager::new(&key);
         assert!(result.is_err());
+        Ok(())
     }
 
     #[test]
-    fn test_derive_key() {
+    fn test_derive_key() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let key = vec![0u8; 32];
-        let mut manager = KeyManager::new(&key).unwrap();
+        let mut manager = KeyManager::new(&key)?;
 
-        let derived1_bytes = manager.derive_key("purpose1").unwrap().bytes().to_vec();
-        let derived2_bytes = manager.derive_key("purpose2").unwrap().bytes().to_vec();
+        let derived1_bytes = manager.derive_key("purpose1")?.bytes().to_vec();
+        let derived2_bytes = manager.derive_key("purpose2")?.bytes().to_vec();
 
         assert_ne!(derived1_bytes, derived2_bytes);
+        Ok(())
     }
 
     #[test]
-    fn test_encrypt_decrypt() {
-        let mut encryptor = create_encryptor();
+    fn test_encrypt_decrypt() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let mut encryptor = create_encryptor()?;
 
         let vector = vec![1.0, 2.0, 3.0, 4.0];
-        let encrypted = encryptor.encrypt("vec1", &vector, HashMap::new()).unwrap();
+        let encrypted = encryptor.encrypt("vec1", &vector, HashMap::new())?;
 
-        let decrypted = encryptor.decrypt(&encrypted).unwrap();
+        let decrypted = encryptor.decrypt(&encrypted)?;
 
         assert_eq!(vector, decrypted);
+        Ok(())
     }
 
     #[test]
-    fn test_encrypted_vector_has_id() {
-        let mut encryptor = create_encryptor();
+    fn test_encrypted_vector_has_id() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let mut encryptor = create_encryptor()?;
 
         let encrypted = encryptor
             .encrypt("test_id", &[1.0], HashMap::new())
-            .unwrap();
+            ?;
 
         assert_eq!(encrypted.id, "test_id");
+        Ok(())
     }
 
     #[test]
-    fn test_searchable_embedding() {
-        let mut encryptor = create_encryptor();
-        encryptor.initialize(4).unwrap();
+    fn test_searchable_embedding() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let mut encryptor = create_encryptor()?;
+        encryptor.initialize(4)?;
 
         let encrypted = encryptor
             .encrypt("vec1", &[1.0, 2.0, 3.0, 4.0], HashMap::new())
-            .unwrap();
+            ?;
 
         assert!(encrypted.search_embedding.is_some());
+        Ok(())
     }
 
     #[test]
-    fn test_search_encrypted() {
-        let mut encryptor = create_encryptor();
-        encryptor.initialize(4).unwrap();
+    fn test_search_encrypted() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let mut encryptor = create_encryptor()?;
+        encryptor.initialize(4)?;
 
         let vectors = [
             ([1.0, 0.0, 0.0, 0.0], "a"),
@@ -889,62 +894,66 @@ mod tests {
 
         let encrypted: Vec<EncryptedVector> = vectors
             .iter()
-            .map(|(v, id)| encryptor.encrypt(id, v, HashMap::new()).unwrap())
-            .collect();
+            .map(|(v, id)| encryptor.encrypt(id, v, HashMap::new()))
+            .collect::<Result<_>>()?;
 
         let query = vec![1.0, 0.0, 0.0, 0.0];
-        let results = encryptor.search_encrypted(&query, &encrypted, 2).unwrap();
+        let results = encryptor.search_encrypted(&query, &encrypted, 2)?;
 
         assert_eq!(results.len(), 2);
+        Ok(())
     }
 
     #[test]
-    fn test_metadata_encryption() {
-        let mut encryptor = create_encryptor();
+    fn test_metadata_encryption() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let mut encryptor = create_encryptor()?;
 
         let mut meta = HashMap::new();
         meta.insert("key".to_string(), "value".to_string());
 
-        let encrypted = encryptor.encrypt("vec1", &[1.0], meta).unwrap();
+        let encrypted = encryptor.encrypt("vec1", &[1.0], meta)?;
 
         assert!(encrypted.metadata.contains_key("key"));
+        Ok(())
     }
 
     #[test]
-    fn test_projection_matrix() {
+    fn test_projection_matrix() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let key = vec![0u8; 32];
-        let mut manager = KeyManager::new(&key).unwrap();
+        let mut manager = KeyManager::new(&key)?;
 
-        manager.init_projection(128, 32).unwrap();
+        manager.init_projection(128, 32)?;
 
-        let matrix = manager.projection_matrix().unwrap();
+        let matrix = manager.projection_matrix().ok_or("projection matrix not initialized")?;
         assert_eq!(matrix.len(), 32);
         assert_eq!(matrix[0].len(), 128);
+        Ok(())
     }
 
     #[test]
-    fn test_different_keys_different_ciphertext() {
+    fn test_different_keys_different_ciphertext() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let key1 = vec![1u8; 32];
         let key2 = vec![2u8; 32];
 
         let mut enc1 =
-            VectorEncryptor::new(EncryptionConfig::default(), KeyManager::new(&key1).unwrap());
+            VectorEncryptor::new(EncryptionConfig::default(), KeyManager::new(&key1)?);
         let mut enc2 =
-            VectorEncryptor::new(EncryptionConfig::default(), KeyManager::new(&key2).unwrap());
+            VectorEncryptor::new(EncryptionConfig::default(), KeyManager::new(&key2)?);
 
         let vector = vec![1.0, 2.0, 3.0, 4.0];
 
-        let encrypted1 = enc1.encrypt("v1", &vector, HashMap::new()).unwrap();
-        let encrypted2 = enc2.encrypt("v2", &vector, HashMap::new()).unwrap();
+        let encrypted1 = enc1.encrypt("v1", &vector, HashMap::new())?;
+        let encrypted2 = enc2.encrypt("v2", &vector, HashMap::new())?;
 
         // Ciphertexts should differ
         assert_ne!(encrypted1.ciphertext, encrypted2.ciphertext);
+        Ok(())
     }
 
     #[test]
-    fn test_non_searchable_mode() {
+    fn test_non_searchable_mode() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let key = vec![0u8; 32];
-        let manager = KeyManager::new(&key).unwrap();
+        let manager = KeyManager::new(&key)?;
         let config = EncryptionConfig {
             searchable: false,
             ..Default::default()
@@ -953,78 +962,83 @@ mod tests {
         let mut encryptor = VectorEncryptor::new(config, manager);
         let encrypted = encryptor
             .encrypt("vec1", &[1.0, 2.0], HashMap::new())
-            .unwrap();
+            ?;
 
         assert!(encrypted.search_embedding.is_none());
+        Ok(())
     }
 
     #[test]
-    fn test_encrypted_metadata_store() {
-        let encryptor = create_encryptor();
+    fn test_encrypted_metadata_store() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let encryptor = create_encryptor()?;
         let mut store = EncryptedMetadataStore::new(encryptor);
 
-        store.put("key1", "secret_value").unwrap();
+        store.put("key1", "secret_value")?;
 
-        let retrieved = store.get("key1").unwrap();
+        let retrieved = store.get("key1")?;
         assert_eq!(retrieved, Some("secret_value".to_string()));
+        Ok(())
     }
 
     #[test]
-    fn test_noise_addition() {
-        let mut encryptor = create_encryptor();
+    fn test_noise_addition() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let mut encryptor = create_encryptor()?;
         encryptor.config.noise_level = 0.1;
-        encryptor.initialize(4).unwrap();
+        encryptor.initialize(4)?;
 
         // Encrypt same vector twice - search embeddings should differ slightly
         let encrypted1 = encryptor
             .encrypt("v1", &[1.0, 2.0, 3.0, 4.0], HashMap::new())
-            .unwrap();
+            ?;
         let encrypted2 = encryptor
             .encrypt("v2", &[1.0, 2.0, 3.0, 4.0], HashMap::new())
-            .unwrap();
+            ?;
 
         // Due to deterministic noise in our simplified implementation, they might be same
         // In real implementation, this would add random noise
         assert!(encrypted1.search_embedding.is_some());
         assert!(encrypted2.search_embedding.is_some());
+        Ok(())
     }
 
     #[test]
-    fn test_local_kek_provider_wrap_unwrap() {
+    fn test_local_kek_provider_wrap_unwrap() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let kek = vec![42u8; 32];
-        let provider = LocalKekProvider::new(&kek, "kek-1").unwrap();
+        let provider = LocalKekProvider::new(&kek, "kek-1")?;
 
         let plaintext = b"my secret DEK bytes here!!!!!!!!"; // 32 bytes
-        let wrapped = provider.wrap(plaintext, "kek-1").unwrap();
+        let wrapped = provider.wrap(plaintext, "kek-1")?;
         assert_ne!(&wrapped[12..], plaintext.as_slice()); // ciphertext differs
 
-        let unwrapped = provider.unwrap(&wrapped, "kek-1").unwrap();
+        let unwrapped = provider.unwrap(&wrapped, "kek-1")?;
         assert_eq!(unwrapped, plaintext);
+        Ok(())
     }
 
     #[test]
-    fn test_key_rotation_manager_generate_dek() {
+    fn test_key_rotation_manager_generate_dek() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let kek = vec![99u8; 32];
-        let provider = LocalKekProvider::new(&kek, "master-kek").unwrap();
+        let provider = LocalKekProvider::new(&kek, "master-kek")?;
         let manager = KeyRotationManager::new(Box::new(provider));
 
-        let (key_id, dek) = manager.generate_dek().unwrap();
+        let (key_id, dek) = manager.generate_dek()?;
         assert!(!key_id.is_empty());
         assert_eq!(dek.len(), 32);
 
         // Can unwrap
-        let unwrapped = manager.unwrap_dek(&key_id).unwrap();
+        let unwrapped = manager.unwrap_dek(&key_id)?;
         assert_eq!(unwrapped, dek);
+        Ok(())
     }
 
     #[test]
-    fn test_key_rotation() {
+    fn test_key_rotation() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let kek = vec![77u8; 32];
-        let provider = LocalKekProvider::new(&kek, "kek-v1").unwrap();
+        let provider = LocalKekProvider::new(&kek, "kek-v1")?;
         let manager = KeyRotationManager::new(Box::new(provider));
 
-        let (id1, _) = manager.generate_dek().unwrap();
-        let id2 = manager.rotate().unwrap();
+        let (id1, _) = manager.generate_dek()?;
+        let id2 = manager.rotate()?;
 
         assert_ne!(id1, id2);
         assert_eq!(manager.rotation_count(), 1);
@@ -1037,20 +1051,21 @@ mod tests {
         let keys = manager.list_keys();
         assert_eq!(keys.len(), 2); // initial + rotated
         assert!(keys.iter().any(|k| k.key_id == id2 && k.active));
+        Ok(())
     }
 
     #[test]
-    fn test_rewrap_all() {
+    fn test_rewrap_all() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let kek1 = vec![11u8; 32];
-        let provider1 = LocalKekProvider::new(&kek1, "kek-v1").unwrap();
+        let provider1 = LocalKekProvider::new(&kek1, "kek-v1")?;
         let manager = KeyRotationManager::new(Box::new(provider1));
 
-        let (id1, dek1) = manager.generate_dek().unwrap();
+        let (id1, dek1) = manager.generate_dek()?;
 
         // Re-wrap with a new KEK
         let kek2 = vec![22u8; 32];
-        let provider2 = LocalKekProvider::new(&kek2, "kek-v2").unwrap();
-        let rewrapped = manager.rewrap_all(&provider2).unwrap();
+        let provider2 = LocalKekProvider::new(&kek2, "kek-v2")?;
+        let rewrapped = manager.rewrap_all(&provider2)?;
         assert_eq!(rewrapped, 1);
 
         // Verify the key metadata updated
@@ -1060,21 +1075,23 @@ mod tests {
         // Can still unwrap using new KEK (manager still holds old provider internally,
         // but the wrapped bytes are now under provider2 — to actually unwrap we'd need
         // to update the manager's provider too. In production, this is atomic.)
+        Ok(())
     }
 
     #[test]
-    fn test_kek_too_short() {
+    fn test_kek_too_short() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let short_key = vec![0u8; 16];
         assert!(LocalKekProvider::new(&short_key, "kek").is_err());
+        Ok(())
     }
 
     // ── Adversarial tests ────────────────────────────────────────────────
 
     #[test]
-    fn test_tampered_ciphertext_detected() {
-        let mut encryptor = create_encryptor();
+    fn test_tampered_ciphertext_detected() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let mut encryptor = create_encryptor()?;
         let vector = vec![1.0, 2.0, 3.0, 4.0];
-        let mut encrypted = encryptor.encrypt("v1", &vector, HashMap::new()).unwrap();
+        let mut encrypted = encryptor.encrypt("v1", &vector, HashMap::new())?;
 
         // Tamper with ciphertext
         if !encrypted.ciphertext.is_empty() {
@@ -1083,13 +1100,14 @@ mod tests {
 
         let result = encryptor.decrypt(&encrypted);
         assert!(result.is_err(), "Tampered ciphertext should fail decryption");
+        Ok(())
     }
 
     #[test]
-    fn test_tampered_auth_tag_detected() {
-        let mut encryptor = create_encryptor();
+    fn test_tampered_auth_tag_detected() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let mut encryptor = create_encryptor()?;
         let vector = vec![1.0, 2.0, 3.0, 4.0];
-        let mut encrypted = encryptor.encrypt("v1", &vector, HashMap::new()).unwrap();
+        let mut encrypted = encryptor.encrypt("v1", &vector, HashMap::new())?;
 
         // Tamper with auth tag
         if !encrypted.auth_tag.is_empty() {
@@ -1098,117 +1116,126 @@ mod tests {
 
         let result = encryptor.decrypt(&encrypted);
         assert!(result.is_err(), "Tampered auth tag should fail decryption");
+        Ok(())
     }
 
     #[test]
-    fn test_tampered_nonce_detected() {
-        let mut encryptor = create_encryptor();
+    fn test_tampered_nonce_detected() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let mut encryptor = create_encryptor()?;
         let vector = vec![1.0, 2.0, 3.0];
-        let mut encrypted = encryptor.encrypt("v1", &vector, HashMap::new()).unwrap();
+        let mut encrypted = encryptor.encrypt("v1", &vector, HashMap::new())?;
 
         // Tamper with nonce
         encrypted.nonce[0] ^= 0xFF;
 
         let result = encryptor.decrypt(&encrypted);
         assert!(result.is_err(), "Tampered nonce should fail decryption");
+        Ok(())
     }
 
     #[test]
-    fn test_decrypt_with_wrong_key() {
+    fn test_decrypt_with_wrong_key() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let key1 = vec![1u8; 32];
         let key2 = vec![2u8; 32];
 
         let mut enc1 = VectorEncryptor::new(
             EncryptionConfig::default(),
-            KeyManager::new(&key1).unwrap(),
+            KeyManager::new(&key1)?,
         );
         let mut enc2 = VectorEncryptor::new(
             EncryptionConfig::default(),
-            KeyManager::new(&key2).unwrap(),
+            KeyManager::new(&key2)?,
         );
 
         let vector = vec![1.0, 2.0, 3.0];
-        let encrypted = enc1.encrypt("v1", &vector, HashMap::new()).unwrap();
+        let encrypted = enc1.encrypt("v1", &vector, HashMap::new())?;
 
         // Try to decrypt with wrong key
         let result = enc2.decrypt(&encrypted);
         assert!(result.is_err(), "Wrong key should fail decryption");
+        Ok(())
     }
 
     #[test]
-    fn test_empty_vector_encrypt_decrypt() {
-        let mut encryptor = create_encryptor();
+    fn test_empty_vector_encrypt_decrypt() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let mut encryptor = create_encryptor()?;
         let vector: Vec<f32> = vec![];
-        let encrypted = encryptor.encrypt("empty", &vector, HashMap::new()).unwrap();
+        let encrypted = encryptor.encrypt("empty", &vector, HashMap::new())?;
 
-        let decrypted = encryptor.decrypt(&encrypted).unwrap();
+        let decrypted = encryptor.decrypt(&encrypted)?;
         assert!(decrypted.is_empty());
+        Ok(())
     }
 
     #[test]
-    fn test_single_element_vector() {
-        let mut encryptor = create_encryptor();
+    fn test_single_element_vector() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let mut encryptor = create_encryptor()?;
         let vector = vec![42.0];
-        let encrypted = encryptor.encrypt("single", &vector, HashMap::new()).unwrap();
+        let encrypted = encryptor.encrypt("single", &vector, HashMap::new())?;
 
-        let decrypted = encryptor.decrypt(&encrypted).unwrap();
+        let decrypted = encryptor.decrypt(&encrypted)?;
         assert_eq!(decrypted, vector);
+        Ok(())
     }
 
     #[test]
-    fn test_large_vector_encrypt_decrypt() {
-        let mut encryptor = create_encryptor();
+    fn test_large_vector_encrypt_decrypt() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let mut encryptor = create_encryptor()?;
         let vector: Vec<f32> = (0..1024).map(|i| i as f32 * 0.001).collect();
-        let encrypted = encryptor.encrypt("large", &vector, HashMap::new()).unwrap();
+        let encrypted = encryptor.encrypt("large", &vector, HashMap::new())?;
 
-        let decrypted = encryptor.decrypt(&encrypted).unwrap();
+        let decrypted = encryptor.decrypt(&encrypted)?;
         assert_eq!(decrypted.len(), 1024);
         for (a, b) in vector.iter().zip(decrypted.iter()) {
             assert!((a - b).abs() < f32::EPSILON);
         }
+        Ok(())
     }
 
     #[test]
-    fn test_encrypt_twice_produces_different_ciphertext() {
-        let mut encryptor = create_encryptor();
+    fn test_encrypt_twice_produces_different_ciphertext() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let mut encryptor = create_encryptor()?;
         let vector = vec![1.0, 2.0, 3.0];
 
-        let e1 = encryptor.encrypt("v1", &vector, HashMap::new()).unwrap();
-        let e2 = encryptor.encrypt("v2", &vector, HashMap::new()).unwrap();
+        let e1 = encryptor.encrypt("v1", &vector, HashMap::new())?;
+        let e2 = encryptor.encrypt("v2", &vector, HashMap::new())?;
 
         // Different nonces should produce different ciphertext
         assert_ne!(e1.nonce, e2.nonce);
         assert_ne!(e1.ciphertext, e2.ciphertext);
+        Ok(())
     }
 
     #[test]
-    fn test_key_rotation_preserves_old_decryption() {
+    fn test_key_rotation_preserves_old_decryption() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let kek = vec![55u8; 32];
-        let provider = LocalKekProvider::new(&kek, "kek-1").unwrap();
+        let provider = LocalKekProvider::new(&kek, "kek-1")?;
         let manager = KeyRotationManager::new(Box::new(provider));
 
-        let (id1, dek1) = manager.generate_dek().unwrap();
-        let _id2 = manager.rotate().unwrap();
+        let (id1, dek1) = manager.generate_dek()?;
+        let _id2 = manager.rotate()?;
 
         // Old key should still be accessible
-        let unwrapped = manager.unwrap_dek(&id1).unwrap();
+        let unwrapped = manager.unwrap_dek(&id1)?;
         assert_eq!(unwrapped, dek1);
+        Ok(())
     }
 
     #[test]
-    fn test_unwrap_nonexistent_dek() {
+    fn test_unwrap_nonexistent_dek() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let kek = vec![55u8; 32];
-        let provider = LocalKekProvider::new(&kek, "kek-1").unwrap();
+        let provider = LocalKekProvider::new(&kek, "kek-1")?;
         let manager = KeyRotationManager::new(Box::new(provider));
 
         let result = manager.unwrap_dek("nonexistent-key-id");
         assert!(result.is_err());
+        Ok(())
     }
 
     #[test]
-    fn test_search_not_searchable_mode() {
+    fn test_search_not_searchable_mode() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let key = vec![0u8; 32];
-        let manager = KeyManager::new(&key).unwrap();
+        let manager = KeyManager::new(&key)?;
         let config = EncryptionConfig {
             searchable: false,
             ..Default::default()
@@ -1217,5 +1244,6 @@ mod tests {
 
         let result = encryptor.search_encrypted(&[1.0, 2.0], &[], 5);
         assert!(result.is_err());
+        Ok(())
     }
 }
