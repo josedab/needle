@@ -444,8 +444,6 @@ pub fn create_router_with_config(state: Arc<AppState>, config: &ServerConfig) ->
         .route("/collections/:collection/diff", post(vector_diff_handler))
         // SSE change feed
         .route("/collections/:collection/changes", get(change_feed_handler))
-        // Query cost estimation
-        .route("/collections/:collection/search/estimate", post(cost_estimate_handler))
         // In-process benchmark
         .route("/collections/:collection/benchmark", post(benchmark_handler))
         // Index status (incremental index / WAL)
