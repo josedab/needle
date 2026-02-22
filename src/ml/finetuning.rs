@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! Embedded Model Fine-Tuning Module
 //!
 //! This module provides in-database contrastive learning capabilities for

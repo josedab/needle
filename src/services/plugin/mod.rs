@@ -1,5 +1,4 @@
 //! Plugin services.
-#![allow(clippy::unwrap_used)] // tech debt: 156 unwrap() calls remaining
 
 #[cfg(feature = "experimental")]
 pub mod plugin_api;

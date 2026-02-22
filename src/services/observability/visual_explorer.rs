@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! Visual Collection Explorer
 //!
 //! UMAP/t-SNE-style dimensionality reduction for 2D visualization of vector

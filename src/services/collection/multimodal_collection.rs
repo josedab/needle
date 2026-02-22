@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! Multi-Modal Collection Service
 //!
 //! Modality-aware collection configuration with auto-modality detection,

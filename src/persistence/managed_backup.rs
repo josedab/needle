@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! Managed Backup & Sync
 //!
 //! Provides point-in-time recovery, incremental backups with scheduling,

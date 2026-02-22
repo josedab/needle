@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! Text Collection Service
 //!
 //! High-level "text-in, text-out" API that combines a Database collection with

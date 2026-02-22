@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! Smart Auto-Embed
 //!
 //! Automatically selects the best embedding model: local ONNX → API provider →

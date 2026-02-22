@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! OpenTelemetry Observability Service
 //!
 //! Auto-instrumentation layer for Needle database operations, providing

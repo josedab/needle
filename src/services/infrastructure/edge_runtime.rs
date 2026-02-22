@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! Serverless Edge Runtime
 //!
 //! Optimized runtime for Lambda/CloudFlare Workers/Vercel Edge with fast cold

@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! Plugin Marketplace & Extension API
 //!
 //! Stable plugin trait API with versioned ABI, manifest format, and registry

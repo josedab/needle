@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! Vector Observability Suite
 //!
 //! Comprehensive monitoring for the Needle vector database with query latency

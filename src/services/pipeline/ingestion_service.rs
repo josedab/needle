@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! Unified Streaming Ingestion Service
 //!
 //! High-level facade that ties together the ingestion pipeline, streaming upsert,

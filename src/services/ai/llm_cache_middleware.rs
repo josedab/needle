@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! Semantic LLM Cache Middleware
 //!
 //! Transparent caching layer that wraps LLM providers, with multi-model

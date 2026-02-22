@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! Managed Embedding Pipeline
 //!
 //! Integrated embedding generation supporting multiple providers (OpenAI, Cohere,

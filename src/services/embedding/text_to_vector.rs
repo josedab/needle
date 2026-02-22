@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! Zero-Config Text-to-Vector
 //!
 //! Auto-embed text using the built-in inference engine. Provides `TextCollection`

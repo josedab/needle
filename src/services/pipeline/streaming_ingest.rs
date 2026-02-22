@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! Streaming Ingest Pipeline
 //!
 //! Built-in CDC connectors (Kafka, PostgreSQL logical replication, webhook) that

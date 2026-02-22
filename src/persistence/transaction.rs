@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! MVCC-based Snapshot Isolation & Transactions for Needle.
 //!
 //! Provides multi-version concurrency control so that concurrent readers and

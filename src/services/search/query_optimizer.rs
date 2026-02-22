@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! Adaptive Query Optimizer
 //!
 //! Runtime statistics collection, cost model calibration with actual query

@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! Real-Time CRDT Vector Sync Service
 //!
 //! Bi-directional, conflict-free vector synchronization across devices/instances

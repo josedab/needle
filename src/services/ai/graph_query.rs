@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! Native Graph Query Language
 //!
 //! Extends NeedleQL with graph traversal operators (`->`, `<-`, `*..N`)

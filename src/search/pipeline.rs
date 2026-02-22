@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! CDC Pipeline Configuration and Execution
 //!
 //! Provides a declarative pipeline configuration for streaming database changes

@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! Embedded Inference Engine
 //!
 //! Built-in model execution for query-time embedding generation, eliminating the

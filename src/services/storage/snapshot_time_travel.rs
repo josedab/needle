@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! Snapshot-Based Time Travel
 //!
 //! Point-in-time read-only database views using version counters and

@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! Multi-Tenant Query Isolation
 //!
 //! Per-tenant routing with resource limits, namespace enforcement, and audit

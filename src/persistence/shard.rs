@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! # Sharding Module
 //!
 //! Provides sharding primitives for horizontal scaling of vector data.

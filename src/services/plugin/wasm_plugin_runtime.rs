@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! WASM Plugin Runtime
 //!
 //! Plugin execution environment with a defined ABI for distance functions,

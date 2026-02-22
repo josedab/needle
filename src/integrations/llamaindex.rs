@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! LlamaIndex Integration
 //!
 //! Compatible interface for LlamaIndex and similar frameworks.

@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! Vector Lineage Tracking
 //!
 //! Tracks provenance chain for every vector: source document → embedding model

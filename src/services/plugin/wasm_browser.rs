@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! WebAssembly-First SDK
 //!
 //! Complete vector database SDK designed to run in the browser, Deno, and

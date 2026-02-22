@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! Plugin Runtime Service
 //!
 //! Runtime plugin management that integrates the plugin system with the

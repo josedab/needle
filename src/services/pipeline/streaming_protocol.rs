@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! Streaming Ingestion Protocol
 //!
 //! Real-time vector ingestion via a persistent connection protocol with

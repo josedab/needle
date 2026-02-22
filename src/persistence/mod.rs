@@ -1,5 +1,4 @@
 //! WAL, transactions, time-travel, backups, cloud storage.
-#![allow(clippy::unwrap_used)] // tech debt: 609 unwrap() calls remaining
 pub mod backup;
 pub mod cloud_storage;
 pub mod cow_storage;

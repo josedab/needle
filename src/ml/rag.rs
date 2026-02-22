@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! RAG (Retrieval-Augmented Generation) Pipeline
 //!
 //! Complete pipeline for building RAG applications:

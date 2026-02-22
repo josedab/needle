@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! Streaming Ingestion Pipeline
 //!
 //! A Source/Transform/Sink trait-based pipeline framework for real-time vector

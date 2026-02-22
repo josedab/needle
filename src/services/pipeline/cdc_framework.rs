@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! CDC Connector Framework
 //!
 //! Production-ready Change Data Capture framework with exactly-once semantics,

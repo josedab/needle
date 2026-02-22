@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! Consensus-Backed Multi-Writer
 //!
 //! Multi-node Raft-based writer with leader election, log replication,

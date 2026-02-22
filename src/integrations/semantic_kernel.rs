@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! Semantic Kernel Memory Store Integration
 //!
 //! Provides a Needle-backed memory store compatible with Microsoft's

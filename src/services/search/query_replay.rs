@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! Query Replay & Regression Testing
 //!
 //! Record production queries as replay logs and replay them against new

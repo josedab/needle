@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! Embedding Drift Detection - Monitor and detect distribution shifts in vector embeddings.
 //!
 //! Detects when new embeddings diverge from the baseline distribution,

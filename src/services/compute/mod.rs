@@ -1,5 +1,4 @@
 //! Compute services.
-#![allow(clippy::unwrap_used)] // tech debt: 116 unwrap() calls remaining
 
 #[cfg(feature = "experimental")]
 pub mod adaptive_optimizer;

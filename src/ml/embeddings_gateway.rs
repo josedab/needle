@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! Universal Embeddings Gateway
 //!
 //! A unified interface for multiple embedding providers with intelligent routing,

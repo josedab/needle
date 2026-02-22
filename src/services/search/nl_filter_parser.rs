@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! Natural Language Filter Parser
 //!
 //! Parses human-readable filter expressions into MongoDB-style metadata filters.

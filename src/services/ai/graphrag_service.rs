@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! Native GraphRAG Service
 //!
 //! Graph + vector hybrid index that stores entity relationships alongside

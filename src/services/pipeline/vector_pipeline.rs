@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! Declarative Vector Pipelines
 //!
 //! YAML/JSON-defined ETL pipelines that chain source → transform → embed → index

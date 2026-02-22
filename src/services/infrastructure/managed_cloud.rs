@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! Managed Cloud Service MVP
 //!
 //! Multi-tenant provisioning, usage metering, control plane API, and tenant

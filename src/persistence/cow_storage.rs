@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! Copy-on-Write (COW) B-tree backed persistence for incremental HNSW updates.
 //!
 //! Instead of serialising the entire database state and performing a full-file

@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! Incremental Sync Protocol
 //!
 //! Bi-directional sync protocol for `.needle` files across devices/nodes,

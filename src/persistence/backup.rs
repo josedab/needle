@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! Backup and Restore
 //!
 //! Provides backup and restore functionality for Needle databases:

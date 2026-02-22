@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! Vector Sync Protocol
 //!
 //! Lightweight replication protocol inspired by Litestream that continuously

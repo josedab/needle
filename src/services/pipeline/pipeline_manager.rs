@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! Declarative Pipeline Manager
 //!
 //! Manages the lifecycle of declarative vector pipelines: create from YAML/JSON

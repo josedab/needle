@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! Live Incremental Replication
 //!
 //! Real-time bi-directional sync coordinator that wraps the sync engine with

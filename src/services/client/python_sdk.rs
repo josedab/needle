@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! Python SDK Enhancement
 //!
 //! Enhanced Python SDK wrapper with TextCollection for zero-config RAG,

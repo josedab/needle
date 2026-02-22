@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! Snapshot Manager
 //!
 //! Named snapshot management layer on top of VersionedStore: create named

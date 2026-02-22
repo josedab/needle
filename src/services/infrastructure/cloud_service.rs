@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! Managed Cloud Service (Needle Cloud)
 //!
 //! Serverless, pay-per-query hosted Needle with auto-scaling, tiered pricing,

@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! Graph-Knowledge Fusion Service
 //!
 //! Auto entity/relation extraction from text, NeedleQL-style graph traversal

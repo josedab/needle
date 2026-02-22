@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! Semantic Caching Layer
 //!
 //! Similarity-based LLM response cache: before querying an LLM, search for

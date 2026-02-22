@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! Plugin Ecosystem Runtime
 //!
 //! WASM-style sandboxed plugin execution with capability-based permissions,

@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! Agentic Memory Protocol
 //!
 //! MCP-optimized memory layer with three tiers: episodic (conversation turns),

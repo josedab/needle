@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! Semantic Time-Travel Module
 //!
 //! Provides point-in-time vector queries with MVCC (Multi-Version Concurrency Control)

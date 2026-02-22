@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! gRPC Service Schema
 //!
 //! Protobuf-equivalent type definitions and service traits for a gRPC API layer.

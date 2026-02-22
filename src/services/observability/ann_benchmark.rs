@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! ann-benchmarks Integration
 //!
 //! Benchmark harness compatible with ann-benchmarks.com format. Loads standard

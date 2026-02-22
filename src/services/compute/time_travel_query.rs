@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! Time-Travel Query Service
 //!
 //! Query the database as of any past timestamp with MVCC snapshots, supporting

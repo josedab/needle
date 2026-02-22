@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! v1.0 API Stability Manifest
 //!
 //! Tracks stability annotations for public types, manages deprecation

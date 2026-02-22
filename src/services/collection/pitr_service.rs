@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! Point-in-Time Recovery Service
 //!
 //! Unified service combining WAL, incremental snapshots, and backup chain management

@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 #[allow(unused_imports)]
 use std::collections::{HashMap, HashSet, VecDeque};
 

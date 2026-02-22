@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! Schema-Aware Typed Collections
 //!
 //! Define typed metadata schemas per collection with validation, secondary indexes

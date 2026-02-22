@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! Browser-Native WASM Persistence
 //!
 //! IndexedDB-style persistence layer for the WASM SDK, with chunked storage

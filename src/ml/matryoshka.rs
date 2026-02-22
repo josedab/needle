@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! Matryoshka Embedding Support
 //!
 //! Support for Matryoshka Representation Learning (MRL) embeddings that allow

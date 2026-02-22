@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! # Reranker Module
 //!
 //! External reranking support for improving search relevance using cross-encoder models.

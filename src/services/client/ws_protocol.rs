@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! WebSocket Change Feed Protocol
 //!
 //! Formal message protocol for real-time vector change notifications.

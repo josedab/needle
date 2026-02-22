@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! Unwrap Audit Tool
 //!
 //! Programmatic scanner that inventories `unwrap()` calls, classifies them by

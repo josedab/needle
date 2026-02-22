@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! OpenTelemetry-Native Tracing
 //!
 //! Span instrumentation for the search pipeline: embed → traverse → filter →

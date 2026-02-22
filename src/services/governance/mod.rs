@@ -1,5 +1,4 @@
 //! Governance services.
-#![allow(clippy::unwrap_used)] // tech debt: 53 unwrap() calls remaining
 
 #[cfg(feature = "experimental")]
 pub mod api_stability;

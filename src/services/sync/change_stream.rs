@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! Collection Change Streams (SSE)
 //!
 //! Server-Sent Events endpoint for real-time collection change notifications.

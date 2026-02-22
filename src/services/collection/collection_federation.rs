@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! Cross-Collection Federation
 //!
 //! Federated search across multiple collections with per-collection weights,

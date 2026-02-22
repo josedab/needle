@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! Native Vector Transactions
 //!
 //! Full ACID transaction support across multiple vector operations with rollback,

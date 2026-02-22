@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! Auto-Embedding HTTP Endpoint
 //!
 //! REST endpoint service that accepts raw text and auto-embeds it using a

@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! Production Readiness Probe
 //!
 //! `needle doctor` CLI + `/readiness` HTTP endpoint that validates index health,

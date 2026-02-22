@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! Compliance & Audit Toolkit
 //!
 //! SOC 2, GDPR, and HIPAA compliance checks with evidence collection,

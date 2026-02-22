@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! Vector Diff & Version Control Service
 //!
 //! Git-like versioning for vector collections with commit, branch, diff, merge,

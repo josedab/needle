@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! # Multi-Modal Embeddings
 //!
 //! This module provides unified embedding support for multiple modalities:

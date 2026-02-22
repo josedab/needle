@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! Tiered Storage - Hot/Warm/Cold data management for vector databases.
 //!
 //! Implements automatic data tiering based on access patterns and age,

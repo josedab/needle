@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! ONNX Model Downloader
 //!
 //! Download, cache, and verify embedding models for zero-config auto-embedding.

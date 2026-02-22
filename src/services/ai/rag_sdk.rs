@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! One-Line RAG SDK
 //!
 //! End-to-end Retrieval-Augmented Generation pipeline: chunk text → embed →

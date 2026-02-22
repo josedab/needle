@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! Cluster Bootstrap & Discovery
 //!
 //! Node discovery, cluster formation, health monitoring, and membership

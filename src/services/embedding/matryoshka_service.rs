@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! Matryoshka Embedding Service
 //!
 //! Collection-level integration for Matryoshka (nested) embeddings: store

@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! Transactional API Integration
 //!
 //! Integrates the transaction manager with the Database/CollectionRef API,

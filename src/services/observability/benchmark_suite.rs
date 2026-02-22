@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! Integrated Evaluation & Benchmarking Suite
 //!
 //! Built-in recall@k, precision, latency, throughput benchmarking with support

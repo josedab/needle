@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! Multi-Modal Search Service
 //!
 //! Database-level service that combines the multi-modal unified index with

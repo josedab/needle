@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! Adaptive Query Optimizer
 //!
 //! Cost-based query planner that automatically selects between HNSW, IVF, DiskANN,

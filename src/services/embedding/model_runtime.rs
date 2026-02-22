@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! Embedded Model Runtime
 //!
 //! Downloadable model registry with lazy-load and `insert_text`/`search_text`

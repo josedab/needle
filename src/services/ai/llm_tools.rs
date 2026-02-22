@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! LLM Function Calling Interface
 //!
 //! OpenAI-compatible tool schemas for autonomous AI agents. Exposes Needle

@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! Incremental HNSW Compaction
 //!
 //! Background online compactor that tracks tombstoned vectors, re-links graph

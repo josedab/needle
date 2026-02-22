@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! Tiered Storage Service
 //!
 //! Automatic data movement service that monitors access patterns and migrates

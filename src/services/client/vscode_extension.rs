@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! VS Code Extension Protocol
 //!
 //! Extension manifest, semantic code search protocol, and LSP integration

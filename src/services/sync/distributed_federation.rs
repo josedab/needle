@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! Distributed Query Federation Service
 //!
 //! Cross-node vector search across multiple Needle instances with query routing,

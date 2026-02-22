@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! Semantic Query Cache HTTP Integration
 //!
 //! Wires the SemanticCache into the HTTP search path as transparent middleware.

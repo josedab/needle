@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! Agentic Workflow Engine
 //!
 //! Multi-agent shared memory, workflow primitives, chain-of-thought memory,

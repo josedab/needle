@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! Pluggable Storage Backends
 //!
 //! Synchronous, in-memory storage layer that mirrors the async

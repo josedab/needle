@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! Incremental Backup & Sync
 //!
 //! Delta-based replication protocol enabling master→replica sync, cloud

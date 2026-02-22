@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! Live Migration Toolkit
 //!
 //! Zero-downtime import from external vector databases (Qdrant, ChromaDB,

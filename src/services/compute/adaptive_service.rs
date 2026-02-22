@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! Adaptive Index Service
 //!
 //! Database-level integration that wraps a collection with the adaptive runtime,

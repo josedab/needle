@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! Cloud Backup Command
 //!
 //! One-command backup and restore for Needle databases to cloud storage

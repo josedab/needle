@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! OpenTelemetry Integration - Observability for vector database operations.
 //!
 //! Provides distributed tracing, metrics, and logging following OpenTelemetry standards.

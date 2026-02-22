@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! Real-Time Collaborative Search
 //!
 //! Enables multiple users and applications to collaborate on vector search

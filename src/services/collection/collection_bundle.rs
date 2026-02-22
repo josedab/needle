@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! Portable Collection Bundles
 //!
 //! Export/import self-contained `.needle-bundle` archives containing vectors,

@@ -1,5 +1,4 @@
 //! Sync services.
-#![allow(clippy::unwrap_used)] // tech debt: 138 unwrap() calls remaining
 
 #[cfg(feature = "experimental")]
 pub mod change_stream;

@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! Adaptive Index Selection
 //!
 //! Workload-driven automatic index strategy switching with online migration.

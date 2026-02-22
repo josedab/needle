@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! Materialized Search Views
 //!
 //! Pre-computed search results for frequent query patterns. Like SQL

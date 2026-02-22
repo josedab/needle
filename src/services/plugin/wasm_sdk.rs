@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! Browser-Native WASM SDK
 //!
 //! Production-ready WASM package with IndexedDB persistence, Web Worker
