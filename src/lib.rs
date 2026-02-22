@@ -107,8 +107,11 @@ pub use search::graphrag;
 
 /// Vector index implementations: HNSW, IVF, DiskANN, sparse, multi-vector, and quantization.
 pub mod indexing;
+/// DiskANN and tiered ANN index implementations. Requires the `diskann` feature.
 #[cfg(feature = "diskann")]
 pub use indexing::{diskann, tiered_ann};
+/// Re-exported indexing submodules for direct access to HNSW, IVF, quantization,
+/// sparse vectors, multi-vector, float16, compression advisor, and more.
 pub use indexing::{
     float16, graph_vector_index, hnsw, cow_hnsw, compression_advisor, cli_playground, hybrid_ann, incremental, ivf, multimodal_index, multivec,
     quantization, sparse,
@@ -118,8 +121,12 @@ pub use indexing::{
 
 /// Search query planning, reranking, federated search, and natural language filtering.
 pub mod search;
+/// Collaborative search across multiple users/sessions. Requires the `experimental` feature.
 #[cfg(feature = "experimental")]
 pub use search::collaborative_search;
+/// Re-exported search submodules: cross-collection search, federated search, natural language
+/// filters, query builder, query explainer, query language, planner, reranking, routing,
+/// search pipeline, and SQL analytics.
 pub use search::{
     cross_collection, federated, nl_filter, query_builder, query_explain, query_lang,
     query_planner, reranker, routing, search_pipeline, sql_analytics,
@@ -129,6 +136,10 @@ pub use search::{
 
 /// Storage and persistence: WAL, backups, migrations, sharding, and cloud storage.
 pub mod persistence;
+/// Re-exported persistence submodules: backup, cloud storage, COW storage, delta sync,
+/// incremental backup, lifecycle, migrations, replica management, schema evolution,
+/// sharding, snapshot replication, sync protocol, tiered storage, time travel,
+/// transactions, vector versioning, versioning, and WAL.
 pub use persistence::{
     backup, cloud_storage, cow_storage, delta_sync, incremental_backup, lifecycle,
     managed_backup, migrations, replica_manager, schema_evolution, shard, snapshot_replication,
@@ -139,10 +150,14 @@ pub use persistence::{
 
 /// Machine learning utilities: auto-embedding, model registry, RAG, and dimensionality reduction.
 pub mod ml;
+/// Re-exported ML submodules: auto-embedding, dimensionality reduction, embedded runtime,
+/// embeddings gateway, fine-tuning, LLM provider, local inference, Matryoshka embeddings,
+/// model registry, multimodal processing, and RAG.
 pub use ml::{
     auto_embed, dimreduce, embedded_runtime, embeddings_gateway, finetuning, llm_provider,
     local_inference, matryoshka, model_registry, multimodal, rag,
 };
+/// ML inference engine. Requires the `experimental` feature.
 #[cfg(feature = "experimental")]
 pub use ml::inference_engine;
 
@@ -151,9 +166,13 @@ pub use ml::inference_engine;
 
 /// Enterprise features: encryption, RBAC, multi-tenancy, Raft consensus, and autoscaling.
 pub mod enterprise;
+/// Encryption at rest (ChaCha20-Poly1305). Requires the `encryption` feature.
 #[cfg(feature = "encryption")]
 pub use enterprise::encryption;
+/// Re-exported enterprise submodules: autoscaling, namespaces, privacy, Raft consensus,
+/// security, and tenant isolation.
 pub use enterprise::{autoscaling, namespace, privacy, raft, security, tenant_isolation};
+/// Privacy policy types for differential privacy and composition tracking.
 pub use privacy::{
     CollectionPrivacyPolicy, CompositionTheorem, PrivacyPolicyRegistry,
 };
@@ -165,6 +184,9 @@ pub use privacy::{
 /// Requires the `observability` feature flag (included in `full`).
 #[cfg(feature = "observability")]
 pub mod observe;
+/// Re-exported observability submodules: anomaly detection, audit logging, dashboard,
+/// drift detection, observability core, OpenTelemetry service, profiler, and telemetry.
+/// Requires the `observability` feature.
 #[cfg(feature = "observability")]
 pub use observe::{anomaly, audit, dashboard, drift, observability, otel_service, profiler, telemetry};
 
@@ -174,7 +196,9 @@ pub use observe::{anomaly, audit, dashboard, drift, observability, otel_service,
 /// Framework integrations: LangChain, LlamaIndex, Haystack, and Semantic Kernel adapters.
 pub mod integrations;
 pub(crate) use integrations::framework_common;
+/// Re-exported integration submodules: Haystack and Semantic Kernel adapters.
 pub use integrations::{haystack, semantic_kernel};
+/// LangChain and LlamaIndex integration adapters. Requires the `integrations` feature.
 #[cfg(feature = "integrations")]
 pub use integrations::{langchain, llamaindex};
 
@@ -505,21 +529,33 @@ uniffi::setup_scaffolding!();
 
 // ── Stable API ───────────────────────────────────────────────────────────────
 // These types form the core stable API surface. Breaking changes follow semver.
+
+/// Core collection types: config, stats, search results, dedup, query cache, and evaluation.
 pub use collection::{
     BundleManifest, Collection, CollectionConfig, CollectionIter, CollectionStats,
     DedupGroup, DedupInsertResult, DedupPolicy, DedupScanResult,
     EvaluationReport, GroundTruthEntry, QueryCacheConfig, QueryCacheStats, QueryMetrics,
     SearchExplain, SearchResult, SemanticDedupConfig, SemanticQueryCacheConfig,
 };
+/// Search parameters for configuring `CollectionRef` queries.
 pub use database::collection_ref::SearchParams;
+/// Database entry point, thread-safe collection references, configuration, and export types.
 pub use database::{CollectionRef, Database, DatabaseConfig, ExportEntry};
+/// Distance function enum for vector similarity computation.
 pub use distance::DistanceFunction;
+/// Error types, error codes, recoverability info, and the `Result` alias.
 pub use error::{ErrorCode, NeedleError, Recoverable, RecoveryHint, Result};
+/// HNSW index types: configuration, index, statistics, and search tracing.
 pub use hnsw::{HnswConfig, HnswIndex, HnswStats, SearchStats, SearchTrace, TraceHop};
+/// Metadata filter and store types for MongoDB-style query filtering.
 pub use metadata::{Filter, MetadataStore};
+/// Multi-vector (ColBERT-style) types: vectors, config, index, and search results.
 pub use multivec::{MultiVector, MultiVectorConfig, MultiVectorIndex, MultiVectorSearchResult};
+/// Quantization types: scalar, product, and binary quantizers for memory-efficient storage.
 pub use quantization::{BinaryQuantizer, ProductQuantizer, ScalarQuantizer};
+/// Sparse vector types: distance functions, inverted index, and sparse vector representation.
 pub use sparse::{SparseDistance, SparseIndex, SparseVector};
+/// Auto-tuning types: parameter tuning, index recommendation, workload profiling, and online migration.
 pub use tuning::{
     auto_tune, quick_recommend_index, recommend_index, AdaptiveRecommendation, AdaptiveTuner,
     DataProfile, DataProfiler, IndexRecommendation, IndexSelectionConstraints, MigrationState,
@@ -527,7 +563,7 @@ pub use tuning::{
     SmartIndexSelection, SmartIndexSelector, TuningConstraints, TuningResult, WorkloadObservation,
 };
 
-// Automatic embedding generation
+/// Automatic embedding generation types: builders, configs, model management, and text-first collections.
 pub use auto_embed::{
     AutoEmbedCollectionBuilder, AutoEmbedConfig, AutoEmbedStats, AutoEmbedder, EmbeddingBackend,
     EmbeddingModelManager, ModelArtifact, ModelEntry, ModelHub, ModelStatus, ModelType,
@@ -543,37 +579,45 @@ pub mod beta_api;
 /// Experimental API types under active development. APIs may change without notice.
 pub mod experimental_api;
 
+/// Hybrid search types: BM25, RRF fusion, adaptive fusion, learned weights, and query classification.
+/// Requires the `hybrid` feature.
 #[cfg(feature = "hybrid")]
 pub use hybrid::{
     reciprocal_rank_fusion, AdaptiveFusion, AdaptiveFusionStats, Bm25Index, HybridConfig,
     HybridSearchResult, LearnedWeightStats, QueryFeatures, QueryType, RrfConfig, SearchFeedback,
 };
 
+/// HTTP server entry point and configuration. Requires the `server` feature.
 #[cfg(feature = "server")]
 pub use server::{serve, ServerConfig};
 
+/// Async database API with streaming and batch operations. Requires the `async` feature.
 #[cfg(feature = "async")]
 pub use async_api::{
     AsyncDatabase, AsyncDatabaseConfig, BatchOperationBuilder, BatchResult, ExportStream,
     SearchStream,
 };
 
+/// Prometheus metrics, alerting rules, Grafana dashboards, and anomaly detection. Requires the `metrics` feature.
 #[cfg(feature = "metrics")]
 pub use metrics::{
     generate_alerting_rules, generate_grafana_dashboard, metrics, AlertingConfig, AnomalyDetector,
     AnomalyResult, GrafanaDashboardConfig, NeedleMetrics,
 };
 
+/// ONNX embedding inference types: builder, config, and text embedder. Requires the `embeddings` feature.
 #[cfg(feature = "embeddings")]
 pub use embeddings::{
     EmbedderBuilder, EmbedderConfig, EmbeddingError, PoolingStrategy, TextEmbedder,
 };
 
+/// Web-based administration UI types and server functions. Requires the `web-ui` feature.
 #[cfg(feature = "web-ui")]
 pub use web_ui::{
     create_web_ui_router, serve_web_ui, serve_web_ui_default, WebUiConfig, WebUiState,
 };
 
+/// Embedding provider types for OpenAI, Cohere, Ollama, and mock providers. Requires the `embedding-providers` feature.
 #[cfg(feature = "embedding-providers")]
 pub use ml::embeddings_provider::{
     BatchConfig, CachedProvider, CohereConfig, CohereInputType, EmbeddingProvider,
