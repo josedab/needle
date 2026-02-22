@@ -52,7 +52,7 @@ jobs:
           cp target/${{ matrix.target }}/release/needle.exe ${{ matrix.name }}
 
       - name: Upload artifact
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: ${{ matrix.name }}
           path: ${{ matrix.name }}
@@ -162,7 +162,7 @@ jobs:
           cp -r python/needle_db dist/ 2>/dev/null || true
 
       - name: Upload wheels
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: wheels-${{ matrix.target }}
           path: dist
