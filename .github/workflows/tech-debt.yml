@@ -73,3 +73,41 @@ jobs:
           path: /dev/stdin
           if-no-files-found: ignore
         continue-on-error: true
+
+  file-size-check:
+    name: File Size Limit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Check for oversized files
+        run: |
+          MAX_LINES=1000
+          EXIT_CODE=0
+
+          echo "Checking for source files exceeding $MAX_LINES lines..."
+          echo ""
+
+          # Find Rust source files, excluding tests, benches, and generated code
+          while IFS= read -r file; do
+            lines=$(wc -l < "$file")
+            if [ "$lines" -gt "$MAX_LINES" ]; then
+              echo "::warning file=${file}::${file} has ${lines} lines (limit: ${MAX_LINES})"
+              EXIT_CODE=1
+            fi
+          done < <(find src/ crates/ -name '*.rs' \
+            -not -path '*/tests/*' \
+            -not -path '*/benches/*' \
+            -not -path '*/target/*' \
+            -not -name '*_test.rs' \
+            -not -name '*_tests.rs')
+
+          if [ "$EXIT_CODE" -eq 1 ]; then
+            echo ""
+            echo "⚠️  Some files exceed the ${MAX_LINES}-line limit."
+            echo "Consider splitting large files into smaller modules."
+            echo "See CONTRIBUTING.md for guidance on module organization."
+            exit 1
+          else
+            echo "✅ All source files are within the ${MAX_LINES}-line limit."
+          fi
