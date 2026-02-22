@@ -17,6 +17,8 @@ make check          # Full pre-commit: format + lint + all tests
 > **Minimum requirements:** Rust stable (see `rust-toolchain.toml`), Git.
 > Run `make doctor` to verify your environment.
 
+> **Returning contributor?** Jump to [Useful Commands](#useful-commands) · [Pull Request Process](#pull-request-process)
+
 ---
 
 ## Table of Contents
@@ -230,6 +232,10 @@ just --list        # Show all available recipes
 just quick         # Fast feedback
 just check         # Full pre-commit
 ```
+
+> **Makefile vs justfile:** The `Makefile` is the canonical source — it works everywhere with zero
+> dependencies. The `justfile` is a convenience wrapper with identical recipes for developers who
+> prefer `just`. When adding a new recipe, update the Makefile first, then mirror it in the justfile.
 
 ### Pre-commit Hooks
 
@@ -626,6 +632,7 @@ let mut guard = self.inner.write();
 | Docker | `docker.yml` | push to main + tags | Build and push Docker images to GHCR |
 | Playground | `playground.yml` | push to main (playground changes) | Deploy WASM interactive playground to GitHub Pages |
 | Release | `release.yml` | version tags (`v*`) | Build release binaries and publish to GitHub Releases |
+| Tech Debt | `tech-debt.yml` | PR to main | Track unwrap/expect counts and file sizes, post report as PR comment |
 
 Our CI pipeline is structured in stages so fast checks gate slower ones:
 
