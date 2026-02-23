@@ -537,6 +537,171 @@ impl<'a> GraphRagService<'a> {
             .collect();
         types.into_iter().map(String::from).collect()
     }
+
+    /// Detect communities using a simple label propagation algorithm.
+    /// Returns a map of community_id → list of entity IDs.
+    pub fn detect_communities(&self, max_iterations: usize) -> HashMap<usize, Vec<String>> {
+        let mut labels: HashMap<String, usize> = HashMap::new();
+        for (i, id) in self.entities.keys().enumerate() {
+            labels.insert(id.clone(), i);
+        }
+
+        for _ in 0..max_iterations {
+            let mut changed = false;
+            for id in self.entities.keys() {
+                let neighbors = self.adjacency.neighbors(id, self.config.bidirectional);
+                if neighbors.is_empty() {
+                    continue;
+                }
+                // Count neighbor labels
+                let mut label_counts: HashMap<usize, usize> = HashMap::new();
+                for (n, _, _) in &neighbors {
+                    if let Some(&lbl) = labels.get(n) {
+                        *label_counts.entry(lbl).or_insert(0) += 1;
+                    }
+                }
+                // Pick the most common label
+                if let Some((&best_label, _)) =
+                    label_counts.iter().max_by_key(|(_, &count)| count)
+                {
+                    let current = labels.get(id).copied().unwrap_or(0);
+                    if best_label != current {
+                        labels.insert(id.clone(), best_label);
+                        changed = true;
+                    }
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+
+        // Group by community
+        let mut communities: HashMap<usize, Vec<String>> = HashMap::new();
+        for (id, label) in labels {
+            communities.entry(label).or_default().push(id);
+        }
+        communities
+    }
+
+    /// Export a subgraph around a seed entity up to `hops` hops.
+    pub fn export_subgraph(
+        &self,
+        seed: &str,
+        hops: usize,
+    ) -> (Vec<Entity>, Vec<(String, String, String, f32)>) {
+        let mut visited: HashSet<String> = HashSet::new();
+        let mut queue: VecDeque<(String, usize)> = VecDeque::new();
+        queue.push_back((seed.to_string(), 0));
+        visited.insert(seed.to_string());
+
+        while let Some((node, depth)) = queue.pop_front() {
+            if depth >= hops {
+                continue;
+            }
+            let neighbors = self.adjacency.neighbors(&node, self.config.bidirectional);
+            for (n, _, _) in neighbors {
+                if !visited.contains(&n) {
+                    visited.insert(n.clone());
+                    queue.push_back((n, depth + 1));
+                }
+            }
+        }
+
+        let entities: Vec<Entity> = visited
+            .iter()
+            .filter_map(|id| self.entities.get(id).cloned())
+            .collect();
+
+        let mut edges = Vec::new();
+        for id in &visited {
+            if let Some(out) = self.adjacency.outgoing.get(id) {
+                for (target, rel_type, weight) in out {
+                    if visited.contains(target) {
+                        edges.push((id.clone(), target.clone(), rel_type.clone(), *weight));
+                    }
+                }
+            }
+        }
+
+        (entities, edges)
+    }
+
+    /// Search with relation type filtering — only traverse edges of the specified types.
+    pub fn graph_search_with_relation_filter(
+        &self,
+        query: &[f32],
+        k: usize,
+        hops: usize,
+        graph_weight: f32,
+        allowed_relations: &[&str],
+    ) -> Result<Vec<GraphSearchResult>> {
+        let hops = hops.min(self.config.max_hops);
+        let graph_weight = graph_weight.clamp(0.0, 1.0);
+        let allowed: HashSet<&str> = allowed_relations.iter().copied().collect();
+
+        let coll = self.db.collection(&self.collection_name)?;
+        let vector_results = coll.search(query, k * 2)?;
+
+        let mut vector_scores: HashMap<String, f32> = HashMap::new();
+        for r in &vector_results {
+            vector_scores.insert(r.id.clone(), 1.0 / (1.0 + r.distance));
+        }
+
+        let mut graph_scores: HashMap<String, (f32, usize, Vec<String>)> = HashMap::new();
+        let seeds: Vec<String> = vector_results.iter().take(k).map(|r| r.id.clone()).collect();
+
+        for seed in &seeds {
+            let mut visited: HashSet<String> = HashSet::new();
+            let mut queue: VecDeque<(String, usize, f32, Vec<String>)> = VecDeque::new();
+            queue.push_back((seed.clone(), 0, 1.0, vec![seed.clone()]));
+            visited.insert(seed.clone());
+
+            while let Some((node, depth, acc, path)) = queue.pop_front() {
+                let entry = graph_scores
+                    .entry(node.clone())
+                    .or_insert((0.0, depth, path.clone()));
+                entry.0 = entry.0.max(acc);
+                if depth < entry.1 {
+                    entry.1 = depth;
+                    entry.2 = path.clone();
+                }
+
+                if depth < hops {
+                    let neighbors = self.adjacency.neighbors(&node, self.config.bidirectional);
+                    for (n, rel_type, w) in neighbors {
+                        if !visited.contains(&n) && allowed.contains(rel_type.as_str()) {
+                            visited.insert(n.clone());
+                            let mut new_path = path.clone();
+                            new_path.push(n.clone());
+                            queue.push_back((n, depth + 1, acc * self.config.hop_decay * w, new_path));
+                        }
+                    }
+                }
+            }
+        }
+
+        let mut all_candidates: HashSet<String> = HashSet::new();
+        all_candidates.extend(vector_scores.keys().cloned());
+        all_candidates.extend(graph_scores.keys().cloned());
+
+        let mut results: Vec<GraphSearchResult> = Vec::new();
+        for id in all_candidates {
+            let entity = match self.entities.get(&id) { Some(e) => e, None => continue };
+            let vs = vector_scores.get(&id).copied().unwrap_or(0.0);
+            let (gs, h, p) = graph_scores.get(&id).cloned().unwrap_or((0.0, 0, vec![id.clone()]));
+            results.push(GraphSearchResult {
+                id: id.clone(), label: entity.label.clone(),
+                score: (1.0 - graph_weight) * vs + graph_weight * gs,
+                vector_score: vs, graph_score: gs, hops: h, path: p,
+                metadata: entity.metadata.clone(),
+            });
+        }
+
+        results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        results.truncate(k);
+        Ok(results)
+    }
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────────
@@ -697,5 +862,66 @@ mod tests {
         let neighbors = svc.neighbors("a");
         assert_eq!(neighbors.len(), 1);
         assert_eq!(neighbors[0].2, 2.0);
+    }
+
+    #[test]
+    fn test_community_detection() {
+        let db = test_db();
+        let mut svc = GraphRagService::new(&db, "entities", GraphRagConfig::default()).unwrap();
+
+        // Two disconnected components → should be 2 communities
+        svc.add_entity(make_entity("a", "X", vec![1.0; 4])).unwrap();
+        svc.add_entity(make_entity("b", "X", vec![1.0; 4])).unwrap();
+        svc.add_entity(make_entity("c", "X", vec![1.0; 4])).unwrap();
+        svc.add_entity(make_entity("d", "X", vec![1.0; 4])).unwrap();
+        svc.add_relation(Relation::new("a", "b", "r")).unwrap();
+        svc.add_relation(Relation::new("c", "d", "r")).unwrap();
+
+        let communities = svc.detect_communities(10);
+        assert!(communities.len() >= 2);
+    }
+
+    #[test]
+    fn test_export_subgraph() {
+        let db = test_db();
+        let mut svc = GraphRagService::new(&db, "entities", GraphRagConfig::default()).unwrap();
+
+        svc.add_entity(make_entity("a", "X", vec![1.0; 4])).unwrap();
+        svc.add_entity(make_entity("b", "X", vec![1.0; 4])).unwrap();
+        svc.add_entity(make_entity("c", "X", vec![1.0; 4])).unwrap();
+        svc.add_entity(make_entity("d", "X", vec![1.0; 4])).unwrap();
+        svc.add_relation(Relation::new("a", "b", "r")).unwrap();
+        svc.add_relation(Relation::new("b", "c", "r")).unwrap();
+        svc.add_relation(Relation::new("c", "d", "r")).unwrap();
+
+        // 1 hop from "a" → should get a and b
+        let (entities, edges) = svc.export_subgraph("a", 1);
+        assert_eq!(entities.len(), 2);
+        assert_eq!(edges.len(), 1);
+
+        // 2 hops from "a" → should get a, b, c
+        let (entities, _) = svc.export_subgraph("a", 2);
+        assert_eq!(entities.len(), 3);
+    }
+
+    #[test]
+    fn test_search_with_relation_filter() {
+        let db = test_db();
+        let mut svc = GraphRagService::new(&db, "entities", GraphRagConfig::default()).unwrap();
+
+        svc.add_entity(make_entity("a", "Lang", vec![1.0, 0.0, 0.0, 0.0])).unwrap();
+        svc.add_entity(make_entity("b", "Tool", vec![0.5, 0.5, 0.0, 0.0])).unwrap();
+        svc.add_entity(make_entity("c", "Lib", vec![0.0, 0.0, 1.0, 0.0])).unwrap();
+        svc.add_relation(Relation::new("a", "b", "uses")).unwrap();
+        svc.add_relation(Relation::new("b", "c", "depends_on")).unwrap();
+
+        // Only follow "uses" edges
+        let results = svc
+            .graph_search_with_relation_filter(&[1.0, 0.0, 0.0, 0.0], 5, 2, 0.3, &["uses"])
+            .unwrap();
+        // "c" should NOT be reachable via graph since "depends_on" is filtered
+        let ids: Vec<&str> = results.iter().map(|r| r.id.as_str()).collect();
+        // a and b should be present, c only via vector score (if close enough)
+        assert!(ids.contains(&"a"));
     }
 }
