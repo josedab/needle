@@ -2,6 +2,25 @@
 
 This SDK provides a browser-focused API with IndexedDB persistence.
 
+## Architecture
+
+> **This is a pure JavaScript SDK, not a WASM binding.**
+
+The JS SDK is a standalone TypeScript implementation that runs entirely in JavaScript without
+WebAssembly. It implements its own HNSW index and vector search algorithms in pure JS,
+optimized for browser environments.
+
+| Aspect | JS SDK (`sdk/js/`) | WASM Bindings (`src/wasm.rs`) |
+|--------|-------------------|------------------------------|
+| **Implementation** | Pure TypeScript | Rust compiled to WebAssembly |
+| **Persistence** | IndexedDB | None (in-memory only) |
+| **Performance** | Good for small-medium datasets | Near-native Rust speed |
+| **Bundle size** | Lightweight (~50KB) | Larger (WASM binary) |
+| **Dependencies** | None (zero-dep) | Requires WASM runtime |
+| **Best for** | Browser apps, prototyping | Performance-critical workloads |
+
+For WASM-based vector search (compiled from the full Rust core), see the [WASM Guide](../docs/WASM_GUIDE.md).
+
 ## Install (from source)
 
 ```bash
@@ -321,5 +340,6 @@ See the [Web Worker Message Protocol](#worker-message-protocol) types (`NeedleWo
 
 ## Related
 
-- [WASM Guide](../docs/WASM_GUIDE.md) — WebAssembly integration for browser and edge deployment
+- [WASM Guide](../docs/WASM_GUIDE.md) — WebAssembly integration for browser and edge deployment (different from this SDK)
+- [Language Bindings Overview](../docs/language-bindings.md) — Comparison of all Needle language bindings
 - [API Reference](../docs/api-reference.md) — Full Rust and REST API documentation
