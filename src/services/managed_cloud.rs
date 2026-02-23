@@ -184,6 +184,87 @@ impl CloudControlPlane {
     pub fn active_tenants(&self) -> Vec<&Tenant> {
         self.tenants.values().filter(|t| t.status == TenantStatus::Active).collect()
     }
+
+    /// Suspend a tenant (e.g., for non-payment).
+    pub fn suspend(&mut self, tenant_id: &str) -> Result<()> {
+        let t = self.tenants.get_mut(tenant_id)
+            .ok_or_else(|| NeedleError::NotFound(format!("Tenant '{tenant_id}'")))?;
+        if t.status != TenantStatus::Active {
+            return Err(NeedleError::InvalidArgument(format!(
+                "Tenant '{tenant_id}' is not active (status: {:?})", t.status
+            )));
+        }
+        t.status = TenantStatus::Suspended;
+        Ok(())
+    }
+
+    /// Reactivate a suspended tenant.
+    pub fn reactivate(&mut self, tenant_id: &str) -> Result<()> {
+        let t = self.tenants.get_mut(tenant_id)
+            .ok_or_else(|| NeedleError::NotFound(format!("Tenant '{tenant_id}'")))?;
+        if t.status != TenantStatus::Suspended {
+            return Err(NeedleError::InvalidArgument(format!(
+                "Tenant '{tenant_id}' is not suspended (status: {:?})", t.status
+            )));
+        }
+        t.status = TenantStatus::Active;
+        Ok(())
+    }
+
+    /// Upgrade or downgrade a tenant's plan.
+    pub fn change_plan(&mut self, tenant_id: &str, new_plan: Plan) -> Result<()> {
+        let t = self.tenants.get_mut(tenant_id)
+            .ok_or_else(|| NeedleError::NotFound(format!("Tenant '{tenant_id}'")))?;
+        t.plan = new_plan;
+        t.config = TenantConfig::for_plan(new_plan);
+        Ok(())
+    }
+
+    /// Estimate the monthly billing for a tenant based on usage metrics.
+    pub fn estimate_billing(&self, tenant_id: &str) -> Result<BillingEstimate> {
+        let tenant = self.tenants.get(tenant_id)
+            .ok_or_else(|| NeedleError::NotFound(format!("Tenant '{tenant_id}'")))?;
+        let usage = self.usage.get(tenant_id).cloned().unwrap_or_default();
+
+        let base_price = match tenant.plan {
+            Plan::Free => 0.0,
+            Plan::Starter => 29.0,
+            Plan::Pro => 99.0,
+            Plan::Enterprise => 499.0,
+        };
+
+        let search_cost = usage.total_searches as f64 * 0.0001; // $0.0001 per search
+        let storage_cost = (usage.storage_bytes.max(0) as f64 / (1024.0 * 1024.0 * 1024.0)) * 0.25; // $0.25/GB
+        let insert_cost = usage.total_inserts as f64 * 0.0005; // $0.0005 per insert
+
+        Ok(BillingEstimate {
+            plan_base: base_price,
+            search_cost,
+            storage_cost,
+            insert_cost,
+            total: base_price + search_cost + storage_cost + insert_cost,
+        })
+    }
+
+    /// List all tenants.
+    pub fn list_tenants(&self) -> Vec<&Tenant> {
+        self.tenants.values().collect()
+    }
+}
+
+/// Monthly billing estimate.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BillingEstimate {
+    /// Base plan price.
+    pub plan_base: f64,
+    /// Search operation costs.
+    pub search_cost: f64,
+    /// Storage costs.
+    pub storage_cost: f64,
+    /// Insert operation costs.
+    pub insert_cost: f64,
+    /// Total estimated monthly cost.
+    pub total: f64,
 }
 
 impl Default for CloudControlPlane {
@@ -242,5 +323,52 @@ mod tests {
         let ent = TenantConfig::for_plan(Plan::Enterprise);
         assert!(ent.max_vectors > free.max_vectors);
         assert!(ent.max_qps > free.max_qps);
+    }
+
+    #[test]
+    fn test_suspend_and_reactivate() {
+        let mut cp = CloudControlPlane::new();
+        cp.provision(ProvisionRequest { tenant_id: "t1".into(), plan: Plan::Pro, region: "us".into(), config: TenantConfig::default() }).unwrap();
+
+        cp.suspend("t1").unwrap();
+        assert_eq!(cp.tenant("t1").unwrap().status, TenantStatus::Suspended);
+        assert!(cp.active_tenants().is_empty());
+
+        cp.reactivate("t1").unwrap();
+        assert_eq!(cp.tenant("t1").unwrap().status, TenantStatus::Active);
+        assert_eq!(cp.active_tenants().len(), 1);
+    }
+
+    #[test]
+    fn test_change_plan() {
+        let mut cp = CloudControlPlane::new();
+        cp.provision(ProvisionRequest { tenant_id: "t1".into(), plan: Plan::Starter, region: "us".into(), config: TenantConfig::default() }).unwrap();
+
+        cp.change_plan("t1", Plan::Enterprise).unwrap();
+        let t = cp.tenant("t1").unwrap();
+        assert_eq!(t.plan, Plan::Enterprise);
+        assert_eq!(t.config.max_vectors, 100_000_000);
+    }
+
+    #[test]
+    fn test_billing_estimate() {
+        let mut cp = CloudControlPlane::new();
+        cp.provision(ProvisionRequest { tenant_id: "t1".into(), plan: Plan::Pro, region: "us".into(), config: TenantConfig::default() }).unwrap();
+
+        cp.record_usage("t1", UsageEvent::Search { vectors_scanned: 1000 });
+        cp.record_usage("t1", UsageEvent::Insert { count: 100 });
+
+        let billing = cp.estimate_billing("t1").unwrap();
+        assert_eq!(billing.plan_base, 99.0);
+        assert!(billing.total > 99.0); // base + usage
+    }
+
+    #[test]
+    fn test_list_tenants() {
+        let mut cp = CloudControlPlane::new();
+        cp.provision(ProvisionRequest { tenant_id: "t1".into(), plan: Plan::Free, region: "us".into(), config: TenantConfig::default() }).unwrap();
+        cp.provision(ProvisionRequest { tenant_id: "t2".into(), plan: Plan::Pro, region: "eu".into(), config: TenantConfig::default() }).unwrap();
+
+        assert_eq!(cp.list_tenants().len(), 2);
     }
 }
