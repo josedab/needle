@@ -81,6 +81,45 @@ Use the Rust example with mock embeddings instead:
 cargo run --example rag_chatbot
 ```
 
+## Using Framework Integrations
+
+Instead of raw HTTP calls, you can use Needle's LangChain or LlamaIndex wrappers to plug into existing RAG pipelines.
+
+### LangChain
+
+```python
+from needle_langchain import NeedleVectorStore
+
+store = NeedleVectorStore(collection_name="rag_demo", dimensions=1536)
+store.add_texts(["Needle is an embedded vector database."], metadatas=[{"source": "docs"}])
+
+results = store.similarity_search_with_score(query_vector=[0.1] * 1536, k=3)
+for doc, score in results:
+    print(f"{doc.page_content} (distance: {score:.4f})")
+```
+
+Install: `cd python/needle_langchain && pip install -e ".[langchain]"`
+Full docs: [LangChain Integration README](../python/needle_langchain/README.md)
+
+### LlamaIndex
+
+```python
+from needle_llamaindex import NeedleVectorStoreIndex, TextNode
+
+index = NeedleVectorStoreIndex(collection_name="rag_demo", dimensions=1536)
+nodes = [TextNode(text="Needle is an embedded vector database.", embedding=[0.1] * 1536)]
+index.add(nodes)
+
+results = index.query(query_embedding=[0.1] * 1536, similarity_top_k=3)
+for r in results:
+    print(f"{r.node.text} (score: {r.score:.4f})")
+```
+
+Install: `cd python/needle_llamaindex && pip install -e ".[llamaindex]"`
+Full docs: [LlamaIndex Integration README](../python/needle_llamaindex/README.md)
+
+> **Note:** Both integrations are reference implementations (in-memory stubs) intended for prototyping. See their READMEs for details.
+
 ## Next steps
 
 - [HTTP Quickstart](http-quickstart.md) — Full HTTP API walkthrough
