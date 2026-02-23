@@ -88,16 +88,28 @@ For more examples, see [How-To Guides](how-to-guides.md).
 | Document | Description |
 |----------|-------------|
 | [Index Selection Guide](index-selection-guide.md) | HNSW vs IVF vs DiskANN decision guide |
+| [Feature Flags Guide](feature-flags.md) | Cargo feature flags decision guide |
 | [Distributed Operations](distributed-operations.md) | Sharding, Raft replication, and clustering |
 | [Migration Guide](migration-upgrade-guide.md) | Version upgrades and database migrations |
 | [WASM Guide](WASM_GUIDE.md) | WebAssembly integration guide |
+| [Experimental Triage](experimental-triage.md) | Experimental module status and maturity report |
+| [Launch Announcement](launch-announcement.md) | Needle v0.1.0 launch announcement |
 
 ### Developer Resources
 
 | Document | Description |
 |----------|-------------|
+| [Language Bindings](language-bindings.md) | Overview of all language bindings (Python, JS, WASM, Swift, Kotlin) |
 | [Examples](../examples/README.md) | Runnable example commands |
+| [Python SDK](../python/README.md) | Python client installation and usage |
 | [JavaScript SDK](../sdk/js/README.md) | SDK build and usage notes |
+
+### Framework Integrations
+
+| Document | Description |
+|----------|-------------|
+| [LangChain Integration](../python/needle_langchain/README.md) | LangChain vector store wrapper (reference implementation) |
+| [LlamaIndex Integration](../python/needle_llamaindex/README.md) | LlamaIndex vector store wrapper (reference implementation) |
 
 ### Reference
 
