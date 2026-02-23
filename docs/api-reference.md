@@ -612,8 +612,19 @@ Prometheus-format metrics (requires `metrics` feature).
 
 ```bash
 curl http://localhost:8080/metrics
-# needle_vectors_total{collection="docs"} 1500
-# needle_search_duration_seconds_bucket{le="0.01"} 42
+```
+
+**Response** (Prometheus text format):
+```
+# HELP needle_vectors_total Total number of vectors
+# TYPE needle_vectors_total gauge
+needle_vectors_total{collection="docs"} 1500
+# HELP needle_search_duration_seconds Search latency histogram
+# TYPE needle_search_duration_seconds histogram
+needle_search_duration_seconds_bucket{le="0.01"} 42
+needle_search_duration_seconds_bucket{le="0.1"} 99
+needle_search_duration_seconds_sum 1.234
+needle_search_duration_seconds_count 100
 ```
 
 #### `POST /save`
@@ -635,6 +646,15 @@ Returns the OpenAPI 3.1 specification for all endpoints.
 
 ```bash
 curl http://localhost:8080/openapi.json -o openapi.json
+```
+
+**Response** (truncated):
+```json
+{
+  "openapi": "3.1.0",
+  "info": {"title": "Needle Vector Database API", "version": "0.1.0"},
+  "paths": {"/health": {"get": {"summary": "Health check", ...}}, ...}
+}
 ```
 
 ---
@@ -1699,6 +1719,20 @@ JSON-RPC endpoint for Model Context Protocol integration.
 curl -X POST http://localhost:8080/mcp \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc": "2.0", "method": "tools/list", "id": 1}'
+```
+
+**Response:**
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "tools": [
+      {"name": "search", "description": "Search for similar vectors", "inputSchema": {...}},
+      {"name": "remember", "description": "Store a memory", "inputSchema": {...}}
+    ]
+  }
+}
 ```
 
 #### `GET /mcp/config`
