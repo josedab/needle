@@ -200,6 +200,71 @@ The `sql` CLI command supports three output formats via `--format`:
 | `table` | Human-readable table |
 | `csv` | Comma-separated values |
 
+## Common Patterns
+
+### Similarity Search with Metadata Filter
+
+Find similar products in a specific category under a price threshold:
+
+```sql
+SELECT id, title, price, distance FROM products
+WHERE vector SIMILAR TO $query
+  AND category = 'electronics'
+  AND price < 200
+  AND status != 'discontinued'
+LIMIT 10;
+```
+
+### Hybrid Search (Vector + BM25 with RRF)
+
+Combine vector similarity with full-text search for better relevance — useful when queries contain specific keywords:
+
+```sql
+SELECT id, title, distance FROM articles
+WHERE vector SIMILAR TO $query
+  AND text MATCH 'distributed systems consensus'
+ORDER BY hybrid_score(vector_score, text_score, 0.6)
+LIMIT 15;
+```
+
+The `0.6` weight favors vector similarity. Use `0.3`–`0.4` when keyword precision matters more.
+
+### Time-Decay Boosted Search
+
+Surface recent news articles while still matching by relevance — the `7d` half-life means articles older than 7 days are progressively down-ranked:
+
+```sql
+SELECT id, headline, published_at, distance FROM news
+WHERE vector SIMILAR TO $query
+ORDER BY time_decay(distance, published_at, '7d')
+LIMIT 10;
+```
+
+### Batch Insert and Delete
+
+Insert a new document and clean up old entries in a single session:
+
+```sql
+INSERT INTO knowledge_base (id, vector, metadata)
+VALUES ('kb-042', $vec, '{"source": "docs", "version": "2.1"}');
+
+DELETE FROM knowledge_base WHERE id = 'kb-017';
+DELETE FROM knowledge_base WHERE id = 'kb-003';
+```
+
+### Diagnose a Slow Query
+
+Use `EXPLAIN ANALYZE` to inspect filter selectivity and scan counts:
+
+```sql
+EXPLAIN ANALYZE
+SELECT id, distance FROM logs
+WHERE vector SIMILAR TO $query
+  AND level = 'error'
+  AND timestamp > '2025-01-01'
+LIMIT 20;
+```
+
 ## See Also
 
 - [ADR-0026: NeedleQL Design Decision](adr/0026-needleql-query-language.md)
