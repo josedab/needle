@@ -311,6 +311,18 @@ helm uninstall needle
 | `NEEDLE_HOST` | Server bind host (used in cloud deploy configs) | `0.0.0.0` |
 | `NEEDLE_PORT` | Server bind port (used in cloud deploy configs) | `8080` |
 
+### Embedding & Observability Configuration
+
+These variables configure embedding providers and tracing. They require the corresponding Cargo features to be enabled.
+
+| Variable | Description | Default | Feature |
+|----------|-------------|---------|---------|
+| `NEEDLE_EMBEDDING_PROVIDER` | Primary embedding provider (`openai`, `cohere`, `ollama`) | — | `embedding-providers` |
+| `NEEDLE_EMBEDDING_FALLBACK` | Fallback provider chain, comma-separated (tried in order if primary fails) | — | `embedding-providers` |
+| `NEEDLE_EMBEDDING_STRATEGY` | Routing strategy: `priority_chain`, `lowest_cost`, `lowest_latency`, `round_robin` | `priority_chain` | `embedding-providers` |
+| `NEEDLE_MODEL_DIR` | Directory for downloaded ONNX embedding models (falls back to `~/.needle/models/`) | — | `embeddings` |
+| `NEEDLE_TRACE_SAMPLE_RATE` | Sampling rate for distributed traces (`0.0` = none, `1.0` = all) | `0.01` | `server` |
+
 ### Server Configuration
 
 ```bash
@@ -580,3 +592,7 @@ needle tune --vectors 1000000 --dimensions 384 --profile high-recall
 - [Operations Guide](OPERATIONS.md) - Day-to-day operations and monitoring
 - [Distributed Operations](distributed-operations.md) - Sharding, Raft, and clustering
 - [WASM Guide](WASM_GUIDE.md) - WebAssembly integration for browser/edge deployment
+
+## Edge Deployment
+
+For deploying Needle to serverless edge platforms (Cloudflare Workers, Deno Deploy), see the [Edge Deployment Guide](../deploy/edge/README.md). These templates use the WASM build to run Needle at the edge with minimal latency.
