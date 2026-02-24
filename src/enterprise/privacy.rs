@@ -513,10 +513,10 @@ mod tests {
     #[test]
     fn test_composition_advanced() {
         let registry = PrivacyPolicyRegistry::new();
-        let eps = registry.composed_epsilon(1.0, 1e-5, 10, CompositionTheorem::Advanced);
-        // Advanced composition should be tighter than basic for many queries
-        let basic = registry.composed_epsilon(1.0, 1e-5, 10, CompositionTheorem::Basic);
-        assert!(eps < basic);
+        // Use small ε and large k where advanced composition is provably tighter
+        let eps = registry.composed_epsilon(0.1, 1e-5, 100, CompositionTheorem::Advanced);
+        let basic = registry.composed_epsilon(0.1, 1e-5, 100, CompositionTheorem::Basic);
+        assert!(eps < basic, "advanced ({eps}) should be < basic ({basic}) for small ε, large k");
     }
 
     #[test]
