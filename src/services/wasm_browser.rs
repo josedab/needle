@@ -182,6 +182,13 @@ pub enum WorkerMessage {
         query: Vec<f32>,
         k: usize,
     },
+    /// Search with a metadata filter.
+    SearchFiltered {
+        collection: String,
+        query: Vec<f32>,
+        k: usize,
+        filter: Value,
+    },
     /// Delete a vector.
     Delete {
         collection: String,
@@ -206,6 +213,15 @@ pub enum WorkerMessage {
     BatchInsert {
         collection: String,
         items: Vec<BatchItem>,
+    },
+    /// Delete a collection.
+    DeleteCollection {
+        name: String,
+    },
+    /// Import data into a collection.
+    Import {
+        collection: String,
+        entries: Vec<BatchItem>,
     },
 }
 
@@ -356,6 +372,59 @@ impl WasmDatabase {
         Ok(coll.get(id).map(|(v, m)| (v.to_vec(), m.cloned())))
     }
 
+    /// Delete a collection.
+    pub fn delete_collection(&mut self, name: &str) -> Result<bool> {
+        Ok(self.collections.remove(name).is_some())
+    }
+
+    /// Search with a JSON filter (parsed from a serde_json::Value).
+    pub fn search_filtered(
+        &self,
+        collection: &str,
+        query: &[f32],
+        k: usize,
+        filter_json: &Value,
+    ) -> Result<Vec<WasmSearchResult>> {
+        let coll = self.get_collection(collection)?;
+        let filter = crate::metadata::Filter::parse(filter_json)
+            .map_err(|e| NeedleError::InvalidArgument(e))?;
+        let results = coll.search_with_filter(query, k, &filter)?;
+        Ok(results
+            .into_iter()
+            .map(|r| WasmSearchResult {
+                id: r.id,
+                distance: r.distance,
+                metadata: r.metadata,
+            })
+            .collect())
+    }
+
+    /// Serialize the entire database for persistence (IndexedDB / localStorage).
+    pub fn serialize_state(&self) -> Result<Value> {
+        let mut collections = serde_json::Map::new();
+        for (name, coll) in &self.collections {
+            let mut entries = Vec::new();
+            let ids: Vec<String> = coll.ids().map(String::from).collect();
+            for id in ids {
+                if let Some((vec, meta)) = coll.get(&id) {
+                    entries.push(serde_json::json!({
+                        "id": id,
+                        "vector": vec.to_vec(),
+                        "metadata": meta.cloned(),
+                    }));
+                }
+            }
+            collections.insert(
+                name.clone(),
+                serde_json::json!({
+                    "dimensions": coll.dimensions(),
+                    "entries": entries,
+                }),
+            );
+        }
+        Ok(Value::Object(collections))
+    }
+
     /// List all collections.
     pub fn list_collections(&self) -> Vec<CollectionInfo> {
         self.collections
@@ -385,6 +454,12 @@ impl WasmDatabase {
                 collection, query, k,
             } => {
                 let results = self.search(&collection, &query, k)?;
+                Ok(WorkerResponse::SearchResults(results))
+            }
+            WorkerMessage::SearchFiltered {
+                collection, query, k, filter,
+            } => {
+                let results = self.search_filtered(&collection, &query, k, &filter)?;
                 Ok(WorkerResponse::SearchResults(results))
             }
             WorkerMessage::Delete { collection, id } => {
@@ -432,6 +507,21 @@ impl WasmDatabase {
                 let mut inserted = 0;
                 let mut failed = 0;
                 for item in items {
+                    match self.insert(&collection, &item.id, &item.vector, item.metadata) {
+                        Ok(()) => inserted += 1,
+                        Err(_) => failed += 1,
+                    }
+                }
+                Ok(WorkerResponse::BatchResult { inserted, failed })
+            }
+            WorkerMessage::DeleteCollection { name } => {
+                self.delete_collection(&name)?;
+                Ok(WorkerResponse::Ok)
+            }
+            WorkerMessage::Import { collection, entries } => {
+                let mut inserted = 0;
+                let mut failed = 0;
+                for item in entries {
                     match self.insert(&collection, &item.id, &item.vector, item.metadata) {
                         Ok(()) => inserted += 1,
                         Err(_) => failed += 1,
@@ -606,5 +696,64 @@ mod tests {
             }
             _ => panic!("Expected ExportData"),
         }
+    }
+
+    #[test]
+    fn test_delete_collection() {
+        let mut db = WasmDatabase::new(WasmConfig::default());
+        db.create_collection("test", 4).unwrap();
+        assert_eq!(db.collection_count(), 1);
+
+        assert!(db.delete_collection("test").unwrap());
+        assert_eq!(db.collection_count(), 0);
+    }
+
+    #[test]
+    fn test_search_filtered() {
+        let mut db = WasmDatabase::new(WasmConfig::default());
+        db.create_collection("test", 4).unwrap();
+        db.insert(
+            "test",
+            "v1",
+            &[1.0; 4],
+            Some(serde_json::json!({"color": "red"})),
+        )
+        .unwrap();
+        db.insert(
+            "test",
+            "v2",
+            &[2.0; 4],
+            Some(serde_json::json!({"color": "blue"})),
+        )
+        .unwrap();
+
+        let filter = serde_json::json!({"color": {"$eq": "red"}});
+        let results = db.search_filtered("test", &[1.0; 4], 5, &filter).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].id, "v1");
+    }
+
+    #[test]
+    fn test_serialize_state() {
+        let mut db = WasmDatabase::new(WasmConfig::default());
+        db.create_collection("test", 4).unwrap();
+        db.insert("test", "v1", &[1.0; 4], None).unwrap();
+
+        let state = db.serialize_state().unwrap();
+        assert!(state.get("test").is_some());
+    }
+
+    #[test]
+    fn test_worker_delete_collection() {
+        let mut db = WasmDatabase::new(WasmConfig::default());
+        db.create_collection("test", 4).unwrap();
+
+        let resp = db
+            .handle_message(WorkerMessage::DeleteCollection {
+                name: "test".into(),
+            })
+            .unwrap();
+        assert!(matches!(resp, WorkerResponse::Ok));
+        assert_eq!(db.collection_count(), 0);
     }
 }
