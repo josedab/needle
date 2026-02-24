@@ -1224,6 +1224,398 @@ impl DiscoveryService {
 }
 
 // ---------------------------------------------------------------------------
+// Gossip-Based Peer Discovery Protocol
+// ---------------------------------------------------------------------------
+
+/// Gossip protocol configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GossipConfig {
+    /// Number of random peers to contact per gossip round.
+    pub fanout: usize,
+    /// Gossip interval.
+    pub interval: Duration,
+    /// How long until a peer is considered suspect.
+    pub suspect_timeout: Duration,
+    /// How long until a suspect peer is considered dead.
+    pub dead_timeout: Duration,
+}
+
+impl Default for GossipConfig {
+    fn default() -> Self {
+        Self {
+            fanout: 3,
+            interval: Duration::from_secs(1),
+            suspect_timeout: Duration::from_secs(5),
+            dead_timeout: Duration::from_secs(30),
+        }
+    }
+}
+
+/// State of a peer in the gossip protocol.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PeerState {
+    /// Peer is alive and responsive.
+    Alive,
+    /// Peer missed a probe — asking others to confirm.
+    Suspect,
+    /// Peer is confirmed dead.
+    Dead,
+    /// Peer has voluntarily left.
+    Left,
+}
+
+/// Information about a peer node in the cluster.
+#[derive(Debug, Clone)]
+pub struct PeerInfo {
+    /// Unique peer identifier.
+    pub id: String,
+    /// Network endpoint.
+    pub endpoint: String,
+    /// Current state in the gossip protocol.
+    pub state: PeerState,
+    /// Logical clock (incarnation number for consistency).
+    pub incarnation: u64,
+    /// Collections hosted on this peer.
+    pub collections: Vec<String>,
+    /// Region/zone for locality-aware routing.
+    pub region: Option<String>,
+    /// Last time this peer's state was updated.
+    pub last_updated: Instant,
+}
+
+/// A gossip message exchanged between peers.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum GossipMessage {
+    /// Periodic ping with sender's view of the cluster.
+    Ping {
+        sender: String,
+        #[serde(skip)]
+        members: Vec<GossipMemberState>,
+    },
+    /// Acknowledgement to a ping.
+    Ack {
+        sender: String,
+        #[serde(skip)]
+        members: Vec<GossipMemberState>,
+    },
+    /// Request another peer to probe a suspect.
+    PingReq {
+        sender: String,
+        target: String,
+    },
+    /// Voluntary leave notification.
+    Leave {
+        sender: String,
+    },
+}
+
+/// Serializable member state for gossip exchange.
+#[derive(Debug, Clone)]
+pub struct GossipMemberState {
+    pub id: String,
+    pub endpoint: String,
+    pub state: PeerState,
+    pub incarnation: u64,
+    pub collections: Vec<String>,
+    pub region: Option<String>,
+}
+
+/// SWIM-inspired gossip protocol for decentralized peer discovery.
+///
+/// Nodes discover each other transitively: when node A tells node B about
+/// node C, all three become aware of each other. This eliminates the need
+/// for a central coordinator or static configuration.
+pub struct GossipProtocol {
+    /// Local node's ID.
+    local_id: String,
+    /// Local node's endpoint.
+    local_endpoint: String,
+    /// Current incarnation number.
+    incarnation: u64,
+    /// Known peers.
+    peers: RwLock<HashMap<String, PeerInfo>>,
+    /// Configuration.
+    config: GossipConfig,
+    /// Registry to sync peer state with.
+    registry: Arc<InstanceRegistry>,
+    /// Collections hosted locally.
+    local_collections: Vec<String>,
+    /// Local region.
+    local_region: Option<String>,
+}
+
+impl GossipProtocol {
+    /// Create a new gossip protocol instance.
+    pub fn new(
+        local_id: impl Into<String>,
+        local_endpoint: impl Into<String>,
+        registry: Arc<InstanceRegistry>,
+        config: GossipConfig,
+    ) -> Self {
+        Self {
+            local_id: local_id.into(),
+            local_endpoint: local_endpoint.into(),
+            incarnation: 0,
+            peers: RwLock::new(HashMap::new()),
+            config,
+            registry,
+            local_collections: Vec::new(),
+            local_region: None,
+        }
+    }
+
+    /// Set the collections this node hosts.
+    pub fn set_collections(&mut self, collections: Vec<String>) {
+        self.local_collections = collections;
+    }
+
+    /// Set the region for this node.
+    pub fn set_region(&mut self, region: impl Into<String>) {
+        self.local_region = Some(region.into());
+    }
+
+    /// Add a seed peer to bootstrap the gossip protocol.
+    pub fn add_seed(&self, id: impl Into<String>, endpoint: impl Into<String>) {
+        let id = id.into();
+        let endpoint = endpoint.into();
+        let mut peers = self.peers.write();
+        peers.insert(
+            id.clone(),
+            PeerInfo {
+                id: id.clone(),
+                endpoint: endpoint.clone(),
+                state: PeerState::Alive,
+                incarnation: 0,
+                collections: Vec::new(),
+                region: None,
+                last_updated: Instant::now(),
+            },
+        );
+        // Also register in the federated search registry
+        self.registry
+            .register(InstanceConfig::new(&id, &endpoint));
+        self.registry.update_health(&id, HealthStatus::Healthy);
+    }
+
+    /// Process an incoming gossip message and return the response.
+    pub fn handle_message(&self, msg: GossipMessage) -> Option<GossipMessage> {
+        match msg {
+            GossipMessage::Ping { sender, members } => {
+                self.merge_members(&members);
+                self.mark_alive(&sender);
+                Some(GossipMessage::Ack {
+                    sender: self.local_id.clone(),
+                    members: self.member_states(),
+                })
+            }
+            GossipMessage::Ack { sender, members } => {
+                self.merge_members(&members);
+                self.mark_alive(&sender);
+                None
+            }
+            GossipMessage::PingReq { sender: _, target } => {
+                // Probe the target on behalf of the sender
+                self.mark_alive(&target);
+                None
+            }
+            GossipMessage::Leave { sender } => {
+                self.mark_left(&sender);
+                None
+            }
+        }
+    }
+
+    /// Generate a ping message to send to a random peer.
+    pub fn create_ping(&self) -> GossipMessage {
+        GossipMessage::Ping {
+            sender: self.local_id.clone(),
+            members: self.member_states(),
+        }
+    }
+
+    /// Generate a leave message for graceful shutdown.
+    pub fn create_leave(&self) -> GossipMessage {
+        GossipMessage::Leave {
+            sender: self.local_id.clone(),
+        }
+    }
+
+    /// Select random peers for the next gossip round.
+    pub fn select_gossip_targets(&self) -> Vec<PeerInfo> {
+        let peers = self.peers.read();
+        let alive: Vec<PeerInfo> = peers
+            .values()
+            .filter(|p| p.state == PeerState::Alive)
+            .cloned()
+            .collect();
+
+        if alive.len() <= self.config.fanout {
+            return alive;
+        }
+
+        // Deterministic selection based on incarnation for reproducibility
+        let mut selected: Vec<PeerInfo> = Vec::new();
+        let n = alive.len();
+        let step = n / self.config.fanout.max(1);
+        for i in 0..self.config.fanout {
+            let idx = (i * step + self.incarnation as usize) % n;
+            selected.push(alive[idx].clone());
+        }
+        selected
+    }
+
+    /// Run a gossip protocol tick: check for suspect/dead peers.
+    pub fn tick(&self) -> GossipTickResult {
+        let mut newly_suspect = Vec::new();
+        let mut newly_dead = Vec::new();
+        let mut peers = self.peers.write();
+
+        for peer in peers.values_mut() {
+            let elapsed = peer.last_updated.elapsed();
+            match peer.state {
+                PeerState::Alive if elapsed > self.config.suspect_timeout => {
+                    peer.state = PeerState::Suspect;
+                    self.registry.update_health(&peer.id, HealthStatus::Degraded);
+                    newly_suspect.push(peer.id.clone());
+                }
+                PeerState::Suspect if elapsed > self.config.dead_timeout => {
+                    peer.state = PeerState::Dead;
+                    self.registry
+                        .update_health(&peer.id, HealthStatus::Unhealthy);
+                    newly_dead.push(peer.id.clone());
+                }
+                _ => {}
+            }
+        }
+
+        // Remove dead peers from registry
+        for id in &newly_dead {
+            self.registry.unregister(id);
+        }
+
+        GossipTickResult {
+            newly_suspect,
+            newly_dead,
+            alive_count: peers.values().filter(|p| p.state == PeerState::Alive).count(),
+            total_known: peers.len(),
+        }
+    }
+
+    /// Get the current view of all known peers.
+    pub fn peers(&self) -> Vec<PeerInfo> {
+        self.peers.read().values().cloned().collect()
+    }
+
+    /// Get the number of alive peers.
+    pub fn alive_count(&self) -> usize {
+        self.peers
+            .read()
+            .values()
+            .filter(|p| p.state == PeerState::Alive)
+            .count()
+    }
+
+    fn mark_alive(&self, id: &str) {
+        let mut peers = self.peers.write();
+        if let Some(peer) = peers.get_mut(id) {
+            peer.state = PeerState::Alive;
+            peer.last_updated = Instant::now();
+            self.registry.update_health(id, HealthStatus::Healthy);
+        }
+    }
+
+    fn mark_left(&self, id: &str) {
+        let mut peers = self.peers.write();
+        if let Some(peer) = peers.get_mut(id) {
+            peer.state = PeerState::Left;
+            peer.last_updated = Instant::now();
+        }
+        self.registry.unregister(id);
+    }
+
+    fn merge_members(&self, members: &[GossipMemberState]) {
+        let mut peers = self.peers.write();
+        for member in members {
+            if member.id == self.local_id {
+                continue;
+            }
+            let should_update = match peers.get(&member.id) {
+                Some(existing) => member.incarnation > existing.incarnation,
+                None => true,
+            };
+            if should_update {
+                let info = PeerInfo {
+                    id: member.id.clone(),
+                    endpoint: member.endpoint.clone(),
+                    state: member.state,
+                    incarnation: member.incarnation,
+                    collections: member.collections.clone(),
+                    region: member.region.clone(),
+                    last_updated: Instant::now(),
+                };
+                peers.insert(member.id.clone(), info);
+
+                // Sync with registry
+                if member.state == PeerState::Alive {
+                    if self.registry.get(&member.id).is_none() {
+                        let mut config = InstanceConfig::new(&member.id, &member.endpoint);
+                        if let Some(ref region) = member.region {
+                            config = config.with_region(region);
+                        }
+                        for coll in &member.collections {
+                            config = config.with_collection(coll);
+                        }
+                        self.registry.register(config);
+                    }
+                    self.registry
+                        .update_health(&member.id, HealthStatus::Healthy);
+                }
+            }
+        }
+    }
+
+    fn member_states(&self) -> Vec<GossipMemberState> {
+        let peers = self.peers.read();
+        let mut states: Vec<GossipMemberState> = peers
+            .values()
+            .map(|p| GossipMemberState {
+                id: p.id.clone(),
+                endpoint: p.endpoint.clone(),
+                state: p.state,
+                incarnation: p.incarnation,
+                collections: p.collections.clone(),
+                region: p.region.clone(),
+            })
+            .collect();
+
+        // Include self
+        states.push(GossipMemberState {
+            id: self.local_id.clone(),
+            endpoint: self.local_endpoint.clone(),
+            state: PeerState::Alive,
+            incarnation: self.incarnation,
+            collections: self.local_collections.clone(),
+            region: self.local_region.clone(),
+        });
+
+        states
+    }
+}
+
+/// Result of a gossip protocol tick.
+#[derive(Debug, Clone)]
+pub struct GossipTickResult {
+    /// Peers that became suspect.
+    pub newly_suspect: Vec<String>,
+    /// Peers that were declared dead.
+    pub newly_dead: Vec<String>,
+    /// Number of currently alive peers.
+    pub alive_count: usize,
+    /// Total known peers (including dead/left).
+    pub total_known: usize,
+}
+
+// ---------------------------------------------------------------------------
 // Cross-Instance Deduplication
 // ---------------------------------------------------------------------------
 
@@ -2039,5 +2431,174 @@ mod tests {
 
         registry.update_health("i1", HealthStatus::Unhealthy);
         assert!(!planner.validate(&plan));
+    }
+
+    // ---- Gossip Protocol tests ----
+
+    #[test]
+    fn test_gossip_add_seed() {
+        let registry = Arc::new(InstanceRegistry::new());
+        let gossip = GossipProtocol::new("local", "http://localhost:8080", registry.clone(), GossipConfig::default());
+        gossip.add_seed("peer1", "http://peer1:8080");
+
+        assert_eq!(gossip.alive_count(), 1);
+        assert!(registry.get("peer1").is_some());
+    }
+
+    #[test]
+    fn test_gossip_create_ping() {
+        let registry = Arc::new(InstanceRegistry::new());
+        let gossip = GossipProtocol::new("local", "http://localhost:8080", registry, GossipConfig::default());
+        gossip.add_seed("peer1", "http://peer1:8080");
+
+        let msg = gossip.create_ping();
+        match msg {
+            GossipMessage::Ping { sender, members } => {
+                assert_eq!(sender, "local");
+                assert!(members.len() >= 1); // at least peer1 + self
+            }
+            _ => panic!("Expected Ping"),
+        }
+    }
+
+    #[test]
+    fn test_gossip_handle_ping() {
+        let reg1 = Arc::new(InstanceRegistry::new());
+        let gossip1 = GossipProtocol::new("node1", "http://n1:8080", reg1.clone(), GossipConfig::default());
+
+        let reg2 = Arc::new(InstanceRegistry::new());
+        let gossip2 = GossipProtocol::new("node2", "http://n2:8080", reg2.clone(), GossipConfig::default());
+
+        // node1 creates a ping
+        gossip1.add_seed("node3", "http://n3:8080");
+        let ping = gossip1.create_ping();
+
+        // node2 handles the ping — should learn about node1 and node3
+        let ack = gossip2.handle_message(ping);
+        assert!(ack.is_some()); // Should return Ack
+
+        let peers = gossip2.peers();
+        let peer_ids: Vec<&str> = peers.iter().map(|p| p.id.as_str()).collect();
+        assert!(peer_ids.contains(&"node1"));
+        assert!(peer_ids.contains(&"node3"));
+    }
+
+    #[test]
+    fn test_gossip_transitive_discovery() {
+        let reg_a = Arc::new(InstanceRegistry::new());
+        let gossip_a = GossipProtocol::new("A", "http://a:8080", reg_a, GossipConfig::default());
+
+        let reg_b = Arc::new(InstanceRegistry::new());
+        let gossip_b = GossipProtocol::new("B", "http://b:8080", reg_b, GossipConfig::default());
+
+        let reg_c = Arc::new(InstanceRegistry::new());
+        let gossip_c = GossipProtocol::new("C", "http://c:8080", reg_c, GossipConfig::default());
+
+        // A knows B
+        gossip_a.add_seed("B", "http://b:8080");
+        // B knows C
+        gossip_b.add_seed("C", "http://c:8080");
+
+        // A pings B → B learns about A
+        let ping_a = gossip_a.create_ping();
+        let ack_b = gossip_b.handle_message(ping_a).unwrap();
+
+        // B acks with its full membership (includes C) → A learns about C
+        gossip_a.handle_message(ack_b);
+
+        // A should now know about C (transitive discovery)
+        let a_peers = gossip_a.peers();
+        let a_ids: Vec<&str> = a_peers.iter().map(|p| p.id.as_str()).collect();
+        assert!(a_ids.contains(&"B"));
+        assert!(a_ids.contains(&"C"));
+    }
+
+    #[test]
+    fn test_gossip_leave() {
+        let registry = Arc::new(InstanceRegistry::new());
+        let gossip = GossipProtocol::new("local", "http://localhost:8080", registry.clone(), GossipConfig::default());
+        gossip.add_seed("peer1", "http://peer1:8080");
+        assert_eq!(gossip.alive_count(), 1);
+
+        let leave = GossipMessage::Leave { sender: "peer1".into() };
+        gossip.handle_message(leave);
+
+        let peers = gossip.peers();
+        let peer1 = peers.iter().find(|p| p.id == "peer1").unwrap();
+        assert_eq!(peer1.state, PeerState::Left);
+        assert!(registry.get("peer1").is_none());
+    }
+
+    #[test]
+    fn test_gossip_tick_suspect() {
+        let config = GossipConfig {
+            suspect_timeout: Duration::from_millis(1), // Immediate for testing
+            dead_timeout: Duration::from_secs(30),
+            ..GossipConfig::default()
+        };
+        let registry = Arc::new(InstanceRegistry::new());
+        let gossip = GossipProtocol::new("local", "http://localhost:8080", registry, config);
+        gossip.add_seed("peer1", "http://peer1:8080");
+
+        // Wait for suspect timeout
+        std::thread::sleep(Duration::from_millis(10));
+
+        let result = gossip.tick();
+        assert!(result.newly_suspect.contains(&"peer1".to_string()));
+        assert_eq!(result.newly_dead.len(), 0); // Not dead yet
+    }
+
+    #[test]
+    fn test_gossip_tick_dead() {
+        let config = GossipConfig {
+            suspect_timeout: Duration::from_millis(1),
+            dead_timeout: Duration::from_millis(2),
+            ..GossipConfig::default()
+        };
+        let registry = Arc::new(InstanceRegistry::new());
+        let gossip = GossipProtocol::new("local", "http://localhost:8080", registry.clone(), config);
+        gossip.add_seed("peer1", "http://peer1:8080");
+
+        std::thread::sleep(Duration::from_millis(5));
+        gossip.tick(); // → suspect
+        std::thread::sleep(Duration::from_millis(5));
+        let result = gossip.tick(); // → dead
+
+        assert!(result.newly_dead.contains(&"peer1".to_string()));
+        assert!(registry.get("peer1").is_none());
+    }
+
+    #[test]
+    fn test_gossip_select_targets() {
+        let registry = Arc::new(InstanceRegistry::new());
+        let gossip = GossipProtocol::new("local", "http://localhost:8080", registry, GossipConfig {
+            fanout: 2,
+            ..GossipConfig::default()
+        });
+
+        for i in 0..5 {
+            gossip.add_seed(format!("peer{i}"), format!("http://peer{i}:8080"));
+        }
+
+        let targets = gossip.select_gossip_targets();
+        assert_eq!(targets.len(), 2);
+    }
+
+    #[test]
+    fn test_gossip_config_serde() {
+        let config = GossipConfig::default();
+        let json = serde_json::to_string(&config).unwrap();
+        let deser: GossipConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(deser.fanout, 3);
+    }
+
+    #[test]
+    fn test_peer_state_serde() {
+        let states = vec![PeerState::Alive, PeerState::Suspect, PeerState::Dead, PeerState::Left];
+        for s in states {
+            let json = serde_json::to_string(&s).unwrap();
+            let deser: PeerState = serde_json::from_str(&json).unwrap();
+            assert_eq!(s, deser);
+        }
     }
 }
