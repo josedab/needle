@@ -71,9 +71,14 @@ For more examples, see [How-To Guides](how-to-guides.md).
 | Document | Description |
 |----------|-------------|
 | [API Reference](api-reference.md) | Complete API documentation with method signatures and examples |
+| [API Stability Policy](api-stability.md) | Stability tiers (Stable, Beta, Experimental) and semver guarantees |
 | [NeedleQL Guide](needleql.md) | SQL-like query language for vector operations |
 | [Architecture](architecture.md) | Internal design, data flow diagrams, and module relationships |
+| [Services Architecture](ARCHITECTURE_SERVICES.md) | Service-layer modules in `src/services/` |
+| [Benchmarks](benchmarks.md) | Performance comparisons for vector search operations |
 | [How-To Guides](how-to-guides.md) | Practical tutorials for common tasks |
+| [HTTP Quickstart](http-quickstart.md) | Zero-to-search walkthrough for the HTTP REST API |
+| [RAG Quickstart](rag-quickstart.md) | Build a RAG pipeline with Needle and OpenAI in 5 minutes |
 
 ### Operations
 
@@ -90,7 +95,9 @@ For more examples, see [How-To Guides](how-to-guides.md).
 | [Index Selection Guide](index-selection-guide.md) | HNSW vs IVF vs DiskANN decision guide |
 | [Feature Flags Guide](feature-flags.md) | Cargo feature flags decision guide |
 | [Distributed Operations](distributed-operations.md) | Sharding, Raft replication, and clustering |
-| [Migration Guide](migration-upgrade-guide.md) | Version upgrades and database migrations |
+| [Migration Guide](migration-upgrade-guide.md) | Comprehensive version upgrades, index changes, and external DB migration |
+| [Migration Quick Reference](MIGRATION.md) | Breaking changes and deprecated APIs between specific versions |
+| [MCP Integration](mcp-integration.md) | Model Context Protocol server for AI agent access |
 | [WASM Guide](WASM_GUIDE.md) | WebAssembly integration guide |
 | [Experimental Triage](experimental-triage.md) | Experimental module status and maturity report |
 | [Launch Announcement](launch-announcement.md) | Needle v0.1.0 launch announcement |
@@ -116,6 +123,8 @@ For more examples, see [How-To Guides](how-to-guides.md).
 | Document | Description |
 |----------|-------------|
 | [Architecture Decision Records](adr/) | Design decisions and rationale |
+| [Governance](GOVERNANCE.md) | Project governance model and decision-making process |
+| [Support](SUPPORT.md) | How to get help, report bugs, and request features |
 | [CLAUDE.md](../CLAUDE.md) | AI assistant context and codebase overview |
 
 ---
