@@ -172,7 +172,7 @@ impl FusionConfigBuilder {
 /// How to combine scores from multiple modalities.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum FusionStrategy {
-    /// Weighted sum of per-modality distances.
+    /// Weighted sum of per-modality distances (normalized by total weight).
     #[default]
     WeightedSum,
     /// Minimum distance across modalities.
@@ -181,6 +181,8 @@ pub enum FusionStrategy {
     MaxDistance,
     /// Reciprocal Rank Fusion.
     ReciprocalRankFusion,
+    /// Concatenate modality vectors then compute a single distance.
+    Concatenate,
 }
 
 // ── Document & Query ─────────────────────────────────────────────────────────
@@ -431,6 +433,26 @@ impl MultiModalFusion {
                     1.0 / rrf // invert so lower = better
                 }
             }
+            FusionStrategy::Concatenate => {
+                // Concatenate all shared modality vectors and compute single distance
+                let mut doc_concat = Vec::new();
+                let mut query_concat = Vec::new();
+                for (modality, query_vec) in &query.vectors {
+                    if let Some(doc_vec) = doc.vectors.get(modality) {
+                        if query_vec.len() == doc_vec.len() {
+                            doc_concat.extend_from_slice(doc_vec);
+                            query_concat.extend_from_slice(query_vec);
+                        }
+                    }
+                }
+                if doc_concat.is_empty() {
+                    f32::INFINITY
+                } else {
+                    DistanceFunction::Cosine
+                        .compute(&query_concat, &doc_concat)
+                        .unwrap_or(f32::INFINITY)
+                }
+            }
         };
 
         (fused, modality_scores)
@@ -634,5 +656,42 @@ mod tests {
 
         // Score should be min of text (0.0) and image (non-zero)
         assert_eq!(results.len(), 1);
+    }
+
+    #[test]
+    fn test_concatenate_strategy() {
+        let config = FusionConfig::builder()
+            .add_modality(ModalityConfig::new(Modality::Text, 4))
+            .add_modality(ModalityConfig::new(Modality::Image, 4))
+            .fusion_strategy(FusionStrategy::Concatenate)
+            .build();
+        let mut index = MultiModalFusion::new(config);
+
+        index
+            .insert(MultiModalDocument {
+                id: "doc1".into(),
+                vectors: vec![
+                    (Modality::Text, vec![1.0, 0.0, 0.0, 0.0]),
+                    (Modality::Image, vec![0.0, 1.0, 0.0, 0.0]),
+                ],
+                metadata: None,
+            })
+            .unwrap();
+
+        let results = index
+            .search(MultiModalQuery {
+                vectors: vec![
+                    (Modality::Text, vec![1.0, 0.0, 0.0, 0.0]),
+                    (Modality::Image, vec![0.0, 1.0, 0.0, 0.0]),
+                ],
+                k: 1,
+                modality_weights: None,
+            })
+            .unwrap();
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].id, "doc1");
+        // Exact match: concatenated distance should be ~0
+        assert!(results[0].score < 0.01);
     }
 }
