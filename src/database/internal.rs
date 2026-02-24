@@ -15,14 +15,23 @@ impl Database {
         vector: &[f32],
         metadata: Option<Value>,
     ) -> Result<()> {
+        let id = id.into();
         let mut state = self.state.write();
         let coll = state
             .collections
             .get_mut(collection)
             .ok_or_else(|| NeedleError::CollectionNotFound(collection.to_string()))?;
 
-        coll.insert(id, vector, metadata)?;
+        coll.insert(&id, vector, metadata)?;
+        drop(state);
+
         self.mark_modified();
+
+        // Record version if versioning is enabled
+        if let Ok(mut store) = self.versioned_store_mut(collection) {
+            let _ = store.put(&id, vector, None);
+        }
+
         Ok(())
     }
 
@@ -33,13 +42,21 @@ impl Database {
         vector: Vec<f32>,
         metadata: Option<Value>,
     ) -> Result<()> {
+        let id = id.into();
+
+        // Record version before insert (we need the vector data)
+        let version_vec = vector.clone();
+        let version_meta = metadata.clone();
+
         let mut state = self.state.write();
         let coll = state
             .collections
             .get_mut(collection)
             .ok_or_else(|| NeedleError::CollectionNotFound(collection.to_string()))?;
 
-        coll.insert_vec(id, vector, metadata)?;
+        coll.insert_vec(&id, vector, metadata)?;
+        drop(state);
+
         self.mark_modified();
         if let Some(aim) = &self.adaptive_index_manager {
             aim.record_insert();
@@ -48,6 +65,12 @@ impl Database {
         if let Some(metrics) = &self.dashboard_metrics {
             metrics.record_insert(collection);
         }
+
+        // Record version if versioning is enabled for this collection
+        if let Ok(mut store) = self.versioned_store_mut(collection) {
+            let _ = store.put(&id, &version_vec, version_meta);
+        }
+
         Ok(())
     }
 
@@ -59,14 +82,22 @@ impl Database {
         metadata: Option<Value>,
         ttl_seconds: Option<u64>,
     ) -> Result<()> {
+        let id = id.into();
         let mut state = self.state.write();
         let coll = state
             .collections
             .get_mut(collection)
             .ok_or_else(|| NeedleError::CollectionNotFound(collection.to_string()))?;
 
-        coll.insert_with_ttl(id, vector, metadata, ttl_seconds)?;
+        coll.insert_with_ttl(&id, vector, metadata, ttl_seconds)?;
+        drop(state);
+
         self.mark_modified();
+
+        if let Ok(mut store) = self.versioned_store_mut(collection) {
+            let _ = store.put(&id, vector, None);
+        }
+
         Ok(())
     }
 
@@ -78,15 +109,56 @@ impl Database {
         metadata: Option<Value>,
         ttl_seconds: Option<u64>,
     ) -> Result<()> {
+        let id = id.into();
+        let version_vec = vector.clone();
+
         let mut state = self.state.write();
         let coll = state
             .collections
             .get_mut(collection)
             .ok_or_else(|| NeedleError::CollectionNotFound(collection.to_string()))?;
 
-        coll.insert_vec_with_ttl(id, vector, metadata, ttl_seconds)?;
+        coll.insert_vec_with_ttl(&id, vector, metadata, ttl_seconds)?;
+        drop(state);
+
+        self.mark_modified();
+
+        if let Ok(mut store) = self.versioned_store_mut(collection) {
+            let _ = store.put(&id, &version_vec, None);
+        }
+
+        Ok(())
+    }
+
+    #[cfg(feature = "embedded-models")]
+    pub(crate) fn insert_text_internal(
+        &self,
+        collection: &str,
+        id: impl Into<String>,
+        text: &str,
+        metadata: Option<Value>,
+    ) -> Result<()> {
+        let mut state = self.state.write();
+        let coll = state
+            .collections
+            .get_mut(collection)
+            .ok_or_else(|| NeedleError::CollectionNotFound(collection.to_string()))?;
+
+        coll.insert_text(id, text, metadata)?;
         self.mark_modified();
         Ok(())
+    }
+
+    #[cfg(feature = "embedded-models")]
+    pub(crate) fn search_text_internal(
+        &self,
+        collection: &str,
+        text: &str,
+        k: usize,
+    ) -> Result<Vec<SearchResult>> {
+        let runtime = crate::ml::embedded_runtime::EmbeddingRuntime::new();
+        let embedding = runtime.embed_text(text)?;
+        self.search_internal(collection, &embedding, k)
     }
 
     pub(crate) fn update_internal(
@@ -96,6 +168,8 @@ impl Database {
         vector: &[f32],
         metadata: Option<Value>,
     ) -> Result<()> {
+        let version_meta = metadata.clone();
+
         let mut state = self.state.write();
         let coll = state
             .collections
@@ -103,7 +177,15 @@ impl Database {
             .ok_or_else(|| NeedleError::CollectionNotFound(collection.to_string()))?;
 
         coll.update(id, vector, metadata)?;
+        drop(state);
+
         self.mark_modified();
+
+        // Record new version if versioning is enabled
+        if let Ok(mut store) = self.versioned_store_mut(collection) {
+            let _ = store.put(id, vector, version_meta);
+        }
+
         Ok(())
     }
 
@@ -406,6 +488,12 @@ impl Database {
         let deleted = coll.delete(id)?;
         if deleted {
             self.mark_modified();
+            drop(state);
+
+            // Record version tombstone if versioning is enabled
+            if let Ok(mut store) = self.versioned_store_mut(collection) {
+                let _ = store.delete(id);
+            }
         }
         Ok(deleted)
     }
@@ -645,6 +733,10 @@ impl Database {
             embedding_model: None,
             created_at: 0,
             data_hash: None,
+            semver: "1.0.0".to_string(),
+            description: None,
+            registry_uri: None,
+            tags: Vec::new(),
         };
 
         let mut state = self.state.write();
@@ -653,5 +745,401 @@ impl Database {
         self.mark_modified();
 
         Ok(manifest)
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use crate::Database;
+    use crate::error::NeedleError;
+    use crate::metadata::Filter;
+    use serde_json::json;
+
+    fn setup_db() -> Database {
+        let db = Database::in_memory();
+        db.create_collection("coll", 4).unwrap();
+        db
+    }
+
+    fn setup_db_with_vectors() -> Database {
+        let db = setup_db();
+        db.insert_internal("coll", "v1", &[1.0, 0.0, 0.0, 0.0], None)
+            .unwrap();
+        db.insert_internal(
+            "coll",
+            "v2",
+            &[0.0, 1.0, 0.0, 0.0],
+            Some(json!({"tag": "a"})),
+        )
+        .unwrap();
+        db
+    }
+
+    // ── insert_internal ─────────────────────────────────────────────────
+
+    #[test]
+    fn test_insert_internal_basic() {
+        let db = setup_db();
+        db.insert_internal("coll", "v1", &[1.0, 0.0, 0.0, 0.0], None)
+            .unwrap();
+        assert_eq!(db.collection_len("coll"), 1);
+    }
+
+    #[test]
+    fn test_insert_internal_missing_collection() {
+        let db = setup_db();
+        let result = db.insert_internal("nonexistent", "v1", &[1.0, 0.0, 0.0, 0.0], None);
+        assert!(matches!(result, Err(NeedleError::CollectionNotFound(_))));
+    }
+
+    // ── insert_vec_internal ─────────────────────────────────────────────
+
+    #[test]
+    fn test_insert_vec_internal() {
+        let db = setup_db();
+        db.insert_vec_internal("coll", "v1", vec![1.0, 0.0, 0.0, 0.0], None)
+            .unwrap();
+        assert_eq!(db.collection_len("coll"), 1);
+    }
+
+    // ── insert_with_ttl_internal ────────────────────────────────────────
+
+    #[test]
+    fn test_insert_with_ttl_internal() {
+        let db = setup_db();
+        db.insert_with_ttl_internal("coll", "v1", &[1.0, 0.0, 0.0, 0.0], None, Some(3600))
+            .unwrap();
+        assert!(db.get_ttl_internal("coll", "v1").is_some());
+    }
+
+    // ── update_internal ─────────────────────────────────────────────────
+
+    #[test]
+    fn test_update_internal() {
+        let db = setup_db_with_vectors();
+        db.update_internal("coll", "v1", &[0.5, 0.5, 0.0, 0.0], Some(json!({"new": true})))
+            .unwrap();
+        let (vec, meta) = db.get_internal("coll", "v1").unwrap();
+        assert_eq!(vec, vec![0.5, 0.5, 0.0, 0.0]);
+        assert!(meta.is_some());
+    }
+
+    #[test]
+    fn test_update_internal_missing_collection() {
+        let db = setup_db();
+        let result = db.update_internal("bad", "v1", &[1.0, 0.0, 0.0, 0.0], None);
+        assert!(matches!(result, Err(NeedleError::CollectionNotFound(_))));
+    }
+
+    // ── search_internal ─────────────────────────────────────────────────
+
+    #[test]
+    fn test_search_internal_roundtrip() {
+        let db = setup_db_with_vectors();
+        let results = db.search_internal("coll", &[1.0, 0.0, 0.0, 0.0], 1).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].id, "v1");
+    }
+
+    #[test]
+    fn test_search_internal_missing_collection() {
+        let db = setup_db();
+        let result = db.search_internal("bad", &[1.0, 0.0, 0.0, 0.0], 1);
+        assert!(matches!(result, Err(NeedleError::CollectionNotFound(_))));
+    }
+
+    // ── search_with_filter_internal ─────────────────────────────────────
+
+    #[test]
+    fn test_search_with_filter_internal() {
+        let db = setup_db_with_vectors();
+        let filter = Filter::eq("tag", "a");
+        let results = db
+            .search_with_filter_internal("coll", &[0.0, 1.0, 0.0, 0.0], 5, &filter)
+            .unwrap();
+        for r in &results {
+            assert_eq!(r.id, "v2");
+        }
+    }
+
+    // ── get_internal ────────────────────────────────────────────────────
+
+    #[test]
+    fn test_get_internal() {
+        let db = setup_db_with_vectors();
+        let result = db.get_internal("coll", "v1");
+        assert!(result.is_some());
+        let (vec, _) = result.unwrap();
+        assert_eq!(vec, vec![1.0, 0.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn test_get_internal_not_found() {
+        let db = setup_db_with_vectors();
+        assert!(db.get_internal("coll", "missing").is_none());
+    }
+
+    #[test]
+    fn test_get_internal_missing_collection() {
+        let db = setup_db();
+        assert!(db.get_internal("bad", "v1").is_none());
+    }
+
+    // ── delete_internal ─────────────────────────────────────────────────
+
+    #[test]
+    fn test_delete_internal() {
+        let db = setup_db_with_vectors();
+        assert!(db.delete_internal("coll", "v1").unwrap());
+        assert!(db.get_internal("coll", "v1").is_none());
+    }
+
+    #[test]
+    fn test_delete_internal_not_found() {
+        let db = setup_db_with_vectors();
+        assert!(!db.delete_internal("coll", "missing").unwrap());
+    }
+
+    #[test]
+    fn test_delete_internal_missing_collection() {
+        let db = setup_db();
+        let result = db.delete_internal("bad", "v1");
+        assert!(matches!(result, Err(NeedleError::CollectionNotFound(_))));
+    }
+
+    // ── collection_len / collection_dimensions ──────────────────────────
+
+    #[test]
+    fn test_collection_len() {
+        let db = setup_db_with_vectors();
+        assert_eq!(db.collection_len("coll"), 2);
+    }
+
+    #[test]
+    fn test_collection_len_missing() {
+        let db = setup_db();
+        assert_eq!(db.collection_len("bad"), 0);
+    }
+
+    #[test]
+    fn test_collection_dimensions() {
+        let db = setup_db();
+        assert_eq!(db.collection_dimensions("coll"), Some(4));
+    }
+
+    #[test]
+    fn test_collection_dimensions_missing() {
+        let db = setup_db();
+        assert_eq!(db.collection_dimensions("bad"), None);
+    }
+
+    // ── collection_stats_internal ───────────────────────────────────────
+
+    #[test]
+    fn test_collection_stats_internal() {
+        let db = setup_db_with_vectors();
+        let stats = db.collection_stats_internal("coll").unwrap();
+        assert_eq!(stats.vector_count, 2);
+        assert_eq!(stats.dimensions, 4);
+    }
+
+    #[test]
+    fn test_collection_stats_missing() {
+        let db = setup_db();
+        let result = db.collection_stats_internal("bad");
+        assert!(matches!(result, Err(NeedleError::CollectionNotFound(_))));
+    }
+
+    // ── export_internal ─────────────────────────────────────────────────
+
+    #[test]
+    fn test_export_internal() {
+        let db = setup_db_with_vectors();
+        let entries = db.export_internal("coll").unwrap();
+        assert_eq!(entries.len(), 2);
+    }
+
+    #[test]
+    fn test_export_internal_missing() {
+        let db = setup_db();
+        let result = db.export_internal("bad");
+        assert!(matches!(result, Err(NeedleError::CollectionNotFound(_))));
+    }
+
+    // ── ids_internal ────────────────────────────────────────────────────
+
+    #[test]
+    fn test_ids_internal() {
+        let db = setup_db_with_vectors();
+        let ids = db.ids_internal("coll").unwrap();
+        assert_eq!(ids.len(), 2);
+        assert!(ids.contains(&"v1".to_string()));
+        assert!(ids.contains(&"v2".to_string()));
+    }
+
+    // ── compact_internal ────────────────────────────────────────────────
+
+    #[test]
+    fn test_compact_internal() {
+        let db = setup_db_with_vectors();
+        db.delete_internal("coll", "v1").unwrap();
+        let removed = db.compact_internal("coll").unwrap();
+        assert!(removed > 0);
+    }
+
+    #[test]
+    fn test_compact_internal_missing() {
+        let db = setup_db();
+        let result = db.compact_internal("bad");
+        assert!(matches!(result, Err(NeedleError::CollectionNotFound(_))));
+    }
+
+    // ── needs_compaction_internal ────────────────────────────────────────
+
+    #[test]
+    fn test_needs_compaction_internal() {
+        let db = setup_db_with_vectors();
+        assert!(!db.needs_compaction_internal("coll", 0.5));
+        db.delete_internal("coll", "v1").unwrap();
+        // After deleting 1 of 2 vectors, 50% are deleted
+        assert!(db.needs_compaction_internal("coll", 0.1));
+    }
+
+    // ── count_internal ──────────────────────────────────────────────────
+
+    #[test]
+    fn test_count_internal() {
+        let db = setup_db_with_vectors();
+        assert_eq!(db.count_internal("coll", None).unwrap(), 2);
+    }
+
+    #[test]
+    fn test_count_internal_with_filter() {
+        let db = setup_db_with_vectors();
+        let filter = Filter::eq("tag", "a");
+        let count = db.count_internal("coll", Some(&filter)).unwrap();
+        assert_eq!(count, 1);
+    }
+
+    // ── deleted_count_internal ──────────────────────────────────────────
+
+    #[test]
+    fn test_deleted_count_internal() {
+        let db = setup_db_with_vectors();
+        assert_eq!(db.deleted_count_internal("coll"), 0);
+        db.delete_internal("coll", "v1").unwrap();
+        assert_eq!(db.deleted_count_internal("coll"), 1);
+    }
+
+    // ── search_ids_internal ─────────────────────────────────────────────
+
+    #[test]
+    fn test_search_ids_internal() {
+        let db = setup_db_with_vectors();
+        let results = db
+            .search_ids_internal("coll", &[1.0, 0.0, 0.0, 0.0], 1)
+            .unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].0, "v1");
+    }
+
+    // ── federated_search_internal ───────────────────────────────────────
+
+    #[test]
+    fn test_federated_search_internal() {
+        let db = Database::in_memory();
+        db.create_collection("c1", 4).unwrap();
+        db.create_collection("c2", 4).unwrap();
+        db.insert_internal("c1", "a", &[1.0, 0.0, 0.0, 0.0], None)
+            .unwrap();
+        db.insert_internal("c2", "b", &[0.0, 1.0, 0.0, 0.0], None)
+            .unwrap();
+        let results = db
+            .federated_search_internal(&[1.0, 0.0, 0.0, 0.0], 5, &["c1", "c2"])
+            .unwrap();
+        assert!(!results.is_empty());
+    }
+
+    #[test]
+    fn test_federated_search_missing_collection() {
+        let db = setup_db();
+        let result = db.federated_search_internal(&[1.0, 0.0, 0.0, 0.0], 5, &["coll", "bad"]);
+        assert!(matches!(result, Err(NeedleError::CollectionNotFound(_))));
+    }
+
+    // ── TTL internal methods ────────────────────────────────────────────
+
+    #[test]
+    fn test_ttl_stats_internal() {
+        let db = setup_db();
+        db.insert_with_ttl_internal("coll", "v1", &[1.0, 0.0, 0.0, 0.0], None, Some(3600))
+            .unwrap();
+        let (total, _, _, _) = db.ttl_stats_internal("coll");
+        assert_eq!(total, 1);
+    }
+
+    #[test]
+    fn test_set_ttl_internal() {
+        let db = setup_db_with_vectors();
+        db.set_ttl_internal("coll", "v1", Some(7200)).unwrap();
+        assert!(db.get_ttl_internal("coll", "v1").is_some());
+    }
+
+    #[test]
+    fn test_set_ttl_internal_remove() {
+        let db = setup_db();
+        db.insert_with_ttl_internal("coll", "v1", &[1.0, 0.0, 0.0, 0.0], None, Some(3600))
+            .unwrap();
+        db.set_ttl_internal("coll", "v1", None).unwrap();
+        assert!(db.get_ttl_internal("coll", "v1").is_none());
+    }
+
+    // ── search_with_options_internal ────────────────────────────────────
+
+    #[test]
+    fn test_search_with_options_internal() {
+        let db = setup_db_with_vectors();
+        let results = db
+            .search_with_options_internal(
+                "coll",
+                &[1.0, 0.0, 0.0, 0.0],
+                2,
+                None,
+                None,
+                None,
+                10,
+            )
+            .unwrap();
+        assert!(!results.is_empty());
+    }
+
+    // ── insert_vec_with_ttl_internal ────────────────────────────────────
+
+    #[test]
+    fn test_insert_vec_with_ttl_internal() {
+        let db = setup_db();
+        db.insert_vec_with_ttl_internal("coll", "v1", vec![1.0, 0.0, 0.0, 0.0], None, Some(100))
+            .unwrap();
+        assert_eq!(db.collection_len("coll"), 1);
+    }
+
+    // ── expire_vectors_internal ─────────────────────────────────────────
+
+    #[test]
+    fn test_expire_vectors_internal_none_expired() {
+        let db = setup_db();
+        db.insert_with_ttl_internal("coll", "v1", &[1.0, 0.0, 0.0, 0.0], None, Some(99999))
+            .unwrap();
+        let expired = db.expire_vectors_internal("coll").unwrap();
+        assert_eq!(expired, 0);
+    }
+
+    // ── needs_expiration_sweep_internal ──────────────────────────────────
+
+    #[test]
+    fn test_needs_expiration_sweep_internal() {
+        let db = setup_db_with_vectors();
+        assert!(!db.needs_expiration_sweep_internal("coll", 0.1));
     }
 }

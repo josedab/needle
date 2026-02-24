@@ -274,6 +274,39 @@ impl<'a> CollectionRef<'a> {
             .insert_vec_with_ttl_internal(&self.name, id, vector, metadata, ttl_seconds)
     }
 
+    /// Insert a text document, automatically embedding it using the built-in model runtime.
+    ///
+    /// Uses the embedded model runtime (feature: `embedded-models`) to generate
+    /// embeddings from text with zero external API dependencies.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the text is empty, dimensions don't match,
+    /// or a vector with the same ID already exists.
+    #[cfg(feature = "embedded-models")]
+    pub fn insert_text(
+        &self,
+        id: impl Into<String>,
+        text: &str,
+        metadata: Option<Value>,
+    ) -> Result<()> {
+        self.db.insert_text_internal(&self.name, id, text, metadata)
+    }
+
+    /// Search by text using the built-in embedded model runtime.
+    ///
+    /// Embeds the query text and performs a k-NN search.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The text is empty
+    /// - Vector dimensions don't match the collection
+    #[cfg(feature = "embedded-models")]
+    pub fn search_text(&self, text: &str, k: usize) -> Result<Vec<SearchResult>> {
+        self.db.search_text_internal(&self.name, text, k)
+    }
+
     /// Search for the k most similar vectors to the query.
     ///
     /// # Arguments
@@ -1023,6 +1056,37 @@ impl<'a> CollectionRef<'a> {
     ) -> Result<crate::collection::BundleManifest> {
         self.db.export_bundle_internal(&self.name, path)
     }
+
+    /// Enable CDC (change data capture) on this collection.
+    pub fn enable_cdc(&self, max_events: usize) -> Result<()> {
+        let mut state = self.db.state.write();
+        let coll = state
+            .collections
+            .get_mut(&self.name)
+            .ok_or_else(|| crate::error::NeedleError::CollectionNotFound(self.name.clone()))?;
+        coll.enable_cdc(max_events);
+        Ok(())
+    }
+
+    /// Get CDC events after the given cursor (sequence number), up to `limit`.
+    pub fn cdc_events_since(&self, after_sequence: u64, limit: usize) -> Vec<crate::collection::CdcEvent> {
+        let state = self.db.state.read();
+        state
+            .collections
+            .get(&self.name)
+            .map(|c| c.cdc_events_since(after_sequence, limit).into_iter().cloned().collect())
+            .unwrap_or_default()
+    }
+
+    /// Get the current CDC head sequence number.
+    pub fn cdc_head_sequence(&self) -> u64 {
+        let state = self.db.state.read();
+        state
+            .collections
+            .get(&self.name)
+            .map(|c| c.cdc_head_sequence())
+            .unwrap_or(0)
+    }
 }
 
 #[cfg(test)]
@@ -1484,6 +1548,23 @@ mod tests {
         coll.create_snapshot("snap1")?;
         let snaps = coll.list_snapshots();
         assert!(snaps.contains(&"snap1".to_string()));
+        Ok(())
+    }
+
+    #[cfg(feature = "embedded-models")]
+    #[test]
+    fn test_collection_ref_search_text() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let db = Database::in_memory();
+        db.create_collection("docs", 384)?;
+
+        let coll = db.collection("docs")?;
+        coll.insert_text("doc1", "machine learning algorithms", None)?;
+        coll.insert_text("doc2", "cooking recipes for dinner", None)?;
+
+        let results = coll.search_text("machine learning", 2)?;
+        assert_eq!(results.len(), 2);
+        // Same topic should be closest
+        assert_eq!(results[0].id, "doc1");
         Ok(())
     }
 }

@@ -141,6 +141,8 @@ pub struct Database {
     dashboard_metrics: Option<Arc<crate::observe::dashboard::MetricsAggregator>>,
     /// Optional replica manager for snapshot-based replication
     replica_manager: Option<Arc<crate::persistence::replica_manager::ReplicaManager>>,
+    /// Versioned stores per collection for MVCC time-travel queries
+    versioned_stores: Arc<RwLock<HashMap<String, crate::persistence::vector_versioning::VersionedStore>>>,
 }
 
 impl Database {
@@ -266,6 +268,7 @@ impl Database {
             modification_gen: AtomicU64::new(0),
             saved_gen: AtomicU64::new(0),
             adaptive_tuner: None, adaptive_index_manager: None, replica_manager: None,
+            versioned_stores: Arc::new(RwLock::new(HashMap::new())),
             #[cfg(feature = "observability")]
             dashboard_metrics: None,
         })
@@ -298,6 +301,7 @@ impl Database {
             modification_gen: AtomicU64::new(0),
             saved_gen: AtomicU64::new(0),
             adaptive_tuner: None, adaptive_index_manager: None, replica_manager: None,
+            versioned_stores: Arc::new(RwLock::new(HashMap::new())),
             #[cfg(feature = "observability")]
             dashboard_metrics: None,
         }
@@ -619,6 +623,117 @@ impl Database {
     /// ```
     pub fn has_collection(&self, name: &str) -> bool {
         self.state.read().collections.contains_key(name)
+    }
+
+    /// Enable vector versioning on a collection for MVCC time-travel queries.
+    ///
+    /// Creates a `VersionedStore` for the collection with the given configuration.
+    pub fn enable_versioning(
+        &self,
+        collection: &str,
+        config: crate::persistence::vector_versioning::VersioningConfig,
+    ) -> Result<()> {
+        if !self.has_collection(collection) {
+            return Err(NeedleError::CollectionNotFound(collection.to_string()));
+        }
+        let store = crate::persistence::vector_versioning::VersionedStore::new(config);
+        self.versioned_stores
+            .write()
+            .insert(collection.to_string(), store);
+        Ok(())
+    }
+
+    /// Access the versioned store for a collection (if versioning is enabled).
+    pub fn versioned_store(
+        &self,
+        collection: &str,
+    ) -> Result<parking_lot::MappedRwLockReadGuard<'_, crate::persistence::vector_versioning::VersionedStore>> {
+        let stores = self.versioned_stores.read();
+        if !stores.contains_key(collection) {
+            return Err(NeedleError::InvalidOperation(format!(
+                "Versioning not enabled for collection '{collection}'"
+            )));
+        }
+        Ok(parking_lot::RwLockReadGuard::map(stores, |s| {
+            s.get(collection).expect("checked above")
+        }))
+    }
+
+    /// Access the versioned store mutably for put/delete operations.
+    pub fn versioned_store_mut(
+        &self,
+        collection: &str,
+    ) -> Result<parking_lot::MappedRwLockWriteGuard<'_, crate::persistence::vector_versioning::VersionedStore>> {
+        let stores = self.versioned_stores.write();
+        if !stores.contains_key(collection) {
+            return Err(NeedleError::InvalidOperation(format!(
+                "Versioning not enabled for collection '{collection}'"
+            )));
+        }
+        Ok(parking_lot::RwLockWriteGuard::map(stores, |s| {
+            s.get_mut(collection).expect("checked above")
+        }))
+    }
+
+    /// Alter a collection's dimensions, migrating all existing vectors.
+    ///
+    /// Applies the given [`DimensionStrategy`] to re-dimension every vector
+    /// in the collection and rebuilds the HNSW index. The operation is atomic:
+    /// on failure, the collection is left unchanged.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the collection doesn't exist, target dimensions
+    /// are zero, or the strategy is incompatible with the dimension change.
+    pub fn alter_collection_dimensions(
+        &self,
+        name: &str,
+        new_dimensions: usize,
+        strategy: crate::persistence::schema_evolution::DimensionStrategy,
+    ) -> Result<()> {
+        use crate::persistence::schema_evolution::adapt_dimensions;
+
+        if new_dimensions == 0 {
+            return Err(NeedleError::InvalidConfig(
+                "Target dimensions must be > 0".into(),
+            ));
+        }
+
+        let mut state = self.state.write();
+        let coll = state
+            .collections
+            .get_mut(name)
+            .ok_or_else(|| NeedleError::CollectionNotFound(name.to_string()))?;
+
+        let old_dimensions = coll.dimensions();
+        if old_dimensions == new_dimensions {
+            return Ok(());
+        }
+
+        // Collect all vectors and metadata
+        let ids: Vec<String> = coll.ids().map(|s| s.to_string()).collect();
+        let mut entries: Vec<(String, Vec<f32>, Option<serde_json::Value>)> = Vec::with_capacity(ids.len());
+        for id in &ids {
+            if let Some((vec, meta)) = coll.get(id) {
+                let new_vec = adapt_dimensions(vec, new_dimensions, &strategy)?;
+                entries.push((id.clone(), new_vec, meta.cloned()));
+            }
+        }
+
+        // Rebuild collection with new dimensions
+        let mut new_config = coll.config().clone();
+        new_config.dimensions = new_dimensions;
+        let mut new_coll = Collection::new(new_config);
+
+        for (id, vec, meta) in entries {
+            new_coll.insert_vec(id, vec, meta)?;
+        }
+
+        // Atomic swap
+        *coll = new_coll;
+        self.mark_modified();
+
+        Ok(())
     }
 
     /// Export the entire database (all collections) as a JSON string.
@@ -1598,6 +1713,259 @@ mod tests {
         let db2 = Database::open(&path)?;
         let coll2 = db2.collection("test")?;
         assert_eq!(coll2.len(), 1);
+        Ok(())
+    }
+
+    // ── Schema Evolution Tests ──────────────────────────────────────────
+
+    #[test]
+    fn test_alter_collection_dimensions_zero_pad() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        use crate::persistence::schema_evolution::DimensionStrategy;
+
+        let db = Database::in_memory();
+        db.create_collection("docs", 4)?;
+
+        let coll = db.collection("docs")?;
+        coll.insert("v1", &[1.0, 2.0, 3.0, 4.0], Some(json!({"tag": "a"})))?;
+        coll.insert("v2", &[5.0, 6.0, 7.0, 8.0], None)?;
+
+        db.alter_collection_dimensions("docs", 6, DimensionStrategy::ZeroPad)?;
+
+        let coll = db.collection("docs")?;
+        assert_eq!(coll.dimensions(), Some(6));
+        assert_eq!(coll.len(), 2);
+
+        // Verify vector was zero-padded
+        let state = db.state.read();
+        let c = state.collections.get("docs").expect("collection exists");
+        let (vec, meta) = c.get("v1").expect("vector exists");
+        assert_eq!(vec.len(), 6);
+        assert_eq!(&vec[..4], &[1.0, 2.0, 3.0, 4.0]);
+        assert_eq!(&vec[4..], &[0.0, 0.0]);
+        assert!(meta.is_some());
+        Ok(())
+    }
+
+    #[test]
+    fn test_alter_collection_dimensions_truncate() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        use crate::persistence::schema_evolution::DimensionStrategy;
+
+        let db = Database::in_memory();
+        db.create_collection("docs", 8)?;
+        let coll = db.collection("docs")?;
+        coll.insert("v1", &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0], None)?;
+
+        db.alter_collection_dimensions("docs", 4, DimensionStrategy::Truncate)?;
+
+        let coll = db.collection("docs")?;
+        assert_eq!(coll.dimensions(), Some(4));
+
+        let state = db.state.read();
+        let c = state.collections.get("docs").expect("exists");
+        let (vec, _) = c.get("v1").expect("exists");
+        assert_eq!(vec, &[1.0, 2.0, 3.0, 4.0]);
+        Ok(())
+    }
+
+    #[test]
+    fn test_alter_collection_dimensions_noop_same() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        use crate::persistence::schema_evolution::DimensionStrategy;
+
+        let db = Database::in_memory();
+        db.create_collection("docs", 4)?;
+        let coll = db.collection("docs")?;
+        coll.insert("v1", &[1.0, 2.0, 3.0, 4.0], None)?;
+
+        // Same dimensions → no-op
+        db.alter_collection_dimensions("docs", 4, DimensionStrategy::ZeroPad)?;
+        let coll = db.collection("docs")?;
+        assert_eq!(coll.len(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn test_alter_collection_dimensions_zero_rejects() {
+        use crate::persistence::schema_evolution::DimensionStrategy;
+
+        let db = Database::in_memory();
+        db.create_collection("docs", 4).unwrap();
+        let result = db.alter_collection_dimensions("docs", 0, DimensionStrategy::ZeroPad);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_alter_collection_dimensions_not_found() {
+        use crate::persistence::schema_evolution::DimensionStrategy;
+
+        let db = Database::in_memory();
+        let result = db.alter_collection_dimensions("nonexistent", 4, DimensionStrategy::ZeroPad);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_alter_collection_search_after() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        use crate::persistence::schema_evolution::DimensionStrategy;
+
+        let db = Database::in_memory();
+        db.create_collection("docs", 4)?;
+        let coll = db.collection("docs")?;
+        coll.insert("v1", &[1.0, 0.0, 0.0, 0.0], None)?;
+        coll.insert("v2", &[0.0, 1.0, 0.0, 0.0], None)?;
+
+        db.alter_collection_dimensions("docs", 6, DimensionStrategy::ZeroPad)?;
+
+        // Search should work with new dimensions
+        let coll = db.collection("docs")?;
+        let results = coll.search(&[1.0, 0.0, 0.0, 0.0, 0.0, 0.0], 2)?;
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].id, "v1"); // closest
+        Ok(())
+    }
+
+    // ── Vector Versioning Tests ─────────────────────────────────────────
+
+    #[test]
+    fn test_enable_versioning() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        use crate::persistence::vector_versioning::VersioningConfig;
+
+        let db = Database::in_memory();
+        db.create_collection("docs", 4)?;
+        db.enable_versioning("docs", VersioningConfig::default())?;
+
+        // Should be able to access the store
+        let store = db.versioned_store("docs")?;
+        assert_eq!(store.stats().total_vectors, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn test_versioning_not_found() {
+        let db = Database::in_memory();
+        let result = db.enable_versioning("nonexistent", Default::default());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_versioning_not_enabled() {
+        let db = Database::in_memory();
+        db.create_collection("docs", 4).unwrap();
+        let result = db.versioned_store("docs");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_versioning_records_on_insert() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        use crate::persistence::vector_versioning::VersioningConfig;
+
+        let db = Database::in_memory();
+        db.create_collection("docs", 4)?;
+        db.enable_versioning("docs", VersioningConfig::default())?;
+
+        let coll = db.collection("docs")?;
+        coll.insert_vec("v1", vec![1.0, 0.0, 0.0, 0.0], None)?;
+        coll.insert_vec("v2", vec![0.0, 1.0, 0.0, 0.0], None)?;
+
+        let store = db.versioned_store("docs")?;
+        assert_eq!(store.stats().total_vectors, 2);
+        assert_eq!(store.stats().total_versions, 2);
+
+        // Verify specific version exists
+        let latest = store.get_latest("v1");
+        assert!(latest.is_some());
+        assert_eq!(latest.unwrap().vector, vec![1.0, 0.0, 0.0, 0.0]);
+        Ok(())
+    }
+
+    #[test]
+    fn test_versioning_records_on_delete() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        use crate::persistence::vector_versioning::VersioningConfig;
+
+        let db = Database::in_memory();
+        db.create_collection("docs", 4)?;
+        db.enable_versioning("docs", VersioningConfig::default())?;
+
+        let coll = db.collection("docs")?;
+        coll.insert_vec("v1", vec![1.0, 0.0, 0.0, 0.0], None)?;
+        coll.delete("v1")?;
+
+        let store = db.versioned_store("docs")?;
+        // Version store should have the insert + tombstone
+        assert_eq!(store.stats().total_versions, 2);
+        // Latest should be None (tombstone)
+        assert!(store.get_latest("v1").is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn test_versioning_time_travel() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        use crate::persistence::vector_versioning::VersioningConfig;
+
+        let db = Database::in_memory();
+        db.create_collection("docs", 4)?;
+        db.enable_versioning("docs", VersioningConfig::default())?;
+
+        let coll = db.collection("docs")?;
+        coll.insert_vec("v1", vec![1.0, 0.0, 0.0, 0.0], None)?;
+
+        // Get current time
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
+        // Vector should be visible at current timestamp
+        let store = db.versioned_store("docs")?;
+        let version = store.get_as_of("v1", now);
+        assert!(version.is_some());
+
+        // Vector should not be visible before it was inserted
+        let version = store.get_as_of("v1", 0);
+        assert!(version.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn test_versioning_records_on_slice_insert() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        use crate::persistence::vector_versioning::VersioningConfig;
+
+        let db = Database::in_memory();
+        db.create_collection("docs", 4)?;
+        db.enable_versioning("docs", VersioningConfig::default())?;
+
+        let coll = db.collection("docs")?;
+        // Use insert (slice) not insert_vec (owned)
+        coll.insert("v1", &[1.0, 0.0, 0.0, 0.0], None)?;
+
+        let store = db.versioned_store("docs")?;
+        assert_eq!(store.stats().total_vectors, 1);
+        let latest = store.get_latest("v1");
+        assert!(latest.is_some());
+        Ok(())
+    }
+
+    #[test]
+    fn test_versioning_records_on_update() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        use crate::persistence::vector_versioning::VersioningConfig;
+
+        let db = Database::in_memory();
+        db.create_collection("docs", 4)?;
+        db.enable_versioning("docs", VersioningConfig::default())?;
+
+        let coll = db.collection("docs")?;
+        coll.insert("v1", &[1.0, 0.0, 0.0, 0.0], None)?;
+        coll.update("v1", &[0.0, 1.0, 0.0, 0.0], None)?;
+
+        let store = db.versioned_store("docs")?;
+        // Should have 2 versions: insert + update
+        assert_eq!(store.stats().total_versions, 2);
+
+        // Latest should be the updated vector
+        let latest = store.get_latest("v1").unwrap();
+        assert_eq!(latest.vector, vec![0.0, 1.0, 0.0, 0.0]);
+
+        // History should have 2 entries
+        let history = store.history("v1").unwrap();
+        assert_eq!(history.len(), 2);
         Ok(())
     }
 }
