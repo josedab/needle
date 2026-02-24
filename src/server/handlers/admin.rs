@@ -441,34 +441,118 @@ pub(in crate::server) async fn vector_diff_handler(
 
 /// Change feed endpoint for a collection.
 ///
-/// `GET /collections/:name/changes` — returns feed configuration and current
-/// state. For real-time streaming, connect to the `/stream` sub-path with
-/// `Accept: text/event-stream`.
+/// `GET /collections/:name/changes` — returns recent CDC events with cursor-based pagination.
+/// Uses the CdcLog from the collection if CDC is enabled.
 pub(in crate::server) async fn change_feed_handler(
     State(state): State<Arc<AppState>>,
     Path(collection): Path<String>,
     Query(params): Query<ChangeStreamQuery>,
 ) -> impl IntoResponse {
     let db = state.db.read().await;
+
     let coll = match db.collection(&collection) {
         Ok(c) => c,
         Err(e) => return (StatusCode::NOT_FOUND, Json(json!({ "error": e.to_string() }))),
     };
 
-    // Return collection metadata and feed configuration
-    // Actual SSE streaming would use Axum's Sse extractor with a tokio broadcast channel
+    let after_cursor = params.after.unwrap_or(0);
+    let limit = params.limit;
+
+    // Get CDC events from the collection's CdcLog
+    let events = coll.cdc_events_since(after_cursor, limit);
+    let head_seq = coll.cdc_head_sequence();
+
+    let event_list: Vec<Value> = events
+        .iter()
+        .map(|e| {
+            json!({
+                "sequence": e.sequence,
+                "timestamp_ms": e.timestamp_ms,
+                "event_type": format!("{:?}", e.event_type),
+                "vector_id": e.vector_id,
+                "metadata": e.metadata,
+            })
+        })
+        .collect();
+
+    let next_cursor = events.last().map(|e| e.sequence);
+
     (StatusCode::OK, Json(json!({
         "collection": collection,
         "vector_count": coll.len(),
-        "feed_config": {
-            "limit": params.limit,
-            "after_cursor": params.after,
-            "event_filter": params.event_type,
-            "supported_events": ["insert", "update", "delete"],
-            "sse_endpoint": format!("/collections/{}/changes/stream", collection),
+        "cdc_enabled": events.len() > 0 || head_seq > 0,
+        "head_sequence": head_seq,
+        "events": event_list,
+        "cursor": {
+            "after": after_cursor,
+            "next": next_cursor,
+            "has_more": next_cursor.map_or(false, |c| c < head_seq),
         },
-        "note": "For real-time SSE streaming, connect to the /stream sub-path with Accept: text/event-stream"
+        "sse_endpoint": format!("/collections/{}/changes/stream", collection),
     })))
+}
+
+/// SSE streaming endpoint for collection changes.
+///
+/// `GET /collections/:name/changes/stream` — Server-Sent Events stream.
+/// Polls the CdcLog every second and sends new events as SSE.
+pub(in crate::server) async fn change_stream_sse_handler(
+    State(state): State<Arc<AppState>>,
+    Path(collection): Path<String>,
+    Query(params): Query<ChangeStreamQuery>,
+) -> impl IntoResponse {
+    use axum::response::sse::{Event, KeepAlive, Sse};
+    use futures::stream;
+    use std::convert::Infallible;
+
+    let initial_cursor = params.after.unwrap_or(0);
+
+    let event_stream = stream::unfold(
+        (state, collection, initial_cursor),
+        |(state, coll_name, mut cursor)| async move {
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+
+                // Scope the borrow so `state` can be moved after
+                let poll_result = {
+                    let db = state.db.read().await;
+                    let coll = match db.collection(&coll_name) {
+                        Ok(c) => c,
+                        Err(_) => return None,
+                    };
+
+                    let events = coll.cdc_events_since(cursor, 100);
+                    if events.is_empty() {
+                        None
+                    } else {
+                        let seq = events.last().map(|e| e.sequence).unwrap_or(cursor);
+                        let data: Vec<Value> = events
+                            .iter()
+                            .map(|e| {
+                                json!({
+                                    "sequence": e.sequence,
+                                    "event_type": format!("{:?}", e.event_type),
+                                    "vector_id": e.vector_id,
+                                    "timestamp_ms": e.timestamp_ms,
+                                })
+                            })
+                            .collect();
+                        Some((seq, data))
+                    }
+                };
+
+                if let Some((seq, data)) = poll_result {
+                    cursor = seq;
+                    let event = Event::default()
+                        .data(serde_json::to_string(&data).unwrap_or_default())
+                        .id(seq.to_string());
+                    return Some((Ok::<_, Infallible>(event), (state, coll_name, cursor)));
+                }
+            }
+        },
+    );
+
+    Sse::new(event_stream).keep_alive(KeepAlive::default())
 }
 
 // ============ gRPC Schema ============

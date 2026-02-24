@@ -442,8 +442,9 @@ pub fn create_router_with_config(state: Arc<AppState>, config: &ServerConfig) ->
         .route("/collections/:collection/search/estimate", post(cost_estimate_handler))
         // Vector diff
         .route("/collections/:collection/diff", post(vector_diff_handler))
-        // SSE change feed
+        // CDC change feed (JSON) and SSE streaming
         .route("/collections/:collection/changes", get(change_feed_handler))
+        .route("/collections/:collection/changes/stream", get(change_stream_sse_handler))
         // In-process benchmark
         .route("/collections/:collection/benchmark", post(benchmark_handler))
         // Index status (incremental index / WAL)
