@@ -96,10 +96,13 @@ pub mod ws_protocol;
 // ── Next-Gen v8 Services ─────────────────────────────────────────────────────
 pub mod hnsw_compactor;
 pub mod matryoshka_service;
+pub mod pipeline_manager;
 pub mod snapshot_manager;
 pub mod wasm_plugin_runtime;
 
 // ── Next-Gen v9 Services ─────────────────────────────────────────────────────
+pub mod backup_command;
 pub mod change_stream;
 pub mod client_sdk;
 pub mod grpc_schema;
+pub mod readiness_probe;

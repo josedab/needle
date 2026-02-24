@@ -193,10 +193,12 @@ pub use services::{
 };
 
 // ── Next-Gen v8 Services ─────────────────────────────────────────────────────
-pub use services::{hnsw_compactor, matryoshka_service, snapshot_manager, wasm_plugin_runtime};
+pub use services::{
+    hnsw_compactor, matryoshka_service, pipeline_manager, snapshot_manager, wasm_plugin_runtime,
+};
 
 // ── Next-Gen v9 Services ─────────────────────────────────────────────────────
-pub use services::{change_stream, client_sdk, grpc_schema};
+pub use services::{backup_command, change_stream, client_sdk, grpc_schema, readiness_probe};
 
 // ── Experimental / Advanced ──────────────────────────────────────────────────
 // Features under active development. APIs may change without notice.
