@@ -68,6 +68,33 @@ pub struct RagSource {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct DocMeta { doc_id: String, chunk_idx: usize, text: String }
 
+/// File format hint for ingestion.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum FileFormat {
+    PlainText,
+    Markdown,
+    Json,
+}
+
+impl FileFormat {
+    /// Detect format from a file extension.
+    pub fn from_extension(ext: &str) -> Self {
+        match ext.to_lowercase().as_str() {
+            "md" | "markdown" => Self::Markdown,
+            "json" | "jsonl" => Self::Json,
+            _ => Self::PlainText,
+        }
+    }
+}
+
+/// Statistics from a batch ingest operation.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct IngestStats {
+    pub docs_ingested: usize,
+    pub docs_failed: usize,
+    pub chunks_created: usize,
+}
+
 /// Zero-config RAG pipeline.
 pub struct RagPipeline {
     config: RagConfig,
@@ -137,6 +164,74 @@ impl RagPipeline {
     /// Total chunks indexed.
     pub fn chunk_count(&self) -> usize { self.collection.len() }
 
+    /// Remove a document and all its chunks.
+    pub fn remove(&mut self, doc_id: &str) -> Result<bool> {
+        let chunks = match self.docs.remove(doc_id) {
+            Some(c) => c,
+            None => return Ok(false),
+        };
+        for i in 0..chunks.len() {
+            let chunk_id = format!("{doc_id}__chunk_{i}");
+            let _ = self.collection.delete(&chunk_id);
+        }
+        Ok(true)
+    }
+
+    /// Ingest multiple documents at once.
+    pub fn add_batch(&mut self, documents: &[(String, String)]) -> Result<IngestStats> {
+        let mut stats = IngestStats::default();
+        for (doc_id, text) in documents {
+            match self.add(doc_id, text) {
+                Ok(chunks) => {
+                    stats.docs_ingested += 1;
+                    stats.chunks_created += chunks;
+                }
+                Err(_) => stats.docs_failed += 1,
+            }
+        }
+        Ok(stats)
+    }
+
+    /// Ingest text from different file formats (detected by extension hint).
+    /// Supports: plain text, markdown (strips headers), JSON (extracts "text" field).
+    pub fn add_file(
+        &mut self,
+        doc_id: &str,
+        content: &str,
+        format_hint: FileFormat,
+    ) -> Result<usize> {
+        let text = match format_hint {
+            FileFormat::PlainText => content.to_string(),
+            FileFormat::Markdown => {
+                // Strip markdown headers and emphasis
+                content
+                    .lines()
+                    .map(|line| line.trim_start_matches('#').trim_start_matches(|c: char| c == '*' || c == '_'))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            }
+            FileFormat::Json => {
+                // Extract "text" or "content" field from JSON
+                serde_json::from_str::<Value>(content)
+                    .ok()
+                    .and_then(|v| {
+                        v.get("text")
+                            .or_else(|| v.get("content"))
+                            .and_then(|t| t.as_str())
+                            .map(String::from)
+                    })
+                    .unwrap_or_else(|| content.to_string())
+            }
+        };
+        self.add(doc_id, &text)
+    }
+
+    /// Get a formatted context string for a question (for passing to LLM).
+    pub fn get_context(&mut self, question: &str, top_k: usize) -> Result<String> {
+        let answer = self.ask(question, top_k)?;
+        Ok(answer.prompt)
+    }
+
     fn chunk(&self, text: &str) -> Vec<String> {
         let words: Vec<&str> = text.split_whitespace().collect();
         if words.len() <= self.config.chunk_size { return vec![text.to_string()]; }
@@ -196,7 +291,65 @@ mod tests {
     fn test_empty_question() {
         let mut rag = RagPipeline::new(RagConfig::default());
         rag.add("d1", "some text").unwrap();
-        // Empty question should still work (empty embedding)
-        assert!(rag.ask("", 1).is_err()); // empty text can't be embedded
+        assert!(rag.ask("", 1).is_err());
+    }
+
+    #[test]
+    fn test_remove_document() {
+        let mut rag = RagPipeline::new(RagConfig::default());
+        rag.add("d1", "hello world").unwrap();
+        assert_eq!(rag.doc_count(), 1);
+
+        assert!(rag.remove("d1").unwrap());
+        assert_eq!(rag.doc_count(), 0);
+        assert_eq!(rag.chunk_count(), 0);
+    }
+
+    #[test]
+    fn test_batch_ingest() {
+        let mut rag = RagPipeline::new(RagConfig::default());
+        let docs = vec![
+            ("d1".into(), "First document".into()),
+            ("d2".into(), "Second document".into()),
+            ("d3".into(), "Third document".into()),
+        ];
+
+        let stats = rag.add_batch(&docs).unwrap();
+        assert_eq!(stats.docs_ingested, 3);
+        assert_eq!(stats.docs_failed, 0);
+        assert!(stats.chunks_created >= 3);
+    }
+
+    #[test]
+    fn test_file_format_detection() {
+        assert_eq!(FileFormat::from_extension("md"), FileFormat::Markdown);
+        assert_eq!(FileFormat::from_extension("json"), FileFormat::Json);
+        assert_eq!(FileFormat::from_extension("txt"), FileFormat::PlainText);
+        assert_eq!(FileFormat::from_extension("CSV"), FileFormat::PlainText);
+    }
+
+    #[test]
+    fn test_add_markdown_file() {
+        let mut rag = RagPipeline::new(RagConfig::default());
+        let md = "# Header\n\nThis is **bold** text.\n\n## Section\n\nMore content here.";
+        let chunks = rag.add_file("doc.md", md, FileFormat::Markdown).unwrap();
+        assert!(chunks >= 1);
+    }
+
+    #[test]
+    fn test_add_json_file() {
+        let mut rag = RagPipeline::new(RagConfig::default());
+        let json = r#"{"text": "This is the document content", "author": "test"}"#;
+        let chunks = rag.add_file("doc.json", json, FileFormat::Json).unwrap();
+        assert!(chunks >= 1);
+    }
+
+    #[test]
+    fn test_get_context() {
+        let mut rag = RagPipeline::new(RagConfig::default());
+        rag.add("d1", "Rust is great for systems programming").unwrap();
+        let ctx = rag.get_context("What is Rust?", 3).unwrap();
+        assert!(ctx.contains("Rust"));
+        assert!(ctx.contains("Question:"));
     }
 }

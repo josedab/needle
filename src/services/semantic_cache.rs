@@ -385,6 +385,74 @@ impl SemanticCache {
             self.analytics.total_evictions += 1;
         }
     }
+
+    /// Invalidate all cache entries that reference a specific vector ID.
+    /// Call this when vectors are inserted/deleted/updated to keep cache consistent.
+    pub fn invalidate_for_vector(&mut self, vector_id: &str) -> usize {
+        let affected: Vec<String> = self
+            .entries
+            .iter()
+            .filter(|(_, e)| {
+                e.response.contains(vector_id)
+                    || e.query.contains(vector_id)
+                    || e.metadata
+                        .as_ref()
+                        .map_or(false, |m| m.to_string().contains(vector_id))
+            })
+            .map(|(id, _)| id.clone())
+            .collect();
+
+        let count = affected.len();
+        for id in affected {
+            let _ = self.collection.delete(&id);
+            self.entries.remove(&id);
+        }
+        self.analytics.total_entries = self.entries.len();
+        count
+    }
+
+    /// Warm up the cache from a list of pre-computed query-response pairs.
+    pub fn warm_up(
+        &mut self,
+        entries: Vec<(Vec<f32>, String, String, Option<String>)>,
+    ) -> Result<usize> {
+        let mut count = 0;
+        for (embedding, query, response, model) in entries {
+            self.put(&embedding, &query, &response, model.as_deref())?;
+            count += 1;
+        }
+        Ok(count)
+    }
+
+    /// Export analytics in Prometheus exposition format.
+    pub fn prometheus_metrics(&self) -> String {
+        let a = &self.analytics;
+        format!(
+            "# HELP needle_cache_lookups_total Total cache lookups\n\
+             # TYPE needle_cache_lookups_total counter\n\
+             needle_cache_lookups_total {}\n\
+             # HELP needle_cache_hits_total Total cache hits\n\
+             # TYPE needle_cache_hits_total counter\n\
+             needle_cache_hits_total {}\n\
+             # HELP needle_cache_misses_total Total cache misses\n\
+             # TYPE needle_cache_misses_total counter\n\
+             needle_cache_misses_total {}\n\
+             # HELP needle_cache_entries Current cached entries\n\
+             # TYPE needle_cache_entries gauge\n\
+             needle_cache_entries {}\n\
+             # HELP needle_cache_evictions_total Total evictions\n\
+             # TYPE needle_cache_evictions_total counter\n\
+             needle_cache_evictions_total {}\n\
+             # HELP needle_cache_hit_rate Cache hit rate\n\
+             # TYPE needle_cache_hit_rate gauge\n\
+             needle_cache_hit_rate {:.4}\n\
+             # HELP needle_cache_avg_hit_distance Average hit distance\n\
+             # TYPE needle_cache_avg_hit_distance gauge\n\
+             needle_cache_avg_hit_distance {:.6}\n",
+            a.total_lookups, a.total_hits, a.total_misses, a.total_entries,
+            a.total_evictions, a.hit_rate(), a.avg_hit_distance,
+        )
+    }
 }
 
 #[cfg(test)]
@@ -497,5 +565,43 @@ mod tests {
         let mut analytics = CacheAnalytics::default();
         analytics.total_hits = 1000;
         assert!((analytics.estimated_savings_usd(0.002) - 2.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_invalidate_for_vector() {
+        let mut cache = SemanticCache::new(CacheConfig::new(8));
+        let emb = make_embedding(0.5, 8);
+        // Store a response that references vector "doc42"
+        cache.put(&emb, "about doc42", "doc42 is important", None).unwrap();
+
+        let evicted = cache.invalidate_for_vector("doc42");
+        assert_eq!(evicted, 1);
+        assert_eq!(cache.len(), 0);
+    }
+
+    #[test]
+    fn test_warm_up() {
+        let mut cache = SemanticCache::new(CacheConfig::new(8));
+        let entries = vec![
+            (make_embedding(0.1, 8), "q1".into(), "r1".into(), None),
+            (make_embedding(0.2, 8), "q2".into(), "r2".into(), Some("gpt-4".into())),
+        ];
+
+        let count = cache.warm_up(entries).unwrap();
+        assert_eq!(count, 2);
+        assert_eq!(cache.len(), 2);
+    }
+
+    #[test]
+    fn test_prometheus_metrics() {
+        let mut cache = SemanticCache::new(CacheConfig::new(8));
+        let emb = make_embedding(0.5, 8);
+        cache.put(&emb, "q", "r", None).unwrap();
+        cache.get(&emb, None).unwrap();
+
+        let metrics = cache.prometheus_metrics();
+        assert!(metrics.contains("needle_cache_lookups_total 1"));
+        assert!(metrics.contains("needle_cache_hits_total 1"));
+        assert!(metrics.contains("needle_cache_entries 1"));
     }
 }

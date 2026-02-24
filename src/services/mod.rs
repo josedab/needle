@@ -95,6 +95,7 @@ pub mod ws_protocol;
 
 // ── Next-Gen v8 Services ─────────────────────────────────────────────────────
 pub mod hnsw_compactor;
+pub mod matryoshka_service;
 pub mod wasm_plugin_runtime;
 
 // ── Next-Gen v9 Services ─────────────────────────────────────────────────────
