@@ -716,6 +716,84 @@ impl AdaptiveIndexManager {
         }
     }
 
+    /// Run a what-if simulation: estimate performance if we switched to `target_index`
+    /// without actually performing the switch.
+    pub fn what_if(
+        &self,
+        target_index: RecommendedIndex,
+        vector_count: usize,
+        dimensions: usize,
+        memory_bytes: u64,
+    ) -> WhatIfResult {
+        let profile = self.build_profile(vector_count, dimensions, memory_bytes);
+        let profile = profile.unwrap_or(WorkloadProfile {
+            qps: 0.0,
+            insert_rate: 0.0,
+            delete_rate: 0.0,
+            read_write_ratio: 1.0,
+            avg_query_latency_ms: 0.0,
+            p99_query_latency_ms: 0.0,
+            avg_result_count: 0.0,
+            vector_count,
+            dimensions,
+            memory_bytes,
+            timestamp: 0,
+            is_read_heavy: true,
+            is_write_heavy: false,
+            has_latency_pressure: false,
+            has_memory_pressure: false,
+        });
+
+        let current = *self.current_index.read();
+        let current_cost = match current {
+            RecommendedIndex::Hnsw => CostModel::estimate_hnsw(&profile),
+            RecommendedIndex::Ivf => CostModel::estimate_ivf(&profile),
+            RecommendedIndex::DiskAnn => CostModel::estimate_diskann(&profile),
+        };
+        let target_cost = match target_index {
+            RecommendedIndex::Hnsw => CostModel::estimate_hnsw(&profile),
+            RecommendedIndex::Ivf => CostModel::estimate_ivf(&profile),
+            RecommendedIndex::DiskAnn => CostModel::estimate_diskann(&profile),
+        };
+
+        let latency_change_pct = if current_cost.estimated_latency_ms > 0.0 {
+            (target_cost.estimated_latency_ms - current_cost.estimated_latency_ms)
+                / current_cost.estimated_latency_ms
+                * 100.0
+        } else {
+            0.0
+        };
+
+        let memory_change_pct = if current_cost.total_memory > 0 {
+            (target_cost.total_memory as f64 - current_cost.total_memory as f64)
+                / current_cost.total_memory as f64
+                * 100.0
+        } else {
+            0.0
+        };
+
+        let recall_change = target_cost.estimated_recall - current_cost.estimated_recall;
+
+        let recommendation = if target_cost.cost_score < current_cost.cost_score {
+            "Switch recommended: target index has lower overall cost.".to_string()
+        } else if (target_cost.cost_score - current_cost.cost_score).abs() < 0.05 {
+            "Marginal difference: switching is optional.".to_string()
+        } else {
+            "Stay with current index: it has lower overall cost.".to_string()
+        };
+
+        WhatIfResult {
+            current_index: current,
+            target_index,
+            current_cost,
+            target_cost,
+            latency_change_pct,
+            memory_change_pct,
+            recall_change,
+            recommendation,
+        }
+    }
+
     /// Get a summary of the current adaptive state for diagnostics.
     pub fn diagnostic_summary(&self) -> AdaptiveDiagnostics {
         let obs = self.observations.read();
@@ -737,6 +815,27 @@ impl AdaptiveIndexManager {
             last_profile: self.last_profile.read().clone(),
         }
     }
+}
+
+/// Result of a what-if simulation comparing current vs target index.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WhatIfResult {
+    /// Currently active index type.
+    pub current_index: RecommendedIndex,
+    /// Simulated target index type.
+    pub target_index: RecommendedIndex,
+    /// Estimated costs for the current index.
+    pub current_cost: CostEstimate,
+    /// Estimated costs for the target index.
+    pub target_cost: CostEstimate,
+    /// Estimated latency change (%, negative = faster).
+    pub latency_change_pct: f64,
+    /// Estimated memory change (%, negative = less memory).
+    pub memory_change_pct: f64,
+    /// Estimated recall change (positive = better recall).
+    pub recall_change: f64,
+    /// Human-readable recommendation.
+    pub recommendation: String,
 }
 
 /// Diagnostic information about the adaptive index state.
@@ -927,5 +1026,24 @@ mod tests {
         assert_eq!(diag.observation_count, 3);
         assert_eq!(diag.query_count, 1);
         assert_eq!(diag.insert_count, 2);
+    }
+
+    #[test]
+    fn test_what_if_simulation() {
+        let config = AdaptiveIndexConfig {
+            min_observations: 3,
+            ..Default::default()
+        };
+        let manager = AdaptiveIndexManager::new(config);
+        for _ in 0..5 {
+            manager.record_query(2.0, 10);
+        }
+
+        let result = manager.what_if(RecommendedIndex::Ivf, 100_000, 128, 500_000_000);
+        assert_eq!(result.current_index, RecommendedIndex::Hnsw);
+        assert_eq!(result.target_index, RecommendedIndex::Ivf);
+        assert!(result.current_cost.estimated_latency_ms > 0.0);
+        assert!(result.target_cost.estimated_latency_ms > 0.0);
+        assert!(!result.recommendation.is_empty());
     }
 }
