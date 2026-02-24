@@ -111,3 +111,7 @@ pub mod notebook;
 pub mod query_cache_middleware;
 pub mod readiness_probe;
 pub mod tenant_router;
+
+// ── Next-Gen v10 Services ────────────────────────────────────────────────────
+pub mod embedding_router;
+pub mod webhook_delivery;
