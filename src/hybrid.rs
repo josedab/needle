@@ -1131,4 +1131,147 @@ mod tests {
         fusion.reset();
         assert_eq!(fusion.stats().total_feedback, 0);
     }
+
+    // ========================================================================
+    // Edge case tests
+    // ========================================================================
+
+    #[test]
+    fn test_bm25_search_zero_results() {
+        let mut index = Bm25Index::default();
+        index.index_document("doc1", "hello world");
+
+        let results = index.search("xyzzy nonexistent", 10);
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_bm25_empty_index() {
+        let index = Bm25Index::default();
+        assert!(index.is_empty());
+        assert_eq!(index.len(), 0);
+
+        let results = index.search("anything", 10);
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_bm25_single_document() {
+        let mut index = Bm25Index::default();
+        index.index_document("doc1", "machine learning algorithms");
+
+        let results = index.search("machine", 10);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].0, "doc1");
+        assert!(results[0].1 > 0.0);
+    }
+
+    #[test]
+    fn test_bm25_clear() {
+        let mut index = Bm25Index::default();
+        index.index_document("doc1", "hello world");
+        index.index_document("doc2", "goodbye world");
+        assert_eq!(index.len(), 2);
+
+        index.clear();
+        assert!(index.is_empty());
+        assert_eq!(index.len(), 0);
+        assert!(index.search("world", 10).is_empty());
+    }
+
+    #[test]
+    fn test_bm25_remove_empty_index() {
+        let mut index = Bm25Index::default();
+        assert!(!index.remove_document("nonexistent"));
+    }
+
+    #[test]
+    fn test_bm25_search_stopwords_only() {
+        let mut index = Bm25Index::default();
+        index.index_document("doc1", "hello world");
+
+        // Query with only stop words should return empty
+        let results = index.search("the a an", 10);
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_bm25_very_long_query() {
+        let mut index = Bm25Index::default();
+        index.index_document("doc1", "machine learning");
+
+        let long_query = (0..100).map(|i| format!("word{}", i)).collect::<Vec<_>>().join(" ");
+        let results = index.search(&long_query, 10);
+        // Should not panic, results depend on overlap
+        assert!(results.len() <= 10);
+    }
+
+    #[test]
+    fn test_bm25_document_update() {
+        let mut index = Bm25Index::default();
+        index.index_document("doc1", "old content here");
+
+        // Re-index same doc with new content
+        index.index_document("doc1", "new content replaced");
+        assert_eq!(index.len(), 1);
+
+        let results = index.search("new replaced", 10);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].0, "doc1");
+
+        // Old content should not match
+        let results = index.search("old", 10);
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_rrf_no_overlap() {
+        let vector_results = vec![("doc1".to_string(), 0.1), ("doc2".to_string(), 0.2)];
+        let bm25_results = vec![("doc3".to_string(), 5.0), ("doc4".to_string(), 3.0)];
+
+        let config = RrfConfig::default();
+        let results = reciprocal_rank_fusion(&vector_results, &bm25_results, &config, 10);
+
+        assert_eq!(results.len(), 4);
+        // Each doc should appear exactly once
+        let ids: Vec<&str> = results.iter().map(|r| r.id.as_str()).collect();
+        assert!(ids.contains(&"doc1"));
+        assert!(ids.contains(&"doc3"));
+    }
+
+    #[test]
+    fn test_rrf_one_empty_set() {
+        let vector_results = vec![("doc1".to_string(), 0.1)];
+        let bm25_results: Vec<(String, f32)> = vec![];
+
+        let config = RrfConfig::default();
+        let results = reciprocal_rank_fusion(&vector_results, &bm25_results, &config, 10);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].id, "doc1");
+        assert!(results[0].bm25_score.is_none());
+    }
+
+    #[test]
+    fn test_rrf_both_empty() {
+        let config = RrfConfig::default();
+        let results = reciprocal_rank_fusion(&[], &[], &config, 10);
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_rrf_config_presets() {
+        let semantic = RrfConfig::semantic_focused();
+        assert!(semantic.vector_weight > semantic.bm25_weight);
+
+        let keyword = RrfConfig::keyword_focused();
+        assert!(keyword.bm25_weight > keyword.vector_weight);
+    }
+
+    #[test]
+    fn test_adaptive_fusion_all_zero_weights() {
+        let fusion = AdaptiveFusion::default();
+        // Default weights should never be all zero
+        let weights = fusion.get_weights("test query");
+        assert!(weights.vector_weight + weights.bm25_weight > 0.0);
+    }
 }
