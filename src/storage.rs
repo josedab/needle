@@ -860,4 +860,224 @@ mod tests {
         assert_eq!(store.get(0), restored.get(0));
         assert_eq!(store.get(1), restored.get(1));
     }
+
+    // ========================================================================
+    // Header error path tests
+    // ========================================================================
+
+    #[test]
+    fn test_header_from_bytes_too_short() {
+        let bytes = vec![0u8; 32]; // Less than 64 bytes minimum
+        let result = Header::from_bytes(&bytes);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_header_from_bytes_invalid_magic() {
+        let mut bytes = vec![0u8; HEADER_SIZE];
+        bytes[0..8].copy_from_slice(b"INVALID!");
+        let result = Header::from_bytes(&bytes);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_header_checksum_tampered() {
+        let header = Header::default();
+        let mut bytes = header.to_bytes();
+
+        // Tamper with vector_count field (bytes 16-24) after checksum was computed
+        bytes[16] = 0xFF;
+        bytes[17] = 0xFF;
+
+        let result = Header::from_bytes(&bytes);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_header_roundtrip_preserves_all_fields() {
+        let header = Header {
+            version: 1,
+            dimensions: 384,
+            vector_count: 99999,
+            index_offset: 4096,
+            vector_offset: 8192,
+            metadata_offset: 12288,
+            checksum: 0,
+            state_size: 1024,
+            state_checksum: 0xDEADBEEF,
+        };
+
+        let bytes = header.to_bytes();
+        let restored = Header::from_bytes(&bytes).unwrap();
+
+        assert_eq!(restored.version, 1);
+        assert_eq!(restored.dimensions, 384);
+        assert_eq!(restored.vector_count, 99999);
+        assert_eq!(restored.index_offset, 4096);
+        assert_eq!(restored.vector_offset, 8192);
+        assert_eq!(restored.metadata_offset, 12288);
+        assert_eq!(restored.state_size, 1024);
+        assert_eq!(restored.state_checksum, 0xDEADBEEF);
+    }
+
+    // ========================================================================
+    // CRC32 tests
+    // ========================================================================
+
+    #[test]
+    fn test_crc32_empty_data() {
+        let checksum = crc32(&[]);
+        // CRC32 of empty data is 0 in this implementation (!0xFFFFFFFF = 0)
+        assert_eq!(checksum, 0);
+    }
+
+    #[test]
+    fn test_crc32_deterministic() {
+        let data = b"hello needle";
+        assert_eq!(crc32(data), crc32(data));
+    }
+
+    #[test]
+    fn test_crc32_different_data() {
+        assert_ne!(crc32(b"hello"), crc32(b"world"));
+    }
+
+    // ========================================================================
+    // VectorStore error path tests
+    // ========================================================================
+
+    #[test]
+    fn test_vector_store_from_bytes_too_short() {
+        let bytes = vec![0u8; 4]; // Less than 12 bytes minimum
+        let result = VectorStore::from_bytes(&bytes);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_vector_store_from_bytes_truncated_data() {
+        // Claim 10 vectors of dim 3 but only provide data for 1
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&10u64.to_le_bytes()); // count = 10
+        bytes.extend_from_slice(&3u32.to_le_bytes()); // dimensions = 3
+        // Only add data for 1 vector (3 floats = 12 bytes)
+        for val in &[1.0f32, 2.0, 3.0] {
+            bytes.extend_from_slice(&val.to_le_bytes());
+        }
+
+        let result = VectorStore::from_bytes(&bytes);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_vector_store_empty_roundtrip() {
+        let store = VectorStore::new(4);
+        let bytes = store.to_bytes();
+        let restored = VectorStore::from_bytes(&bytes).unwrap();
+
+        assert_eq!(restored.len(), 0);
+        assert_eq!(restored.dimensions, 4);
+    }
+
+    #[test]
+    fn test_vector_store_get_out_of_bounds() {
+        let store = VectorStore::new(3);
+        assert!(store.get(0).is_none());
+        assert!(store.get(100).is_none());
+    }
+
+    #[test]
+    fn test_vector_store_update_wrong_dims() {
+        let mut store = VectorStore::new(3);
+        store.add(vec![1.0, 2.0, 3.0]).unwrap();
+
+        let result = store.update(0, vec![1.0, 2.0]); // wrong dimensions
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_vector_store_update_nonexistent() {
+        let mut store = VectorStore::new(3);
+        let result = store.update(0, vec![1.0, 2.0, 3.0]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_vector_store_auto_dimension() {
+        let mut store = VectorStore::new(0);
+        store.add(vec![1.0, 2.0, 3.0]).unwrap();
+        assert_eq!(store.dimensions, 3);
+
+        // Next insert must match
+        let result = store.add(vec![1.0, 2.0]);
+        assert!(result.is_err());
+    }
+
+    // ========================================================================
+    // StorageEngine tests
+    // ========================================================================
+
+    #[test]
+    fn test_storage_engine_read_beyond_file() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("test.needle");
+
+        let mut storage = StorageEngine::open(&path).unwrap();
+        // File only has header (4096 bytes), try to read beyond
+        let result = storage.read_at(100000, 100);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_storage_engine_atomic_save() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("test.needle");
+
+        let mut storage = StorageEngine::open(&path).unwrap();
+
+        let mut header = storage.header().clone();
+        header.vector_count = 42;
+        let state_data = b"test state data";
+        storage.atomic_save(&header, state_data).unwrap();
+
+        // Verify header was updated
+        assert_eq!(storage.header().vector_count, 42);
+        assert_eq!(storage.header().state_size, state_data.len() as u64);
+        assert_eq!(storage.header().state_checksum, crc32(state_data));
+    }
+
+    #[test]
+    fn test_storage_engine_atomic_save_data_integrity() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("test.needle");
+
+        let mut storage = StorageEngine::open(&path).unwrap();
+        let state_data = b"important state data";
+        storage.atomic_save(&Header::default(), state_data).unwrap();
+
+        // Re-read the state data
+        let read_data = storage
+            .read_at(HEADER_SIZE as u64, state_data.len())
+            .unwrap();
+        assert_eq!(&read_data, state_data);
+    }
+
+    #[test]
+    fn test_storage_engine_reopen_file() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("test.needle");
+
+        // Create and write
+        {
+            let mut storage = StorageEngine::open(&path).unwrap();
+            let data = b"persistent data";
+            storage.append(data).unwrap();
+            storage.sync().unwrap();
+        }
+
+        // Reopen and verify
+        let mut storage = StorageEngine::open(&path).unwrap();
+        assert_eq!(storage.header().version, VERSION);
+        let data = storage.read_at(HEADER_SIZE as u64, 15).unwrap();
+        assert_eq!(&data, b"persistent data");
+    }
 }
