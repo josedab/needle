@@ -63,3 +63,76 @@ impl Database {
             .collect()
     }
 }
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use crate::Database;
+    use crate::error::NeedleError;
+
+    fn setup_db_with_data() -> Database {
+        let db = Database::in_memory();
+        db.create_collection("coll", 4).unwrap();
+        {
+            let coll = db.collection("coll").unwrap();
+            coll.insert("v1", &[1.0, 0.0, 0.0, 0.0], None).unwrap();
+            coll.insert("v2", &[0.0, 1.0, 0.0, 0.0], None).unwrap();
+        }
+        db
+    }
+
+    #[test]
+    fn test_create_and_list_snapshot() {
+        let db = setup_db_with_data();
+        db.create_snapshot("coll", "snap1").unwrap();
+        let snaps = db.list_snapshots("coll");
+        assert_eq!(snaps.len(), 1);
+        assert!(snaps.contains(&"snap1".to_string()));
+    }
+
+    #[test]
+    fn test_create_snapshot_missing_collection() {
+        let db = Database::in_memory();
+        let result = db.create_snapshot("bad", "snap1");
+        assert!(matches!(result, Err(NeedleError::CollectionNotFound(_))));
+    }
+
+    #[test]
+    fn test_restore_snapshot() {
+        let db = setup_db_with_data();
+        db.create_snapshot("coll", "snap1").unwrap();
+
+        // Delete a vector then restore
+        {
+            let coll = db.collection("coll").unwrap();
+            coll.delete("v1").unwrap();
+            assert!(coll.get("v1").is_none());
+        }
+
+        db.restore_snapshot("coll", "snap1").unwrap();
+        let coll = db.collection("coll").unwrap();
+        assert!(coll.get("v1").is_some());
+    }
+
+    #[test]
+    fn test_restore_missing_snapshot() {
+        let db = setup_db_with_data();
+        let result = db.restore_snapshot("coll", "nonexistent");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_list_snapshots_empty() {
+        let db = setup_db_with_data();
+        assert!(db.list_snapshots("coll").is_empty());
+    }
+
+    #[test]
+    fn test_multiple_snapshots() {
+        let db = setup_db_with_data();
+        db.create_snapshot("coll", "s1").unwrap();
+        db.create_snapshot("coll", "s2").unwrap();
+        let snaps = db.list_snapshots("coll");
+        assert_eq!(snaps.len(), 2);
+    }
+}

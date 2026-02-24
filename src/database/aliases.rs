@@ -240,3 +240,137 @@ impl Database {
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use crate::Database;
+    use crate::error::NeedleError;
+
+    fn setup_db() -> Database {
+        let db = Database::in_memory();
+        db.create_collection("coll_v1", 128).unwrap();
+        db.create_collection("coll_v2", 128).unwrap();
+        db
+    }
+
+    // ── create_alias ────────────────────────────────────────────────────
+
+    #[test]
+    fn test_create_alias() {
+        let db = setup_db();
+        db.create_alias("prod", "coll_v1").unwrap();
+        assert_eq!(
+            db.get_canonical_name("prod"),
+            Some("coll_v1".to_string())
+        );
+    }
+
+    #[test]
+    fn test_create_alias_duplicate() {
+        let db = setup_db();
+        db.create_alias("prod", "coll_v1").unwrap();
+        let result = db.create_alias("prod", "coll_v2");
+        assert!(matches!(result, Err(NeedleError::AliasAlreadyExists(_))));
+    }
+
+    #[test]
+    fn test_create_alias_conflicts_with_collection_name() {
+        let db = setup_db();
+        let result = db.create_alias("coll_v1", "coll_v2");
+        assert!(matches!(result, Err(NeedleError::AliasAlreadyExists(_))));
+    }
+
+    #[test]
+    fn test_create_alias_missing_collection() {
+        let db = setup_db();
+        let result = db.create_alias("prod", "nonexistent");
+        assert!(matches!(result, Err(NeedleError::CollectionNotFound(_))));
+    }
+
+    // ── delete_alias ────────────────────────────────────────────────────
+
+    #[test]
+    fn test_delete_alias() {
+        let db = setup_db();
+        db.create_alias("prod", "coll_v1").unwrap();
+        assert!(db.delete_alias("prod").unwrap());
+        assert!(db.get_canonical_name("prod").is_none());
+    }
+
+    #[test]
+    fn test_delete_alias_not_found() {
+        let db = setup_db();
+        assert!(!db.delete_alias("nonexistent").unwrap());
+    }
+
+    // ── list_aliases ────────────────────────────────────────────────────
+
+    #[test]
+    fn test_list_aliases() {
+        let db = setup_db();
+        db.create_alias("prod", "coll_v1").unwrap();
+        db.create_alias("staging", "coll_v2").unwrap();
+        let aliases = db.list_aliases();
+        assert_eq!(aliases.len(), 2);
+    }
+
+    #[test]
+    fn test_list_aliases_empty() {
+        let db = setup_db();
+        assert!(db.list_aliases().is_empty());
+    }
+
+    // ── get_canonical_name ──────────────────────────────────────────────
+
+    #[test]
+    fn test_get_canonical_name_not_found() {
+        let db = setup_db();
+        assert!(db.get_canonical_name("missing").is_none());
+    }
+
+    // ── aliases_for_collection ──────────────────────────────────────────
+
+    #[test]
+    fn test_aliases_for_collection() {
+        let db = setup_db();
+        db.create_alias("prod", "coll_v1").unwrap();
+        db.create_alias("latest", "coll_v1").unwrap();
+        let aliases = db.aliases_for_collection("coll_v1");
+        assert_eq!(aliases.len(), 2);
+    }
+
+    #[test]
+    fn test_aliases_for_collection_none() {
+        let db = setup_db();
+        assert!(db.aliases_for_collection("coll_v1").is_empty());
+    }
+
+    // ── update_alias ────────────────────────────────────────────────────
+
+    #[test]
+    fn test_update_alias() {
+        let db = setup_db();
+        db.create_alias("prod", "coll_v1").unwrap();
+        db.update_alias("prod", "coll_v2").unwrap();
+        assert_eq!(
+            db.get_canonical_name("prod"),
+            Some("coll_v2".to_string())
+        );
+    }
+
+    #[test]
+    fn test_update_alias_not_found() {
+        let db = setup_db();
+        let result = db.update_alias("nonexistent", "coll_v1");
+        assert!(matches!(result, Err(NeedleError::AliasNotFound(_))));
+    }
+
+    #[test]
+    fn test_update_alias_missing_collection() {
+        let db = setup_db();
+        db.create_alias("prod", "coll_v1").unwrap();
+        let result = db.update_alias("prod", "nonexistent");
+        assert!(matches!(result, Err(NeedleError::CollectionNotFound(_))));
+    }
+}

@@ -48,3 +48,36 @@ impl DatabaseConfig {
         self
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_default_config() {
+        let config = DatabaseConfig::default();
+        assert_eq!(config.path, PathBuf::from("needle.db"));
+        assert!(config.create_if_missing);
+        assert!(!config.read_only);
+        assert!(!config.auto_save);
+    }
+
+    #[test]
+    fn test_new_config() {
+        let config = DatabaseConfig::new("/tmp/test.needle");
+        assert_eq!(config.path, PathBuf::from("/tmp/test.needle"));
+        assert!(config.create_if_missing);
+    }
+
+    #[test]
+    fn test_with_auto_save() {
+        let config = DatabaseConfig::new("test.db").with_auto_save(true);
+        assert!(config.auto_save);
+    }
+
+    #[test]
+    fn test_with_auto_save_false() {
+        let config = DatabaseConfig::new("test.db").with_auto_save(false);
+        assert!(!config.auto_save);
+    }
+}
