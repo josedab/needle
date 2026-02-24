@@ -1554,4 +1554,152 @@ mod tests {
         assert!(result.is_ok());
         Ok(())
     }
+
+    // ── validate_vector_id ──────────────────────────────────────────────
+
+    #[test]
+    fn test_validate_vector_id_empty() {
+        assert!(validate_vector_id("").is_err());
+    }
+
+    #[test]
+    fn test_validate_vector_id_too_long() {
+        let id = "a".repeat(1025);
+        assert!(validate_vector_id(&id).is_err());
+    }
+
+    #[test]
+    fn test_validate_vector_id_control_chars() {
+        assert!(validate_vector_id("bad\x00id").is_err());
+        assert!(validate_vector_id("bad\nid").is_err());
+    }
+
+    #[test]
+    fn test_validate_vector_id_valid() {
+        assert!(validate_vector_id("valid-id_123").is_ok());
+        assert!(validate_vector_id("a").is_ok());
+    }
+
+    // ── validate_collection_name ────────────────────────────────────────
+
+    #[test]
+    fn test_validate_collection_name_special_chars() {
+        assert!(validate_collection_name("has spaces").is_err());
+        assert!(validate_collection_name("has.dots").is_err());
+        assert!(validate_collection_name("has/slash").is_err());
+    }
+
+    #[test]
+    fn test_validate_collection_name_max_boundary() {
+        let name = "a".repeat(256);
+        assert!(validate_collection_name(&name).is_ok());
+    }
+
+    // ── validate_metadata ───────────────────────────────────────────────
+
+    #[test]
+    fn test_validate_metadata_none() {
+        assert!(validate_metadata(&None).is_ok());
+    }
+
+    #[test]
+    fn test_validate_metadata_small() {
+        let meta = Some(serde_json::json!({"key": "value"}));
+        assert!(validate_metadata(&meta).is_ok());
+    }
+
+    #[test]
+    fn test_validate_metadata_too_large() {
+        let big = "x".repeat(MAX_METADATA_BYTES + 1);
+        let meta = Some(serde_json::json!({"data": big}));
+        assert!(validate_metadata(&meta).is_err());
+    }
+
+    #[test]
+    fn test_validate_metadata_too_deep() {
+        // Build deeply nested JSON exceeding MAX_METADATA_DEPTH
+        let mut value = serde_json::json!("leaf");
+        for _ in 0..MAX_METADATA_DEPTH + 1 {
+            value = serde_json::json!({"nested": value});
+        }
+        let meta = Some(value);
+        assert!(validate_metadata(&meta).is_err());
+    }
+
+    // ── json_depth ──────────────────────────────────────────────────────
+
+    #[test]
+    fn test_json_depth_scalar() {
+        assert_eq!(json_depth(&serde_json::json!(42)), 0);
+        assert_eq!(json_depth(&serde_json::json!("hello")), 0);
+    }
+
+    #[test]
+    fn test_json_depth_flat_object() {
+        assert_eq!(json_depth(&serde_json::json!({"a": 1, "b": 2})), 1);
+    }
+
+    #[test]
+    fn test_json_depth_nested() {
+        assert_eq!(json_depth(&serde_json::json!({"a": {"b": {"c": 1}}})), 3);
+    }
+
+    #[test]
+    fn test_json_depth_array() {
+        assert_eq!(json_depth(&serde_json::json!([1, [2, [3]]])), 3);
+    }
+
+    // ── insert_vector: 400 for NaN vector ───────────────────────────────
+
+    #[tokio::test]
+    async fn test_insert_vector_nan() -> Result<(), Box<dyn std::error::Error>> {
+        let state = make_state_with_collection("test", 4).await;
+        let result = insert_vector(
+            State(state),
+            axum::extract::Path("test".to_string()),
+            Json(InsertRequest {
+                id: "v1".to_string(),
+                vector: vec![f32::NAN, 0.0, 0.0, 0.0],
+                metadata: None,
+                ttl_seconds: None,
+            }),
+        ).await;
+        match result {
+            Err((status, err)) => {
+                assert_eq!(status, StatusCode::BAD_REQUEST);
+                assert_eq!(err.code, "INVALID_VECTOR");
+            }
+            Ok(_) => return Err("Expected error for NaN vector".into()),
+        }
+        Ok(())
+    }
+
+    // ── search: k=0 should return 400 ──────────────────────────────────
+
+    #[tokio::test]
+    async fn test_search_k_zero_validation() -> Result<(), Box<dyn std::error::Error>> {
+        let state = make_state_with_collection("test", 4).await;
+        let result = search(
+            State(state),
+            axum::extract::Path("test".to_string()),
+            Json(SearchRequest {
+                vector: vec![1.0, 0.0, 0.0, 0.0],
+                k: 0,
+                filter: None,
+                post_filter: None,
+                post_filter_factor: 3,
+                include_vectors: false,
+                distance: None,
+                explain: false,
+            }),
+        ).await;
+        match result {
+            Err((status, err)) => {
+                assert_eq!(status, StatusCode::BAD_REQUEST);
+                assert_eq!(err.code, "INVALID_K");
+            }
+            Ok(_) => return Err("Expected error for k=0".into()),
+        }
+        Ok(())
+    }
 }
