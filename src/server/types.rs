@@ -624,6 +624,37 @@ fn is_private_ip(ip: &std::net::IpAddr) -> bool {
     }
 }
 
+/// Delta sync request — pull incremental changes from a given LSN.
+#[derive(Deserialize)]
+pub struct DeltaSyncRequest {
+    /// Last LSN the replica has seen. Entries after this LSN will be returned.
+    pub from_lsn: u64,
+    /// Optional replica identifier for tracking.
+    #[serde(default)]
+    pub replica_id: Option<String>,
+}
+
+/// Delta sync response.
+#[derive(Serialize)]
+pub struct DeltaSyncResponse {
+    /// Response type: "delta", "up_to_date", or "snapshot_required".
+    pub status: String,
+    /// Starting LSN of the delta (if status == "delta").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub from_lsn: Option<u64>,
+    /// Ending LSN of the delta (if status == "delta").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub to_lsn: Option<u64>,
+    /// Number of entries in the delta.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub entry_count: Option<usize>,
+    /// Current server LSN.
+    pub current_lsn: u64,
+    /// Serialised delta entries (JSON array).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub entries: Option<Value>,
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
