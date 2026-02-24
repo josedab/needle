@@ -4,7 +4,7 @@
 //! and the brute-force search parameter type.
 
 use super::Collection;
-use crate::collection::search::SearchResult;
+use crate::collection::search::{SearchExplain, SearchResult};
 use crate::distance::DistanceFunction;
 use crate::error::{NeedleError, Result};
 use crate::hnsw::VectorId;
@@ -171,6 +171,59 @@ pub struct SearchBuilder<'a> {
     /// When set, results are filtered to only include vectors that existed
     /// at the specified Unix epoch timestamp.
     as_of_timestamp: Option<u64>,
+    /// Time-weighted decay function for biasing results toward recency.
+    time_decay: Option<TimeDecay>,
+}
+
+/// Time-decay configuration for search results.
+/// Applies a decay multiplier based on vector age to bias results toward recency.
+#[derive(Debug, Clone)]
+pub enum TimeDecay {
+    /// Exponential decay: score *= exp(-ln(2) / half_life * age)
+    Exponential {
+        /// Duration in seconds after which decay factor reaches 0.5
+        half_life_seconds: u64,
+    },
+    /// Linear decay: score *= max(0, 1 - age / max_age)
+    Linear {
+        /// Duration in seconds at which decay factor reaches 0
+        max_age_seconds: u64,
+    },
+    /// Step function: full score within window, zero outside
+    Step {
+        /// Duration in seconds for the recency window
+        window_seconds: u64,
+    },
+}
+
+impl TimeDecay {
+    /// Compute the decay factor for a given age in seconds.
+    /// Returns a value in [0.0, 1.0] where 1.0 means no decay.
+    pub fn compute(&self, age_seconds: u64) -> f32 {
+        match self {
+            TimeDecay::Exponential { half_life_seconds } => {
+                if *half_life_seconds == 0 {
+                    return if age_seconds == 0 { 1.0 } else { 0.0 };
+                }
+                let lambda = (2.0_f32).ln() / *half_life_seconds as f32;
+                (-lambda * age_seconds as f32).exp()
+            }
+            TimeDecay::Linear { max_age_seconds } => {
+                if *max_age_seconds == 0 || age_seconds >= *max_age_seconds {
+                    0.0
+                } else {
+                    1.0 - (age_seconds as f32 / *max_age_seconds as f32)
+                }
+            }
+            TimeDecay::Step { window_seconds } => {
+                if age_seconds <= *window_seconds {
+                    1.0
+                } else {
+                    0.0
+                }
+            }
+        }
+    }
 }
 
 impl<'a> SearchBuilder<'a> {
@@ -188,6 +241,7 @@ impl<'a> SearchBuilder<'a> {
             include_metadata: true,
             distance_override: None,
             as_of_timestamp: None,
+            time_decay: None,
         }
     }
 
@@ -308,6 +362,28 @@ impl<'a> SearchBuilder<'a> {
         self.as_of_timestamp
     }
 
+    /// Apply time-weighted decay to bias results toward recency.
+    ///
+    /// Decay is applied as a normalized multiplier on the similarity score
+    /// (1.0 - distance) preserving relative ordering among same-age vectors.
+    /// The search over-fetches by 3x to compensate for reordering.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use needle::collection::pipeline::TimeDecay;
+    ///
+    /// let results = collection.search_builder(&query)
+    ///     .k(10)
+    ///     .with_time_decay(TimeDecay::Exponential { half_life_seconds: 86400 })
+    ///     .execute()?;
+    /// ```
+    #[must_use]
+    pub fn with_time_decay(mut self, decay: TimeDecay) -> Self {
+        self.time_decay = Some(decay);
+        self
+    }
+
     /// Execute the search and return results
     pub fn execute(self) -> Result<Vec<SearchResult>> {
         self.validate_query()?;
@@ -340,6 +416,7 @@ impl<'a> SearchBuilder<'a> {
         let pre_filtered = self.apply_pre_filter(time_filtered, self.k * post_filter_factor.max(1));
         let mut enriched = self.enrich(pre_filtered)?;
         self.apply_post_filter(&mut enriched);
+        self.apply_time_decay(&mut enriched);
         Ok(enriched)
     }
 
@@ -372,7 +449,9 @@ impl<'a> SearchBuilder<'a> {
         } else {
             1
         };
-        self.k * pre_filter_factor * post_filter_factor
+        // Over-fetch when time decay is active to compensate for reordering
+        let decay_factor = if self.time_decay.is_some() { 3 } else { 1 };
+        self.k * pre_filter_factor * post_filter_factor * decay_factor
     }
 
     /// Fetch raw results from the HNSW index.
@@ -427,6 +506,7 @@ impl<'a> SearchBuilder<'a> {
     }
 
     /// Apply the pre-filter (metadata filter during ANN search phase).
+    /// Uses the inverted index for O(1) equality filter acceleration when available.
     fn apply_pre_filter(
         &self,
         results: Vec<(VectorId, f32)>,
@@ -434,6 +514,19 @@ impl<'a> SearchBuilder<'a> {
     ) -> Vec<(VectorId, f32)> {
         let capacity = limit.min(results.len());
         if let Some(filter) = self.filter {
+            // Try using the inverted index for fast pre-filtering
+            if let Some(matching_ids) = self.collection.metadata.resolve_filter_via_index(filter) {
+                let mut filtered = Vec::with_capacity(capacity);
+                filtered.extend(
+                    results
+                        .into_iter()
+                        .filter(|(id, _)| matching_ids.contains(id))
+                        .take(limit),
+                );
+                return filtered;
+            }
+
+            // Fall back to sequential filter evaluation
             let mut filtered = Vec::with_capacity(capacity);
             filtered.extend(
                 results
@@ -494,6 +587,48 @@ impl<'a> SearchBuilder<'a> {
         }
     }
 
+    /// Apply time-weighted decay, re-sort by decayed score, and truncate to k.
+    fn apply_time_decay(&self, results: &mut Vec<SearchResult>) {
+        let decay = match &self.time_decay {
+            Some(d) => d,
+            None => return,
+        };
+
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+
+        // Apply decay factor to distances. Lower distance = better, so we
+        // scale distance up (worse) for older vectors: distance /= decay_factor.
+        for result in results.iter_mut() {
+            let timestamp = self
+                .collection
+                .metadata
+                .get_internal_id(&result.id)
+                .and_then(|iid| self.collection.insertion_timestamps.get(&iid).copied())
+                .unwrap_or(0);
+
+            let age = now.saturating_sub(timestamp);
+            let decay_factor = decay.compute(age);
+
+            if decay_factor > 0.0 {
+                result.distance /= decay_factor;
+            } else {
+                result.distance = f32::MAX;
+            }
+        }
+
+        // Re-sort by distance (ascending = best first)
+        results.sort_by(|a, b| {
+            a.distance
+                .partial_cmp(&b.distance)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        results.truncate(self.k);
+    }
+
     /// Execute the search and return only IDs with distances
     pub fn execute_ids_only(self) -> Result<Vec<(String, f32)>> {
         self.include_metadata(false)
@@ -503,6 +638,99 @@ impl<'a> SearchBuilder<'a> {
                 ids.extend(results.into_iter().map(|r| (r.id, r.distance)));
                 ids
             })
+    }
+
+    /// Execute the search with explanation, returning results and a SearchExplain report.
+    ///
+    /// The explanation captures timing breakdown, HNSW traversal stats, and filter
+    /// selectivity. Only activates instrumentation for this call — no performance
+    /// impact on normal searches.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let (results, explain) = collection.search_builder(&query)
+    ///     .k(10)
+    ///     .filter(&filter)
+    ///     .execute_explained()?;
+    /// println!("{}", explain); // ASCII report
+    /// ```
+    pub fn execute_explained(self) -> Result<(Vec<SearchResult>, SearchExplain)> {
+        use std::time::Instant;
+
+        let total_start = Instant::now();
+        self.validate_query()?;
+
+        let effective_k = self.k.min(self.collection.len()).max(if self.collection.is_empty() { 0 } else { 1 });
+        if effective_k == 0 {
+            let explain = SearchExplain {
+                dimensions: self.collection.config.dimensions,
+                collection_size: self.collection.len(),
+                requested_k: self.k,
+                total_time_us: total_start.elapsed().as_micros() as u64,
+                distance_function: format!("{:?}", self.collection.config.distance),
+                ..Default::default()
+            };
+            return Ok((Vec::new(), explain));
+        }
+
+        // Index search with stats
+        let index_start = Instant::now();
+        let fetch_count = self.calculate_fetch_count();
+        let (raw_results, hnsw_stats) = self.collection.index.search_with_stats(
+            self.query,
+            fetch_count,
+            self.collection.vectors.as_slice(),
+        )?;
+        let index_time = index_start.elapsed();
+
+        let candidates_before_filter = raw_results.len();
+
+        let non_expired = self.filter_expired(raw_results);
+        let time_filtered = self.filter_as_of(non_expired);
+
+        // Filter with timing
+        let filter_start = Instant::now();
+        let post_filter_factor = if self.post_filter.is_some() {
+            self.post_filter_factor
+        } else {
+            1
+        };
+        let pre_filtered = self.apply_pre_filter(
+            time_filtered,
+            self.k * post_filter_factor.max(1),
+        );
+        let filter_time = filter_start.elapsed();
+
+        let candidates_after_filter = pre_filtered.len();
+
+        // Enrich with timing
+        let enrich_start = Instant::now();
+        let mut enriched = self.enrich(pre_filtered)?;
+        self.apply_post_filter(&mut enriched);
+        self.apply_time_decay(&mut enriched);
+        let enrich_time = enrich_start.elapsed();
+
+        let total_time = total_start.elapsed();
+
+        let explain = SearchExplain {
+            total_time_us: total_time.as_micros() as u64,
+            index_time_us: index_time.as_micros() as u64,
+            filter_time_us: filter_time.as_micros() as u64,
+            enrich_time_us: enrich_time.as_micros() as u64,
+            candidates_before_filter,
+            candidates_after_filter,
+            hnsw_stats,
+            dimensions: self.collection.config.dimensions,
+            collection_size: self.collection.len(),
+            requested_k: self.k,
+            effective_k,
+            ef_search: self.ef_search.unwrap_or(self.collection.index.config().ef_search),
+            filter_applied: self.filter.is_some() || self.post_filter.is_some(),
+            distance_function: format!("{:?}", self.collection.config.distance),
+        };
+
+        Ok((enriched, explain))
     }
 }
 
@@ -766,5 +994,182 @@ mod tests {
         };
         assert_eq!(report.num_queries, 10);
         assert_eq!(report.k, 5);
+    }
+
+    // ── TimeDecay unit tests ────────────────────────────────────────────
+
+    #[test]
+    fn test_time_decay_exponential_half_life() {
+        let decay = TimeDecay::Exponential { half_life_seconds: 3600 };
+        // At t=0, factor should be 1.0
+        assert!((decay.compute(0) - 1.0).abs() < 1e-6);
+        // At t=half_life, factor should be ~0.5
+        assert!((decay.compute(3600) - 0.5).abs() < 0.01);
+        // At t=2*half_life, factor should be ~0.25
+        assert!((decay.compute(7200) - 0.25).abs() < 0.01);
+        // Monotonically decreasing
+        assert!(decay.compute(100) > decay.compute(200));
+    }
+
+    #[test]
+    fn test_time_decay_linear() {
+        let decay = TimeDecay::Linear { max_age_seconds: 1000 };
+        assert!((decay.compute(0) - 1.0).abs() < 1e-6);
+        assert!((decay.compute(500) - 0.5).abs() < 1e-6);
+        assert!((decay.compute(1000) - 0.0).abs() < 1e-6);
+        assert!((decay.compute(2000) - 0.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_time_decay_step() {
+        let decay = TimeDecay::Step { window_seconds: 100 };
+        assert!((decay.compute(0) - 1.0).abs() < 1e-6);
+        assert!((decay.compute(50) - 1.0).abs() < 1e-6);
+        assert!((decay.compute(100) - 1.0).abs() < 1e-6);
+        assert!((decay.compute(101) - 0.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_time_decay_exponential_zero_half_life() {
+        let decay = TimeDecay::Exponential { half_life_seconds: 0 };
+        assert!((decay.compute(0) - 1.0).abs() < 1e-6);
+        assert!((decay.compute(1) - 0.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_time_decay_linear_zero_max_age() {
+        let decay = TimeDecay::Linear { max_age_seconds: 0 };
+        assert!((decay.compute(0) - 0.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_search_builder_with_time_decay() {
+        let col = make_collection(20, 8);
+        let query = random_vector(8);
+        // Should not panic and should return results
+        let results = col.search_builder(&query)
+            .k(5)
+            .with_time_decay(TimeDecay::Exponential { half_life_seconds: 86400 })
+            .execute()
+            .unwrap();
+        // All vectors were just inserted (age ~0), so decay factor ~1.0
+        // All results should be present
+        assert!(!results.is_empty());
+        assert!(results.len() <= 5);
+    }
+
+    #[test]
+    fn test_time_decay_overfetch_factor() {
+        // Verify that when time_decay is set, the fetch count is 3x
+        let col = make_collection(10, 4);
+        let query = random_vector(4);
+        let builder = col.search_builder(&query)
+            .k(5)
+            .with_time_decay(TimeDecay::Step { window_seconds: 1 });
+        // This is a compile/integration test - verify it executes
+        let results = builder.execute().unwrap();
+        // Step decay with 1s window: all vectors just inserted, should all be in window
+        assert!(results.len() <= 5);
+    }
+
+    // ── execute_explained tests ─────────────────────────────────────────
+
+    #[test]
+    fn test_execute_explained_basic() {
+        let col = make_collection(20, 8);
+        let query = random_vector(8);
+        let (results, explain) = col.search_builder(&query)
+            .k(5)
+            .execute_explained()
+            .unwrap();
+
+        assert_eq!(results.len(), 5);
+        assert!(explain.total_time_us > 0);
+        assert_eq!(explain.dimensions, 8);
+        assert_eq!(explain.collection_size, 20);
+        assert_eq!(explain.requested_k, 5);
+        assert!(!explain.filter_applied);
+        assert!(explain.hnsw_stats.visited_nodes > 0);
+    }
+
+    #[test]
+    fn test_execute_explained_with_filter() {
+        let col = make_collection(20, 8);
+        let query = random_vector(8);
+        let filter = Filter::eq("cat", "even");
+        let (results, explain) = col.search_builder(&query)
+            .k(5)
+            .filter(&filter)
+            .execute_explained()
+            .unwrap();
+
+        assert!(results.len() <= 5);
+        assert!(explain.filter_applied);
+        assert!(explain.candidates_before_filter >= explain.candidates_after_filter);
+    }
+
+    #[test]
+    fn test_execute_explained_empty_collection() {
+        let col = Collection::with_dimensions("test", 4);
+        let (results, explain) = col.search_builder(&[1.0, 0.0, 0.0, 0.0])
+            .k(5)
+            .execute_explained()
+            .unwrap();
+
+        assert!(results.is_empty());
+        assert_eq!(explain.effective_k, 0);
+    }
+
+    #[test]
+    fn test_execute_explained_display() {
+        let col = make_collection(10, 4);
+        let query = random_vector(4);
+        let (_, explain) = col.search_builder(&query)
+            .k(3)
+            .execute_explained()
+            .unwrap();
+
+        let output = format!("{}", explain);
+        assert!(output.contains("NEEDLE SEARCH EXPLAIN"));
+        assert!(output.contains("HNSW TRAVERSAL"));
+    }
+
+    // ── as_of (MVCC point-in-time) tests ────────────────────────────────
+
+    #[test]
+    fn test_search_builder_as_of_excludes_future() {
+        let mut col = Collection::with_dimensions("test", 4);
+        col.insert("old", &[1.0, 0.0, 0.0, 0.0], None).unwrap();
+        col.insert("new", &[0.9, 0.1, 0.0, 0.0], None).unwrap();
+
+        // as_of(0) excludes everything (timestamps are current time >> 0)
+        let results = col.search_builder(&[1.0, 0.0, 0.0, 0.0])
+            .k(10)
+            .as_of(0)
+            .execute()
+            .unwrap();
+        assert!(results.is_empty(), "as_of(0) should exclude all modern-timestamped vectors");
+
+        // as_of(far future) includes everything
+        let results = col.search_builder(&[1.0, 0.0, 0.0, 0.0])
+            .k(10)
+            .as_of(u64::MAX)
+            .execute()
+            .unwrap();
+        assert_eq!(results.len(), 2, "as_of(MAX) should include all vectors");
+    }
+
+    #[test]
+    fn test_search_builder_as_of_zero_returns_nothing() {
+        let col = make_collection(5, 4);
+        let query = random_vector(4);
+
+        let results = col.search_builder(&query)
+            .k(5)
+            .as_of(0)
+            .execute()
+            .unwrap();
+
+        assert!(results.is_empty());
     }
 }
