@@ -159,6 +159,54 @@ pub struct SearchTrace {
     pub layers_traversed: Vec<usize>,
 }
 
+impl SearchTrace {
+    /// Format the trace as an ASCII graph showing layer-by-layer traversal.
+    pub fn format_ascii(&self) -> String {
+        let mut out = String::new();
+        out.push_str("HNSW Search Trace\n");
+
+        if let Some(ep) = self.entry_point {
+            out.push_str(&format!("Entry point: node {} (layer {})\n", ep, self.entry_layer));
+        }
+        out.push_str(&format!(
+            "Stats: {} nodes visited, {} distance computations\n\n",
+            self.nodes_visited, self.distance_computations
+        ));
+
+        // Group hops by layer
+        let max_layer = self.hops.iter().map(|h| h.layer).max().unwrap_or(0);
+        for layer in (0..=max_layer).rev() {
+            let layer_hops: Vec<&TraceHop> = self.hops.iter().filter(|h| h.layer == layer).collect();
+            if layer_hops.is_empty() {
+                continue;
+            }
+            out.push_str(&format!("Layer {}:", layer));
+            for hop in &layer_hops {
+                let marker = if hop.added_to_candidates { "+" } else { "." };
+                out.push_str(&format!(" [{}]{:.3}", hop.node_id, hop.distance));
+                out.push_str(marker);
+            }
+            out.push('\n');
+        }
+
+        if !self.results.is_empty() {
+            out.push_str("\nResults: ");
+            for (id, dist) in &self.results {
+                out.push_str(&format!("({}:{:.4}) ", id, dist));
+            }
+            out.push('\n');
+        }
+
+        out
+    }
+}
+
+impl std::fmt::Display for SearchTrace {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.format_ascii())
+    }
+}
+
 /// HNSW configuration parameters
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HnswConfig {
