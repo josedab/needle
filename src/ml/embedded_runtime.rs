@@ -550,6 +550,14 @@ pub struct EmbeddingRuntime {
     active_model_id: RwLock<Option<String>>,
 }
 
+impl std::fmt::Debug for EmbeddingRuntime {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EmbeddingRuntime")
+            .field("active_model_id", &*self.active_model_id.read())
+            .finish()
+    }
+}
+
 impl EmbeddingRuntime {
     /// Create a runtime with default configuration.
     pub fn new() -> Self {
