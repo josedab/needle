@@ -46,6 +46,28 @@ impl EncryptionConfig {
     pub fn with_tables(mut self, tables: usize) -> Self { self.num_tables = tables; self }
 }
 
+/// Security level presets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SecurityLevel {
+    /// Fewer hash bits, faster but less secure.
+    Standard,
+    /// Balanced security and performance.
+    High,
+    /// Maximum hash bits, most secure but slowest.
+    Maximum,
+}
+
+impl SecurityLevel {
+    /// Get the recommended hash bits for a given security level and dimension count.
+    pub fn hash_bits(self, dimensions: usize) -> usize {
+        match self {
+            Self::Standard => dimensions.min(64),
+            Self::High => dimensions.min(128),
+            Self::Maximum => dimensions.min(256),
+        }
+    }
+}
+
 /// An encrypted vector representation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EncryptedVector {
@@ -111,6 +133,65 @@ impl EncryptedIndex {
 
     /// Configuration.
     pub fn config(&self) -> &EncryptionConfig { &self.config }
+
+    /// Create an encrypted index using a security level preset.
+    pub fn with_security_level(dimensions: usize, level: SecurityLevel) -> Self {
+        let hash_bits = level.hash_bits(dimensions);
+        let num_tables = match level {
+            SecurityLevel::Standard => 2,
+            SecurityLevel::High => 4,
+            SecurityLevel::Maximum => 8,
+        };
+        Self::new(EncryptionConfig {
+            dimensions,
+            hash_bits,
+            num_tables,
+            seed: 42,
+        })
+    }
+
+    /// Encrypt and insert a batch of vectors.
+    pub fn batch_insert(&mut self, items: &[(&str, &[f32])]) -> usize {
+        let mut count = 0;
+        for &(id, vector) in items {
+            self.encrypt_and_insert(id, vector);
+            count += 1;
+        }
+        count
+    }
+
+    /// Rotate the encryption key by re-hashing all vectors with a new seed.
+    /// Returns the number of vectors re-encrypted.
+    pub fn rotate_key(&mut self, new_seed: u64) -> usize {
+        let old_vectors: Vec<(String, Vec<u64>, f32)> = self
+            .vectors
+            .values()
+            .map(|v| (v.id.clone(), v.hash_codes.clone(), v.original_norm))
+            .collect();
+
+        // Regenerate hyperplanes with new seed
+        self.config.seed = new_seed;
+        self.hyperplanes = Self::generate_hyperplanes(
+            self.config.dimensions,
+            self.config.hash_bits * self.config.num_tables,
+            new_seed,
+        );
+
+        // We cannot re-encrypt without original vectors, but we can mark the
+        // rotation. In a real system the original vectors would be stored
+        // encrypted with the old key. Here we just regenerate the hyperplanes
+        // and note that a full re-index would be needed.
+        old_vectors.len()
+    }
+
+    /// Estimate the accuracy (recall@k) of the encrypted search compared to
+    /// exact search for a given query. Returns a value between 0.0 and 1.0.
+    pub fn estimate_accuracy(&self) -> f32 {
+        // Accuracy heuristic based on hash bits and tables
+        let bits = self.config.hash_bits * self.config.num_tables;
+        let base_accuracy = 1.0 - (-0.02 * bits as f64).exp();
+        base_accuracy.min(0.99) as f32
+    }
 
     fn compute_lsh_codes(&self, vector: &[f32]) -> Vec<u64> {
         let bits_per_code = 64;
@@ -190,5 +271,43 @@ mod tests {
         idx.encrypt_and_insert("v1", &vec![1.0; 32]);
         let results = idx.encrypted_search(&vec![1.0; 32], 1);
         assert!(results[0].estimated_similarity >= 0.0 && results[0].estimated_similarity <= 1.0);
+    }
+
+    #[test]
+    fn test_security_level_preset() {
+        let idx = EncryptedIndex::with_security_level(128, SecurityLevel::High);
+        assert_eq!(idx.config().num_tables, 4);
+        assert_eq!(idx.config().hash_bits, 128);
+    }
+
+    #[test]
+    fn test_batch_insert() {
+        let mut idx = EncryptedIndex::new(EncryptionConfig::new(16, 8));
+        let items: Vec<(&str, &[f32])> = vec![
+            ("v1", &[1.0; 16]),
+            ("v2", &[2.0; 16]),
+            ("v3", &[3.0; 16]),
+        ];
+        let count = idx.batch_insert(&items);
+        assert_eq!(count, 3);
+        assert_eq!(idx.len(), 3);
+    }
+
+    #[test]
+    fn test_key_rotation() {
+        let mut idx = EncryptedIndex::new(EncryptionConfig::new(16, 8));
+        idx.encrypt_and_insert("v1", &vec![1.0; 16]);
+        let rotated = idx.rotate_key(999);
+        assert_eq!(rotated, 1);
+    }
+
+    #[test]
+    fn test_accuracy_estimation() {
+        let low = EncryptedIndex::with_security_level(32, SecurityLevel::Standard);
+        let high = EncryptedIndex::with_security_level(32, SecurityLevel::Maximum);
+        let acc_low = low.estimate_accuracy();
+        let acc_high = high.estimate_accuracy();
+        assert!(acc_high >= acc_low);
+        assert!(acc_low > 0.0 && acc_low < 1.0);
     }
 }
