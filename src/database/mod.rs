@@ -1346,6 +1346,23 @@ impl Database {
         builder.execute()
     }
 
+    fn search_matryoshka_internal(
+        &self,
+        collection: &str,
+        query: &[f32],
+        k: usize,
+        coarse_dims: usize,
+        oversample: usize,
+    ) -> Result<Vec<SearchResult>> {
+        let state = self.state.read();
+        let coll = state
+            .collections
+            .get(collection)
+            .ok_or_else(|| NeedleError::CollectionNotFound(collection.to_string()))?;
+
+        coll.search_matryoshka(query, k, coarse_dims, oversample)
+    }
+
     fn search_radius_internal(
         &self,
         collection: &str,
@@ -2017,5 +2034,243 @@ mod tests {
             .unwrap();
 
         assert_eq!(results.len(), 10);
+    }
+
+    // ── Next-Gen Feature Tests ──────────────────────────────────────────
+
+    #[test]
+    fn test_matryoshka_search() {
+        let db = Database::in_memory();
+        db.create_collection("docs", 128).unwrap();
+        let coll = db.collection("docs").unwrap();
+
+        for i in 0..50 {
+            let vec = random_vector(128);
+            coll.insert(format!("doc{}", i), &vec, None).unwrap();
+        }
+
+        let query = random_vector(128);
+        let results = coll.search_matryoshka(&query, 10, 64, 4).unwrap();
+
+        assert!(!results.is_empty());
+        assert!(results.len() <= 10);
+        // Verify results are sorted by distance
+        for w in results.windows(2) {
+            assert!(w[0].distance <= w[1].distance);
+        }
+    }
+
+    #[test]
+    fn test_matryoshka_search_fallback_to_full() {
+        let db = Database::in_memory();
+        db.create_collection("docs", 64).unwrap();
+        let coll = db.collection("docs").unwrap();
+
+        for i in 0..20 {
+            let vec = random_vector(64);
+            coll.insert(format!("doc{}", i), &vec, None).unwrap();
+        }
+
+        let query = random_vector(64);
+        // coarse_dims >= dims should fall back to normal search
+        let results = coll.search_matryoshka(&query, 5, 128, 4).unwrap();
+        assert_eq!(results.len(), 5);
+    }
+
+    #[test]
+    fn test_snapshot_create_list_restore() {
+        let db = Database::in_memory();
+        db.create_collection("docs", 32).unwrap();
+        let coll = db.collection("docs").unwrap();
+
+        // Insert data
+        for i in 0..10 {
+            coll.insert(format!("v{}", i), &random_vector(32), None).unwrap();
+        }
+        assert_eq!(coll.len(), 10);
+
+        // Create snapshot
+        coll.create_snapshot("snap1").unwrap();
+
+        // List snapshots
+        let snapshots = coll.list_snapshots();
+        assert!(snapshots.contains(&"snap1".to_string()));
+
+        // Delete some vectors
+        for i in 0..5 {
+            coll.delete(&format!("v{}", i)).unwrap();
+        }
+        assert_eq!(coll.len(), 5);
+
+        // Restore snapshot
+        coll.restore_snapshot("snap1").unwrap();
+        assert_eq!(coll.len(), 10);
+    }
+
+    #[test]
+    fn test_memory_store_and_recall() {
+        let db = Database::in_memory();
+        db.create_collection("memories", 32).unwrap();
+        let coll = db.collection("memories").unwrap();
+
+        // Store a "memory" with metadata
+        let vec = random_vector(32);
+        let metadata = json!({
+            "_memory_content": "The user prefers dark mode",
+            "_memory_tier": "semantic",
+            "_memory_importance": 0.8,
+        });
+        coll.insert("mem_1", &vec, Some(metadata)).unwrap();
+
+        // Recall by similarity
+        let results = coll.search(&vec, 5).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].id, "mem_1");
+
+        let meta = results[0].metadata.as_ref().unwrap();
+        assert_eq!(meta["_memory_tier"], "semantic");
+        assert_eq!(meta["_memory_content"], "The user prefers dark mode");
+
+        // Forget
+        assert!(coll.delete("mem_1").unwrap());
+        assert_eq!(coll.len(), 0);
+    }
+
+    #[test]
+    fn test_vector_diff_between_collections() {
+        let db = Database::in_memory();
+        db.create_collection("a", 32).unwrap();
+        db.create_collection("b", 32).unwrap();
+
+        let coll_a = db.collection("a").unwrap();
+        let coll_b = db.collection("b").unwrap();
+
+        // Shared vectors (same ID, same data)
+        for i in 0..5 {
+            let vec = random_vector(32);
+            coll_a.insert(format!("shared_{}", i), &vec, None).unwrap();
+            coll_b.insert(format!("shared_{}", i), &vec, None).unwrap();
+        }
+
+        // Only in A
+        for i in 0..3 {
+            coll_a.insert(format!("only_a_{}", i), &random_vector(32), None).unwrap();
+        }
+
+        // Only in B
+        for i in 0..2 {
+            coll_b.insert(format!("only_b_{}", i), &random_vector(32), None).unwrap();
+        }
+
+        let ids_a: std::collections::HashSet<String> = coll_a.ids().unwrap().into_iter().collect();
+        let ids_b: std::collections::HashSet<String> = coll_b.ids().unwrap().into_iter().collect();
+
+        assert_eq!(ids_a.difference(&ids_b).count(), 3); // only in A
+        assert_eq!(ids_b.difference(&ids_a).count(), 2); // only in B
+        assert_eq!(ids_a.intersection(&ids_b).count(), 5); // shared
+    }
+
+    #[test]
+    fn test_cost_estimator_integration() {
+        use crate::search::cost_estimator::{CostEstimator, CollectionStatistics};
+
+        let db = Database::in_memory();
+        db.create_collection("bench", 128).unwrap();
+        let coll = db.collection("bench").unwrap();
+
+        for i in 0..100 {
+            coll.insert(format!("v{}", i), &random_vector(128), None).unwrap();
+        }
+
+        let stats = coll.stats().unwrap();
+        let col_stats = CollectionStatistics::new(stats.vector_count, stats.dimensions, 0.0);
+
+        let estimator = CostEstimator::default();
+        let plan = estimator.plan(&col_stats, 10, None);
+
+        assert!(plan.cost.estimated_latency_ms > 0.0);
+        assert!(plan.cost.distance_computations > 0);
+        assert!(!plan.rationale.is_empty());
+    }
+
+    #[test]
+    fn test_quantized_index_persistence() {
+        use crate::indexing::quantization::{ScalarQuantizer, QuantizedIndex};
+
+        let vectors: Vec<Vec<f32>> = (0..50).map(|_| random_vector(32)).collect();
+        let refs: Vec<&[f32]> = vectors.iter().map(|v| v.as_slice()).collect();
+
+        let sq = ScalarQuantizer::train(&refs);
+        let idx = QuantizedIndex::Scalar(sq);
+
+        // Serialize
+        let bytes = idx.to_bytes();
+        assert!(!bytes.is_empty());
+
+        // Deserialize
+        let restored = QuantizedIndex::from_bytes(&bytes).unwrap();
+        assert_eq!(restored.dimensions(), 32);
+        assert_eq!(restored.compression_label(), "4x (scalar u8)");
+    }
+
+    #[test]
+    fn test_embedding_router_integration() {
+        use crate::services::embedding_router::{EmbeddingRouter, RouterConfig, ProviderEntry};
+
+        let mut router = EmbeddingRouter::new(RouterConfig::default());
+        router.register(ProviderEntry::new("local", 384, 0.0));
+        router.register(ProviderEntry::new("openai", 1536, 0.0001));
+        router.pin_collection("premium", "openai");
+
+        // Regular collection → first provider (local)
+        assert_eq!(router.route(Some("docs")), Some("local".to_string()));
+
+        // Pinned collection → pinned provider
+        assert_eq!(router.route(Some("premium")), Some("openai".to_string()));
+
+        // Record failure to test failover
+        router.record_failure("local");
+        router.record_failure("local");
+        router.record_failure("local");
+        assert_eq!(router.route(Some("docs")), Some("openai".to_string()));
+
+        // Stats tracking
+        let stats = router.stats();
+        assert_eq!(stats.len(), 2);
+    }
+
+    #[test]
+    fn test_webhook_service() {
+        use crate::services::webhook_delivery::{
+            WebhookService, WebhookConfig, WebhookSubscription, EventFilter
+        };
+
+        let mut svc = WebhookService::new(WebhookConfig::default());
+        let sub = WebhookSubscription::new("https://example.com/hook", EventFilter::all());
+        svc.subscribe(sub);
+
+        svc.enqueue("docs", "insert", "v1");
+        svc.enqueue("docs", "delete", "v2");
+
+        let stats = svc.process_queue();
+        assert_eq!(stats.delivered, 2);
+
+        let (delivered, failed, pending) = svc.total_stats();
+        assert_eq!(delivered, 2);
+        assert_eq!(failed, 0);
+        assert_eq!(pending, 0);
+    }
+
+    #[test]
+    fn test_rbac_path_extraction() {
+        // Test the path extraction logic used by RBAC middleware
+        let path = "/collections/my_docs/vectors/v1";
+        let parts: Vec<&str> = path.trim_start_matches('/').split('/').collect();
+        assert_eq!(parts[0], "collections");
+        assert_eq!(parts[1], "my_docs");
+
+        let path2 = "/health";
+        let parts2: Vec<&str> = path2.trim_start_matches('/').split('/').collect();
+        assert_ne!(parts2[0], "collections");
     }
 }
