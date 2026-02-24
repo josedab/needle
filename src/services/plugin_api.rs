@@ -504,6 +504,68 @@ impl PluginRegistry {
         }
         errors
     }
+
+    /// Hot-reload a plugin: unregister and re-register with updated manifest.
+    /// Preserves dependent relationships if versions are compatible.
+    pub fn hot_reload(&mut self, manifest: PluginManifest) -> Result<()> {
+        let id = manifest.id.clone();
+        // Check if new version is compatible with dependents
+        if let Some(old_entry) = self.plugins.get(&id) {
+            let old_version = &old_entry.manifest.version;
+            if manifest.version.major != old_version.major {
+                // Check if any dependent needs the old major version
+                for (dep_id, entry) in &self.plugins {
+                    if let Some(required) = entry.manifest.dependencies.get(&id) {
+                        if !manifest.version.is_compatible_with(required) {
+                            return Err(NeedleError::InvalidArgument(format!(
+                                "Plugin '{dep_id}' requires '{id}' version {required}, new version {} incompatible",
+                                manifest.version
+                            )));
+                        }
+                    }
+                }
+            }
+        }
+
+        // Remove old entry (skip dependency check for reload)
+        self.plugins.remove(&id);
+        self.distance_plugins.remove(&id);
+
+        // Re-register
+        let entry = PluginEntry {
+            manifest,
+            status: PluginStatus::Active,
+            registered_at: SystemTime::now(),
+            invocation_count: 0,
+        };
+        self.plugins.insert(id, entry);
+        Ok(())
+    }
+
+    /// Get a health summary of all plugins.
+    pub fn health(&self) -> PluginRegistryHealth {
+        let total = self.plugins.len();
+        let active = self.plugins.values().filter(|e| e.status == PluginStatus::Active).count();
+        let disabled = self.plugins.values().filter(|e| e.status == PluginStatus::Disabled).count();
+        let errors = self.validate();
+        PluginRegistryHealth {
+            total_plugins: total,
+            active,
+            disabled,
+            dependency_errors: errors.len(),
+            error_details: errors,
+        }
+    }
+}
+
+/// Plugin registry health summary.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PluginRegistryHealth {
+    pub total_plugins: usize,
+    pub active: usize,
+    pub disabled: usize,
+    pub dependency_errors: usize,
+    pub error_details: Vec<String>,
 }
 
 impl Default for PluginRegistry {
@@ -668,5 +730,33 @@ mod tests {
 
         let dist = plugin.compute(&[1.0, 0.0, 1.0], &[0.0, 0.0, 1.0]);
         assert!((dist - 1.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_hot_reload() {
+        let mut registry = PluginRegistry::new();
+        registry.register(test_manifest("reloadable")).unwrap();
+
+        let updated = PluginManifest::builder("reloadable")
+            .version(PluginVersion::new(1, 1, 0))
+            .build();
+        registry.hot_reload(updated).unwrap();
+
+        let entry = registry.get("reloadable").unwrap();
+        assert_eq!(entry.manifest.version, PluginVersion::new(1, 1, 0));
+    }
+
+    #[test]
+    fn test_health_summary() {
+        let mut registry = PluginRegistry::new();
+        registry.register(test_manifest("a")).unwrap();
+        registry.register(test_manifest("b")).unwrap();
+        registry.set_status("b", PluginStatus::Disabled).unwrap();
+
+        let health = registry.health();
+        assert_eq!(health.total_plugins, 2);
+        assert_eq!(health.active, 1);
+        assert_eq!(health.disabled, 1);
+        assert_eq!(health.dependency_errors, 0);
     }
 }
