@@ -124,6 +124,31 @@ doc = store.get_by_id("nonexistent")  # None
 deleted = store.delete(ids=["nonexistent"])  # False
 ```
 
+## Testing
+
+```bash
+cd python/needle_langchain
+pip install -e ".[langchain]"
+python -m pytest -xvs
+```
+
+If no tests exist yet, you can verify the package loads correctly:
+
+```bash
+python -c "from needle_langchain import NeedleVectorStore; print('import ok')"
+```
+
+## Contributing
+
+Contributions are welcome! This is a reference implementation and a great place to start contributing to Needle.
+
+1. Fork the repository and create a feature branch
+2. Follow the existing code style (type hints, docstrings)
+3. Add or update tests for any new functionality
+4. Submit a pull request against `main`
+
+See the [project-level CONTRIBUTING.md](../../CONTRIBUTING.md) for general guidelines.
+
 ## Related
 
 - [Needle Python SDK](../README.md) — Core Python client
