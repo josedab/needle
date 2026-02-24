@@ -174,3 +174,127 @@ impl Collection {
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use crate::collection::Collection;
+    use crate::error::NeedleError;
+
+    // ── get_ttl / set_ttl ───────────────────────────────────────────────
+
+    #[test]
+    fn test_set_and_get_ttl() {
+        let mut col = Collection::with_dimensions("test", 4);
+        col.insert("v1", &[1.0, 0.0, 0.0, 0.0], None).unwrap();
+        col.set_ttl("v1", Some(3600)).unwrap();
+        assert!(col.get_ttl("v1").is_some());
+    }
+
+    #[test]
+    fn test_set_ttl_remove() {
+        let mut col = Collection::with_dimensions("test", 4);
+        col.insert("v1", &[1.0, 0.0, 0.0, 0.0], None).unwrap();
+        col.set_ttl("v1", Some(3600)).unwrap();
+        col.set_ttl("v1", None).unwrap();
+        assert!(col.get_ttl("v1").is_none());
+    }
+
+    #[test]
+    fn test_set_ttl_not_found() {
+        let mut col = Collection::with_dimensions("test", 4);
+        let result = col.set_ttl("missing", Some(100));
+        assert!(matches!(result, Err(NeedleError::VectorNotFound(_))));
+    }
+
+    #[test]
+    fn test_get_ttl_no_ttl_set() {
+        let mut col = Collection::with_dimensions("test", 4);
+        col.insert("v1", &[1.0, 0.0, 0.0, 0.0], None).unwrap();
+        assert!(col.get_ttl("v1").is_none());
+    }
+
+    #[test]
+    fn test_get_ttl_nonexistent_vector() {
+        let col = Collection::with_dimensions("test", 4);
+        assert!(col.get_ttl("missing").is_none());
+    }
+
+    // ── ttl_stats ───────────────────────────────────────────────────────
+
+    #[test]
+    fn test_ttl_stats_empty() {
+        let col = Collection::with_dimensions("test", 4);
+        let (total, expired, earliest, latest) = col.ttl_stats();
+        assert_eq!(total, 0);
+        assert_eq!(expired, 0);
+        assert!(earliest.is_none());
+        assert!(latest.is_none());
+    }
+
+    #[test]
+    fn test_ttl_stats_with_ttl() {
+        let mut col = Collection::with_dimensions("test", 4);
+        col.insert("v1", &[1.0, 0.0, 0.0, 0.0], None).unwrap();
+        col.set_ttl("v1", Some(3600)).unwrap();
+        let (total, _, earliest, latest) = col.ttl_stats();
+        assert_eq!(total, 1);
+        assert!(earliest.is_some());
+        assert!(latest.is_some());
+    }
+
+    // ── insert_with_ttl ─────────────────────────────────────────────────
+
+    #[test]
+    fn test_insert_with_large_ttl() {
+        let mut col = Collection::with_dimensions("test", 4);
+        col.insert_with_ttl("v1", &[1.0, 0.0, 0.0, 0.0], None, Some(u64::MAX / 2))
+            .unwrap();
+        assert!(col.get_ttl("v1").is_some());
+    }
+
+    // ── expire_vectors ──────────────────────────────────────────────────
+
+    #[test]
+    fn test_expire_vectors_none_expired() {
+        let mut col = Collection::with_dimensions("test", 4);
+        col.insert_with_ttl("v1", &[1.0, 0.0, 0.0, 0.0], None, Some(99999))
+            .unwrap();
+        let expired = col.expire_vectors().unwrap();
+        assert_eq!(expired, 0);
+        assert_eq!(col.len(), 1);
+    }
+
+    #[test]
+    fn test_expire_vectors_empty_collection() {
+        let mut col = Collection::with_dimensions("test", 4);
+        let expired = col.expire_vectors().unwrap();
+        assert_eq!(expired, 0);
+    }
+
+    // ── needs_expiration_sweep ──────────────────────────────────────────
+
+    #[test]
+    fn test_needs_expiration_sweep_no_ttl() {
+        let mut col = Collection::with_dimensions("test", 4);
+        col.insert("v1", &[1.0, 0.0, 0.0, 0.0], None).unwrap();
+        assert!(!col.needs_expiration_sweep(0.1));
+    }
+
+    #[test]
+    fn test_needs_expiration_sweep_empty() {
+        let col = Collection::with_dimensions("test", 4);
+        assert!(!col.needs_expiration_sweep(0.1));
+    }
+
+    // ── set_ttl with zero TTL ───────────────────────────────────────────
+
+    #[test]
+    fn test_set_ttl_zero() {
+        let mut col = Collection::with_dimensions("test", 4);
+        col.insert("v1", &[1.0, 0.0, 0.0, 0.0], None).unwrap();
+        // Zero TTL means expires immediately (now + 0)
+        col.set_ttl("v1", Some(0)).unwrap();
+        assert!(col.get_ttl("v1").is_some());
+    }
+}

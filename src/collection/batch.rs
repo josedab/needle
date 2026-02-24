@@ -170,3 +170,113 @@ impl Collection {
         Ok(results)
     }
 }
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use crate::collection::Collection;
+    use crate::error::NeedleError;
+    use crate::metadata::Filter;
+    use serde_json::json;
+
+    fn populated_collection() -> Collection {
+        let mut col = Collection::with_dimensions("test", 4);
+        col.insert("v1", &[1.0, 0.0, 0.0, 0.0], Some(json!({"tag": "a"})))
+            .unwrap();
+        col.insert("v2", &[0.0, 1.0, 0.0, 0.0], Some(json!({"tag": "b"})))
+            .unwrap();
+        col.insert("v3", &[0.0, 0.0, 1.0, 0.0], Some(json!({"tag": "a"})))
+            .unwrap();
+        col
+    }
+
+    // ── batch_search ────────────────────────────────────────────────────
+
+    #[test]
+    fn test_batch_search_single_query() {
+        let col = populated_collection();
+        let results = col.batch_search(&[vec![1.0, 0.0, 0.0, 0.0]], 2).unwrap();
+        assert_eq!(results.len(), 1);
+        assert!(!results[0].is_empty());
+    }
+
+    #[test]
+    fn test_batch_search_multiple_queries() {
+        let col = populated_collection();
+        let queries = vec![
+            vec![1.0, 0.0, 0.0, 0.0],
+            vec![0.0, 1.0, 0.0, 0.0],
+        ];
+        let results = col.batch_search(&queries, 3).unwrap();
+        assert_eq!(results.len(), 2);
+    }
+
+    #[test]
+    fn test_batch_search_empty_queries() {
+        let col = populated_collection();
+        let results = col.batch_search(&[], 5).unwrap();
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_batch_search_dimension_mismatch() {
+        let col = populated_collection();
+        let queries = vec![vec![1.0, 0.0]]; // wrong dims
+        let result = col.batch_search(&queries, 5);
+        assert!(matches!(result, Err(NeedleError::DimensionMismatch { .. })));
+    }
+
+    #[test]
+    fn test_batch_search_k_zero() {
+        let col = populated_collection();
+        let results = col
+            .batch_search(&[vec![1.0, 0.0, 0.0, 0.0]], 0)
+            .unwrap();
+        assert_eq!(results.len(), 1);
+        assert!(results[0].is_empty());
+    }
+
+    #[test]
+    fn test_batch_search_empty_collection() {
+        let col = Collection::with_dimensions("test", 4);
+        let results = col
+            .batch_search(&[vec![1.0, 0.0, 0.0, 0.0]], 5)
+            .unwrap();
+        assert_eq!(results.len(), 1);
+        assert!(results[0].is_empty());
+    }
+
+    // ── batch_search_with_filter ────────────────────────────────────────
+
+    #[test]
+    fn test_batch_search_with_filter_match() {
+        let col = populated_collection();
+        let filter = Filter::eq("tag", "a");
+        let results = col
+            .batch_search_with_filter(&[vec![1.0, 0.0, 0.0, 0.0]], 5, &filter)
+            .unwrap();
+        assert_eq!(results.len(), 1);
+        for r in &results[0] {
+            assert!(r.id == "v1" || r.id == "v3");
+        }
+    }
+
+    #[test]
+    fn test_batch_search_with_filter_no_match() {
+        let col = populated_collection();
+        let filter = Filter::eq("tag", "nonexistent");
+        let results = col
+            .batch_search_with_filter(&[vec![1.0, 0.0, 0.0, 0.0]], 5, &filter)
+            .unwrap();
+        assert_eq!(results.len(), 1);
+        assert!(results[0].is_empty());
+    }
+
+    #[test]
+    fn test_batch_search_with_filter_dimension_mismatch() {
+        let col = populated_collection();
+        let filter = Filter::eq("tag", "a");
+        let result = col.batch_search_with_filter(&[vec![1.0]], 5, &filter);
+        assert!(matches!(result, Err(NeedleError::DimensionMismatch { .. })));
+    }
+}
