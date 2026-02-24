@@ -245,6 +245,8 @@ pub struct Namespace {
     prefix: String,
     /// Usage statistics
     stats: Arc<NamespaceStats>,
+    /// Optional rate limiter (created from config.rate_limit_ops)
+    rate_limiter: Option<Arc<TokenBucketRateLimiter>>,
 }
 
 /// Namespace usage statistics
@@ -296,12 +298,14 @@ impl Namespace {
     /// Create a new namespace
     fn new(id: String, config: TenantConfig, db: Arc<Database>) -> Self {
         let prefix = format!("ns_{}__", id);
+        let rate_limiter = config.rate_limit_ops.map(|qps| Arc::new(TokenBucketRateLimiter::new(qps)));
         Self {
             id,
             config,
             db,
             prefix,
             stats: Arc::new(NamespaceStats::default()),
+            rate_limiter,
         }
     }
 
@@ -367,6 +371,7 @@ impl Namespace {
             inner: coll_ref,
             stats: Arc::clone(&self.stats),
             config: self.config.clone(),
+            rate_limiter: self.rate_limiter.clone(),
         })
     }
 
@@ -470,9 +475,22 @@ pub struct NamespaceCollection<'a> {
     inner: crate::database::CollectionRef<'a>,
     stats: Arc<NamespaceStats>,
     config: TenantConfig,
+    rate_limiter: Option<Arc<TokenBucketRateLimiter>>,
 }
 
 impl<'a> NamespaceCollection<'a> {
+    /// Check rate limit; returns error if exhausted.
+    fn check_rate_limit(&self) -> Result<()> {
+        if let Some(limiter) = &self.rate_limiter {
+            if !limiter.try_acquire() {
+                return Err(NeedleError::QuotaExceeded(
+                    "Rate limit exceeded".to_string(),
+                ));
+            }
+        }
+        Ok(())
+    }
+
     /// Insert a vector
     pub fn insert(
         &self,
@@ -480,6 +498,8 @@ impl<'a> NamespaceCollection<'a> {
         vector: &[f32],
         metadata: Option<serde_json::Value>,
     ) -> Result<()> {
+        self.check_rate_limit()?;
+
         if self.config.read_only {
             return Err(NeedleError::InvalidInput(
                 "Namespace is read-only".to_string(),
@@ -514,6 +534,7 @@ impl<'a> NamespaceCollection<'a> {
 
     /// Search vectors
     pub fn search(&self, query: &[f32], k: usize) -> Result<Vec<crate::collection::SearchResult>> {
+        self.check_rate_limit()?;
         self.stats.operations.fetch_add(1, Ordering::Relaxed);
         self.stats.searches.fetch_add(1, Ordering::Relaxed);
 
@@ -676,6 +697,49 @@ impl NamespaceManager {
     pub fn database(&self) -> &Database {
         &self.db
     }
+
+    /// Clone a namespace's data into a new namespace.
+    ///
+    /// Creates a new namespace and copies all collections from the source.
+    /// Each collection is re-created with the same config and vectors are
+    /// exported then imported. The new namespace gets its own independent
+    /// quota tracking.
+    ///
+    /// This is a logical copy, not a zero-copy operation at the storage
+    /// level, but it provides complete isolation for the cloned namespace.
+    pub fn clone_namespace(
+        &self,
+        source_id: &str,
+        target_id: &str,
+        target_config: Option<TenantConfig>,
+    ) -> Result<Arc<Namespace>> {
+        let source = self
+            .namespace(source_id)
+            .ok_or_else(|| NeedleError::NotFound(format!("Namespace '{source_id}'")))?;
+
+        let config = target_config.unwrap_or_else(|| source.config().clone());
+        let target = self.create_namespace(target_id, config)?;
+
+        // Copy all collections
+        let collections = source.list_collections();
+        for coll_name in &collections {
+            let src_prefixed = source.prefixed_name(coll_name);
+            let src_ref = self.db.collection(&src_prefixed)?;
+
+            if let Some(dims) = src_ref.dimensions() {
+                target.create_collection(coll_name, dims)?;
+
+                // Export entries from source and insert into target
+                let entries = self.db.export_internal(&src_prefixed)?;
+                let tgt_prefixed = target.prefixed_name(coll_name);
+                for (id, vector, metadata) in entries {
+                    self.db.insert_vec_internal(&tgt_prefixed, id, vector, metadata)?;
+                }
+            }
+        }
+
+        Ok(target)
+    }
 }
 
 impl Default for NamespaceManager {
@@ -766,6 +830,7 @@ impl Default for AccessControl {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn test_create_namespace() {
@@ -1006,5 +1071,92 @@ mod tests {
         };
         assert_eq!(report.total_vectors, 5000);
         assert_eq!(report.total_collections, 3);
+    }
+
+    #[test]
+    fn test_clone_namespace() {
+        let manager = NamespaceManager::new();
+        let ns = manager.create_namespace_default("source").unwrap();
+        ns.create_collection("docs", 4).unwrap();
+
+        let coll = ns.collection("docs").unwrap();
+        coll.insert("v1", &[1.0, 0.0, 0.0, 0.0], None).unwrap();
+        coll.insert("v2", &[0.0, 1.0, 0.0, 0.0], None).unwrap();
+
+        // Clone the namespace
+        let cloned = manager.clone_namespace("source", "target", None).unwrap();
+
+        // Verify cloned namespace has same collections
+        let cloned_colls = cloned.list_collections();
+        assert_eq!(cloned_colls.len(), 1);
+        assert!(cloned_colls.contains(&"docs".to_string()));
+
+        // Verify data was copied
+        let cloned_coll = cloned.collection("docs").unwrap();
+        let results = cloned_coll.search(&[1.0, 0.0, 0.0, 0.0], 10).unwrap();
+        assert_eq!(results.len(), 2);
+    }
+
+    #[test]
+    fn test_clone_namespace_not_found() {
+        let manager = NamespaceManager::new();
+        let result = manager.clone_namespace("nonexistent", "target", None);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_rate_limiter_integration() {
+        let mut config = TenantConfig::default();
+        config.rate_limit_ops = Some(2); // Only 2 ops/sec
+
+        let manager = NamespaceManager::new();
+        let ns = manager.create_namespace("rate_test", config).unwrap();
+        ns.create_collection("docs", 4).unwrap();
+
+        let coll = ns.collection("docs").unwrap();
+        // First two ops should succeed
+        coll.insert("v1", &[1.0, 0.0, 0.0, 0.0], None).unwrap();
+        coll.insert("v2", &[0.0, 1.0, 0.0, 0.0], None).unwrap();
+        // Third op should be rate-limited
+        let result = coll.insert("v3", &[0.0, 0.0, 1.0, 0.0], None);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_namespace_collection_filtered_search() {
+        let manager = NamespaceManager::new();
+        let ns = manager.create_namespace_default("tenant_a").unwrap();
+        ns.create_collection("docs", 4).unwrap();
+
+        let coll = ns.collection("docs").unwrap();
+        coll.insert("v1", &[1.0, 0.0, 0.0, 0.0], Some(json!({"cat": "science"}))).unwrap();
+        coll.insert("v2", &[0.0, 1.0, 0.0, 0.0], Some(json!({"cat": "cooking"}))).unwrap();
+        coll.insert("v3", &[0.9, 0.1, 0.0, 0.0], Some(json!({"cat": "science"}))).unwrap();
+
+        let filter = crate::metadata::Filter::eq("cat", "science");
+        let results = coll.search_with_filter(&[1.0, 0.0, 0.0, 0.0], 10, &filter).unwrap();
+
+        assert_eq!(results.len(), 2);
+        for r in &results {
+            let cat = r.metadata.as_ref().unwrap().get("cat").unwrap();
+            assert_eq!(cat, "science");
+        }
+    }
+
+    #[test]
+    fn test_namespace_quota_enforcement() {
+        let mut config = TenantConfig::default();
+        config.max_vectors = Some(2);
+
+        let manager = NamespaceManager::new();
+        let ns = manager.create_namespace("limited", config).unwrap();
+        ns.create_collection("docs", 4).unwrap();
+
+        let coll = ns.collection("docs").unwrap();
+        coll.insert("v1", &[1.0, 0.0, 0.0, 0.0], None).unwrap();
+        coll.insert("v2", &[0.0, 1.0, 0.0, 0.0], None).unwrap();
+        // Third insert should be blocked by quota
+        let result = coll.insert("v3", &[0.0, 0.0, 1.0, 0.0], None);
+        assert!(result.is_err());
     }
 }
