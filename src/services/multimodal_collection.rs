@@ -305,6 +305,57 @@ impl MultiModalCollectionService {
     pub fn registered_modalities(&self) -> Vec<&ModalityDef> {
         self.config.modalities.iter().collect()
     }
+
+    /// Batch insert multiple documents.
+    pub fn batch_insert(&mut self, docs: Vec<MultiModalDoc>) -> Result<usize> {
+        let mut count = 0;
+        for doc in docs {
+            self.insert(doc)?;
+            count += 1;
+        }
+        Ok(count)
+    }
+
+    /// Cross-modal search: query with one modality, find results across all modalities.
+    /// This searches the single specified modality and returns results including
+    /// information about other modalities present in each matching document.
+    pub fn cross_modal_search(
+        &self,
+        query_modality: Modality,
+        query_vector: &[f32],
+        k: usize,
+    ) -> Result<Vec<ServiceSearchResult>> {
+        self.search(MultiModalSearchQuery {
+            queries: vec![(query_modality, query_vector.to_vec())],
+            k,
+            weights: None,
+        })
+    }
+
+    /// Get summary statistics for the entire collection.
+    pub fn collection_stats(&self) -> MultiModalCollectionStats {
+        MultiModalCollectionStats {
+            total_documents: self.len(),
+            modality_stats: self.modality_stats.clone(),
+            registered_modalities: self
+                .config
+                .modalities
+                .iter()
+                .map(|m| m.modality.to_string())
+                .collect(),
+        }
+    }
+}
+
+/// Summary statistics for a multi-modal collection.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MultiModalCollectionStats {
+    /// Total document count.
+    pub total_documents: usize,
+    /// Per-modality statistics.
+    pub modality_stats: HashMap<String, ModalityStats>,
+    /// List of registered modality names.
+    pub registered_modalities: Vec<String>,
 }
 
 #[cfg(test)]
@@ -419,5 +470,63 @@ mod tests {
             .unwrap();
 
         assert_eq!(results.len(), 1);
+    }
+
+    #[test]
+    fn test_batch_insert() {
+        let mut svc = text_image_svc();
+        let docs = vec![
+            MultiModalDoc {
+                id: "d1".into(),
+                modalities: vec![(Modality::Text, vec![1.0; 8])],
+                metadata: None,
+            },
+            MultiModalDoc {
+                id: "d2".into(),
+                modalities: vec![(Modality::Text, vec![2.0; 8])],
+                metadata: None,
+            },
+        ];
+        let count = svc.batch_insert(docs).unwrap();
+        assert_eq!(count, 2);
+        assert_eq!(svc.len(), 2);
+    }
+
+    #[test]
+    fn test_cross_modal_search() {
+        let mut svc = text_image_svc();
+        svc.insert(MultiModalDoc {
+            id: "d1".into(),
+            modalities: vec![
+                (Modality::Text, vec![1.0; 8]),
+                (Modality::Image, vec![0.5; 8]),
+            ],
+            metadata: None,
+        })
+        .unwrap();
+
+        // Search with text, should find the document
+        let results = svc
+            .cross_modal_search(Modality::Text, &vec![1.0; 8], 5)
+            .unwrap();
+        assert_eq!(results.len(), 1);
+    }
+
+    #[test]
+    fn test_collection_stats() {
+        let mut svc = text_image_svc();
+        svc.insert(MultiModalDoc {
+            id: "d1".into(),
+            modalities: vec![
+                (Modality::Text, vec![1.0; 8]),
+                (Modality::Image, vec![0.5; 8]),
+            ],
+            metadata: None,
+        })
+        .unwrap();
+
+        let stats = svc.collection_stats();
+        assert_eq!(stats.total_documents, 1);
+        assert_eq!(stats.registered_modalities.len(), 2);
     }
 }

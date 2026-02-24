@@ -493,6 +493,36 @@ pub enum BackpressureSignal {
     Pause,
 }
 
+/// Pipeline health status.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum HealthStatus {
+    /// Pipeline is operating normally.
+    Healthy,
+    /// Pipeline is under pressure but still accepting records.
+    Degraded,
+    /// Pipeline is at capacity and may drop records.
+    Overloaded,
+}
+
+/// Pipeline health summary.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PipelineHealth {
+    /// Overall health status.
+    pub status: HealthStatus,
+    /// Buffer utilization (0.0–1.0).
+    pub buffer_usage: f32,
+    /// Number of records waiting in the buffer.
+    pub pending_records: usize,
+    /// Number of dead-letter entries.
+    pub dead_letter_count: usize,
+    /// Total records flushed.
+    pub total_flushed: u64,
+    /// Total records dead-lettered.
+    pub total_errors: u64,
+    /// Average flush latency in microseconds.
+    pub avg_flush_latency_us: u64,
+}
+
 // ── Pipeline ─────────────────────────────────────────────────────────────────
 
 /// Streaming ingestion pipeline with backpressure and exactly-once semantics.
@@ -704,6 +734,44 @@ impl<'a> StreamingIngestPipeline<'a> {
     /// Number of records currently buffered.
     pub fn pending_count(&self) -> usize {
         self.buffer.len()
+    }
+
+    /// Replay dead-letter entries back into the pipeline buffer for retry.
+    /// Returns the number of entries replayed.
+    pub fn replay_dead_letters(&mut self) -> usize {
+        let entries = std::mem::take(&mut self.dead_letters);
+        let count = entries.len();
+        for entry in entries {
+            let record = IngestRecord {
+                id: entry.record_id,
+                vector: entry.vector,
+                metadata: entry.metadata,
+                attempts: 0, // reset attempts for replay
+                sequence_id: None,
+            };
+            self.buffer.push_back(record);
+        }
+        count
+    }
+
+    /// Get a pipeline health summary.
+    pub fn health(&self) -> PipelineHealth {
+        let signal = self.backpressure_signal();
+        let buffer_usage =
+            self.buffer.len() as f32 / self.config.max_buffer_size as f32;
+        PipelineHealth {
+            status: match signal {
+                BackpressureSignal::Accept => HealthStatus::Healthy,
+                BackpressureSignal::Throttle => HealthStatus::Degraded,
+                BackpressureSignal::Pause => HealthStatus::Overloaded,
+            },
+            buffer_usage,
+            pending_records: self.buffer.len(),
+            dead_letter_count: self.dead_letters.len(),
+            total_flushed: self.stats.records_flushed,
+            total_errors: self.stats.records_dead_lettered,
+            avg_flush_latency_us: self.stats.avg_flush_latency_us,
+        }
     }
 
     fn dead_letter(&mut self, record: IngestRecord, error: &str) {
@@ -925,5 +993,55 @@ mod tests {
         let mut pipeline = StreamingIngestPipeline::new(&db, config).unwrap();
         let result = pipeline.tick().unwrap();
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_pipeline_health() {
+        let db = test_db();
+        let config = StreamingIngestConfig::builder()
+            .collection("test")
+            .batch_size(100)
+            .max_buffer_size(10)
+            .build();
+
+        let mut pipeline = StreamingIngestPipeline::new(&db, config).unwrap();
+        let health = pipeline.health();
+        assert_eq!(health.status, HealthStatus::Healthy);
+        assert_eq!(health.pending_records, 0);
+
+        // Fill buffer to trigger degraded
+        for i in 0..8 {
+            pipeline
+                .push(IngestRecord::new(format!("v{i}"), vec![1.0; 4]))
+                .unwrap();
+        }
+        let health = pipeline.health();
+        assert_eq!(health.status, HealthStatus::Degraded);
+    }
+
+    #[test]
+    fn test_replay_dead_letters() {
+        let db = test_db();
+        let config = StreamingIngestConfig::builder()
+            .collection("test")
+            .batch_size(100)
+            .max_retries(1)
+            .build();
+
+        let mut pipeline = StreamingIngestPipeline::new(&db, config).unwrap();
+
+        // Insert a record that causes dimension mismatch → dead letter
+        pipeline
+            .push(IngestRecord::new("bad", vec![1.0; 8])) // wrong dimensions
+            .unwrap();
+        pipeline.flush().unwrap();
+
+        assert_eq!(pipeline.dead_letters().len(), 1);
+
+        // Replay
+        let replayed = pipeline.replay_dead_letters();
+        assert_eq!(replayed, 1);
+        assert!(pipeline.dead_letters().is_empty());
+        assert_eq!(pipeline.pending_count(), 1);
     }
 }
