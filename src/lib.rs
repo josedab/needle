@@ -532,10 +532,11 @@ uniffi::setup_scaffolding!();
 
 /// Core collection types: config, stats, search results, dedup, query cache, and evaluation.
 pub use collection::{
-    BundleManifest, Collection, CollectionConfig, CollectionIter, CollectionStats,
+    BundleManifest, CdcConfig, CdcEvent, CdcEventType, CdcLog,
+    Collection, CollectionConfig, CollectionIter, CollectionStats,
     DedupGroup, DedupInsertResult, DedupPolicy, DedupScanResult,
     EvaluationReport, GroundTruthEntry, QueryCacheConfig, QueryCacheStats, QueryMetrics,
-    SearchExplain, SearchResult, SemanticDedupConfig, SemanticQueryCacheConfig,
+    SearchExplain, SearchResult, SemanticDedupConfig, SemanticQueryCacheConfig, TimeDecay,
 };
 /// Search parameters for configuring `CollectionRef` queries.
 pub use database::collection_ref::SearchParams;

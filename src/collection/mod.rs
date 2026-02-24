@@ -64,6 +64,9 @@ mod cache;
 mod search_methods;
 mod accessors;
 pub use accessors::CollectionIter;
+/// Collection-level change data capture with sequence numbers and cursor resumption.
+pub mod cdc;
+pub use cdc::{CdcConfig, CdcEvent, CdcEventType, CdcLog};
 
 use crate::error::{NeedleError, Result};
 use crate::hnsw::{HnswConfig, HnswIndex, VectorId};
@@ -148,11 +151,22 @@ pub struct Collection {
     /// Provenance tracking store
     #[serde(default)]
     provenance_store: crate::persistence::vector_versioning::ProvenanceStore,
+    /// CDC event log for change data capture
+    #[serde(default)]
+    cdc_log: Option<CdcLog>,
+    /// Cached embedded model runtime for text-to-vector operations.
+    /// Feature-gated behind `embedded-models`. Shared across insert_text/search_text calls.
+    /// Uses Box<dyn Any> to avoid requiring Debug on EmbeddingRuntime.
+    #[cfg(feature = "embedded-models")]
+    #[serde(skip)]
+    embedded_runtime: Option<Arc<crate::ml::embedded_runtime::EmbeddingRuntime>>,
 }
 
 /// Manifest for a portable collection bundle.
 ///
 /// Contains metadata about the bundled collection for validation during import.
+/// The `.needle-bundle` format includes data + index + schema + manifest with
+/// semver-based format versioning for forward/backward compatibility.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BundleManifest {
     /// Bundle format version
@@ -171,6 +185,22 @@ pub struct BundleManifest {
     pub created_at: u64,
     /// SHA-256 hash of the serialized collection data
     pub data_hash: Option<String>,
+    /// Semantic version string (e.g., "1.0.0") for bundle format compatibility.
+    #[serde(default = "default_bundle_semver")]
+    pub semver: String,
+    /// Optional description of the bundle contents.
+    #[serde(default)]
+    pub description: Option<String>,
+    /// Optional registry URI for pull-based distribution (e.g., "needle://registry/datasets/my-embeddings:v1").
+    #[serde(default)]
+    pub registry_uri: Option<String>,
+    /// Optional tags for discoverability.
+    #[serde(default)]
+    pub tags: Vec<String>,
+}
+
+fn default_bundle_semver() -> String {
+    "1.0.0".to_string()
 }
 
 impl Collection {
@@ -196,6 +226,9 @@ impl Collection {
             insertion_timestamps: HashMap::new(),
             semantic_cache,
             provenance_store: crate::persistence::vector_versioning::ProvenanceStore::new(),
+            cdc_log: None,
+            #[cfg(feature = "embedded-models")]
+            embedded_runtime: None,
             config,
         }
     }

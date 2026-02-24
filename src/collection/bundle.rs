@@ -231,6 +231,10 @@ impl Collection {
             embedding_model: None,
             created_at: Self::now_unix(),
             data_hash: Some(hash),
+            semver: "1.0.0".to_string(),
+            description: None,
+            registry_uri: None,
+            tags: Vec::new(),
         };
 
         let bundle = serde_json::json!({
@@ -557,10 +561,81 @@ mod tests {
             embedding_model: Some("ada-002".into()),
             created_at: 12345,
             data_hash: Some("abc123".into()),
+            semver: "1.0.0".into(),
+            description: Some("Test bundle".into()),
+            registry_uri: None,
+            tags: vec!["test".into()],
         };
         let json = serde_json::to_string(&manifest).unwrap();
         let restored: BundleManifest = serde_json::from_str(&json).unwrap();
         assert_eq!(restored.collection_name, "test");
         assert_eq!(restored.dimensions, 128);
+    }
+
+    /// Test backward compatibility: old manifests without new fields should deserialize correctly
+    #[test]
+    fn test_bundle_manifest_backward_compat() {
+        // Simulate an old manifest JSON without semver/description/registry_uri/tags
+        let old_json = r#"{
+            "format_version": 1,
+            "collection_name": "legacy",
+            "dimensions": 64,
+            "distance_function": "Cosine",
+            "vector_count": 42,
+            "embedding_model": null,
+            "created_at": 99999,
+            "data_hash": null
+        }"#;
+
+        let manifest: BundleManifest = serde_json::from_str(old_json).unwrap();
+        assert_eq!(manifest.collection_name, "legacy");
+        assert_eq!(manifest.dimensions, 64);
+        assert_eq!(manifest.semver, "1.0.0"); // default
+        assert!(manifest.description.is_none());
+        assert!(manifest.registry_uri.is_none());
+        assert!(manifest.tags.is_empty());
+    }
+
+    /// Test that new fields serialize and deserialize correctly
+    #[test]
+    fn test_bundle_manifest_new_fields_roundtrip() {
+        let manifest = BundleManifest {
+            format_version: 1,
+            collection_name: "rich".into(),
+            dimensions: 384,
+            distance_function: "Cosine".into(),
+            vector_count: 1000,
+            embedding_model: Some("all-MiniLM-L6-v2".into()),
+            created_at: 1700000000,
+            data_hash: Some("sha256hash".into()),
+            semver: "1.2.3".into(),
+            description: Some("A curated dataset of embeddings".into()),
+            registry_uri: Some("needle://registry/datasets/my-data:v1".into()),
+            tags: vec!["nlp".into(), "english".into(), "embeddings".into()],
+        };
+
+        let json = serde_json::to_string(&manifest).unwrap();
+        let restored: BundleManifest = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(restored.semver, "1.2.3");
+        assert_eq!(restored.description.unwrap(), "A curated dataset of embeddings");
+        assert_eq!(restored.registry_uri.unwrap(), "needle://registry/datasets/my-data:v1");
+        assert_eq!(restored.tags, vec!["nlp", "english", "embeddings"]);
+    }
+
+    /// Test export includes new manifest fields
+    #[test]
+    fn test_bundle_export_includes_semver() {
+        let col = make_collection(3);
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("versioned.bundle");
+
+        let manifest = col.export_bundle(&path).unwrap();
+        assert_eq!(manifest.semver, "1.0.0");
+        assert!(manifest.tags.is_empty());
+
+        // Validate the file can be re-read
+        let reread = Collection::validate_bundle_compatibility(&path).unwrap();
+        assert_eq!(reread.semver, "1.0.0");
     }
 }
