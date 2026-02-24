@@ -39,6 +39,13 @@ These examples require additional feature flags:
 
 > Tip: Each example file includes a "Run with:" comment at the top.
 
+## Configuration Examples
+
+| File | Description |
+|------|-------------|
+| `pipeline.yml` | CDC pipeline configuration for streaming database changes (Postgres, Kafka, MongoDB) into Needle collections. Run with `needle pipeline --config pipeline.yml` (requires `--features embedding-providers`). |
+| `claude_desktop_config.json` | Claude Desktop MCP server configuration for connecting AI agents to Needle via the [Model Context Protocol](../docs/mcp-integration.md). |
+
 ## Python Examples
 
 | Example | Description | Prerequisites |
