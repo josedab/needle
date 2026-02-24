@@ -172,6 +172,14 @@ impl Collection {
         // Record insertion timestamp for MVCC as_of queries
         self.insertion_timestamps.insert(internal_id, Self::now_unix());
 
+        // Record CDC event if enabled
+        {
+            let ext_id = self.metadata.get(internal_id).map(|e| e.external_id.clone());
+            if let Some(eid) = ext_id {
+                self.record_cdc_event(CdcEventType::Insert, &eid, None);
+            }
+        }
+
         // Invalidate cache since collection changed
         self.invalidate_cache();
 
@@ -199,6 +207,70 @@ impl Collection {
     ) -> Result<()> {
         let embedding = model.embed(text)?;
         self.insert_vec(id, embedding, metadata)
+    }
+
+    /// Insert a text document using the built-in embedded model runtime.
+    ///
+    /// Embeds `text` using the collection's embedded runtime (lazily initialized).
+    /// The runtime's output dimensions must match the collection's dimensions.
+    ///
+    /// # Feature gate
+    ///
+    /// Available with the `embedded-models` feature flag.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The text is empty
+    /// - Vector dimensions don't match the collection
+    /// - A vector with the same ID already exists
+    #[cfg(feature = "embedded-models")]
+    pub fn insert_text(
+        &mut self,
+        id: impl Into<String>,
+        text: &str,
+        metadata: Option<Value>,
+    ) -> Result<()> {
+        let embedding = self.get_or_init_runtime().embed_text(text)?;
+        self.insert_vec(id, embedding, metadata)
+    }
+
+    /// Search by text using the built-in embedded model runtime.
+    ///
+    /// Embeds the query text and performs a k-NN search.
+    #[cfg(feature = "embedded-models")]
+    pub fn search_text(&self, text: &str, k: usize) -> Result<Vec<SearchResult>> {
+        let runtime = self.embedded_runtime.as_ref().map_or_else(
+            || {
+                let rt = crate::ml::embedded_runtime::EmbeddingRuntime::new();
+                rt.embed_text(text)
+            },
+            |rt| rt.embed_text(text),
+        )?;
+        self.search(&runtime, k)
+    }
+
+    /// Lazily initialize and return the embedded runtime.
+    #[cfg(feature = "embedded-models")]
+    fn get_or_init_runtime(&mut self) -> &crate::ml::embedded_runtime::EmbeddingRuntime {
+        if self.embedded_runtime.is_none() {
+            self.embedded_runtime = Some(Arc::new(crate::ml::embedded_runtime::EmbeddingRuntime::new()));
+        }
+        self.embedded_runtime.as_ref().expect("just initialized")
+    }
+
+    /// Batch insert text documents using the built-in embedded model runtime.
+    #[cfg(feature = "embedded-models")]
+    pub fn insert_texts_batch(
+        &mut self,
+        items: Vec<(String, String, Option<Value>)>,
+    ) -> Result<()> {
+        let runtime = self.get_or_init_runtime();
+        let texts: Vec<&str> = items.iter().map(|(_, t, _)| t.as_str()).collect();
+        let embeddings = runtime.embed_batch(&texts)?;
+        let ids = items.iter().map(|(id, _, _)| id.clone()).collect();
+        let metadata = items.into_iter().map(|(_, _, m)| m).collect();
+        self.insert_batch(ids, embeddings, metadata)
     }
 
     /// Insert multiple text documents in batch, embedding them with the given model.
@@ -527,5 +599,79 @@ mod tests {
         // Near-duplicate (identical vector) should be rejected
         let result = col.insert("v2", &[1.0, 0.0, 0.0, 0.0], None);
         assert!(result.is_err() || col.len() == 1);
+    }
+
+    #[cfg(feature = "embedded-models")]
+    #[test]
+    fn test_insert_text_basic() {
+        // Default embedded runtime uses MiniLM (384 dims)
+        let mut col = Collection::with_dimensions("test", 384);
+        col.insert_text("doc1", "Hello world", None).unwrap();
+        assert_eq!(col.len(), 1);
+        assert!(col.contains("doc1"));
+    }
+
+    #[cfg(feature = "embedded-models")]
+    #[test]
+    fn test_insert_text_deterministic() {
+        let mut col = Collection::with_dimensions("test", 384);
+        col.insert_text("doc1", "Hello world", None).unwrap();
+
+        // Same text should produce same embedding (deterministic mock)
+        let (vec1, _) = col.get("doc1").unwrap();
+        let mut col2 = Collection::with_dimensions("test2", 384);
+        col2.insert_text("doc2", "Hello world", None).unwrap();
+        let (vec2, _) = col2.get("doc2").unwrap();
+        assert_eq!(vec1, vec2);
+    }
+
+    #[cfg(feature = "embedded-models")]
+    #[test]
+    fn test_insert_text_empty_rejects() {
+        let mut col = Collection::with_dimensions("test", 384);
+        let result = col.insert_text("doc1", "", None);
+        assert!(result.is_err());
+    }
+
+    #[cfg(feature = "embedded-models")]
+    #[test]
+    fn test_insert_text_duplicate_rejects() {
+        let mut col = Collection::with_dimensions("test", 384);
+        col.insert_text("doc1", "Hello", None).unwrap();
+        let result = col.insert_text("doc1", "World", None);
+        assert!(result.is_err());
+    }
+
+    #[cfg(feature = "embedded-models")]
+    #[test]
+    fn test_search_text() {
+        let mut col = Collection::with_dimensions("test", 384);
+        col.insert_text("doc1", "machine learning", None).unwrap();
+        col.insert_text("doc2", "cooking recipes", None).unwrap();
+        let results = col.search_text("machine learning", 2).unwrap();
+        assert_eq!(results.len(), 2);
+        // Same text should be closest match
+        assert_eq!(results[0].id, "doc1");
+    }
+
+    #[cfg(feature = "embedded-models")]
+    #[test]
+    fn test_insert_texts_batch() {
+        let mut col = Collection::with_dimensions("test", 384);
+        let items = vec![
+            ("d1".to_string(), "Hello world".to_string(), None),
+            ("d2".to_string(), "Goodbye world".to_string(), None),
+        ];
+        col.insert_texts_batch(items).unwrap();
+        assert_eq!(col.len(), 2);
+    }
+
+    #[cfg(feature = "embedded-models")]
+    #[test]
+    fn test_insert_text_dimension_mismatch() {
+        // Default runtime outputs 384 dims; collection has 128 → should error
+        let mut col = Collection::with_dimensions("test", 128);
+        let result = col.insert_text("doc1", "Hello world", None);
+        assert!(result.is_err(), "insert_text should fail when model output dims != collection dims");
     }
 }

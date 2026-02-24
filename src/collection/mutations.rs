@@ -34,6 +34,9 @@ impl Collection {
         self.index.delete(internal_id)?;
         self.provenance_store.remove(id);
 
+        // Record CDC event
+        self.record_cdc_event(CdcEventType::Delete, id, None);
+
         // Invalidate cache since collection changed
         self.invalidate_cache();
 
@@ -137,6 +140,9 @@ impl Collection {
         self.index
             .insert(internal_id, vector, self.vectors.as_slice())?;
 
+        // Record CDC event
+        self.record_cdc_event(CdcEventType::Update, id, None);
+
         // Invalidate cache since collection changed
         self.invalidate_cache();
 
@@ -209,5 +215,161 @@ impl Collection {
             self.insert(id, vector, metadata)?;
             Ok(true) // Inserted new
         }
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use crate::collection::Collection;
+    use crate::error::NeedleError;
+    use serde_json::json;
+
+    // ── Delete ───────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_delete_existing() {
+        let mut col = Collection::with_dimensions("test", 4);
+        col.insert("v1", &[1.0, 0.0, 0.0, 0.0], None).unwrap();
+        assert!(col.delete("v1").unwrap());
+        assert_eq!(col.len(), 0);
+    }
+
+    #[test]
+    fn test_delete_not_found() {
+        let mut col = Collection::with_dimensions("test", 4);
+        assert!(!col.delete("nonexistent").unwrap());
+    }
+
+    #[test]
+    fn test_delete_idempotent() {
+        let mut col = Collection::with_dimensions("test", 4);
+        col.insert("v1", &[1.0, 0.0, 0.0, 0.0], None).unwrap();
+        assert!(col.delete("v1").unwrap());
+        assert!(!col.delete("v1").unwrap());
+    }
+
+    // ── Delete batch ────────────────────────────────────────────────────
+
+    #[test]
+    fn test_delete_batch_basic() {
+        let mut col = Collection::with_dimensions("test", 4);
+        col.insert("a", &[1.0, 0.0, 0.0, 0.0], None).unwrap();
+        col.insert("b", &[0.0, 1.0, 0.0, 0.0], None).unwrap();
+        let deleted = col.delete_batch(&["a", "b", "nonexistent"]).unwrap();
+        assert_eq!(deleted, 2);
+        assert_eq!(col.len(), 0);
+    }
+
+    #[test]
+    fn test_delete_batch_empty() {
+        let mut col = Collection::with_dimensions("test", 4);
+        let deleted = col.delete_batch(&Vec::<String>::new()).unwrap();
+        assert_eq!(deleted, 0);
+    }
+
+    #[test]
+    fn test_delete_batch_all_missing() {
+        let mut col = Collection::with_dimensions("test", 4);
+        let deleted = col.delete_batch(&["x", "y"]).unwrap();
+        assert_eq!(deleted, 0);
+    }
+
+    // ── Update ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_update_basic() {
+        let mut col = Collection::with_dimensions("test", 4);
+        col.insert("v1", &[1.0, 0.0, 0.0, 0.0], None).unwrap();
+        col.update("v1", &[0.0, 1.0, 0.0, 0.0], Some(json!({"k": "v"})))
+            .unwrap();
+        let (vec, meta) = col.get("v1").unwrap();
+        assert_eq!(vec, &[0.0, 1.0, 0.0, 0.0]);
+        assert!(meta.is_some());
+    }
+
+    #[test]
+    fn test_update_not_found() {
+        let mut col = Collection::with_dimensions("test", 4);
+        let result = col.update("missing", &[1.0, 0.0, 0.0, 0.0], None);
+        assert!(matches!(result, Err(NeedleError::VectorNotFound(_))));
+    }
+
+    #[test]
+    fn test_update_dimension_mismatch() {
+        let mut col = Collection::with_dimensions("test", 4);
+        col.insert("v1", &[1.0, 0.0, 0.0, 0.0], None).unwrap();
+        let result = col.update("v1", &[1.0, 0.0], None);
+        assert!(matches!(result, Err(NeedleError::DimensionMismatch { .. })));
+    }
+
+    #[test]
+    fn test_update_searchable_after() {
+        let mut col = Collection::with_dimensions("test", 4);
+        col.insert("v1", &[1.0, 0.0, 0.0, 0.0], None).unwrap();
+        col.insert("v2", &[0.0, 1.0, 0.0, 0.0], None).unwrap();
+        col.update("v1", &[0.0, 0.99, 0.0, 0.0], None).unwrap();
+        let results = col.search(&[0.0, 1.0, 0.0, 0.0], 1).unwrap();
+        // v1 is now closer to the query than before
+        assert!(!results.is_empty());
+    }
+
+    // ── Update metadata ─────────────────────────────────────────────────
+
+    #[test]
+    fn test_update_metadata_basic() {
+        let mut col = Collection::with_dimensions("test", 4);
+        col.insert("v1", &[1.0, 0.0, 0.0, 0.0], None).unwrap();
+        col.update_metadata("v1", Some(json!({"new": true})))
+            .unwrap();
+        let (_, meta) = col.get("v1").unwrap();
+        assert_eq!(meta.unwrap()["new"], true);
+    }
+
+    #[test]
+    fn test_update_metadata_not_found() {
+        let mut col = Collection::with_dimensions("test", 4);
+        let result = col.update_metadata("missing", Some(json!({})));
+        assert!(matches!(result, Err(NeedleError::VectorNotFound(_))));
+    }
+
+    #[test]
+    fn test_update_metadata_to_none() {
+        let mut col = Collection::with_dimensions("test", 4);
+        col.insert("v1", &[1.0, 0.0, 0.0, 0.0], Some(json!({"k": 1})))
+            .unwrap();
+        col.update_metadata("v1", None).unwrap();
+        let (_, meta) = col.get("v1").unwrap();
+        assert!(meta.is_none());
+    }
+
+    // ── Upsert ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_upsert_insert_path() {
+        let mut col = Collection::with_dimensions("test", 4);
+        let is_new = col.upsert("v1", &[1.0, 0.0, 0.0, 0.0], None).unwrap();
+        assert!(is_new);
+        assert_eq!(col.len(), 1);
+    }
+
+    #[test]
+    fn test_upsert_update_path() {
+        let mut col = Collection::with_dimensions("test", 4);
+        col.insert("v1", &[1.0, 0.0, 0.0, 0.0], None).unwrap();
+        let is_new = col
+            .upsert("v1", &[0.0, 1.0, 0.0, 0.0], Some(json!({"v": 2})))
+            .unwrap();
+        assert!(!is_new);
+        assert_eq!(col.len(), 1);
+        let (vec, _) = col.get("v1").unwrap();
+        assert_eq!(vec, &[0.0, 1.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn test_upsert_dimension_mismatch() {
+        let mut col = Collection::with_dimensions("test", 4);
+        let result = col.upsert("v1", &[1.0, 0.0], None);
+        assert!(result.is_err());
     }
 }

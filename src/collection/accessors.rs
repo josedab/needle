@@ -257,3 +257,298 @@ impl<'a> IntoIterator for &'a Collection {
         CollectionIter::new(self)
     }
 }
+
+// ── CDC accessors ────────────────────────────────────────────────────────────
+
+impl Collection {
+    /// Enable CDC (change data capture) on this collection.
+    pub fn enable_cdc(&mut self, max_events: usize) {
+        self.cdc_log = Some(CdcLog::new(max_events));
+    }
+
+    /// Disable CDC and discard the event log.
+    pub fn disable_cdc(&mut self) {
+        self.cdc_log = None;
+    }
+
+    /// Check whether CDC is enabled.
+    pub fn cdc_enabled(&self) -> bool {
+        self.cdc_log.is_some()
+    }
+
+    /// Get CDC events after the given cursor (sequence number), up to `limit`.
+    pub fn cdc_events_since(&self, after_sequence: u64, limit: usize) -> Vec<&CdcEvent> {
+        self.cdc_log
+            .as_ref()
+            .map_or_else(Vec::new, |log| log.events_since(after_sequence, limit))
+    }
+
+    /// Get the current CDC head sequence number.
+    pub fn cdc_head_sequence(&self) -> u64 {
+        self.cdc_log.as_ref().map_or(0, |log| log.head_sequence())
+    }
+
+    /// Compact CDC events older than `before_sequence`.
+    pub fn cdc_compact(&mut self, before_sequence: u64) {
+        if let Some(log) = &mut self.cdc_log {
+            log.compact(before_sequence);
+        }
+    }
+
+    /// Record a CDC event (internal helper called by insert/update/delete).
+    pub(crate) fn record_cdc_event(
+        &mut self,
+        event_type: CdcEventType,
+        vector_id: &str,
+        metadata: Option<serde_json::Value>,
+    ) {
+        if let Some(log) = &mut self.cdc_log {
+            log.append(event_type, vector_id, metadata);
+        }
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use crate::collection::Collection;
+    use crate::metadata::Filter;
+    use serde_json::json;
+
+    fn populated_collection() -> Collection {
+        let mut col = Collection::with_dimensions("test", 4);
+        col.insert("v1", &[1.0, 0.0, 0.0, 0.0], Some(json!({"tag": "a"})))
+            .unwrap();
+        col.insert("v2", &[0.0, 1.0, 0.0, 0.0], Some(json!({"tag": "b"})))
+            .unwrap();
+        col.insert("v3", &[0.0, 0.0, 1.0, 0.0], None).unwrap();
+        col
+    }
+
+    // ── get ─────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_get_existing() {
+        let col = populated_collection();
+        let (vec, meta) = col.get("v1").unwrap();
+        assert_eq!(vec, &[1.0, 0.0, 0.0, 0.0]);
+        assert!(meta.is_some());
+    }
+
+    #[test]
+    fn test_get_nonexistent() {
+        let col = populated_collection();
+        assert!(col.get("missing").is_none());
+    }
+
+    #[test]
+    fn test_get_no_metadata() {
+        let col = populated_collection();
+        let (_, meta) = col.get("v3").unwrap();
+        assert!(meta.is_none());
+    }
+
+    // ── contains ────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_contains_true() {
+        let col = populated_collection();
+        assert!(col.contains("v1"));
+    }
+
+    #[test]
+    fn test_contains_false() {
+        let col = populated_collection();
+        assert!(!col.contains("missing"));
+    }
+
+    #[test]
+    fn test_contains_empty() {
+        let col = Collection::with_dimensions("test", 4);
+        assert!(!col.contains("anything"));
+    }
+
+    // ── stats ───────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_stats_empty() {
+        let col = Collection::with_dimensions("test", 4);
+        let stats = col.stats();
+        assert_eq!(stats.vector_count, 0);
+        assert_eq!(stats.dimensions, 4);
+        assert_eq!(stats.name, "test");
+    }
+
+    #[test]
+    fn test_stats_populated() {
+        let col = populated_collection();
+        let stats = col.stats();
+        assert_eq!(stats.vector_count, 3);
+        assert_eq!(stats.dimensions, 4);
+        assert!(stats.total_memory_bytes > 0);
+    }
+
+    // ── count ───────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_count_no_filter() {
+        let col = populated_collection();
+        assert_eq!(col.count(None), 3);
+    }
+
+    #[test]
+    fn test_count_with_filter() {
+        let col = populated_collection();
+        let filter = Filter::eq("tag", "a");
+        assert_eq!(col.count(Some(&filter)), 1);
+    }
+
+    #[test]
+    fn test_count_filter_no_match() {
+        let col = populated_collection();
+        let filter = Filter::eq("tag", "nonexistent");
+        assert_eq!(col.count(Some(&filter)), 0);
+    }
+
+    #[test]
+    fn test_count_empty() {
+        let col = Collection::with_dimensions("test", 4);
+        assert_eq!(col.count(None), 0);
+    }
+
+    // ── deleted_count ───────────────────────────────────────────────────
+
+    #[test]
+    fn test_deleted_count_none() {
+        let col = populated_collection();
+        assert_eq!(col.deleted_count(), 0);
+    }
+
+    #[test]
+    fn test_deleted_count_after_delete() {
+        let mut col = populated_collection();
+        col.delete("v1").unwrap();
+        assert_eq!(col.deleted_count(), 1);
+    }
+
+    // ── iter ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_iter() {
+        let col = populated_collection();
+        let items: Vec<_> = col.iter().collect();
+        assert_eq!(items.len(), 3);
+    }
+
+    #[test]
+    fn test_iter_empty() {
+        let col = Collection::with_dimensions("test", 4);
+        let items: Vec<_> = col.iter().collect();
+        assert!(items.is_empty());
+    }
+
+    #[test]
+    fn test_iter_skips_deleted() {
+        let mut col = populated_collection();
+        col.delete("v1").unwrap();
+        let items: Vec<_> = col.iter().collect();
+        assert_eq!(items.len(), 2);
+    }
+
+    // ── ids ─────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_ids() {
+        let col = populated_collection();
+        let ids: Vec<_> = col.ids().collect();
+        assert_eq!(ids.len(), 3);
+    }
+
+    #[test]
+    fn test_ids_skips_deleted() {
+        let mut col = populated_collection();
+        col.delete("v2").unwrap();
+        let ids: Vec<_> = col.ids().collect();
+        assert_eq!(ids.len(), 2);
+        assert!(!ids.contains(&"v2"));
+    }
+
+    // ── compact ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_compact_no_deletions() {
+        let mut col = populated_collection();
+        let removed = col.compact().unwrap();
+        assert_eq!(removed, 0);
+    }
+
+    #[test]
+    fn test_compact_after_delete() {
+        let mut col = populated_collection();
+        col.delete("v1").unwrap();
+        let removed = col.compact().unwrap();
+        assert!(removed > 0);
+        assert_eq!(col.len(), 2);
+        assert!(col.get("v2").is_some());
+        assert!(col.get("v3").is_some());
+    }
+
+    // ── needs_compaction ────────────────────────────────────────────────
+
+    #[test]
+    fn test_needs_compaction_false() {
+        let col = populated_collection();
+        assert!(!col.needs_compaction(0.5));
+    }
+
+    // ── CollectionIter (IntoIterator) ───────────────────────────────────
+
+    #[test]
+    fn test_into_iter() {
+        let col = populated_collection();
+        let items: Vec<_> = (&col).into_iter().collect();
+        assert_eq!(items.len(), 3);
+    }
+
+    #[test]
+    fn test_collection_iter_size_hint() {
+        let col = populated_collection();
+        let iter = (&col).into_iter();
+        let (_, upper) = iter.size_hint();
+        assert!(upper.is_some());
+    }
+
+    // ── CDC accessors ───────────────────────────────────────────────────
+
+    #[test]
+    fn test_cdc_disabled_by_default() {
+        let col = Collection::with_dimensions("test", 4);
+        assert!(!col.cdc_enabled());
+    }
+
+    #[test]
+    fn test_cdc_enable_disable() {
+        let mut col = Collection::with_dimensions("test", 4);
+        col.enable_cdc(100);
+        assert!(col.cdc_enabled());
+        col.disable_cdc();
+        assert!(!col.cdc_enabled());
+    }
+
+    #[test]
+    fn test_cdc_events_tracked() {
+        let mut col = Collection::with_dimensions("test", 4);
+        col.enable_cdc(100);
+        col.insert("v1", &[1.0, 0.0, 0.0, 0.0], None).unwrap();
+        assert!(col.cdc_head_sequence() > 0);
+        let events = col.cdc_events_since(0, 10);
+        assert!(!events.is_empty());
+    }
+
+    #[test]
+    fn test_cdc_events_since_no_cdc() {
+        let col = Collection::with_dimensions("test", 4);
+        let events = col.cdc_events_since(0, 10);
+        assert!(events.is_empty());
+    }
+}
