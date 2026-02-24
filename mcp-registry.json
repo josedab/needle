@@ -50,6 +50,18 @@
     {
       "name": "save_database",
       "description": "Persist all changes to disk"
+    },
+    {
+      "name": "remember",
+      "description": "Store a memory with embedding vector for AI agent long-term recall"
+    },
+    {
+      "name": "recall",
+      "description": "Retrieve relevant memories by vector similarity with optional tier/importance filtering"
+    },
+    {
+      "name": "forget",
+      "description": "Delete a specific memory by ID"
     }
   ],
   "resources": [

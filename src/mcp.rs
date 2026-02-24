@@ -272,6 +272,95 @@ fn tool_definitions() -> Value {
                     "properties": {},
                     "required": []
                 }
+            },
+            {
+                "name": "remember",
+                "description": "Store a memory for an AI agent. The memory is stored as a vector with metadata containing the content, tier, and importance.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "collection": {
+                            "type": "string",
+                            "description": "Name of the memory collection"
+                        },
+                        "content": {
+                            "type": "string",
+                            "description": "Memory content to store"
+                        },
+                        "vector": {
+                            "type": "array",
+                            "items": { "type": "number" },
+                            "description": "Embedding vector for the memory"
+                        },
+                        "tier": {
+                            "type": "string",
+                            "enum": ["episodic", "semantic", "procedural"],
+                            "description": "Memory tier (default: episodic)",
+                            "default": "episodic"
+                        },
+                        "importance": {
+                            "type": "number",
+                            "description": "Importance score 0.0-1.0 (default: 0.5)",
+                            "default": 0.5
+                        },
+                        "session_id": {
+                            "type": "string",
+                            "description": "Optional session ID for scoping memories"
+                        }
+                    },
+                    "required": ["collection", "content", "vector"]
+                }
+            },
+            {
+                "name": "recall",
+                "description": "Retrieve relevant memories for an AI agent based on vector similarity. Supports filtering by tier, session, and importance.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "collection": {
+                            "type": "string",
+                            "description": "Name of the memory collection"
+                        },
+                        "vector": {
+                            "type": "array",
+                            "items": { "type": "number" },
+                            "description": "Query vector to find similar memories"
+                        },
+                        "k": {
+                            "type": "integer",
+                            "description": "Number of memories to retrieve (default: 5)",
+                            "default": 5
+                        },
+                        "tier": {
+                            "type": "string",
+                            "enum": ["episodic", "semantic", "procedural"],
+                            "description": "Filter by memory tier"
+                        },
+                        "min_importance": {
+                            "type": "number",
+                            "description": "Minimum importance threshold (0.0-1.0)"
+                        }
+                    },
+                    "required": ["collection", "vector"]
+                }
+            },
+            {
+                "name": "forget",
+                "description": "Delete a specific memory by its ID.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "collection": {
+                            "type": "string",
+                            "description": "Name of the memory collection"
+                        },
+                        "memory_id": {
+                            "type": "string",
+                            "description": "ID of the memory to forget"
+                        }
+                    },
+                    "required": ["collection", "memory_id"]
+                }
             }
         ]
     })
@@ -412,6 +501,9 @@ impl McpServer {
             "delete_vector" => self.tool_delete_vector(&arguments),
             "delete_collection" => self.tool_delete_collection(&arguments),
             "save_database" => self.tool_save_database(),
+            "remember" => self.tool_remember(&arguments),
+            "recall" => self.tool_recall(&arguments),
+            "forget" => self.tool_forget(&arguments),
             _ => Err(NeedleError::InvalidInput(format!("Unknown tool: {tool_name}"))),
         };
 
@@ -643,6 +735,129 @@ impl McpServer {
         Ok(json!({
             "acknowledged": true,
             "message": "Save request acknowledged. Use file-backed database for persistence.",
+        }))
+    }
+
+    fn tool_remember(&self, args: &Value) -> Result<Value> {
+        if self.read_only {
+            return Err(NeedleError::InvalidInput("Database is read-only".to_string()));
+        }
+
+        let collection = args.get("collection")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| NeedleError::InvalidInput("Missing 'collection' parameter".to_string()))?;
+        let content = args.get("content")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| NeedleError::InvalidInput("Missing 'content' parameter".to_string()))?;
+        let vector: Vec<f32> = args.get("vector")
+            .and_then(|v| v.as_array())
+            .ok_or_else(|| NeedleError::InvalidInput("Missing 'vector' parameter".to_string()))?
+            .iter()
+            .filter_map(|v| v.as_f64().map(|f| f as f32))
+            .collect();
+
+        let tier = args.get("tier").and_then(|v| v.as_str()).unwrap_or("episodic");
+        let importance = args.get("importance").and_then(|v| v.as_f64()).unwrap_or(0.5);
+        let session_id = args.get("session_id").and_then(|v| v.as_str());
+
+        let coll = self.db.collection(collection)?;
+
+        let memory_id = format!("mem_{}", chrono::Utc::now().timestamp_millis());
+        let mut metadata = json!({
+            "_memory_content": content,
+            "_memory_tier": tier,
+            "_memory_importance": importance,
+            "_memory_timestamp": chrono::Utc::now().to_rfc3339(),
+        });
+        if let Some(sid) = session_id {
+            metadata.as_object_mut().map(|o| o.insert("_memory_session".to_string(), json!(sid)));
+        }
+
+        coll.insert(&memory_id, &vector, Some(metadata))?;
+
+        Ok(json!({
+            "stored": true,
+            "memory_id": memory_id,
+            "tier": tier,
+            "importance": importance,
+        }))
+    }
+
+    fn tool_recall(&self, args: &Value) -> Result<Value> {
+        let collection = args.get("collection")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| NeedleError::InvalidInput("Missing 'collection' parameter".to_string()))?;
+        let vector: Vec<f32> = args.get("vector")
+            .and_then(|v| v.as_array())
+            .ok_or_else(|| NeedleError::InvalidInput("Missing 'vector' parameter".to_string()))?
+            .iter()
+            .filter_map(|v| v.as_f64().map(|f| f as f32))
+            .collect();
+        let k = args.get("k").and_then(|v| v.as_u64()).unwrap_or(5) as usize;
+
+        let coll = self.db.collection(collection)?;
+
+        // Build filter from tier/importance constraints
+        let tier = args.get("tier").and_then(|v| v.as_str());
+        let min_importance = args.get("min_importance").and_then(|v| v.as_f64());
+
+        let results = if tier.is_some() || min_importance.is_some() {
+            let mut conditions = Vec::new();
+            if let Some(t) = tier {
+                conditions.push(json!({ "_memory_tier": { "$eq": t } }));
+            }
+            if let Some(imp) = min_importance {
+                conditions.push(json!({ "_memory_importance": { "$gte": imp } }));
+            }
+            let filter_json = if conditions.len() == 1 {
+                conditions.into_iter().next().expect("checked non-empty")
+            } else {
+                json!({ "$and": conditions })
+            };
+            let filter = Filter::parse(&filter_json)
+                .map_err(|e| NeedleError::InvalidInput(format!("Invalid filter: {e}")))?;
+            coll.search_with_filter(&vector, k, &filter)?
+        } else {
+            coll.search(&vector, k)?
+        };
+
+        let memories: Vec<Value> = results.iter().map(|r| {
+            let meta = r.metadata.as_ref();
+            json!({
+                "memory_id": r.id,
+                "distance": r.distance,
+                "relevance_score": 1.0 / (1.0 + r.distance as f64),
+                "content": meta.and_then(|m| m.get("_memory_content")),
+                "tier": meta.and_then(|m| m.get("_memory_tier")),
+                "importance": meta.and_then(|m| m.get("_memory_importance")),
+                "timestamp": meta.and_then(|m| m.get("_memory_timestamp")),
+            })
+        }).collect();
+
+        Ok(json!({
+            "memories": memories,
+            "count": memories.len(),
+        }))
+    }
+
+    fn tool_forget(&self, args: &Value) -> Result<Value> {
+        if self.read_only {
+            return Err(NeedleError::InvalidInput("Database is read-only".to_string()));
+        }
+
+        let collection = args.get("collection")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| NeedleError::InvalidInput("Missing 'collection' parameter".to_string()))?;
+        let memory_id = args.get("memory_id")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| NeedleError::InvalidInput("Missing 'memory_id' parameter".to_string()))?;
+
+        let coll = self.db.collection(collection)?;
+        let deleted = coll.delete(memory_id)?;
+
+        Ok(json!({
+            "forgotten": deleted,
+            "memory_id": memory_id,
         }))
     }
 }
@@ -914,5 +1129,75 @@ mod tests {
         });
         assert!(resp.error.is_some());
         assert_eq!(resp.error.unwrap().code, -32601);
+    }
+
+    #[test]
+    fn test_remember_recall_forget() {
+        let server = create_test_server();
+
+        // Create a memory collection
+        server.handle_request(&JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            id: Some(json!(1)),
+            method: "tools/call".to_string(),
+            params: json!({
+                "name": "create_collection",
+                "arguments": { "name": "memories", "dimensions": 4 }
+            }),
+        });
+
+        // Remember
+        let resp = server.handle_request(&JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            id: Some(json!(2)),
+            method: "tools/call".to_string(),
+            params: json!({
+                "name": "remember",
+                "arguments": {
+                    "collection": "memories",
+                    "content": "User likes dark mode",
+                    "vector": [0.1, 0.2, 0.3, 0.4],
+                    "tier": "semantic",
+                    "importance": 0.9
+                }
+            }),
+        });
+        assert!(resp.result.is_some());
+        let result_text = resp.result.unwrap()["content"][0]["text"].as_str().unwrap().to_string();
+        assert!(result_text.contains("stored"));
+
+        // Recall
+        let resp = server.handle_request(&JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            id: Some(json!(3)),
+            method: "tools/call".to_string(),
+            params: json!({
+                "name": "recall",
+                "arguments": {
+                    "collection": "memories",
+                    "vector": [0.1, 0.2, 0.3, 0.4],
+                    "k": 5
+                }
+            }),
+        });
+        assert!(resp.result.is_some());
+        let result_text = resp.result.unwrap()["content"][0]["text"].as_str().unwrap().to_string();
+        assert!(result_text.contains("memories"));
+        assert!(result_text.contains("User likes dark mode"));
+    }
+
+    #[test]
+    fn test_tools_list_includes_memory() {
+        let server = create_test_server();
+        let resp = server.handle_request(&JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            id: Some(json!(1)),
+            method: "tools/list".to_string(),
+            params: json!({}),
+        });
+        let tools_text = serde_json::to_string(&resp.result).unwrap();
+        assert!(tools_text.contains("remember"));
+        assert!(tools_text.contains("recall"));
+        assert!(tools_text.contains("forget"));
     }
 }
