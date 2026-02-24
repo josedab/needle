@@ -92,3 +92,6 @@ pub mod triage_report;
 pub mod unwrap_audit;
 pub mod vscode_extension;
 pub mod ws_protocol;
+
+// ── Next-Gen v8 Services ─────────────────────────────────────────────────────
+pub mod hnsw_compactor;

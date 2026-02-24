@@ -192,6 +192,9 @@ pub use services::{
     triage_report, unwrap_audit, vscode_extension, ws_protocol,
 };
 
+// ── Next-Gen v8 Services ─────────────────────────────────────────────────────
+pub use services::hnsw_compactor;
+
 // ── Experimental / Advanced ──────────────────────────────────────────────────
 // Features under active development. APIs may change without notice.
 // Enable experimental modules with: --features experimental
