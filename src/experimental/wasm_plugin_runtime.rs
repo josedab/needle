@@ -515,6 +515,48 @@ impl WasmPluginRuntime {
         stats
     }
 
+    /// Hot-reload a plugin by replacing its WASM binary without downtime.
+    /// The old plugin is unloaded and the new one loaded atomically.
+    pub fn hot_reload(
+        &mut self,
+        name: &str,
+        wasm_bytes: &[u8],
+        manifest: PluginManifest,
+    ) -> Result<()> {
+        if wasm_bytes.len() > self.config.max_memory_bytes {
+            return Err(NeedleError::CapacityExceeded(format!(
+                "WASM binary ({} bytes) exceeds memory limit ({} bytes)",
+                wasm_bytes.len(),
+                self.config.max_memory_bytes
+            )));
+        }
+
+        // Preserve invocation stats if the plugin already exists
+        let (prev_invocations, prev_time) = self
+            .plugins
+            .get(name)
+            .map(|p| (p.invocations, p.total_time))
+            .unwrap_or((0, Duration::ZERO));
+
+        self.plugins.insert(
+            name.to_string(),
+            LoadedPlugin {
+                manifest,
+                wasm_bytes: wasm_bytes.to_vec(),
+                enabled: true,
+                invocations: prev_invocations,
+                total_time: prev_time,
+                avg_time_us: if prev_invocations > 0 {
+                    prev_time.as_micros() as f64 / prev_invocations as f64
+                } else {
+                    0.0
+                },
+            },
+        );
+
+        Ok(())
+    }
+
     /// Get plugin count.
     pub fn plugin_count(&self) -> usize {
         self.plugins.len()
@@ -718,5 +760,20 @@ mod tests {
     fn test_plugin_not_found() {
         let runtime = WasmPluginRuntime::new(WasmPluginConfig::default());
         assert!(runtime.call_reranker("nonexistent", &[], &[]).is_err());
+    }
+
+    #[test]
+    fn test_hot_reload() {
+        let mut runtime = WasmPluginRuntime::new(WasmPluginConfig::default());
+        let manifest = PluginManifest::distance("test", "0.1.0", "test v1");
+        runtime.load_plugin("test", &[0u8; 10], manifest).unwrap();
+
+        // Hot-reload with new binary
+        let manifest_v2 = PluginManifest::distance("test", "0.2.0", "test v2");
+        runtime.hot_reload("test", &[1u8; 20], manifest_v2).unwrap();
+
+        let plugins = runtime.list_plugins();
+        let p = plugins.iter().find(|p| p.name == "test").unwrap();
+        assert_eq!(p.wasm_size_bytes, 20);
     }
 }
