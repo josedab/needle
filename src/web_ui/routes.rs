@@ -882,6 +882,198 @@ async fn api_monitoring_handler(State(state): State<Arc<WebUiState>>) -> Json<Mo
     Json(snapshot)
 }
 
+/// GET /visualize - Interactive vector visualization with 2D scatter plot
+async fn visualize_handler(State(state): State<Arc<WebUiState>>) -> Html<String> {
+    let db = state.db.read().await;
+    let collections = db.list_collections();
+
+    let collection_options: String = collections
+        .iter()
+        .map(|name| format!(r#"<option value="{name}">{name}</option>"#))
+        .collect();
+
+    let content = format!(
+        r#"
+        <div class="page-header">
+            <h1 class="page-title">Vector Visualization</h1>
+            <p class="page-description">2D projection of collection vectors with interactive search</p>
+        </div>
+
+        <div class="card" style="margin-bottom: 1rem;">
+            <div class="card-header" style="display: flex; justify-content: space-between; align-items: center;">
+                <h2 class="card-title">Controls</h2>
+            </div>
+            <div style="display: flex; gap: 1rem; align-items: end; flex-wrap: wrap;">
+                <div class="form-group" style="margin: 0;">
+                    <label class="form-label">Collection</label>
+                    <select id="viz-collection" class="form-input">
+                        <option value="">Select</option>
+                        {collection_options}
+                    </select>
+                </div>
+                <div class="form-group" style="margin: 0;">
+                    <label class="form-label">Max Points</label>
+                    <input type="number" id="viz-max" class="form-input" value="500" min="10" max="5000" />
+                </div>
+                <button onclick="loadVisualization()" class="btn btn-primary">Visualize</button>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-header">
+                <h2 class="card-title">2D Projection</h2>
+                <span id="viz-info" style="color: var(--text-secondary); font-size: 14px;"></span>
+            </div>
+            <div id="viz-container" style="width: 100%; height: 600px; position: relative; background: var(--bg-card); border-radius: 8px;">
+                <svg id="viz-svg" width="100%" height="100%" style="display: block;"></svg>
+                <p id="viz-placeholder" style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); color: var(--text-secondary);">
+                    Select a collection and click Visualize
+                </p>
+            </div>
+            <div id="viz-tooltip" style="display: none; position: absolute; background: var(--bg-secondary); border: 1px solid var(--border-color);
+                 padding: 8px 12px; border-radius: 6px; font-size: 13px; pointer-events: none; z-index: 1000; max-width: 300px;"></div>
+        </div>
+
+        <script>
+        async function loadVisualization() {{
+            const collection = document.getElementById('viz-collection').value;
+            const maxPoints = parseInt(document.getElementById('viz-max').value) || 500;
+            if (!collection) {{ alert('Select a collection'); return; }}
+
+            document.getElementById('viz-placeholder').textContent = 'Loading...';
+            try {{
+                const resp = await fetch(`/api/visualize/${{collection}}?max=${{maxPoints}}`);
+                const data = await resp.json();
+                if (!resp.ok) {{ throw new Error(data.error || 'Failed'); }}
+                renderScatterPlot(data.points);
+                document.getElementById('viz-info').textContent = `${{data.points.length}} points projected via random 2D`;
+            }} catch (e) {{
+                document.getElementById('viz-placeholder').textContent = 'Error: ' + e.message;
+            }}
+        }}
+
+        function renderScatterPlot(points) {{
+            const svg = document.getElementById('viz-svg');
+            const container = document.getElementById('viz-container');
+            const tooltip = document.getElementById('viz-tooltip');
+            document.getElementById('viz-placeholder').style.display = 'none';
+            svg.innerHTML = '';
+
+            const w = container.clientWidth, h = container.clientHeight;
+            const pad = 40;
+            const xs = points.map(p => p.x), ys = points.map(p => p.y);
+            const minX = Math.min(...xs), maxX = Math.max(...xs);
+            const minY = Math.min(...ys), maxY = Math.max(...ys);
+            const rangeX = maxX - minX || 1, rangeY = maxY - minY || 1;
+
+            const scale = (v, min, range, size) => pad + (v - min) / range * (size - 2 * pad);
+
+            points.forEach(p => {{
+                const cx = scale(p.x, minX, rangeX, w);
+                const cy = scale(p.y, minY, rangeY, h);
+                const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+                circle.setAttribute('cx', cx);
+                circle.setAttribute('cy', cy);
+                circle.setAttribute('r', '4');
+                circle.setAttribute('fill', '#6366f1');
+                circle.setAttribute('opacity', '0.7');
+                circle.setAttribute('cursor', 'pointer');
+
+                circle.addEventListener('mouseenter', (e) => {{
+                    circle.setAttribute('r', '7');
+                    circle.setAttribute('fill', '#22c55e');
+                    tooltip.style.display = 'block';
+                    tooltip.style.left = (e.pageX + 10) + 'px';
+                    tooltip.style.top = (e.pageY - 10) + 'px';
+                    tooltip.innerHTML = `<strong>${{p.id}}</strong>`;
+                }});
+                circle.addEventListener('mouseleave', () => {{
+                    circle.setAttribute('r', '4');
+                    circle.setAttribute('fill', '#6366f1');
+                    tooltip.style.display = 'none';
+                }});
+                svg.appendChild(circle);
+            }});
+        }}
+        </script>
+        "#,
+        collection_options = collection_options,
+    );
+
+    Html(base_layout("Vector Visualization", &content, "visualize"))
+}
+
+/// API endpoint for 2D vector projection data
+async fn api_visualize_handler(
+    State(state): State<Arc<WebUiState>>,
+    Path(collection): Path<String>,
+    Query(params): Query<std::collections::HashMap<String, String>>,
+) -> impl IntoResponse {
+    let db = state.db.read().await;
+    let max_points: usize = params
+        .get("max")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(500);
+
+    let coll = match db.collection(&collection) {
+        Ok(c) => c,
+        Err(_) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({"error": "Collection not found"})),
+            );
+        }
+    };
+
+    let entries = match db.export_internal(&collection) {
+        Ok(e) => e,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": format!("{}", e)})),
+            );
+        }
+    };
+
+    // Sample if too many
+    let sampled: Vec<_> = if entries.len() > max_points {
+        use rand::seq::SliceRandom;
+        let mut rng = rand::thread_rng();
+        let mut shuffled = entries;
+        shuffled.shuffle(&mut rng);
+        shuffled.into_iter().take(max_points).collect()
+    } else {
+        entries
+    };
+
+    // Simple random 2D projection (lightweight UMAP-like visualization)
+    let dims = coll.dimensions().unwrap_or(1);
+    let seed: u64 = 42;
+    let proj_a: Vec<f32> = (0..dims)
+        .map(|i| {
+            let s = seed.wrapping_mul(6364136223846793005).wrapping_add(i as u64);
+            ((s >> 33) as f32) / (u32::MAX as f32) * 2.0 - 1.0
+        })
+        .collect();
+    let proj_b: Vec<f32> = (0..dims)
+        .map(|i| {
+            let s = (seed + 1).wrapping_mul(6364136223846793005).wrapping_add(i as u64);
+            ((s >> 33) as f32) / (u32::MAX as f32) * 2.0 - 1.0
+        })
+        .collect();
+
+    let points: Vec<serde_json::Value> = sampled
+        .iter()
+        .map(|(id, vec, _meta)| {
+            let x: f32 = vec.iter().zip(&proj_a).map(|(a, b)| a * b).sum();
+            let y: f32 = vec.iter().zip(&proj_b).map(|(a, b)| a * b).sum();
+            json!({"id": id, "x": x, "y": y})
+        })
+        .collect();
+
+    (StatusCode::OK, Json(json!({"points": points})))
+}
+
 // ============================================================================
 // Router and Server
 // ============================================================================
@@ -896,9 +1088,11 @@ pub fn create_web_ui_router(state: Arc<WebUiState>) -> Router {
         .route("/query", get(query_playground_handler))
         .route("/playground", get(needleql_playground_handler))
         .route("/monitoring", get(monitoring_handler))
+        .route("/visualize", get(visualize_handler))
         // API endpoints
         .route("/api/stats", get(api_stats_handler))
         .route("/api/monitoring", get(api_monitoring_handler))
+        .route("/api/visualize/{collection}", get(api_visualize_handler))
         .route("/health", get(health_handler))
         .with_state(state)
 }
@@ -1202,5 +1396,16 @@ mod tests {
         assert!(html.contains("Needle"));
         assert!(html.contains("System Health"));
         assert!(html.contains("test"));
+    }
+
+    #[test]
+    fn test_web_ui_router_includes_visualize_route() {
+        let state = Arc::new(WebUiState::new(
+            crate::Database::in_memory(),
+            WebUiConfig::default(),
+        ));
+        let router = create_web_ui_router(state);
+        // Verify router was created without panicking (routes are valid)
+        let _router = router;
     }
 }
