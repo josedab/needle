@@ -72,6 +72,11 @@ pub struct MetadataEntry {
     pub data: Option<Value>,
 }
 
+/// Maximum distinct values per field before the inverted index stops adding
+/// new values for that field. Prevents high-cardinality fields (like UUIDs)
+/// from bloating the index with no filtering benefit.
+const FIELD_INDEX_CARDINALITY_THRESHOLD: usize = 10_000;
+
 /// Metadata store for vectors
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct MetadataStore {
@@ -83,6 +88,14 @@ pub struct MetadataStore {
     /// Key is field name; value is the bit-vector bloom filter.
     #[serde(skip)]
     field_blooms: HashMap<String, BloomFilter>,
+    /// Inverted index: field_name -> (stringified_value -> set of internal IDs).
+    /// Enables O(1) lookup for equality filters instead of O(n) scan.
+    /// Fields exceeding FIELD_INDEX_CARDINALITY_THRESHOLD are excluded.
+    #[serde(skip)]
+    field_indexes: HashMap<String, HashMap<String, Vec<usize>>>,
+    /// Fields that have been disabled from indexing due to high cardinality.
+    #[serde(skip)]
+    high_cardinality_fields: std::collections::HashSet<String>,
 }
 
 /// Simple bit-array bloom filter for metadata field values.
@@ -154,6 +167,8 @@ impl MetadataStore {
             entries: HashMap::new(),
             id_map: HashMap::new(),
             field_blooms: HashMap::new(),
+            field_indexes: HashMap::new(),
+            high_cardinality_fields: std::collections::HashSet::new(),
         }
     }
 
@@ -168,7 +183,7 @@ impl MetadataStore {
             return Err(NeedleError::VectorAlreadyExists(external_id));
         }
 
-        // Update bloom filters with field values
+        // Update bloom filters and inverted indexes with field values
         if let Some(Value::Object(ref map)) = data {
             for (field, value) in map {
                 let bloom = self
@@ -176,6 +191,26 @@ impl MetadataStore {
                     .entry(field.clone())
                     .or_insert_with(BloomFilter::default);
                 bloom.insert(&value.to_string());
+
+                // Skip inverted index for high-cardinality fields
+                if self.high_cardinality_fields.contains(field) {
+                    continue;
+                }
+
+                let val_str = value.to_string();
+                let field_idx = self.field_indexes
+                    .entry(field.clone())
+                    .or_default();
+                field_idx
+                    .entry(val_str)
+                    .or_default()
+                    .push(internal_id);
+
+                // Auto-detect high cardinality and stop indexing
+                if field_idx.len() > FIELD_INDEX_CARDINALITY_THRESHOLD {
+                    self.high_cardinality_fields.insert(field.clone());
+                    self.field_indexes.remove(field);
+                }
             }
         }
 
@@ -200,9 +235,73 @@ impl MetadataStore {
     pub fn delete(&mut self, internal_id: usize) -> Option<MetadataEntry> {
         if let Some(entry) = self.entries.remove(&internal_id) {
             self.id_map.remove(&entry.external_id);
+
+            // Remove from inverted indexes
+            if let Some(Value::Object(ref map)) = entry.data {
+                for (field, value) in map {
+                    let val_str = value.to_string();
+                    if let Some(idx) = self.field_indexes.get_mut(field) {
+                        if let Some(ids) = idx.get_mut(&val_str) {
+                            ids.retain(|&id| id != internal_id);
+                        }
+                    }
+                }
+            }
+
             Some(entry)
         } else {
             None
+        }
+    }
+
+    /// Look up internal IDs matching a field==value condition via the inverted index.
+    /// Returns `None` if the field is not indexed, `Some(ids)` otherwise.
+    pub fn lookup_field_eq(&self, field: &str, value: &Value) -> Option<&Vec<usize>> {
+        let val_str = value.to_string();
+        self.field_indexes.get(field)?.get(&val_str)
+    }
+
+    /// Get the set of indexed field names.
+    pub fn indexed_fields(&self) -> Vec<&str> {
+        self.field_indexes.keys().map(|s| s.as_str()).collect()
+    }
+
+    /// Get the cardinality (distinct values) for an indexed field.
+    pub fn field_cardinality(&self, field: &str) -> usize {
+        self.field_indexes.get(field).map_or(0, |idx| idx.len())
+    }
+
+    /// Check if a field has been excluded from the inverted index due to high cardinality.
+    pub fn is_high_cardinality(&self, field: &str) -> bool {
+        self.high_cardinality_fields.contains(field)
+    }
+
+    /// Try to resolve a filter using the inverted index for O(1) equality lookups.
+    /// Returns `Some(set_of_matching_internal_ids)` if the filter is a simple equality
+    /// condition on an indexed field. Returns `None` otherwise (caller should fall back
+    /// to sequential scan).
+    pub fn resolve_filter_via_index(&self, filter: &Filter) -> Option<std::collections::HashSet<usize>> {
+        match filter {
+            Filter::Condition(cond) if cond.operator == FilterOperator::Eq => {
+                let ids = self.lookup_field_eq(&cond.field, &cond.value)?;
+                Some(ids.iter().copied().collect())
+            }
+            Filter::And(filters) => {
+                // Intersect results from all sub-filters
+                let mut result: Option<std::collections::HashSet<usize>> = None;
+                for f in filters {
+                    if let Some(ids) = self.resolve_filter_via_index(f) {
+                        result = Some(match result {
+                            Some(existing) => existing.intersection(&ids).copied().collect(),
+                            None => ids,
+                        });
+                    } else {
+                        return None; // Can't fully resolve, fall back
+                    }
+                }
+                result
+            }
+            _ => None,
         }
     }
 
@@ -240,12 +339,38 @@ impl MetadataStore {
         self.field_blooms.get(field)
     }
 
-    /// Update the metadata data for an entry
+    /// Update the metadata data for an entry, maintaining the inverted index.
     pub fn update_data(&mut self, internal_id: usize, data: Option<Value>) -> Result<()> {
         let entry = self
             .entries
             .get_mut(&internal_id)
             .ok_or_else(|| NeedleError::VectorNotFound(internal_id.to_string()))?;
+
+        // Remove old values from inverted index
+        if let Some(Value::Object(ref old_map)) = entry.data {
+            for (field, value) in old_map {
+                let val_str = value.to_string();
+                if let Some(idx) = self.field_indexes.get_mut(field) {
+                    if let Some(ids) = idx.get_mut(&val_str) {
+                        ids.retain(|&id| id != internal_id);
+                    }
+                }
+            }
+        }
+
+        // Add new values to inverted index
+        if let Some(Value::Object(ref new_map)) = data {
+            for (field, value) in new_map {
+                let val_str = value.to_string();
+                self.field_indexes
+                    .entry(field.clone())
+                    .or_default()
+                    .entry(val_str)
+                    .or_default()
+                    .push(internal_id);
+            }
+        }
+
         entry.data = data;
         Ok(())
     }
@@ -822,5 +947,168 @@ mod tests {
 
         let result = Filter::parse(&filter_json);
         assert!(result.is_ok());
+    }
+
+    // ── Inverted Index / Filtered Pre-Index Tests ────────────────────────
+
+    #[test]
+    fn test_inverted_index_populated_on_insert() {
+        let mut store = MetadataStore::new();
+        store.insert(0, "v0".into(), Some(json!({"color": "red", "size": 10}))).unwrap();
+        store.insert(1, "v1".into(), Some(json!({"color": "blue", "size": 20}))).unwrap();
+        store.insert(2, "v2".into(), Some(json!({"color": "red", "size": 30}))).unwrap();
+
+        assert!(store.indexed_fields().contains(&"color"));
+        assert!(store.indexed_fields().contains(&"size"));
+        assert_eq!(store.field_cardinality("color"), 2); // "red" and "blue"
+
+        // Lookup returns matching internal IDs
+        let reds = store.lookup_field_eq("color", &json!("red"));
+        assert!(reds.is_some());
+        let reds = reds.unwrap();
+        assert_eq!(reds.len(), 2);
+        assert!(reds.contains(&0));
+        assert!(reds.contains(&2));
+    }
+
+    #[test]
+    fn test_inverted_index_cleaned_on_delete() {
+        let mut store = MetadataStore::new();
+        store.insert(0, "v0".into(), Some(json!({"color": "red"}))).unwrap();
+        store.insert(1, "v1".into(), Some(json!({"color": "red"}))).unwrap();
+
+        store.delete(0);
+
+        let reds = store.lookup_field_eq("color", &json!("red")).unwrap();
+        assert_eq!(reds.len(), 1);
+        assert!(reds.contains(&1));
+    }
+
+    #[test]
+    fn test_inverted_index_updated_on_metadata_change() {
+        let mut store = MetadataStore::new();
+        store.insert(0, "v0".into(), Some(json!({"color": "red"}))).unwrap();
+        store.insert(1, "v1".into(), Some(json!({"color": "red"}))).unwrap();
+
+        // Update v0 from red to blue
+        store.update_data(0, Some(json!({"color": "blue"}))).unwrap();
+
+        // Red should now only contain v1
+        let reds = store.lookup_field_eq("color", &json!("red")).unwrap();
+        assert_eq!(reds.len(), 1);
+        assert!(reds.contains(&1));
+
+        // Blue should contain v0
+        let blues = store.lookup_field_eq("color", &json!("blue")).unwrap();
+        assert_eq!(blues.len(), 1);
+        assert!(blues.contains(&0));
+    }
+
+    #[test]
+    fn test_inverted_index_lookup_missing_field() {
+        let store = MetadataStore::new();
+        assert!(store.lookup_field_eq("nonexistent", &json!("val")).is_none());
+    }
+
+    #[test]
+    fn test_resolve_filter_via_index_eq() {
+        let mut store = MetadataStore::new();
+        store.insert(0, "v0".into(), Some(json!({"cat": "a"}))).unwrap();
+        store.insert(1, "v1".into(), Some(json!({"cat": "b"}))).unwrap();
+        store.insert(2, "v2".into(), Some(json!({"cat": "a"}))).unwrap();
+
+        let filter = Filter::eq("cat", "a");
+        let result = store.resolve_filter_via_index(&filter);
+        assert!(result.is_some());
+        let ids = result.unwrap();
+        assert_eq!(ids.len(), 2);
+        assert!(ids.contains(&0));
+        assert!(ids.contains(&2));
+    }
+
+    #[test]
+    fn test_resolve_filter_via_index_and() {
+        let mut store = MetadataStore::new();
+        store.insert(0, "v0".into(), Some(json!({"cat": "a", "type": "x"}))).unwrap();
+        store.insert(1, "v1".into(), Some(json!({"cat": "a", "type": "y"}))).unwrap();
+        store.insert(2, "v2".into(), Some(json!({"cat": "b", "type": "x"}))).unwrap();
+
+        let filter = Filter::and(vec![
+            Filter::eq("cat", "a"),
+            Filter::eq("type", "x"),
+        ]);
+        let result = store.resolve_filter_via_index(&filter);
+        assert!(result.is_some());
+        let ids = result.unwrap();
+        assert_eq!(ids.len(), 1);
+        assert!(ids.contains(&0));
+    }
+
+    #[test]
+    fn test_resolve_filter_via_index_unsupported_falls_back() {
+        let mut store = MetadataStore::new();
+        store.insert(0, "v0".into(), Some(json!({"val": 10}))).unwrap();
+
+        // Greater-than is not supported by inverted index
+        let filter = Filter::gt("val", 5);
+        let result = store.resolve_filter_via_index(&filter);
+        assert!(result.is_none()); // Falls back to sequential
+    }
+
+    #[test]
+    fn test_filtered_search_uses_index() {
+        // Integration test: search with equality filter should use inverted index path
+        use crate::Collection;
+        let mut col = Collection::with_dimensions("test", 4);
+        for i in 0..20 {
+            let cat = if i % 2 == 0 { "even" } else { "odd" };
+            col.insert(
+                format!("v{i}"),
+                &[i as f32, 0.0, 0.0, 0.0],
+                Some(json!({"cat": cat})),
+            ).unwrap();
+        }
+
+        let filter = Filter::eq("cat", "even");
+        let results = col.search_builder(&[10.0, 0.0, 0.0, 0.0])
+            .k(5)
+            .filter(&filter)
+            .execute()
+            .unwrap();
+
+        assert_eq!(results.len(), 5);
+        // All results should have cat=even
+        for r in &results {
+            assert!(r.metadata.as_ref().unwrap()["cat"] == "even");
+        }
+    }
+
+    #[test]
+    fn test_high_cardinality_auto_detection() {
+        let mut store = MetadataStore::new();
+
+        // Insert vectors with unique UUID-like values
+        for i in 0..super::FIELD_INDEX_CARDINALITY_THRESHOLD + 100 {
+            store
+                .insert(
+                    i,
+                    format!("v{i}"),
+                    Some(json!({
+                        "category": if i % 3 == 0 { "a" } else if i % 3 == 1 { "b" } else { "c" },
+                        "uuid": format!("uuid-{i}")
+                    })),
+                )
+                .unwrap();
+        }
+
+        // "category" has low cardinality (3) — should be indexed
+        assert!(!store.is_high_cardinality("category"));
+        assert!(store.field_cardinality("category") == 3);
+        assert!(store.lookup_field_eq("category", &json!("a")).is_some());
+
+        // "uuid" has high cardinality — should be auto-excluded
+        assert!(store.is_high_cardinality("uuid"));
+        // Inverted index for uuid should be removed
+        assert!(store.lookup_field_eq("uuid", &json!("uuid-0")).is_none());
     }
 }
