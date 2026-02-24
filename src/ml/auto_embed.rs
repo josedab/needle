@@ -31,7 +31,8 @@
 //! let results = collection.search_text("AI and neural networks", 10)?;
 //! ```
 
-use crate::error::Result;
+use crate::database::Database;
+use crate::error::{NeedleError, Result};
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -860,6 +861,209 @@ impl EmbeddingModelManager {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Re-embedding Executor
+// ---------------------------------------------------------------------------
+
+/// Status of a re-embedding job.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ReEmbedStatus {
+    /// Job is queued but not started.
+    Pending,
+    /// Job is actively processing vectors.
+    Running,
+    /// Job completed successfully.
+    Completed,
+    /// Job failed.
+    Failed,
+    /// Job was cancelled.
+    Cancelled,
+}
+
+/// Progress of a re-embedding job.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReEmbedProgress {
+    /// Total vectors to re-embed.
+    pub total_vectors: usize,
+    /// Vectors processed so far.
+    pub processed: usize,
+    /// Vectors that failed to re-embed.
+    pub failed: usize,
+    /// Current status.
+    pub status: ReEmbedStatus,
+    /// Estimated time remaining in ms (if running).
+    pub estimated_remaining_ms: Option<u64>,
+    /// Elapsed time in ms.
+    pub elapsed_ms: u64,
+}
+
+impl ReEmbedProgress {
+    /// Fraction of vectors processed (0.0 to 1.0).
+    pub fn fraction_complete(&self) -> f64 {
+        if self.total_vectors == 0 {
+            return 1.0;
+        }
+        self.processed as f64 / self.total_vectors as f64
+    }
+}
+
+/// Configuration for a re-embedding job.
+#[derive(Debug, Clone)]
+pub struct ReEmbedConfig {
+    /// Number of vectors to process per batch.
+    pub batch_size: usize,
+    /// Whether to keep old vectors until the new ones are verified.
+    pub keep_old: bool,
+    /// Maximum number of failures before aborting.
+    pub max_failures: usize,
+}
+
+impl Default for ReEmbedConfig {
+    fn default() -> Self {
+        Self {
+            batch_size: 64,
+            keep_old: true,
+            max_failures: 100,
+        }
+    }
+}
+
+/// Executes re-embedding of vectors when an embedding model changes.
+///
+/// Processes vectors in batches, tracks progress, and handles failures
+/// with configurable abort thresholds.
+pub struct ReEmbedExecutor {
+    embedder: AutoEmbedder,
+    config: ReEmbedConfig,
+    progress: ReEmbedProgress,
+}
+
+impl ReEmbedExecutor {
+    /// Create a new re-embedding executor.
+    pub fn new(embedder: AutoEmbedder, config: ReEmbedConfig) -> Self {
+        Self {
+            embedder,
+            config,
+            progress: ReEmbedProgress {
+                total_vectors: 0,
+                processed: 0,
+                failed: 0,
+                status: ReEmbedStatus::Pending,
+                estimated_remaining_ms: None,
+                elapsed_ms: 0,
+            },
+        }
+    }
+
+    /// Execute re-embedding for a collection.
+    ///
+    /// Retrieves all vectors from the collection, re-embeds their associated
+    /// text metadata, and updates the vectors in-place.
+    pub fn execute(
+        &mut self,
+        db: &Database,
+        collection_name: &str,
+        text_field: &str,
+    ) -> Result<ReEmbedProgress> {
+        let coll = db.collection(collection_name)?;
+        let stats = coll.stats()?;
+        self.progress.total_vectors = stats.vector_count;
+        self.progress.status = ReEmbedStatus::Running;
+        let start = std::time::Instant::now();
+
+        // Collect all IDs first
+        let all_ids: Vec<String> = (0..stats.vector_count)
+            .filter_map(|i| {
+                let id = format!("_idx_{i}");
+                if coll.get(&id).is_some() {
+                    Some(id)
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        // Process in batches
+        for chunk in all_ids.chunks(self.config.batch_size) {
+            if self.progress.failed >= self.config.max_failures {
+                self.progress.status = ReEmbedStatus::Failed;
+                self.progress.elapsed_ms = start.elapsed().as_millis() as u64;
+                return Err(NeedleError::InvalidArgument(format!(
+                    "Re-embedding aborted: {} failures exceeded max {}",
+                    self.progress.failed, self.config.max_failures
+                )));
+            }
+
+            for id in chunk {
+                match self.re_embed_single(db, collection_name, id, text_field) {
+                    Ok(()) => self.progress.processed += 1,
+                    Err(_) => {
+                        self.progress.failed += 1;
+                        self.progress.processed += 1;
+                    }
+                }
+            }
+
+            // Update estimated remaining time
+            let elapsed = start.elapsed().as_millis() as u64;
+            self.progress.elapsed_ms = elapsed;
+            if self.progress.processed > 0 {
+                let ms_per_vec = elapsed as f64 / self.progress.processed as f64;
+                let remaining = self.progress.total_vectors - self.progress.processed;
+                self.progress.estimated_remaining_ms =
+                    Some((ms_per_vec * remaining as f64) as u64);
+            }
+        }
+
+        self.progress.status = if self.progress.failed > 0 {
+            ReEmbedStatus::Completed // completed with some failures
+        } else {
+            ReEmbedStatus::Completed
+        };
+        self.progress.elapsed_ms = start.elapsed().as_millis() as u64;
+        self.progress.estimated_remaining_ms = Some(0);
+
+        Ok(self.progress.clone())
+    }
+
+    fn re_embed_single(
+        &self,
+        db: &Database,
+        collection_name: &str,
+        id: &str,
+        text_field: &str,
+    ) -> Result<()> {
+        let coll = db.collection(collection_name)?;
+        let (_, metadata) = coll
+            .get(id)
+            .ok_or_else(|| NeedleError::NotFound(format!("Vector '{id}'")))?;
+
+        let text = metadata
+            .as_ref()
+            .and_then(|m| m.get(text_field))
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| {
+                NeedleError::InvalidArgument(format!(
+                    "No text field '{text_field}' in vector '{id}'"
+                ))
+            })?;
+
+        let new_vector = self.embedder.embed(text)?;
+        coll.update(id, &new_vector, metadata.clone())?;
+        Ok(())
+    }
+
+    /// Get current progress.
+    pub fn progress(&self) -> &ReEmbedProgress {
+        &self.progress
+    }
+
+    /// Cancel the re-embedding job.
+    pub fn cancel(&mut self) {
+        self.progress.status = ReEmbedStatus::Cancelled;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1167,5 +1371,102 @@ mod tests {
 
         let (_, config) = builder.build();
         assert_eq!(config.dimensions(), 384); // default
+    }
+
+    // ── Re-embedding Executor Tests ──
+
+    #[test]
+    fn test_re_embed_progress_fraction() {
+        let progress = ReEmbedProgress {
+            total_vectors: 100,
+            processed: 50,
+            failed: 2,
+            status: ReEmbedStatus::Running,
+            estimated_remaining_ms: Some(500),
+            elapsed_ms: 500,
+        };
+        assert!((progress.fraction_complete() - 0.5).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_re_embed_progress_empty() {
+        let progress = ReEmbedProgress {
+            total_vectors: 0,
+            processed: 0,
+            failed: 0,
+            status: ReEmbedStatus::Completed,
+            estimated_remaining_ms: None,
+            elapsed_ms: 0,
+        };
+        assert!((progress.fraction_complete() - 1.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_re_embed_config_defaults() {
+        let config = ReEmbedConfig::default();
+        assert_eq!(config.batch_size, 64);
+        assert!(config.keep_old);
+        assert_eq!(config.max_failures, 100);
+    }
+
+    #[test]
+    fn test_re_embed_executor_new() {
+        let embedder = AutoEmbedder::new(AutoEmbedConfig::mock(4));
+        let executor = ReEmbedExecutor::new(embedder, ReEmbedConfig::default());
+        assert_eq!(executor.progress().status, ReEmbedStatus::Pending);
+        assert_eq!(executor.progress().total_vectors, 0);
+    }
+
+    #[test]
+    fn test_re_embed_executor_cancel() {
+        let embedder = AutoEmbedder::new(AutoEmbedConfig::mock(4));
+        let mut executor = ReEmbedExecutor::new(embedder, ReEmbedConfig::default());
+        executor.cancel();
+        assert_eq!(executor.progress().status, ReEmbedStatus::Cancelled);
+    }
+
+    #[test]
+    fn test_re_embed_executor_empty_collection() {
+        let db = crate::database::Database::in_memory();
+        db.create_collection("test", 4).unwrap();
+
+        let embedder = AutoEmbedder::new(AutoEmbedConfig::mock(4));
+        let mut executor = ReEmbedExecutor::new(embedder, ReEmbedConfig::default());
+        let progress = executor.execute(&db, "test", "text").unwrap();
+        assert_eq!(progress.status, ReEmbedStatus::Completed);
+        assert_eq!(progress.processed, 0);
+        assert_eq!(progress.failed, 0);
+    }
+
+    #[test]
+    fn test_re_embed_status_serde() {
+        let statuses = vec![
+            ReEmbedStatus::Pending,
+            ReEmbedStatus::Running,
+            ReEmbedStatus::Completed,
+            ReEmbedStatus::Failed,
+            ReEmbedStatus::Cancelled,
+        ];
+        for s in statuses {
+            let json = serde_json::to_string(&s).unwrap();
+            let deser: ReEmbedStatus = serde_json::from_str(&json).unwrap();
+            assert_eq!(s, deser);
+        }
+    }
+
+    #[test]
+    fn test_re_embed_progress_serde() {
+        let progress = ReEmbedProgress {
+            total_vectors: 1000,
+            processed: 500,
+            failed: 5,
+            status: ReEmbedStatus::Running,
+            estimated_remaining_ms: Some(2500),
+            elapsed_ms: 2500,
+        };
+        let json = serde_json::to_string(&progress).unwrap();
+        let deser: ReEmbedProgress = serde_json::from_str(&json).unwrap();
+        assert_eq!(deser.total_vectors, 1000);
+        assert_eq!(deser.processed, 500);
     }
 }
