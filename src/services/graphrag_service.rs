@@ -702,6 +702,236 @@ impl<'a> GraphRagService<'a> {
         results.truncate(k);
         Ok(results)
     }
+
+    /// Leiden-inspired community detection using modularity optimization.
+    ///
+    /// Assigns each node to the community that maximizes modularity gain,
+    /// iterating until convergence or `max_iterations` is reached.
+    /// Returns community ID → list of entity IDs.
+    pub fn detect_communities_leiden(
+        &self,
+        max_iterations: usize,
+        resolution: f64,
+    ) -> Vec<Community> {
+        let nodes: Vec<String> = self.entities.keys().cloned().collect();
+        if nodes.is_empty() {
+            return Vec::new();
+        }
+
+        let mut community_of: HashMap<String, usize> = HashMap::new();
+        for (i, id) in nodes.iter().enumerate() {
+            community_of.insert(id.clone(), i);
+        }
+
+        // Compute total edge weight (m) for modularity calculation
+        let mut total_weight: f64 = 0.0;
+        for edges in self.adjacency.outgoing.values() {
+            for (_, _, w) in edges {
+                total_weight += *w as f64;
+            }
+        }
+        if total_weight == 0.0 {
+            total_weight = 1.0;
+        }
+
+        // Node strengths (weighted degree)
+        let mut strength: HashMap<String, f64> = HashMap::new();
+        for node in &nodes {
+            let s: f64 = self
+                .adjacency
+                .neighbors(node, self.config.bidirectional)
+                .iter()
+                .map(|(_, _, w)| *w as f64)
+                .sum();
+            strength.insert(node.clone(), s);
+        }
+
+        for _ in 0..max_iterations {
+            let mut changed = false;
+
+            for node in &nodes {
+                let current_comm = community_of[node];
+                let node_strength = strength.get(node).copied().unwrap_or(0.0);
+
+                // Compute weight to each neighboring community
+                let mut comm_weights: HashMap<usize, f64> = HashMap::new();
+                let neighbors = self.adjacency.neighbors(node, self.config.bidirectional);
+                for (n, _, w) in &neighbors {
+                    if let Some(&c) = community_of.get(n) {
+                        *comm_weights.entry(c).or_insert(0.0) += *w as f64;
+                    }
+                }
+
+                // Compute community total strengths
+                let mut comm_total_strength: HashMap<usize, f64> = HashMap::new();
+                for (n, &c) in &community_of {
+                    *comm_total_strength.entry(c).or_insert(0.0) +=
+                        strength.get(n).copied().unwrap_or(0.0);
+                }
+
+                // Find best community (maximizing modularity gain)
+                let mut best_comm = current_comm;
+                let mut best_gain: f64 = 0.0;
+
+                for (&candidate_comm, &w_to_comm) in &comm_weights {
+                    if candidate_comm == current_comm {
+                        continue;
+                    }
+                    let sigma_tot = comm_total_strength
+                        .get(&candidate_comm)
+                        .copied()
+                        .unwrap_or(0.0);
+                    let sigma_tot_old = comm_total_strength
+                        .get(&current_comm)
+                        .copied()
+                        .unwrap_or(0.0)
+                        - node_strength;
+
+                    let w_to_old = comm_weights.get(&current_comm).copied().unwrap_or(0.0);
+
+                    // Modularity gain of moving node to candidate community
+                    let gain = (w_to_comm - w_to_old)
+                        - resolution * node_strength * (sigma_tot - sigma_tot_old)
+                            / (2.0 * total_weight);
+
+                    if gain > best_gain {
+                        best_gain = gain;
+                        best_comm = candidate_comm;
+                    }
+                }
+
+                if best_comm != current_comm {
+                    community_of.insert(node.clone(), best_comm);
+                    changed = true;
+                }
+            }
+
+            if !changed {
+                break;
+            }
+        }
+
+        // Normalize community IDs to 0..N and build result
+        let mut comm_remap: HashMap<usize, usize> = HashMap::new();
+        let mut next_id = 0;
+        let mut community_members: HashMap<usize, Vec<String>> = HashMap::new();
+        for (node, &comm) in &community_of {
+            let normalized = *comm_remap.entry(comm).or_insert_with(|| {
+                let id = next_id;
+                next_id += 1;
+                id
+            });
+            community_members
+                .entry(normalized)
+                .or_default()
+                .push(node.clone());
+        }
+
+        community_members
+            .into_iter()
+            .map(|(id, members)| Community { id, members })
+            .collect()
+    }
+
+    /// Find all entities connected to `entity_id` within `hops` hops.
+    pub fn connected_to(&self, entity_id: &str, hops: usize) -> Vec<String> {
+        let mut visited: HashSet<String> = HashSet::new();
+        let mut queue: VecDeque<(String, usize)> = VecDeque::new();
+        queue.push_back((entity_id.to_string(), 0));
+        visited.insert(entity_id.to_string());
+
+        while let Some((node, depth)) = queue.pop_front() {
+            if depth >= hops {
+                continue;
+            }
+            for (n, _, _) in self.adjacency.neighbors(&node, self.config.bidirectional) {
+                if !visited.contains(&n) {
+                    visited.insert(n.clone());
+                    queue.push_back((n, depth + 1));
+                }
+            }
+        }
+
+        visited.into_iter().filter(|id| id != entity_id).collect()
+    }
+
+    /// Find all entities within the same community as `entity_id`.
+    pub fn within_community(&self, entity_id: &str, resolution: f64) -> Vec<String> {
+        let communities = self.detect_communities_leiden(20, resolution);
+        for comm in &communities {
+            if comm.members.contains(&entity_id.to_string()) {
+                return comm
+                    .members
+                    .iter()
+                    .filter(|id| id.as_str() != entity_id)
+                    .cloned()
+                    .collect();
+            }
+        }
+        Vec::new()
+    }
+
+    /// Apply a graph filter to narrow search results.
+    pub fn apply_graph_filter(
+        &self,
+        candidates: &[GraphSearchResult],
+        filter: &GraphFilter,
+    ) -> Vec<GraphSearchResult> {
+        candidates
+            .iter()
+            .filter(|r| self.matches_graph_filter(&r.id, filter))
+            .cloned()
+            .collect()
+    }
+
+    fn matches_graph_filter(&self, entity_id: &str, filter: &GraphFilter) -> bool {
+        match filter {
+            GraphFilter::ConnectedTo { target, max_hops } => {
+                let connected = self.connected_to(target, *max_hops);
+                connected.contains(&entity_id.to_string())
+            }
+            GraphFilter::WithinCommunity { seed, resolution } => {
+                let members = self.within_community(seed, *resolution);
+                members.contains(&entity_id.to_string())
+            }
+            GraphFilter::HasRelation { relation_type } => self
+                .adjacency
+                .neighbors(entity_id, self.config.bidirectional)
+                .iter()
+                .any(|(_, rt, _)| rt == relation_type),
+            GraphFilter::MinDegree(min) => {
+                self.adjacency.degree(entity_id, self.config.bidirectional) >= *min
+            }
+            GraphFilter::And(filters) => filters.iter().all(|f| self.matches_graph_filter(entity_id, f)),
+            GraphFilter::Or(filters) => filters.iter().any(|f| self.matches_graph_filter(entity_id, f)),
+        }
+    }
+}
+
+/// A detected community of entities.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Community {
+    /// Community identifier.
+    pub id: usize,
+    /// Entity IDs belonging to this community.
+    pub members: Vec<String>,
+}
+
+/// Graph-aware filter operators for search refinement.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum GraphFilter {
+    /// Include only entities connected to `target` within `max_hops`.
+    ConnectedTo { target: String, max_hops: usize },
+    /// Include only entities in the same community as `seed`.
+    WithinCommunity { seed: String, resolution: f64 },
+    /// Include only entities with at least one edge of the given type.
+    HasRelation { relation_type: String },
+    /// Include only entities with degree >= min.
+    MinDegree(usize),
+    /// All sub-filters must match.
+    And(Vec<GraphFilter>),
+    /// At least one sub-filter must match.
+    Or(Vec<GraphFilter>),
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────────
@@ -923,5 +1153,194 @@ mod tests {
         let ids: Vec<&str> = results.iter().map(|r| r.id.as_str()).collect();
         // a and b should be present, c only via vector score (if close enough)
         assert!(ids.contains(&"a"));
+    }
+
+    #[test]
+    fn test_leiden_community_detection() {
+        let db = test_db();
+        let mut svc = GraphRagService::new(&db, "entities", GraphRagConfig::default()).unwrap();
+
+        // Create two clusters: {a,b,c} densely connected, {d,e,f} densely connected
+        for id in ["a", "b", "c", "d", "e", "f"] {
+            svc.add_entity(make_entity(id, "Node", vec![1.0; 4])).unwrap();
+        }
+        // Cluster 1
+        svc.add_relation(Relation::new("a", "b", "r").with_weight(1.0)).unwrap();
+        svc.add_relation(Relation::new("b", "c", "r").with_weight(1.0)).unwrap();
+        svc.add_relation(Relation::new("a", "c", "r").with_weight(1.0)).unwrap();
+        // Cluster 2
+        svc.add_relation(Relation::new("d", "e", "r").with_weight(1.0)).unwrap();
+        svc.add_relation(Relation::new("e", "f", "r").with_weight(1.0)).unwrap();
+        svc.add_relation(Relation::new("d", "f", "r").with_weight(1.0)).unwrap();
+        // Weak bridge
+        svc.add_relation(Relation::new("c", "d", "r").with_weight(0.1)).unwrap();
+
+        let communities = svc.detect_communities_leiden(50, 1.0);
+        assert!(communities.len() >= 2, "Expected at least 2 communities, got {}", communities.len());
+
+        // Verify nodes in same cluster end up together
+        let a_comm = communities.iter().find(|c| c.members.contains(&"a".to_string()));
+        let d_comm = communities.iter().find(|c| c.members.contains(&"d".to_string()));
+        assert!(a_comm.is_some());
+        assert!(d_comm.is_some());
+    }
+
+    #[test]
+    fn test_leiden_empty_graph() {
+        let db = test_db();
+        let svc = GraphRagService::new(&db, "entities", GraphRagConfig::default()).unwrap();
+        let communities = svc.detect_communities_leiden(10, 1.0);
+        assert!(communities.is_empty());
+    }
+
+    #[test]
+    fn test_connected_to() {
+        let db = test_db();
+        let mut svc = GraphRagService::new(&db, "entities", GraphRagConfig::default()).unwrap();
+
+        for id in ["a", "b", "c", "d"] {
+            svc.add_entity(make_entity(id, "N", vec![1.0; 4])).unwrap();
+        }
+        svc.add_relation(Relation::new("a", "b", "r")).unwrap();
+        svc.add_relation(Relation::new("b", "c", "r")).unwrap();
+        svc.add_relation(Relation::new("c", "d", "r")).unwrap();
+
+        // 1 hop from a
+        let one_hop = svc.connected_to("a", 1);
+        assert!(one_hop.contains(&"b".to_string()));
+        assert!(!one_hop.contains(&"c".to_string()));
+
+        // 2 hops from a
+        let two_hops = svc.connected_to("a", 2);
+        assert!(two_hops.contains(&"b".to_string()));
+        assert!(two_hops.contains(&"c".to_string()));
+        assert!(!two_hops.contains(&"d".to_string()));
+    }
+
+    #[test]
+    fn test_within_community() {
+        let db = test_db();
+        let mut svc = GraphRagService::new(&db, "entities", GraphRagConfig::default()).unwrap();
+
+        for id in ["a", "b", "c"] {
+            svc.add_entity(make_entity(id, "N", vec![1.0; 4])).unwrap();
+        }
+        svc.add_relation(Relation::new("a", "b", "r").with_weight(1.0)).unwrap();
+        svc.add_relation(Relation::new("b", "c", "r").with_weight(1.0)).unwrap();
+        svc.add_relation(Relation::new("a", "c", "r").with_weight(1.0)).unwrap();
+
+        let peers = svc.within_community("a", 1.0);
+        // All 3 nodes should be in the same community
+        assert!(peers.contains(&"b".to_string()) || peers.contains(&"c".to_string()));
+    }
+
+    #[test]
+    fn test_graph_filter_connected_to() {
+        let db = test_db();
+        let mut svc = GraphRagService::new(&db, "entities", GraphRagConfig::default()).unwrap();
+
+        svc.add_entity(make_entity("a", "N", vec![1.0, 0.0, 0.0, 0.0])).unwrap();
+        svc.add_entity(make_entity("b", "N", vec![0.9, 0.1, 0.0, 0.0])).unwrap();
+        svc.add_entity(make_entity("c", "N", vec![0.0, 1.0, 0.0, 0.0])).unwrap();
+        svc.add_relation(Relation::new("a", "b", "r")).unwrap();
+
+        let results = svc.graph_search(&[1.0, 0.0, 0.0, 0.0], 10, 1, 0.3).unwrap();
+
+        let filter = GraphFilter::ConnectedTo { target: "a".into(), max_hops: 1 };
+        let filtered = svc.apply_graph_filter(&results, &filter);
+        let ids: Vec<&str> = filtered.iter().map(|r| r.id.as_str()).collect();
+        assert!(ids.contains(&"b"));
+        assert!(!ids.contains(&"c"));
+    }
+
+    #[test]
+    fn test_graph_filter_has_relation() {
+        let db = test_db();
+        let mut svc = GraphRagService::new(&db, "entities", GraphRagConfig::default()).unwrap();
+
+        svc.add_entity(make_entity("a", "N", vec![1.0; 4])).unwrap();
+        svc.add_entity(make_entity("b", "N", vec![1.0; 4])).unwrap();
+        svc.add_entity(make_entity("c", "N", vec![1.0; 4])).unwrap();
+        svc.add_relation(Relation::new("a", "b", "uses")).unwrap();
+        svc.add_relation(Relation::new("b", "c", "depends_on")).unwrap();
+
+        let results = svc.graph_search(&[1.0; 4], 10, 2, 0.3).unwrap();
+        let filter = GraphFilter::HasRelation { relation_type: "uses".into() };
+        let filtered = svc.apply_graph_filter(&results, &filter);
+
+        let ids: Vec<&str> = filtered.iter().map(|r| r.id.as_str()).collect();
+        assert!(ids.contains(&"a"));
+    }
+
+    #[test]
+    fn test_graph_filter_min_degree() {
+        let db = test_db();
+        let mut svc = GraphRagService::new(&db, "entities", GraphRagConfig::default()).unwrap();
+
+        svc.add_entity(make_entity("hub", "N", vec![1.0; 4])).unwrap();
+        svc.add_entity(make_entity("leaf1", "N", vec![1.0; 4])).unwrap();
+        svc.add_entity(make_entity("leaf2", "N", vec![1.0; 4])).unwrap();
+        svc.add_relation(Relation::new("hub", "leaf1", "r")).unwrap();
+        svc.add_relation(Relation::new("hub", "leaf2", "r")).unwrap();
+
+        let results = svc.graph_search(&[1.0; 4], 10, 1, 0.3).unwrap();
+        let filter = GraphFilter::MinDegree(2);
+        let filtered = svc.apply_graph_filter(&results, &filter);
+
+        // Only hub has degree >= 2
+        let ids: Vec<&str> = filtered.iter().map(|r| r.id.as_str()).collect();
+        assert!(ids.contains(&"hub"));
+        assert!(!ids.contains(&"leaf1"));
+    }
+
+    #[test]
+    fn test_graph_filter_and_or() {
+        let db = test_db();
+        let mut svc = GraphRagService::new(&db, "entities", GraphRagConfig::default()).unwrap();
+
+        svc.add_entity(make_entity("a", "N", vec![1.0; 4])).unwrap();
+        svc.add_entity(make_entity("b", "N", vec![1.0; 4])).unwrap();
+        svc.add_relation(Relation::new("a", "b", "uses")).unwrap();
+
+        let results = svc.graph_search(&[1.0; 4], 10, 1, 0.3).unwrap();
+
+        // AND: has "uses" relation AND degree >= 1
+        let filter = GraphFilter::And(vec![
+            GraphFilter::HasRelation { relation_type: "uses".into() },
+            GraphFilter::MinDegree(1),
+        ]);
+        let filtered = svc.apply_graph_filter(&results, &filter);
+        assert!(!filtered.is_empty());
+
+        // OR: degree >= 5 OR has "uses" relation
+        let filter = GraphFilter::Or(vec![
+            GraphFilter::MinDegree(5),
+            GraphFilter::HasRelation { relation_type: "uses".into() },
+        ]);
+        let filtered = svc.apply_graph_filter(&results, &filter);
+        assert!(!filtered.is_empty());
+    }
+
+    #[test]
+    fn test_community_struct_serde() {
+        let comm = Community { id: 0, members: vec!["a".into(), "b".into()] };
+        let json = serde_json::to_string(&comm).unwrap();
+        let deser: Community = serde_json::from_str(&json).unwrap();
+        assert_eq!(deser.id, 0);
+        assert_eq!(deser.members.len(), 2);
+    }
+
+    #[test]
+    fn test_graph_filter_serde() {
+        let filter = GraphFilter::ConnectedTo { target: "x".into(), max_hops: 2 };
+        let json = serde_json::to_string(&filter).unwrap();
+        let deser: GraphFilter = serde_json::from_str(&json).unwrap();
+        match deser {
+            GraphFilter::ConnectedTo { target, max_hops } => {
+                assert_eq!(target, "x");
+                assert_eq!(max_hops, 2);
+            }
+            _ => panic!("Wrong variant"),
+        }
     }
 }
