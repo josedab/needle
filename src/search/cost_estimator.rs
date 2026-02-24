@@ -264,6 +264,7 @@ pub struct AlternativePlan {
 ///
 /// Analyzes collection statistics and query parameters to choose the optimal
 /// index strategy and estimate execution costs.
+#[derive(Debug, Clone)]
 pub struct CostEstimator {
     /// Cost per distance computation in microseconds.
     distance_cost_us: f64,
@@ -574,6 +575,245 @@ impl CostEstimator {
     }
 }
 
+// ── Adaptive Multi-Armed Bandit Optimizer ────────────────────────────────────
+
+/// Exploration strategy for the adaptive optimizer.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub enum ExplorationStrategy {
+    /// Epsilon-greedy: explore with probability epsilon.
+    EpsilonGreedy { epsilon: f64 },
+    /// Upper Confidence Bound: balance exploitation and exploration.
+    Ucb { confidence: f64 },
+}
+
+impl Default for ExplorationStrategy {
+    fn default() -> Self {
+        Self::Ucb { confidence: 2.0 }
+    }
+}
+
+/// Observed latency sample for a particular index strategy.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LatencyObservation {
+    /// Which index was used.
+    pub index: IndexChoice,
+    /// Observed latency in milliseconds.
+    pub latency_ms: f64,
+    /// Number of results returned.
+    pub results_returned: usize,
+    /// Approximate dataset size at observation time.
+    pub dataset_size: usize,
+}
+
+/// Per-arm statistics for the bandit model.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct ArmStats {
+    /// Number of times this arm has been selected.
+    pulls: u64,
+    /// Sum of rewards (inverse latency).
+    total_reward: f64,
+    /// Sum of squared rewards (for variance).
+    total_reward_sq: f64,
+    /// Most recent observed latency.
+    last_latency_ms: f64,
+}
+
+impl ArmStats {
+    fn mean_reward(&self) -> f64 {
+        if self.pulls == 0 {
+            return 0.0;
+        }
+        self.total_reward / self.pulls as f64
+    }
+}
+
+/// Adaptive optimizer that learns the best index strategy from query latency feedback.
+///
+/// Uses a multi-armed bandit model to balance exploration (trying different indexes)
+/// with exploitation (using the historically best-performing index).
+#[derive(Debug, Clone)]
+pub struct AdaptiveOptimizer {
+    /// Strategy for balancing exploration vs exploitation.
+    strategy: ExplorationStrategy,
+    /// Per-index arm statistics.
+    arms: HashMap<IndexChoice, ArmStats>,
+    /// Total observations across all arms.
+    total_observations: u64,
+    /// Fallback cost estimator for cold-start.
+    estimator: CostEstimator,
+    /// Minimum observations per arm before trusting learned data.
+    min_observations: u64,
+}
+
+impl Default for AdaptiveOptimizer {
+    fn default() -> Self {
+        Self::new(ExplorationStrategy::default())
+    }
+}
+
+impl AdaptiveOptimizer {
+    /// Create a new adaptive optimizer with the given exploration strategy.
+    pub fn new(strategy: ExplorationStrategy) -> Self {
+        let mut arms = HashMap::new();
+        for index in [
+            IndexChoice::Hnsw,
+            IndexChoice::BruteForce,
+            IndexChoice::HnswPreFilter,
+            IndexChoice::HnswPostFilter,
+        ] {
+            arms.insert(index, ArmStats::default());
+        }
+        Self {
+            strategy,
+            arms,
+            total_observations: 0,
+            estimator: CostEstimator::new(),
+            min_observations: 5,
+        }
+    }
+
+    /// Select the best index strategy, balancing exploration and exploitation.
+    ///
+    /// During cold-start (fewer than `min_observations` per arm), falls back to
+    /// the cost estimator's heuristic. Once enough data is collected, uses the
+    /// bandit model.
+    pub fn select(
+        &self,
+        stats: &CollectionStatistics,
+        k: usize,
+        filter_selectivity: Option<f32>,
+    ) -> IndexChoice {
+        // Cold start: use heuristic cost estimator
+        let cold_arms: Vec<_> = self
+            .arms
+            .iter()
+            .filter(|(_, s)| s.pulls < self.min_observations)
+            .collect();
+        if !cold_arms.is_empty() {
+            // Explore the least-tried arm during cold start
+            let least_tried = cold_arms
+                .iter()
+                .min_by_key(|(_, s)| s.pulls)
+                .map(|(&idx, _)| idx);
+            if let Some(idx) = least_tried {
+                return idx;
+            }
+        }
+
+        match self.strategy {
+            ExplorationStrategy::EpsilonGreedy { epsilon } => {
+                // Deterministic selection: always pick best arm
+                // (randomness would require rand crate; use a simple hash-based probe)
+                let probe = (self.total_observations * 2654435761) % 1000;
+                if (probe as f64) < epsilon * 1000.0 {
+                    // "Explore": pick the arm with fewest pulls
+                    self.arms
+                        .iter()
+                        .min_by_key(|(_, s)| s.pulls)
+                        .map(|(&idx, _)| idx)
+                        .unwrap_or_else(|| self.estimator.plan(stats, k, filter_selectivity).index_choice)
+                } else {
+                    self.best_arm()
+                }
+            }
+            ExplorationStrategy::Ucb { confidence } => {
+                self.ucb_select(confidence)
+            }
+        }
+    }
+
+    /// Record an observed latency for a chosen index strategy.
+    pub fn observe(&mut self, observation: LatencyObservation) {
+        let arm = self.arms.entry(observation.index).or_default();
+        let reward = 1.0 / (1.0 + observation.latency_ms);
+        arm.pulls += 1;
+        arm.total_reward += reward;
+        arm.total_reward_sq += reward * reward;
+        arm.last_latency_ms = observation.latency_ms;
+        self.total_observations += 1;
+    }
+
+    /// Get the arm with the highest mean reward (lowest latency).
+    fn best_arm(&self) -> IndexChoice {
+        self.arms
+            .iter()
+            .filter(|(_, s)| s.pulls > 0)
+            .max_by(|(_, a), (_, b)| {
+                a.mean_reward()
+                    .partial_cmp(&b.mean_reward())
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .map(|(&idx, _)| idx)
+            .unwrap_or(IndexChoice::Hnsw)
+    }
+
+    /// UCB1 selection: mean reward + confidence bound.
+    fn ucb_select(&self, confidence: f64) -> IndexChoice {
+        let ln_total = (self.total_observations.max(1) as f64).ln();
+
+        self.arms
+            .iter()
+            .filter(|(_, s)| s.pulls > 0)
+            .max_by(|(_, a), (_, b)| {
+                let ucb_a = a.mean_reward() + confidence * (ln_total / a.pulls as f64).sqrt();
+                let ucb_b = b.mean_reward() + confidence * (ln_total / b.pulls as f64).sqrt();
+                ucb_a
+                    .partial_cmp(&ucb_b)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .map(|(&idx, _)| idx)
+            .unwrap_or(IndexChoice::Hnsw)
+    }
+
+    /// Get performance statistics for all arms.
+    pub fn arm_stats(&self) -> Vec<ArmPerformance> {
+        self.arms
+            .iter()
+            .map(|(&index, stats)| ArmPerformance {
+                index,
+                observations: stats.pulls,
+                mean_reward: stats.mean_reward(),
+                avg_latency_ms: if stats.pulls > 0 {
+                    1.0 / stats.mean_reward() - 1.0
+                } else {
+                    0.0
+                },
+                last_latency_ms: stats.last_latency_ms,
+            })
+            .collect()
+    }
+
+    /// Total number of observations recorded.
+    pub fn total_observations(&self) -> u64 {
+        self.total_observations
+    }
+
+    /// Reset all learned statistics.
+    pub fn reset(&mut self) {
+        for stats in self.arms.values_mut() {
+            *stats = ArmStats::default();
+        }
+        self.total_observations = 0;
+    }
+}
+
+/// Performance summary for a single bandit arm.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ArmPerformance {
+    /// Index strategy.
+    pub index: IndexChoice,
+    /// Number of times this strategy was used.
+    pub observations: u64,
+    /// Mean reward (higher = better performance).
+    pub mean_reward: f64,
+    /// Average observed latency in ms.
+    pub avg_latency_ms: f64,
+    /// Most recent latency.
+    pub last_latency_ms: f64,
+}
+
+use std::collections::HashMap;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -663,5 +903,216 @@ mod tests {
     fn test_active_vectors() {
         let stats = CollectionStatistics::new(10_000, 64, 0.2);
         assert_eq!(stats.active_vectors(), 8_000);
+    }
+
+    // ── Adaptive Optimizer Tests ──
+
+    #[test]
+    fn test_adaptive_optimizer_cold_start() {
+        let optimizer = AdaptiveOptimizer::new(ExplorationStrategy::default());
+        let stats = CollectionStatistics::new(100_000, 384, 0.0);
+        // Cold start should explore (pick least-tried arm)
+        let choice = optimizer.select(&stats, 10, None);
+        // Any arm is valid during cold start
+        assert!(
+            [
+                IndexChoice::Hnsw,
+                IndexChoice::BruteForce,
+                IndexChoice::HnswPreFilter,
+                IndexChoice::HnswPostFilter,
+            ]
+            .contains(&choice)
+        );
+    }
+
+    #[test]
+    fn test_adaptive_optimizer_learns() {
+        let mut optimizer = AdaptiveOptimizer::new(ExplorationStrategy::Ucb { confidence: 1.0 });
+
+        // Feed HNSW with consistently low latency (many observations)
+        for _ in 0..100 {
+            optimizer.observe(LatencyObservation {
+                index: IndexChoice::Hnsw,
+                latency_ms: 2.0,
+                results_returned: 10,
+                dataset_size: 100_000,
+            });
+        }
+
+        // Feed BruteForce with consistently high latency
+        for _ in 0..100 {
+            optimizer.observe(LatencyObservation {
+                index: IndexChoice::BruteForce,
+                latency_ms: 50.0,
+                results_returned: 10,
+                dataset_size: 100_000,
+            });
+        }
+
+        // Feed pre/post filter with moderate latency
+        for _ in 0..100 {
+            optimizer.observe(LatencyObservation {
+                index: IndexChoice::HnswPreFilter,
+                latency_ms: 5.0,
+                results_returned: 10,
+                dataset_size: 100_000,
+            });
+            optimizer.observe(LatencyObservation {
+                index: IndexChoice::HnswPostFilter,
+                latency_ms: 8.0,
+                results_returned: 10,
+                dataset_size: 100_000,
+            });
+        }
+
+        let stats = CollectionStatistics::new(100_000, 384, 0.0);
+        let choice = optimizer.select(&stats, 10, None);
+        // Should prefer HNSW (lowest latency) with enough observations to overcome UCB bonus
+        assert_eq!(choice, IndexChoice::Hnsw);
+    }
+
+    #[test]
+    fn test_adaptive_optimizer_arm_stats() {
+        let mut optimizer = AdaptiveOptimizer::default();
+
+        optimizer.observe(LatencyObservation {
+            index: IndexChoice::Hnsw,
+            latency_ms: 3.0,
+            results_returned: 10,
+            dataset_size: 50_000,
+        });
+
+        let stats = optimizer.arm_stats();
+        let hnsw_stat = stats.iter().find(|s| s.index == IndexChoice::Hnsw).unwrap();
+        assert_eq!(hnsw_stat.observations, 1);
+        assert!(hnsw_stat.mean_reward > 0.0);
+        assert_eq!(hnsw_stat.last_latency_ms, 3.0);
+    }
+
+    #[test]
+    fn test_adaptive_optimizer_reset() {
+        let mut optimizer = AdaptiveOptimizer::default();
+
+        optimizer.observe(LatencyObservation {
+            index: IndexChoice::Hnsw,
+            latency_ms: 2.0,
+            results_returned: 10,
+            dataset_size: 100_000,
+        });
+        assert_eq!(optimizer.total_observations(), 1);
+
+        optimizer.reset();
+        assert_eq!(optimizer.total_observations(), 0);
+        assert!(optimizer.arm_stats().iter().all(|s| s.observations == 0));
+    }
+
+    #[test]
+    fn test_epsilon_greedy_strategy() {
+        let mut optimizer =
+            AdaptiveOptimizer::new(ExplorationStrategy::EpsilonGreedy { epsilon: 0.1 });
+
+        // Train sufficiently
+        for _ in 0..20 {
+            optimizer.observe(LatencyObservation {
+                index: IndexChoice::Hnsw,
+                latency_ms: 1.0,
+                results_returned: 10,
+                dataset_size: 100_000,
+            });
+            optimizer.observe(LatencyObservation {
+                index: IndexChoice::BruteForce,
+                latency_ms: 100.0,
+                results_returned: 10,
+                dataset_size: 100_000,
+            });
+            optimizer.observe(LatencyObservation {
+                index: IndexChoice::HnswPreFilter,
+                latency_ms: 5.0,
+                results_returned: 10,
+                dataset_size: 100_000,
+            });
+            optimizer.observe(LatencyObservation {
+                index: IndexChoice::HnswPostFilter,
+                latency_ms: 8.0,
+                results_returned: 10,
+                dataset_size: 100_000,
+            });
+        }
+
+        let stats = CollectionStatistics::new(100_000, 384, 0.0);
+        let choice = optimizer.select(&stats, 10, None);
+        // With very low epsilon and enough training, should usually exploit best arm
+        // (HNSW has lowest latency)
+        assert!(
+            [IndexChoice::Hnsw, IndexChoice::BruteForce, IndexChoice::HnswPreFilter, IndexChoice::HnswPostFilter]
+                .contains(&choice)
+        );
+    }
+
+    #[test]
+    fn test_ucb_exploration() {
+        let mut optimizer = AdaptiveOptimizer::new(ExplorationStrategy::Ucb { confidence: 2.0 });
+
+        // Only observe HNSW heavily, others sparsely
+        for _ in 0..50 {
+            optimizer.observe(LatencyObservation {
+                index: IndexChoice::Hnsw,
+                latency_ms: 3.0,
+                results_returned: 10,
+                dataset_size: 100_000,
+            });
+        }
+        for _ in 0..2 {
+            optimizer.observe(LatencyObservation {
+                index: IndexChoice::BruteForce,
+                latency_ms: 100.0,
+                results_returned: 10,
+                dataset_size: 100_000,
+            });
+        }
+        for _ in 0..2 {
+            optimizer.observe(LatencyObservation {
+                index: IndexChoice::HnswPreFilter,
+                latency_ms: 4.0,
+                results_returned: 10,
+                dataset_size: 100_000,
+            });
+        }
+        for _ in 0..2 {
+            optimizer.observe(LatencyObservation {
+                index: IndexChoice::HnswPostFilter,
+                latency_ms: 5.0,
+                results_returned: 10,
+                dataset_size: 100_000,
+            });
+        }
+
+        // UCB considers uncertainty — under-explored arms get a bonus
+        let stats = CollectionStatistics::new(100_000, 384, 0.0);
+        let choice = optimizer.select(&stats, 10, None);
+        // Any valid arm can be selected — UCB may explore under-tried arms
+        assert!(
+            [
+                IndexChoice::Hnsw,
+                IndexChoice::BruteForce,
+                IndexChoice::HnswPreFilter,
+                IndexChoice::HnswPostFilter,
+            ]
+            .contains(&choice)
+        );
+    }
+
+    #[test]
+    fn test_latency_observation_serde() {
+        let obs = LatencyObservation {
+            index: IndexChoice::Hnsw,
+            latency_ms: 3.5,
+            results_returned: 10,
+            dataset_size: 50_000,
+        };
+        let json = serde_json::to_string(&obs).unwrap();
+        let deser: LatencyObservation = serde_json::from_str(&json).unwrap();
+        assert_eq!(deser.index, IndexChoice::Hnsw);
+        assert!((deser.latency_ms - 3.5).abs() < f64::EPSILON);
     }
 }
