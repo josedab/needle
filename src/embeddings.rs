@@ -535,4 +535,140 @@ mod tests {
         assert!(!builder.config.normalize);
         assert_eq!(builder.config.num_threads, 2);
     }
+
+    // ========================================================================
+    // Extended embeddings tests
+    // ========================================================================
+
+    #[test]
+    fn test_embedder_config_builder_chain() {
+        let builder = EmbedderBuilder::new()
+            .max_length(128)
+            .normalize(true)
+            .pooling(PoolingStrategy::Max)
+            .num_threads(8);
+
+        assert_eq!(builder.config.max_length, 128);
+        assert!(builder.config.normalize);
+        assert_eq!(builder.config.num_threads, 8);
+    }
+
+    #[test]
+    fn test_embedder_builder_default() {
+        let builder = EmbedderBuilder::default();
+        assert_eq!(builder.config.max_length, 512);
+        assert!(builder.config.normalize);
+        assert_eq!(builder.config.num_threads, 4);
+    }
+
+    #[test]
+    fn test_pooling_strategy_variants() {
+        // Just ensure all variants can be used in config
+        for strategy in &[PoolingStrategy::Cls, PoolingStrategy::Mean, PoolingStrategy::Max] {
+            let config = EmbedderBuilder::new().pooling(*strategy);
+            let _ = format!("{:?}", config.config.pooling);
+        }
+    }
+
+    #[test]
+    fn test_normalize_zero_vector() {
+        let vec = vec![0.0, 0.0, 0.0];
+        let normalized = normalize(&vec);
+        // Zero vector should remain zero
+        assert!(normalized.iter().all(|&x| x == 0.0));
+    }
+
+    #[test]
+    fn test_normalize_unit_vector() {
+        let vec = vec![1.0, 0.0, 0.0];
+        let normalized = normalize(&vec);
+        assert!((normalized[0] - 1.0).abs() < 1e-6);
+        assert!((normalized[1]).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_normalize_negative_values() {
+        let vec = vec![-3.0, 4.0];
+        let normalized = normalize(&vec);
+        let norm: f32 = normalized.iter().map(|x| x * x).sum::<f32>().sqrt();
+        assert!((norm - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_builder_missing_model_from_directory() {
+        let result = EmbedderBuilder::new().from_directory("/nonexistent/path");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_builder_missing_model_from_files() {
+        let result = EmbedderBuilder::new()
+            .from_files("/nonexistent/model.onnx", "/nonexistent/tokenizer.json");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_embedding_error_display() {
+        let err = EmbeddingError::ModelNotFound("test.onnx".to_string());
+        assert!(err.to_string().contains("test.onnx"));
+
+        let err = EmbeddingError::InvalidInput("bad input".to_string());
+        assert!(err.to_string().contains("bad input"));
+
+        let err = EmbeddingError::TokenizerError("tokenizer fail".to_string());
+        assert!(err.to_string().contains("tokenizer fail"));
+
+        let err = EmbeddingError::OrtError("ort fail".to_string());
+        assert!(err.to_string().contains("ort fail"));
+    }
+
+    // Mock embedder for testing SharedEmbedder
+    struct MockEmbedder {
+        dims: usize,
+    }
+
+    impl Embedder for MockEmbedder {
+        fn embed(&self, _text: &str) -> Result<Vec<f32>> {
+            Ok(vec![0.1; self.dims])
+        }
+
+        fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>> {
+            Ok(texts.iter().map(|_| vec![0.1; self.dims]).collect())
+        }
+
+        fn dimensions(&self) -> usize {
+            self.dims
+        }
+    }
+
+    #[test]
+    fn test_shared_embedder_delegation() {
+        let embedder = SharedEmbedder::new(MockEmbedder { dims: 128 });
+        assert_eq!(embedder.dimensions(), 128);
+
+        let result = embedder.embed("test").unwrap();
+        assert_eq!(result.len(), 128);
+    }
+
+    #[test]
+    fn test_shared_embedder_batch() {
+        let embedder = SharedEmbedder::new(MockEmbedder { dims: 64 });
+        let results = embedder.embed_batch(&["a", "b", "c"]).unwrap();
+        assert_eq!(results.len(), 3);
+        assert!(results.iter().all(|r| r.len() == 64));
+    }
+
+    #[test]
+    fn test_shared_embedder_clone() {
+        let embedder = SharedEmbedder::new(MockEmbedder { dims: 32 });
+        let cloned = embedder.clone();
+        assert_eq!(cloned.dimensions(), 32);
+    }
+
+    #[test]
+    fn test_shared_embedder_empty_batch() {
+        let embedder = SharedEmbedder::new(MockEmbedder { dims: 64 });
+        let results = embedder.embed_batch(&[]).unwrap();
+        assert!(results.is_empty());
+    }
 }
