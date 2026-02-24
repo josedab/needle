@@ -198,7 +198,10 @@ pub use services::{
 };
 
 // ── Next-Gen v9 Services ─────────────────────────────────────────────────────
-pub use services::{backup_command, change_stream, client_sdk, grpc_schema, readiness_probe};
+pub use services::{
+    auto_embed_endpoint, backup_command, change_stream, client_sdk, grpc_schema,
+    query_cache_middleware, readiness_probe, tenant_router,
+};
 
 // ── Experimental / Advanced ──────────────────────────────────────────────────
 // Features under active development. APIs may change without notice.
