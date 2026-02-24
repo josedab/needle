@@ -129,6 +129,38 @@ impl BenchmarkReport {
         }
         s
     }
+
+    /// Export the report as JSON.
+    pub fn to_json(&self) -> String {
+        serde_json::to_string_pretty(self).unwrap_or_else(|_| "{}".to_string())
+    }
+
+    /// Export the report as Markdown.
+    pub fn to_markdown(&self) -> String {
+        let mut md = String::new();
+        md.push_str("# Needle Benchmark Report\n\n");
+        md.push_str("## Configuration\n\n");
+        md.push_str(&format!("| Parameter | Value |\n|---|---|\n"));
+        md.push_str(&format!("| Vectors | {} |\n", self.config.num_vectors));
+        md.push_str(&format!("| Dimensions | {} |\n", self.config.dimensions));
+        md.push_str(&format!("| Queries | {} |\n", self.config.num_queries));
+        md.push_str(&format!("| Distance | {:?} |\n", self.config.distance));
+        md.push_str(&format!("| Build time | {}ms |\n", self.build_time_ms));
+        md.push_str(&format!(
+            "| Est. memory | {:.1} MB |\n\n",
+            self.memory_estimate_bytes as f64 / 1_048_576.0
+        ));
+        md.push_str("## Results\n\n");
+        md.push_str("| k | ef_search | recall | QPS | mean (µs) | p95 (µs) | p99 (µs) |\n");
+        md.push_str("|---|---|---|---|---|---|---|\n");
+        for m in &self.metrics {
+            md.push_str(&format!(
+                "| {} | {} | {:.4} | {:.1} | {:.1} | {:.1} | {:.1} |\n",
+                m.k, m.ef_search, m.recall, m.qps, m.mean_latency_us, m.p95_latency_us, m.p99_latency_us,
+            ));
+        }
+        md
+    }
 }
 
 // ============================================================================
@@ -285,6 +317,143 @@ pub fn run_recall_benchmark(config: &BenchmarkConfig) -> BenchmarkReport {
     }
 }
 
+/// Compare two benchmark reports side-by-side.
+pub fn compare_reports(baseline: &BenchmarkReport, candidate: &BenchmarkReport) -> ComparisonReport {
+    let mut comparisons = Vec::new();
+
+    for bm in &baseline.metrics {
+        let cm = candidate
+            .metrics
+            .iter()
+            .find(|m| m.k == bm.k && m.ef_search == bm.ef_search);
+
+        if let Some(cm) = cm {
+            comparisons.push(MetricComparison {
+                k: bm.k,
+                ef_search: bm.ef_search,
+                baseline_recall: bm.recall,
+                candidate_recall: cm.recall,
+                recall_delta: cm.recall - bm.recall,
+                baseline_qps: bm.qps,
+                candidate_qps: cm.qps,
+                qps_change_pct: if bm.qps > 0.0 {
+                    (cm.qps - bm.qps) / bm.qps * 100.0
+                } else {
+                    0.0
+                },
+                baseline_p99_us: bm.p99_latency_us,
+                candidate_p99_us: cm.p99_latency_us,
+                p99_change_pct: if bm.p99_latency_us > 0.0 {
+                    (cm.p99_latency_us - bm.p99_latency_us) / bm.p99_latency_us * 100.0
+                } else {
+                    0.0
+                },
+            });
+        }
+    }
+
+    let build_time_change_pct = if baseline.build_time_ms > 0 {
+        (candidate.build_time_ms as f64 - baseline.build_time_ms as f64)
+            / baseline.build_time_ms as f64
+            * 100.0
+    } else {
+        0.0
+    };
+
+    ComparisonReport {
+        baseline_config: baseline.config.clone(),
+        candidate_config: candidate.config.clone(),
+        build_time_change_pct,
+        comparisons,
+    }
+}
+
+/// Side-by-side comparison of two benchmark runs.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ComparisonReport {
+    /// Baseline configuration.
+    pub baseline_config: BenchmarkConfig,
+    /// Candidate configuration.
+    pub candidate_config: BenchmarkConfig,
+    /// Build time change percentage.
+    pub build_time_change_pct: f64,
+    /// Per-(k, ef_search) comparisons.
+    pub comparisons: Vec<MetricComparison>,
+}
+
+/// Comparison of a single (k, ef_search) metric pair.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MetricComparison {
+    /// k value.
+    pub k: usize,
+    /// ef_search value.
+    pub ef_search: usize,
+    /// Baseline recall@k.
+    pub baseline_recall: f64,
+    /// Candidate recall@k.
+    pub candidate_recall: f64,
+    /// Recall delta (positive = improvement).
+    pub recall_delta: f64,
+    /// Baseline QPS.
+    pub baseline_qps: f64,
+    /// Candidate QPS.
+    pub candidate_qps: f64,
+    /// QPS change percentage (positive = faster).
+    pub qps_change_pct: f64,
+    /// Baseline P99 latency (µs).
+    pub baseline_p99_us: f64,
+    /// Candidate P99 latency (µs).
+    pub candidate_p99_us: f64,
+    /// P99 change percentage (negative = faster).
+    pub p99_change_pct: f64,
+}
+
+impl ComparisonReport {
+    /// Generate a summary string.
+    pub fn summary(&self) -> String {
+        let mut s = String::new();
+        s.push_str("Benchmark Comparison\n");
+        s.push_str("====================\n");
+        s.push_str(&format!(
+            "Build time change: {:+.1}%\n\n",
+            self.build_time_change_pct
+        ));
+        s.push_str(&format!(
+            "{:<6} {:<10} {:<14} {:<14} {:<12} {:<12}\n",
+            "k", "ef_search", "recall_delta", "qps_change%", "p99_base_us", "p99_cand_us"
+        ));
+        s.push_str(&format!("{}\n", "-".repeat(70)));
+        for c in &self.comparisons {
+            s.push_str(&format!(
+                "{:<6} {:<10} {:+<14.4} {:+<14.1} {:<12.1} {:<12.1}\n",
+                c.k, c.ef_search, c.recall_delta, c.qps_change_pct, c.baseline_p99_us, c.candidate_p99_us,
+            ));
+        }
+        s
+    }
+
+    /// Export as JSON.
+    pub fn to_json(&self) -> String {
+        serde_json::to_string_pretty(self).unwrap_or_else(|_| "{}".to_string())
+    }
+
+    /// Export as Markdown.
+    pub fn to_markdown(&self) -> String {
+        let mut md = String::new();
+        md.push_str("# Benchmark Comparison\n\n");
+        md.push_str(&format!("Build time change: {:+.1}%\n\n", self.build_time_change_pct));
+        md.push_str("| k | ef_search | recall Δ | QPS change | p99 base (µs) | p99 cand (µs) |\n");
+        md.push_str("|---|---|---|---|---|---|\n");
+        for c in &self.comparisons {
+            md.push_str(&format!(
+                "| {} | {} | {:+.4} | {:+.1}% | {:.1} | {:.1} |\n",
+                c.k, c.ef_search, c.recall_delta, c.qps_change_pct, c.baseline_p99_us, c.candidate_p99_us,
+            ));
+        }
+        md
+    }
+}
+
 // ============================================================================
 // Tests
 // ============================================================================
@@ -359,5 +528,70 @@ mod tests {
         let summary = report.summary();
         assert!(summary.contains("Recall Benchmark"));
         assert!(summary.contains("recall"));
+    }
+
+    #[test]
+    fn test_report_json_export() {
+        let config = BenchmarkConfig {
+            num_vectors: 50,
+            dimensions: 8,
+            num_queries: 5,
+            k_values: vec![1],
+            ef_search_values: vec![50],
+            seed: 1,
+            distance: DistanceFunction::Cosine,
+        };
+        let report = run_recall_benchmark(&config);
+        let json = report.to_json();
+        assert!(json.contains("num_vectors"));
+        assert!(json.contains("recall"));
+    }
+
+    #[test]
+    fn test_report_markdown_export() {
+        let config = BenchmarkConfig {
+            num_vectors: 50,
+            dimensions: 8,
+            num_queries: 5,
+            k_values: vec![1],
+            ef_search_values: vec![50],
+            seed: 1,
+            distance: DistanceFunction::Cosine,
+        };
+        let report = run_recall_benchmark(&config);
+        let md = report.to_markdown();
+        assert!(md.contains("# Needle Benchmark Report"));
+        assert!(md.contains("| k |"));
+    }
+
+    #[test]
+    fn test_compare_reports() {
+        let config1 = BenchmarkConfig {
+            num_vectors: 50,
+            dimensions: 8,
+            num_queries: 5,
+            k_values: vec![1, 5],
+            ef_search_values: vec![50],
+            seed: 42,
+            distance: DistanceFunction::Cosine,
+        };
+        let config2 = BenchmarkConfig {
+            num_vectors: 50,
+            dimensions: 8,
+            num_queries: 5,
+            k_values: vec![1, 5],
+            ef_search_values: vec![50],
+            seed: 43,
+            distance: DistanceFunction::Cosine,
+        };
+        let report1 = run_recall_benchmark(&config1);
+        let report2 = run_recall_benchmark(&config2);
+        let comparison = compare_reports(&report1, &report2);
+
+        assert_eq!(comparison.comparisons.len(), 2);
+        let summary = comparison.summary();
+        assert!(summary.contains("Benchmark Comparison"));
+        let md = comparison.to_markdown();
+        assert!(md.contains("# Benchmark Comparison"));
     }
 }
