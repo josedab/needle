@@ -196,7 +196,7 @@ pub use services::{
 pub use services::{hnsw_compactor, matryoshka_service, wasm_plugin_runtime};
 
 // ── Next-Gen v9 Services ─────────────────────────────────────────────────────
-pub use services::{client_sdk, grpc_schema};
+pub use services::{change_stream, client_sdk, grpc_schema};
 
 // ── Experimental / Advanced ──────────────────────────────────────────────────
 // Features under active development. APIs may change without notice.

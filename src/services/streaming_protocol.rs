@@ -359,6 +359,212 @@ impl<'a> StreamProtocol<'a> {
     }
 }
 
+// ── Subscription Manager ─────────────────────────────────────────────────────
+
+/// Subscription state for a single subscriber.
+#[derive(Debug, Clone)]
+pub struct Subscription {
+    /// Unique subscription ID.
+    pub id: String,
+    /// Collection being watched.
+    pub collection: String,
+    /// Last acknowledged offset.
+    pub last_offset: u64,
+    /// Event filter (None = all events).
+    pub event_types: Option<Vec<ChangeEventType>>,
+    /// Created timestamp.
+    pub created_at: u64,
+}
+
+/// Type of change event.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ChangeEventType {
+    Insert,
+    Delete,
+    Upsert,
+}
+
+/// A change event emitted by the subscription manager.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChangeEvent {
+    pub offset: u64,
+    pub event_type: ChangeEventType,
+    pub collection: String,
+    pub vector_id: String,
+    pub timestamp: u64,
+}
+
+/// Manages subscriptions and dispatches change events.
+pub struct SubscriptionManager {
+    subscriptions: HashMap<String, Subscription>,
+    event_log: VecDeque<ChangeEvent>,
+    next_offset: u64,
+    max_log_size: usize,
+    next_sub_id: u64,
+}
+
+impl SubscriptionManager {
+    pub fn new(max_log_size: usize) -> Self {
+        Self {
+            subscriptions: HashMap::new(),
+            event_log: VecDeque::new(),
+            next_offset: 1,
+            max_log_size,
+            next_sub_id: 0,
+        }
+    }
+
+    /// Create a new subscription.
+    pub fn subscribe(
+        &mut self,
+        collection: &str,
+        event_types: Option<Vec<ChangeEventType>>,
+    ) -> Subscription {
+        let id = format!("sub_{}", self.next_sub_id);
+        self.next_sub_id += 1;
+        let sub = Subscription {
+            id: id.clone(),
+            collection: collection.to_string(),
+            last_offset: self.next_offset.saturating_sub(1),
+            event_types,
+            created_at: SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
+        };
+        self.subscriptions.insert(id, sub.clone());
+        sub
+    }
+
+    /// Remove a subscription.
+    pub fn unsubscribe(&mut self, sub_id: &str) -> bool {
+        self.subscriptions.remove(sub_id).is_some()
+    }
+
+    /// Record a change event (called after flush applies a frame).
+    pub fn emit(&mut self, event_type: ChangeEventType, collection: &str, vector_id: &str) {
+        let event = ChangeEvent {
+            offset: self.next_offset,
+            event_type,
+            collection: collection.to_string(),
+            vector_id: vector_id.to_string(),
+            timestamp: SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
+        };
+        self.next_offset += 1;
+        self.event_log.push_back(event);
+        while self.event_log.len() > self.max_log_size {
+            self.event_log.pop_front();
+        }
+    }
+
+    /// Poll pending events for a subscription.
+    pub fn poll(&mut self, sub_id: &str) -> Vec<ChangeEvent> {
+        let sub = match self.subscriptions.get(sub_id) {
+            Some(s) => s.clone(),
+            None => return Vec::new(),
+        };
+
+        let events: Vec<ChangeEvent> = self
+            .event_log
+            .iter()
+            .filter(|e| {
+                e.offset > sub.last_offset
+                    && e.collection == sub.collection
+                    && sub
+                        .event_types
+                        .as_ref()
+                        .map_or(true, |types| types.contains(&e.event_type))
+            })
+            .cloned()
+            .collect();
+
+        if let Some(last) = events.last() {
+            if let Some(s) = self.subscriptions.get_mut(sub_id) {
+                s.last_offset = last.offset;
+            }
+        }
+
+        events
+    }
+
+    /// Acknowledge events up to an offset.
+    pub fn ack(&mut self, sub_id: &str, offset: u64) {
+        if let Some(sub) = self.subscriptions.get_mut(sub_id) {
+            sub.last_offset = sub.last_offset.max(offset);
+        }
+    }
+
+    /// Number of active subscriptions.
+    pub fn subscription_count(&self) -> usize {
+        self.subscriptions.len()
+    }
+
+    /// Current offset.
+    pub fn current_offset(&self) -> u64 {
+        self.next_offset.saturating_sub(1)
+    }
+}
+
+impl Default for SubscriptionManager {
+    fn default() -> Self {
+        Self::new(100_000)
+    }
+}
+
+// ── Progressive Search ──────────────────────────────────────────────────────
+
+/// Result from a progressive search step.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProgressiveSearchResult {
+    /// Current best results so far.
+    pub results: Vec<(String, f32)>,
+    /// Whether more results may come.
+    pub is_complete: bool,
+    /// Number of vectors scanned so far.
+    pub vectors_scanned: usize,
+    /// Elapsed time in microseconds.
+    pub elapsed_us: u64,
+}
+
+/// Performs a search that yields intermediate results in batches.
+pub fn progressive_search(
+    db: &Database,
+    collection: &str,
+    query: &[f32],
+    k: usize,
+    batch_size: usize,
+) -> Result<Vec<ProgressiveSearchResult>> {
+    let coll = db.collection(collection)?;
+    let start = Instant::now();
+    let mut steps = Vec::new();
+
+    // First batch: fast approximate with reduced ef
+    let initial_k = batch_size.min(k);
+    let initial = coll.search(query, initial_k)?;
+    steps.push(ProgressiveSearchResult {
+        results: initial.iter().map(|r| (r.id.clone(), r.distance)).collect(),
+        is_complete: initial_k >= k,
+        vectors_scanned: initial.len(),
+        elapsed_us: start.elapsed().as_micros() as u64,
+    });
+
+    // Full results if needed
+    if initial_k < k {
+        let full = coll.search(query, k)?;
+        steps.push(ProgressiveSearchResult {
+            results: full.iter().map(|r| (r.id.clone(), r.distance)).collect(),
+            is_complete: true,
+            vectors_scanned: full.len(),
+            elapsed_us: start.elapsed().as_micros() as u64,
+        });
+    }
+
+    Ok(steps)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -469,5 +675,75 @@ mod tests {
         assert_eq!(stream.total_received(), 5);
         stream.flush().unwrap();
         assert_eq!(stream.total_flushed(), 5);
+    }
+
+    #[test]
+    fn test_subscription_manager() {
+        let mut mgr = SubscriptionManager::new(1000);
+        let sub = mgr.subscribe("test", None);
+        assert_eq!(mgr.subscription_count(), 1);
+
+        mgr.emit(ChangeEventType::Insert, "test", "v1");
+        mgr.emit(ChangeEventType::Insert, "test", "v2");
+        mgr.emit(ChangeEventType::Delete, "test", "v3");
+
+        let events = mgr.poll(&sub.id);
+        assert_eq!(events.len(), 3);
+        assert_eq!(events[0].vector_id, "v1");
+        assert_eq!(events[2].event_type, ChangeEventType::Delete);
+
+        // Subsequent poll should return nothing (already acked)
+        let events2 = mgr.poll(&sub.id);
+        assert!(events2.is_empty());
+    }
+
+    #[test]
+    fn test_subscription_filter() {
+        let mut mgr = SubscriptionManager::new(1000);
+        let sub = mgr.subscribe("test", Some(vec![ChangeEventType::Insert]));
+
+        mgr.emit(ChangeEventType::Insert, "test", "v1");
+        mgr.emit(ChangeEventType::Delete, "test", "v2");
+
+        let events = mgr.poll(&sub.id);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].event_type, ChangeEventType::Insert);
+    }
+
+    #[test]
+    fn test_subscription_collection_scope() {
+        let mut mgr = SubscriptionManager::new(1000);
+        let sub = mgr.subscribe("coll_a", None);
+
+        mgr.emit(ChangeEventType::Insert, "coll_a", "v1");
+        mgr.emit(ChangeEventType::Insert, "coll_b", "v2");
+
+        let events = mgr.poll(&sub.id);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].collection, "coll_a");
+    }
+
+    #[test]
+    fn test_unsubscribe() {
+        let mut mgr = SubscriptionManager::new(1000);
+        let sub = mgr.subscribe("test", None);
+        assert!(mgr.unsubscribe(&sub.id));
+        assert_eq!(mgr.subscription_count(), 0);
+        assert!(!mgr.unsubscribe("nonexistent"));
+    }
+
+    #[test]
+    fn test_progressive_search() {
+        let db = setup();
+        let coll = db.collection("test").unwrap();
+        for i in 0..20 {
+            coll.insert(format!("v{i}"), &[i as f32 * 0.1, 0.0, 0.0, 0.0], None).unwrap();
+        }
+
+        let steps = progressive_search(&db, "test", &[1.0, 0.0, 0.0, 0.0], 10, 3).unwrap();
+        assert!(!steps.is_empty());
+        // Last step should be complete
+        assert!(steps.last().unwrap().is_complete);
+        assert_eq!(steps.last().unwrap().results.len(), 10);
     }
 }
