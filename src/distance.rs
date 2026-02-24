@@ -666,4 +666,189 @@ mod tests {
 
         assert!((regular - fast).abs() < 1e-5);
     }
+
+    // ========================================================================
+    // Edge case tests
+    // ========================================================================
+
+    #[test]
+    fn test_dimension_mismatch_error() {
+        let a = vec![1.0, 2.0, 3.0];
+        let b = vec![1.0, 2.0];
+
+        assert!(cosine_distance(&a, &b).is_err());
+        assert!(euclidean_distance(&a, &b).is_err());
+        assert!(dot_product(&a, &b).is_err());
+        assert!(manhattan_distance(&a, &b).is_err());
+        assert!(dot_product_distance(&a, &b).is_err());
+        assert!(cosine_distance_normalized(&a, &b).is_err());
+        assert!(euclidean_distance_squared(&a, &b).is_err());
+    }
+
+    #[test]
+    fn test_dimension_mismatch_via_compute() {
+        let a = vec![1.0, 2.0];
+        let b = vec![1.0, 2.0, 3.0];
+        for df in &[
+            DistanceFunction::Cosine,
+            DistanceFunction::CosineNormalized,
+            DistanceFunction::Euclidean,
+            DistanceFunction::DotProduct,
+            DistanceFunction::Manhattan,
+        ] {
+            let result = df.compute(&a, &b);
+            assert!(result.is_err(), "{:?} should fail on mismatched dims", df);
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "SIMD operation on empty slices")]
+    fn test_empty_vectors_panic_on_simd() {
+        // On aarch64/NEON, empty vectors panic in SIMD path (known limitation)
+        let a: Vec<f32> = vec![];
+        let b: Vec<f32> = vec![];
+        let _ = dot_product(&a, &b);
+    }
+
+    #[test]
+    fn test_zero_vector_cosine() {
+        let zero = vec![0.0, 0.0, 0.0];
+        let b = vec![1.0, 2.0, 3.0];
+
+        // Zero vector should return distance of 1.0 (handled by norm check)
+        let dist = cosine_distance(&zero, &b).unwrap();
+        assert!((dist - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_both_zero_vectors_cosine() {
+        let a = vec![0.0, 0.0];
+        let b = vec![0.0, 0.0];
+        let dist = cosine_distance(&a, &b).unwrap();
+        assert!((dist - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_nan_vector_distance() {
+        let a = vec![f32::NAN, 1.0];
+        let b = vec![1.0, 2.0];
+
+        // NaN propagates through arithmetic; results should be NaN
+        let dist = euclidean_distance(&a, &b).unwrap();
+        assert!(dist.is_nan());
+
+        let dot = dot_product(&a, &b).unwrap();
+        assert!(dot.is_nan());
+    }
+
+    #[test]
+    fn test_infinity_vector_distance() {
+        let a = vec![f32::INFINITY, 0.0];
+        let b = vec![0.0, 1.0];
+
+        let dist = euclidean_distance(&a, &b).unwrap();
+        assert!(dist.is_infinite());
+
+        let man = manhattan_distance(&a, &b).unwrap();
+        assert!(man.is_infinite());
+    }
+
+    #[test]
+    fn test_negative_infinity_vector() {
+        let a = vec![f32::NEG_INFINITY, 0.0];
+        let b = vec![0.0, 1.0];
+
+        let dist = manhattan_distance(&a, &b).unwrap();
+        assert!(dist.is_infinite());
+    }
+
+    #[test]
+    fn test_identical_vectors_all_distances() {
+        let a = vec![1.0, 2.0, 3.0];
+        let b = vec![1.0, 2.0, 3.0];
+
+        let cos = cosine_distance(&a, &b).unwrap();
+        assert!(cos.abs() < 1e-6, "identical vectors should have cosine dist ~0");
+
+        let euc = euclidean_distance(&a, &b).unwrap();
+        assert!(euc.abs() < 1e-6, "identical vectors should have euclidean dist 0");
+
+        let man = manhattan_distance(&a, &b).unwrap();
+        assert!(man.abs() < 1e-6, "identical vectors should have manhattan dist 0");
+
+        let euc_sq = euclidean_distance_squared(&a, &b).unwrap();
+        assert!(euc_sq.abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_single_dimension_vectors() {
+        let a = vec![3.0];
+        let b = vec![7.0];
+
+        let euc = euclidean_distance(&a, &b).unwrap();
+        assert!((euc - 4.0).abs() < 1e-6);
+
+        let man = manhattan_distance(&a, &b).unwrap();
+        assert!((man - 4.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_dot_product_distance_negation() {
+        let a = vec![1.0, 2.0, 3.0];
+        let b = vec![4.0, 5.0, 6.0];
+
+        let dp = dot_product(&a, &b).unwrap();
+        let dpd = dot_product_distance(&a, &b).unwrap();
+        assert!((dpd + dp).abs() < 1e-6, "dot_product_distance should be -dot_product");
+    }
+
+    #[test]
+    fn test_normalize_zero_vector() {
+        let mut v = vec![0.0, 0.0, 0.0];
+        normalize(&mut v);
+        // Zero vector should remain zero after normalization
+        assert!(v.iter().all(|&x| x == 0.0));
+    }
+
+    #[test]
+    fn test_normalized_returns_unit_vector() {
+        let v = vec![3.0, 4.0, 0.0];
+        let n = normalized(&v);
+        let norm: f32 = n.iter().map(|x| x * x).sum::<f32>().sqrt();
+        assert!((norm - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_compute_dispatch_all_variants() {
+        let a = vec![1.0, 0.0, 0.0];
+        let b = vec![0.0, 1.0, 0.0];
+
+        let cos = DistanceFunction::Cosine.compute(&a, &b).unwrap();
+        assert!((cos - 1.0).abs() < 1e-6);
+
+        let euc = DistanceFunction::Euclidean.compute(&a, &b).unwrap();
+        assert!((euc - std::f32::consts::SQRT_2).abs() < 1e-5);
+
+        let dp = DistanceFunction::DotProduct.compute(&a, &b).unwrap();
+        assert!(dp.abs() < 1e-6); // -dot_product = -0 = 0
+
+        let man = DistanceFunction::Manhattan.compute(&a, &b).unwrap();
+        assert!((man - 2.0).abs() < 1e-6);
+
+        let cos_norm = DistanceFunction::CosineNormalized.compute(&a, &b).unwrap();
+        assert!((cos_norm - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_large_vector() {
+        let dim = 1024;
+        let a: Vec<f32> = (0..dim).map(|i| i as f32 / dim as f32).collect();
+        let b: Vec<f32> = (0..dim).map(|i| (dim - i) as f32 / dim as f32).collect();
+
+        let dist = cosine_distance(&a, &b).unwrap();
+        assert!(dist >= 0.0 && dist <= 2.0);
+
+        let euc = euclidean_distance(&a, &b).unwrap();
+        assert!(euc >= 0.0);
+    }
 }
