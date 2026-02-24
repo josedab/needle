@@ -321,6 +321,44 @@ enum Commands {
     /// Check local environment and diagnose issues
     Doctor,
 
+    /// Snapshot management for time-travel queries
+    #[command(subcommand)]
+    Snapshot(SnapshotCommands),
+
+    /// Agentic memory management (store/recall/forget memories)
+    #[command(subcommand)]
+    Memory(MemoryCommands),
+
+    /// Compare two collections and show differences
+    Diff {
+        /// Path to the database file
+        database: String,
+        /// First collection name
+        #[arg(short = 'a', long)]
+        source: String,
+        /// Second collection name
+        #[arg(short = 'b', long)]
+        target: String,
+        /// Maximum differences to show
+        #[arg(short, long, default_value_t = 100)]
+        limit: usize,
+    },
+
+    /// Estimate query cost before execution
+    Estimate {
+        /// Path to the database file
+        database: String,
+        /// Collection name
+        #[arg(short, long)]
+        collection: String,
+        /// Number of results (k)
+        #[arg(short, long, default_value_t = 10)]
+        k: usize,
+        /// Whether query will include a filter
+        #[arg(long)]
+        with_filter: bool,
+    },
+
     /// Recommend the best index type for a workload
     RecommendIndex {
         /// Expected number of vectors
@@ -631,6 +669,98 @@ enum FederateCommands {
     },
 }
 
+/// Snapshot subcommands for time-travel queries
+#[derive(Subcommand)]
+enum SnapshotCommands {
+    /// Create a named snapshot of a collection
+    Create {
+        /// Path to the database file
+        database: String,
+        /// Collection name
+        #[arg(short, long)]
+        collection: String,
+        /// Snapshot name
+        #[arg(short, long)]
+        name: String,
+    },
+
+    /// List all snapshots for a collection
+    List {
+        /// Path to the database file
+        database: String,
+        /// Collection name
+        #[arg(short, long)]
+        collection: String,
+    },
+
+    /// Restore a collection from a snapshot
+    Restore {
+        /// Path to the database file
+        database: String,
+        /// Collection name
+        #[arg(short, long)]
+        collection: String,
+        /// Snapshot name to restore
+        #[arg(short, long)]
+        name: String,
+    },
+}
+
+/// Memory subcommands for agentic memory management
+#[derive(Subcommand)]
+enum MemoryCommands {
+    /// Store a memory with a pre-computed embedding vector
+    Remember {
+        /// Path to the database file
+        database: String,
+        /// Collection name (used as memory store)
+        #[arg(short, long)]
+        collection: String,
+        /// Memory content text
+        #[arg(short = 't', long)]
+        text: String,
+        /// Vector embedding as comma-separated floats
+        #[arg(short, long)]
+        vector: String,
+        /// Memory tier: episodic, semantic, procedural
+        #[arg(long, default_value = "episodic")]
+        tier: String,
+        /// Importance score 0.0-1.0
+        #[arg(long, default_value_t = 0.5)]
+        importance: f32,
+    },
+
+    /// Recall memories similar to a query vector
+    Recall {
+        /// Path to the database file
+        database: String,
+        /// Collection name
+        #[arg(short, long)]
+        collection: String,
+        /// Query vector as comma-separated floats
+        #[arg(short, long)]
+        vector: String,
+        /// Number of memories to retrieve
+        #[arg(short, long, default_value_t = 5)]
+        k: usize,
+        /// Filter by tier
+        #[arg(long)]
+        tier: Option<String>,
+    },
+
+    /// Forget (delete) a specific memory
+    Forget {
+        /// Path to the database file
+        database: String,
+        /// Collection name
+        #[arg(short, long)]
+        collection: String,
+        /// Memory ID to forget
+        #[arg(short, long)]
+        id: String,
+    },
+}
+
 fn main() {
     let cli = Cli::parse();
 
@@ -746,6 +876,12 @@ fn run(cli: Cli) -> Result<()> {
         Commands::Mcp { database, read_only } => mcp_command(&database, read_only),
         Commands::Init { directory, database, dimensions } => init_command(&directory, &database, dimensions),
         Commands::Doctor => doctor_command(),
+        Commands::Snapshot(cmd) => snapshot_command(cmd),
+        Commands::Memory(cmd) => memory_command(cmd),
+        Commands::Diff { database, source, target, limit } =>
+            diff_command(&database, &source, &target, limit),
+        Commands::Estimate { database, collection, k, with_filter } =>
+            estimate_command(&database, &collection, k, with_filter),
         Commands::RecommendIndex { vectors, dimensions, memory_mb, profile } =>
             recommend_index_command(vectors, dimensions, memory_mb, &profile),
     }
@@ -2642,6 +2778,193 @@ fn recommend_index_command(
         for alt in &recommendation.alternatives {
             println!("    - {:?}", alt);
         }
+    }
+
+    Ok(())
+}
+
+fn snapshot_command(cmd: SnapshotCommands) -> Result<()> {
+    match cmd {
+        SnapshotCommands::Create { database, collection, name } => {
+            let db = Database::open(&database)?;
+            let coll = db.collection(&collection)?;
+            coll.create_snapshot(&name)?;
+            println!("Created snapshot '{}' for collection '{}'", name, collection);
+            Ok(())
+        }
+        SnapshotCommands::List { database, collection } => {
+            let db = Database::open(&database)?;
+            let coll = db.collection(&collection)?;
+            let snapshots = coll.list_snapshots();
+            if snapshots.is_empty() {
+                println!("No snapshots found for collection '{}'", collection);
+            } else {
+                println!("Snapshots for '{}':", collection);
+                for s in &snapshots {
+                    println!("  - {}", s);
+                }
+            }
+            Ok(())
+        }
+        SnapshotCommands::Restore { database, collection, name } => {
+            let db = Database::open(&database)?;
+            let coll = db.collection(&collection)?;
+            coll.restore_snapshot(&name)?;
+            println!("Restored collection '{}' from snapshot '{}'", collection, name);
+            Ok(())
+        }
+    }
+}
+
+fn memory_command(cmd: MemoryCommands) -> Result<()> {
+    match cmd {
+        MemoryCommands::Remember { database, collection, text, vector, tier, importance } => {
+            let db = Database::open(&database)?;
+            let coll = db.collection(&collection)?;
+
+            let vec: Vec<f32> = vector.split(',')
+                .map(|s| s.trim().parse::<f32>())
+                .collect::<std::result::Result<Vec<_>, _>>()
+                .map_err(|e| NeedleError::InvalidInput(format!("Invalid vector: {}", e)))?;
+
+            let memory_id = format!("mem_{}", chrono::Utc::now().timestamp_millis());
+            let metadata = json!({
+                "_memory_content": text,
+                "_memory_tier": tier,
+                "_memory_importance": importance,
+                "_memory_timestamp": chrono::Utc::now().to_rfc3339(),
+            });
+
+            coll.insert(&memory_id, &vec, Some(metadata))?;
+            println!("Stored memory: {} (tier: {}, importance: {})", memory_id, tier, importance);
+            Ok(())
+        }
+        MemoryCommands::Recall { database, collection, vector, k, tier } => {
+            let db = Database::open(&database)?;
+            let coll = db.collection(&collection)?;
+
+            let vec: Vec<f32> = vector.split(',')
+                .map(|s| s.trim().parse::<f32>())
+                .collect::<std::result::Result<Vec<_>, _>>()
+                .map_err(|e| NeedleError::InvalidInput(format!("Invalid vector: {}", e)))?;
+
+            let results = if let Some(ref t) = tier {
+                let filter_json = json!({ "_memory_tier": { "$eq": t } });
+                let filter = needle::Filter::parse(&filter_json)
+                    .map_err(|e| NeedleError::InvalidInput(format!("Filter error: {}", e)))?;
+                coll.search_with_filter(&vec, k, &filter)?
+            } else {
+                coll.search(&vec, k)?
+            };
+
+            if results.is_empty() {
+                println!("No memories found.");
+            } else {
+                println!("Recalled {} memories:", results.len());
+                for r in &results {
+                    let content = r.metadata.as_ref()
+                        .and_then(|m| m.get("_memory_content"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("(no content)");
+                    let t = r.metadata.as_ref()
+                        .and_then(|m| m.get("_memory_tier"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("?");
+                    println!("  [{}] {} (distance: {:.4}, tier: {})", r.id, content, r.distance, t);
+                }
+            }
+            Ok(())
+        }
+        MemoryCommands::Forget { database, collection, id } => {
+            let db = Database::open(&database)?;
+            let coll = db.collection(&collection)?;
+            let deleted = coll.delete(&id)?;
+            if deleted {
+                println!("Forgot memory: {}", id);
+            } else {
+                println!("Memory not found: {}", id);
+            }
+            Ok(())
+        }
+    }
+}
+
+fn diff_command(path: &str, source: &str, target: &str, limit: usize) -> Result<()> {
+    let db = Database::open(path)?;
+    let coll_a = db.collection(source)?;
+    let coll_b = db.collection(target)?;
+
+    let ids_a: std::collections::HashSet<String> = coll_a.ids()?.into_iter().collect();
+    let ids_b: std::collections::HashSet<String> = coll_b.ids()?.into_iter().collect();
+
+    let only_a: Vec<&String> = ids_a.difference(&ids_b).take(limit).collect();
+    let only_b: Vec<&String> = ids_b.difference(&ids_a).take(limit).collect();
+    let shared: Vec<&String> = ids_a.intersection(&ids_b).collect();
+
+    let mut modified_count = 0usize;
+    for id in shared.iter().take(limit) {
+        if let (Some((va, _)), Some((vb, _))) = (coll_a.get(id), coll_b.get(id)) {
+            let dist: f32 = va.iter().zip(vb.iter()).map(|(a, b)| (a - b).powi(2)).sum::<f32>().sqrt();
+            if dist > 1e-6 {
+                modified_count += 1;
+                if modified_count <= 10 {
+                    println!("  Modified: {} (L2 distance: {:.6})", id, dist);
+                }
+            }
+        }
+    }
+
+    println!("Diff: '{}' vs '{}'", source, target);
+    println!("  Source vectors: {}", ids_a.len());
+    println!("  Target vectors: {}", ids_b.len());
+    println!("  Only in source: {}", only_a.len());
+    println!("  Only in target: {}", only_b.len());
+    println!("  Modified: {}", modified_count);
+    println!("  Unchanged: {}", shared.len() - modified_count);
+
+    if !only_a.is_empty() {
+        println!("\n  Removed (first {}):", only_a.len().min(10));
+        for id in only_a.iter().take(10) { println!("    - {}", id); }
+    }
+    if !only_b.is_empty() {
+        println!("\n  Added (first {}):", only_b.len().min(10));
+        for id in only_b.iter().take(10) { println!("    + {}", id); }
+    }
+
+    Ok(())
+}
+
+fn estimate_command(path: &str, collection: &str, k: usize, with_filter: bool) -> Result<()> {
+    use needle::cost_estimator::{CostEstimator, CollectionStatistics};
+
+    let db = Database::open(path)?;
+    let coll = db.collection(collection)?;
+    let stats = coll.stats()?;
+
+    let col_stats = CollectionStatistics::new(
+        stats.vector_count,
+        stats.dimensions,
+        if stats.vector_count > 0 {
+            coll.deleted_count() as f32 / (stats.vector_count + coll.deleted_count()) as f32
+        } else {
+            0.0
+        },
+    );
+
+    let filter_sel = if with_filter { Some(0.3f32) } else { None };
+    let estimator = CostEstimator::default();
+    let plan = estimator.plan(&col_stats, k, filter_sel);
+
+    println!("Query Cost Estimate for '{}' (k={})", collection, k);
+    println!("  Collection: {} vectors, {} dimensions", stats.vector_count, stats.dimensions);
+    println!("  Strategy: {}", plan.index_choice);
+    println!("  Estimated latency: {:.2} ms", plan.cost.estimated_latency_ms);
+    println!("  Estimated memory: {:.2} MB", plan.cost.estimated_memory_mb);
+    println!("  Distance computations: {}", plan.cost.distance_computations);
+    println!("  Nodes visited: {}", plan.cost.nodes_visited);
+    println!("  Rationale:");
+    for r in &plan.rationale {
+        println!("    - {}", r);
     }
 
     Ok(())
