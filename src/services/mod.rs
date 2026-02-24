@@ -96,3 +96,7 @@ pub mod ws_protocol;
 // ── Next-Gen v8 Services ─────────────────────────────────────────────────────
 pub mod hnsw_compactor;
 pub mod wasm_plugin_runtime;
+
+// ── Next-Gen v9 Services ─────────────────────────────────────────────────────
+pub mod client_sdk;
+pub mod grpc_schema;
