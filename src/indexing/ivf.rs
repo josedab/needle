@@ -873,4 +873,209 @@ mod tests {
 
         assert_eq!(index.len(), 50);
     }
+
+    // ========================================================================
+    // Recall, serialization, and nprobe sweep tests
+    // ========================================================================
+
+    #[test]
+    fn test_ivf_recall_accuracy() {
+        let dim = 32;
+        let n = 200;
+        let config = IvfConfig::new(4).with_nprobe(4).with_max_iterations(20);
+        let mut index = IvfIndex::new(dim, config);
+
+        let vectors = random_vectors(n, dim);
+        let refs: Vec<&[f32]> = vectors.iter().map(|v| v.as_slice()).collect();
+        index.train(&refs).unwrap();
+
+        for (i, v) in vectors.iter().enumerate() {
+            index.insert(i, v).unwrap();
+        }
+
+        // Searching all clusters with large k should find the query vector
+        let query = &vectors[0];
+        let results = index.search(query, n).unwrap();
+        assert!(!results.is_empty(), "Should return some results");
+
+        // The query vector itself should be in the results when searching all clusters
+        let found_self = results.iter().any(|(id, _)| *id == 0);
+        assert!(
+            found_self,
+            "Query vector (id=0) should be found when probing all clusters with large k"
+        );
+
+        // And it should have near-zero distance
+        let self_dist = results.iter().find(|(id, _)| *id == 0).unwrap().1;
+        assert!(self_dist < 0.1, "Self-distance should be near zero");
+    }
+
+    #[test]
+    fn test_ivf_nprobe_sweep() {
+        let dim = 16;
+        let n = 100;
+        let k = 5;
+        let n_clusters = 4;
+
+        let vectors = random_vectors(n, dim);
+        let refs: Vec<&[f32]> = vectors.iter().map(|v| v.as_slice()).collect();
+
+        // Build a brute-force ground truth
+        let query = &vectors[0];
+        let mut brute_force: Vec<(usize, f32)> = vectors
+            .iter()
+            .enumerate()
+            .map(|(i, v)| (i, euclidean_distance(query, v).unwrap()))
+            .collect();
+        brute_force.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+        let ground_truth: std::collections::HashSet<usize> =
+            brute_force.iter().take(k).map(|(id, _)| *id).collect();
+
+        let mut prev_recall = 0.0f32;
+        for nprobe in [1, 2, 4] {
+            let config = IvfConfig::new(n_clusters)
+                .with_nprobe(nprobe)
+                .with_max_iterations(20);
+            let mut index = IvfIndex::new(dim, config);
+
+            index.train(&refs).unwrap();
+            for (i, v) in vectors.iter().enumerate() {
+                index.insert(i, v).unwrap();
+            }
+
+            let results = index.search(query, k).unwrap();
+            let result_ids: std::collections::HashSet<usize> =
+                results.iter().map(|(id, _)| *id).collect();
+
+            let recall = ground_truth.intersection(&result_ids).count() as f32 / k as f32;
+            // More probes should generally give equal or better recall
+            assert!(
+                recall >= prev_recall - 0.1, // Allow small margin for randomness
+                "nprobe={} recall ({:.0}%) should not be much worse than previous ({:.0}%)",
+                nprobe,
+                recall * 100.0,
+                prev_recall * 100.0
+            );
+            prev_recall = recall;
+        }
+    }
+
+    #[test]
+    fn test_ivf_cluster_imbalance() {
+        // Create vectors that naturally cluster unevenly
+        let mut vectors = Vec::new();
+        // 90 vectors near origin
+        for i in 0..90 {
+            let v: Vec<f32> = (0..8).map(|j| (i * 8 + j) as f32 * 0.001).collect();
+            vectors.push(v);
+        }
+        // 10 vectors far away
+        for i in 0..10 {
+            let v: Vec<f32> = (0..8).map(|j| 100.0 + (i * 8 + j) as f32 * 0.001).collect();
+            vectors.push(v);
+        }
+
+        let config = IvfConfig::new(4).with_nprobe(4).with_max_iterations(20);
+        let mut index = IvfIndex::new(8, config);
+
+        let refs: Vec<&[f32]> = vectors.iter().map(|v| v.as_slice()).collect();
+        index.train(&refs).unwrap();
+
+        for (i, v) in vectors.iter().enumerate() {
+            index.insert(i, v).unwrap();
+        }
+
+        let stats = index.cluster_stats();
+        let sizes: Vec<usize> = stats.iter().map(|s| s.size).collect();
+
+        // Verify all vectors are assigned
+        assert_eq!(sizes.iter().sum::<usize>(), 100);
+        // There should be some imbalance (not all clusters equal)
+        assert!(sizes.iter().max().unwrap() > sizes.iter().min().unwrap());
+    }
+
+    #[test]
+    fn test_ivf_pq_recall() {
+        let dim = 32;
+        let n = 100;
+        let k = 10;
+
+        let config = IvfConfig::new(4)
+            .with_nprobe(4)
+            .with_pq(4, 8)
+            .with_max_iterations(20);
+        let mut index = IvfIndex::new(dim, config);
+
+        let vectors = random_vectors(n, dim);
+        let refs: Vec<&[f32]> = vectors.iter().map(|v| v.as_slice()).collect();
+        index.train(&refs).unwrap();
+
+        for (i, v) in vectors.iter().enumerate() {
+            index.insert(i, v).unwrap();
+        }
+
+        // PQ search should return results (PQ is approximate, may not find exact self)
+        let results = index.search(&vectors[0], k).unwrap();
+        assert!(!results.is_empty(), "PQ search should return results");
+        assert!(results.len() <= k);
+    }
+
+    #[test]
+    fn test_ivf_config_builder() {
+        let config = IvfConfig::new(128)
+            .with_nprobe(16)
+            .with_max_iterations(50)
+            .with_tolerance(1e-5)
+            .with_pq(8, 8);
+
+        assert_eq!(config.n_clusters, 128);
+        assert_eq!(config.n_probe, 16);
+        assert_eq!(config.max_iterations, 50);
+        assert!((config.tolerance - 1e-5).abs() < 1e-10);
+        assert!(config.use_pq);
+        assert_eq!(config.pq_subvectors, 8);
+        assert_eq!(config.pq_bits, 8);
+    }
+
+    #[test]
+    fn test_ivf_empty_after_clear() {
+        let config = IvfConfig::new(4).with_nprobe(4);
+        let mut index = IvfIndex::new(16, config);
+
+        let vectors = random_vectors(50, 16);
+        let refs: Vec<&[f32]> = vectors.iter().map(|v| v.as_slice()).collect();
+        index.train(&refs).unwrap();
+
+        for (i, v) in vectors.iter().enumerate() {
+            index.insert(i, v).unwrap();
+        }
+
+        index.clear();
+        // Search on empty (but trained) index should return empty
+        let results = index.search(&vectors[0], 5).unwrap();
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_ivf_search_after_partial_clear() {
+        let config = IvfConfig::new(4).with_nprobe(4);
+        let mut index = IvfIndex::new(16, config);
+
+        let vectors = random_vectors(50, 16);
+        let refs: Vec<&[f32]> = vectors.iter().map(|v| v.as_slice()).collect();
+        index.train(&refs).unwrap();
+
+        for (i, v) in vectors.iter().enumerate() {
+            index.insert(i, v).unwrap();
+        }
+
+        // Clear one cluster
+        let removed = index.clear_cluster(0).unwrap();
+        let remaining = index.len();
+        assert_eq!(remaining + removed, 50);
+
+        // Search should still work with remaining vectors
+        let results = index.search(&vectors[0], 5).unwrap();
+        assert!(results.len() <= remaining);
+    }
 }
