@@ -764,6 +764,22 @@ Benchmarks are sensitive to system load. For reliable results:
 cargo bench -- --warm-up-time 3
 ```
 
+### Workspace test targets
+
+The workspace has 4 members: `needle` (root), `needle-core`, `needle-cli`, and `needle-python`. The `default-members` in `Cargo.toml` excludes `needle-python` because its `cdylib` crate type requires Python development headers at link time.
+
+**Why bare `cargo test` can fail:** Running `cargo test --workspace` (or `cargo test` from a parent directory that resolves all members) pulls in `needle-python`, which triggers cdylib linker errors unless Python headers are available.
+
+**Recommended test commands:**
+
+```bash
+cargo test --features full     # Uses default-members — safe, covers core + CLI
+cargo test --lib               # Unit tests only (fastest)
+cargo test -p needle           # Explicit root package
+cargo test -p needle-core      # Core crate only
+cargo test -p needle-cli       # CLI crate only
+```
+
 ### Cascading compile errors from `services/`
 
 The `services/` directory (118 files, 58K+ lines) depends heavily on core types
