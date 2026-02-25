@@ -571,9 +571,12 @@ impl WasmCollection {
         let dimensions = coll.dimensions();
 
         // Estimate memory usage
-        let estimated_vector_bytes = vectors_count * dimensions * 4; // f32 = 4 bytes
-        let estimated_index_bytes = vectors_count * 64 * 4; // Rough HNSW estimate
-        let estimated_metadata_bytes = vectors_count * 100; // Average metadata estimate
+        let estimated_vector_bytes = vectors_count
+            .checked_mul(dimensions)
+            .and_then(|v| v.checked_mul(4))
+            .ok_or_else(|| JsValue::from_str("Memory size overflow: vectors * dimensions * 4 exceeds usize"))?;
+        let estimated_index_bytes = vectors_count.saturating_mul(64).saturating_mul(4);
+        let estimated_metadata_bytes = vectors_count.saturating_mul(100);
 
         Ok(MemoryStats {
             vectors_count,

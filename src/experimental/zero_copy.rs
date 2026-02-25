@@ -316,7 +316,7 @@ impl VectorBatch {
         dimensions: usize,
         count: usize,
     ) -> Self {
-        let len = count * dimensions * 4;
+        let len = count.saturating_mul(dimensions).saturating_mul(4);
         Self {
             ids,
             data: ZeroCopyBuffer::from_raw_parts(data_ptr as *const u8, len, DataType::Float32),

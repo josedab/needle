@@ -115,7 +115,7 @@ impl CollectionStatistics {
             has_metadata_index: false,
             avg_query_latency_ms: 1.0,
             filter_selectivity: 1.0,
-            memory_usage_bytes: total_vectors * dimensions * 4,
+            memory_usage_bytes: total_vectors.saturating_mul(dimensions).saturating_mul(4),
         }
     }
 }

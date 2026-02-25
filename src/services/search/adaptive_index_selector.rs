@@ -184,7 +184,7 @@ impl AdaptiveSelector {
             _ => true,
         };
 
-        let memory_estimate_bytes = vector_count * dimensions * 4;
+        let memory_estimate_bytes = vector_count.saturating_mul(dimensions).saturating_mul(4);
         let memory_within_budget = self.memory_budget_bytes
             .map_or(true, |budget| memory_estimate_bytes <= budget);
 
@@ -244,7 +244,7 @@ impl AdaptiveSelector {
 
         // Memory budget constraint
         if let Some(budget) = self.memory_budget_bytes {
-            let estimated_bytes = vector_count * dimensions * 4;
+            let estimated_bytes = vector_count.saturating_mul(dimensions).saturating_mul(4);
             if estimated_bytes > budget {
                 *scores.entry(IndexStrategy::HnswQuantized).or_default() += 3.0;
                 *scores.entry(IndexStrategy::DiskAnn).or_default() += 2.0;
@@ -340,7 +340,7 @@ pub struct IndexCostModel {
 
 /// Estimate costs for all index strategies given collection parameters.
 pub fn estimate_costs(vector_count: usize, dimensions: usize) -> Vec<IndexCostModel> {
-    let raw_bytes = vector_count * dimensions * 4;
+    let raw_bytes = vector_count.saturating_mul(dimensions).saturating_mul(4);
     let n = vector_count as f64;
     let d = dimensions as f64;
 
@@ -374,7 +374,7 @@ pub fn estimate_costs(vector_count: usize, dimensions: usize) -> Vec<IndexCostMo
         IndexCostModel {
             strategy: IndexStrategy::Ivf,
             // IVF: centroids + inverted lists
-            memory_bytes: raw_bytes + (n.sqrt() as usize) * dimensions * 4,
+            memory_bytes: raw_bytes.saturating_add((n.sqrt() as usize).saturating_mul(dimensions).saturating_mul(4)),
             p50_latency_ms: ((n / n.sqrt()) * d * 1e-9 * 1000.0).max(0.1),
             p99_latency_ms: ((n / n.sqrt()) * d * 2e-9 * 1000.0).max(0.2),
             estimated_recall: 0.85,

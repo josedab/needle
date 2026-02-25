@@ -1673,7 +1673,7 @@ impl AdaptiveIndexManager {
         vector_count: usize,
         dimensions: usize,
     ) -> usize {
-        let vector_bytes = vector_count * dimensions * 4;
+        let vector_bytes = vector_count.saturating_mul(dimensions).saturating_mul(4);
         match index {
             RecommendedIndex::Hnsw => vector_bytes + vector_count * 16 * 2 * 8 + vector_count * 100,
             RecommendedIndex::Ivf => vector_bytes + vector_count * 50,
