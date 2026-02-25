@@ -8,6 +8,14 @@ use std::sync::{Arc, RwLock};
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 
+/// Set a property on a JS object, logging on failure (which should never happen on plain Objects).
+fn js_set(obj: &js_sys::Object, key: &JsValue, value: &JsValue) {
+    if let Err(_e) = js_sys::Reflect::set(obj, key, value) {
+        #[cfg(debug_assertions)]
+        web_sys::console::warn_1(&format!("Failed to set JS property: {:?}", _e).into());
+    }
+}
+
 /// Search result for JavaScript
 #[wasm_bindgen]
 pub struct SearchResult {
@@ -287,12 +295,12 @@ impl WasmCollection {
                 // Set vector
                 let arr = js_sys::Float32Array::new_with_length(vector.len() as u32);
                 arr.copy_from(vector);
-                let _ = js_sys::Reflect::set(&obj, &JsValue::from_str("vector"), &arr);
+                js_set(&obj, &JsValue::from_str("vector"), &arr);
 
                 // Set metadata
                 if let Some(meta) = metadata {
                     if let Ok(parsed) = js_sys::JSON::parse(&meta.to_string()) {
-                        let _ = js_sys::Reflect::set(&obj, &JsValue::from_str("metadata"), &parsed);
+                        js_set(&obj, &JsValue::from_str("metadata"), &parsed);
                     }
                 }
 
@@ -396,18 +404,10 @@ impl PerformanceMetrics {
     #[wasm_bindgen(js_name = "toObject")]
     pub fn to_object(&self) -> JsValue {
         let obj = js_sys::Object::new();
-        let _ = js_sys::Reflect::set(&obj, &"operation".into(), &self.operation.clone().into());
-        let _ = js_sys::Reflect::set(&obj, &"durationMs".into(), &self.duration_ms.into());
-        let _ = js_sys::Reflect::set(
-            &obj,
-            &"vectorsProcessed".into(),
-            &(self.vectors_processed as u32).into(),
-        );
-        let _ = js_sys::Reflect::set(
-            &obj,
-            &"memoryUsedBytes".into(),
-            &(self.memory_used_bytes as u32).into(),
-        );
+        js_set(&obj, &"operation".into(), &self.operation.clone().into());
+        js_set(&obj, &"durationMs".into(), &self.duration_ms.into());
+        js_set(&obj, &"vectorsProcessed".into(), &(self.vectors_processed as u32).into());
+        js_set(&obj, &"memoryUsedBytes".into(), &(self.memory_used_bytes as u32).into());
         obj.into()
     }
 }
@@ -464,32 +464,12 @@ impl MemoryStats {
     #[wasm_bindgen(js_name = "toObject")]
     pub fn to_object(&self) -> JsValue {
         let obj = js_sys::Object::new();
-        let _ = js_sys::Reflect::set(
-            &obj,
-            &"vectorsCount".into(),
-            &(self.vectors_count as u32).into(),
-        );
-        let _ = js_sys::Reflect::set(&obj, &"dimensions".into(), &(self.dimensions as u32).into());
-        let _ = js_sys::Reflect::set(
-            &obj,
-            &"estimatedVectorBytes".into(),
-            &(self.estimated_vector_bytes as u32).into(),
-        );
-        let _ = js_sys::Reflect::set(
-            &obj,
-            &"estimatedIndexBytes".into(),
-            &(self.estimated_index_bytes as u32).into(),
-        );
-        let _ = js_sys::Reflect::set(
-            &obj,
-            &"estimatedMetadataBytes".into(),
-            &(self.estimated_metadata_bytes as u32).into(),
-        );
-        let _ = js_sys::Reflect::set(
-            &obj,
-            &"totalBytes".into(),
-            &(self.total_bytes() as u32).into(),
-        );
+        js_set(&obj, &"vectorsCount".into(), &(self.vectors_count as u32).into());
+        js_set(&obj, &"dimensions".into(), &(self.dimensions as u32).into());
+        js_set(&obj, &"estimatedVectorBytes".into(), &(self.estimated_vector_bytes as u32).into());
+        js_set(&obj, &"estimatedIndexBytes".into(), &(self.estimated_index_bytes as u32).into());
+        js_set(&obj, &"estimatedMetadataBytes".into(), &(self.estimated_metadata_bytes as u32).into());
+        js_set(&obj, &"totalBytes".into(), &(self.total_bytes() as u32).into());
         obj.into()
     }
 }
@@ -550,11 +530,11 @@ impl SearchChunk {
         let arr = js_sys::Array::new();
         for result in &self.results {
             let obj = js_sys::Object::new();
-            let _ = js_sys::Reflect::set(&obj, &"id".into(), &result.id.clone().into());
-            let _ = js_sys::Reflect::set(&obj, &"distance".into(), &result.distance.into());
+            js_set(&obj, &"id".into(), &result.id.clone().into());
+            js_set(&obj, &"distance".into(), &result.distance.into());
             if let Some(ref meta) = result.metadata_json {
                 if let Ok(parsed) = js_sys::JSON::parse(meta) {
-                    let _ = js_sys::Reflect::set(&obj, &"metadata".into(), &parsed);
+                    js_set(&obj, &"metadata".into(), &parsed);
                 }
             }
             arr.push(&obj);
@@ -698,24 +678,20 @@ impl WasmCollection {
         let result_array = js_sys::Array::new();
         for result in results.iter() {
             let obj = js_sys::Object::new();
-            let _ = js_sys::Reflect::set(&obj, &"id".into(), &result.id.clone().into());
-            let _ = js_sys::Reflect::set(&obj, &"distance".into(), &result.distance.into());
+            js_set(&obj, &"id".into(), &result.id.clone().into());
+            js_set(&obj, &"distance".into(), &result.distance.into());
             if let Some(ref meta) = result.metadata {
                 if let Ok(parsed) = js_sys::JSON::parse(&meta.to_string()) {
-                    let _ = js_sys::Reflect::set(&obj, &"metadata".into(), &parsed);
+                    js_set(&obj, &"metadata".into(), &parsed);
                 }
             }
             result_array.push(&obj);
         }
 
         let response = js_sys::Object::new();
-        let _ = js_sys::Reflect::set(&response, &"results".into(), &result_array);
-        let _ = js_sys::Reflect::set(&response, &"durationMs".into(), &duration_ms.into());
-        let _ = js_sys::Reflect::set(
-            &response,
-            &"vectorsSearched".into(),
-            &(coll.len() as u32).into(),
-        );
+        js_set(&response, &"results".into(), &result_array);
+        js_set(&response, &"durationMs".into(), &duration_ms.into());
+        js_set(&response, &"vectorsSearched".into(), &(coll.len() as u32).into());
 
         Ok(response)
     }
@@ -753,14 +729,9 @@ impl WasmCollection {
             };
 
             let chunk_obj = js_sys::Object::new();
-            let _ = js_sys::Reflect::set(&chunk_obj, &"results".into(), &search_chunk.results());
-            let _ =
-                js_sys::Reflect::set(&chunk_obj, &"isFinal".into(), &search_chunk.is_final.into());
-            let _ = js_sys::Reflect::set(
-                &chunk_obj,
-                &"chunkIndex".into(),
-                &(search_chunk.chunk_index as u32).into(),
-            );
+            js_set(&chunk_obj, &"results".into(), &search_chunk.results());
+            js_set(&chunk_obj, &"isFinal".into(), &search_chunk.is_final.into());
+            js_set(&chunk_obj, &"chunkIndex".into(), &(search_chunk.chunk_index as u32).into());
 
             chunks_array.push(&chunk_obj);
         }
@@ -792,13 +763,9 @@ impl WasmCollection {
             .map_err(|_| JsValue::from_str("Lock poisoned"))?;
 
         let info = js_sys::Object::new();
-        let _ = js_sys::Reflect::set(&info, &"name".into(), &coll.name().into());
-        let _ = js_sys::Reflect::set(
-            &info,
-            &"dimensions".into(),
-            &(coll.dimensions() as u32).into(),
-        );
-        let _ = js_sys::Reflect::set(&info, &"vectorCount".into(), &(coll.len() as u32).into());
+        js_set(&info, &"name".into(), &coll.name().into());
+        js_set(&info, &"dimensions".into(), &(coll.dimensions() as u32).into());
+        js_set(&info, &"vectorCount".into(), &(coll.len() as u32).into());
 
         Ok(info)
     }
@@ -813,7 +780,7 @@ impl WasmCollection {
         // Get all IDs and delete them
         let ids: Vec<String> = guard.all_ids();
         for id in ids {
-            let _ = guard.delete(&id);
+            guard.delete(&id).map_err(|e| JsValue::from_str(&e.to_string()))?;
         }
         Ok(())
     }
@@ -1080,13 +1047,9 @@ impl PersistentCollection {
     #[wasm_bindgen(js_name = "getInfo")]
     pub fn get_info(&self) -> Result<js_sys::Object, JsValue> {
         let info = self.collection.get_info()?;
-        let _ = js_sys::Reflect::set(&info, &"isDirty".into(), &self.dirty.into());
-        let _ = js_sys::Reflect::set(&info, &"dbName".into(), &self.config.db_name.clone().into());
-        let _ = js_sys::Reflect::set(
-            &info,
-            &"storeName".into(),
-            &self.config.store_name.clone().into(),
-        );
+        js_set(&info, &"isDirty".into(), &self.dirty.into());
+        js_set(&info, &"dbName".into(), &self.config.db_name.clone().into());
+        js_set(&info, &"storeName".into(), &self.config.store_name.clone().into());
         Ok(info)
     }
 }
@@ -1267,17 +1230,9 @@ impl SyncStatus {
     #[wasm_bindgen(js_name = "toObject")]
     pub fn to_object(&self) -> js_sys::Object {
         let obj = js_sys::Object::new();
-        let _ = js_sys::Reflect::set(&obj, &"isOnline".into(), &self.is_online.into());
-        let _ = js_sys::Reflect::set(
-            &obj,
-            &"pendingChanges".into(),
-            &(self.pending_changes as u32).into(),
-        );
-        let _ = js_sys::Reflect::set(
-            &obj,
-            &"lastSyncTimestamp".into(),
-            &self.last_sync_timestamp.into(),
-        );
+        js_set(&obj, &"isOnline".into(), &self.is_online.into());
+        js_set(&obj, &"pendingChanges".into(), &(self.pending_changes as u32).into());
+        js_set(&obj, &"lastSyncTimestamp".into(), &self.last_sync_timestamp.into());
         obj
     }
 }
@@ -1878,11 +1833,11 @@ impl BatchSearchResults {
         if let Some(results) = self.results.get(index) {
             for r in results {
                 let obj = js_sys::Object::new();
-                let _ = js_sys::Reflect::set(&obj, &"id".into(), &r.id.clone().into());
-                let _ = js_sys::Reflect::set(&obj, &"distance".into(), &r.distance.into());
+                js_set(&obj, &"id".into(), &r.id.clone().into());
+                js_set(&obj, &"distance".into(), &r.distance.into());
                 if let Some(ref meta) = r.metadata_json {
                     if let Ok(parsed) = js_sys::JSON::parse(meta) {
-                        let _ = js_sys::Reflect::set(&obj, &"metadata".into(), &parsed);
+                        js_set(&obj, &"metadata".into(), &parsed);
                     }
                 }
                 arr.push(&obj);
