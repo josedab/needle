@@ -203,6 +203,7 @@ make doctor        # Check local environment setup
 | `make lint-fix` | Auto-fix clippy suggestions |
 | `make lint-dirty` | Lint only uncommitted .rs files (fast) |
 | `make lint-new` | Lint filtering out known service/experimental warnings |
+| `make lint-module MODULE=x` | Lint a single module by name |
 | `make watch` | Continuous check on file changes (requires cargo-watch) |
 | `make test-watch` | Continuous test on save — TDD workflow (requires cargo-watch) |
 | `make serve` | Run HTTP server locally (`NEEDLE_PORT=9090 make serve`) |
@@ -211,9 +212,11 @@ make doctor        # Check local environment setup
 | `make doc` | Generate and open documentation |
 | `make open-docs` | Open existing rustdoc (no rebuild) |
 | `make bench` | Run benchmarks |
+| `make bench-single NAME=x` | Run a single benchmark by name |
 | `make coverage` | Generate HTML coverage report (requires cargo-llvm-cov) |
 | `make outdated` | Check for outdated dependencies (requires cargo-outdated) |
 | `make count-debt` | Show tech debt & module size dashboard |
+| `make update-deps` | Update dependencies and run tests |
 | `make verify-docs` | Check that all markdown links resolve |
 | `make playground` | Interactive guided walkthrough |
 | `make new-module DOMAIN=x NAME=y` | Scaffold a new service module |
@@ -566,6 +569,47 @@ Understanding the codebase structure will help you contribute effectively.
 | `server/` | HTTP REST API (feature: server) |
 | `error.rs` | Error types with structured codes |
 | `services/` | Higher-level service modules (adaptive indexing, ingestion pipelines, plugin runtime) |
+
+### Services Layer
+
+The `src/services/` directory (118 files, ~58K lines) contains higher-level service
+modules organized into 13 domain-specific subdirectories. Services wrap core types
+(`Database`, `Collection`, `CollectionConfig`) to provide workflow-oriented APIs.
+They depend on the core layer but never on each other directly — cross-service
+communication goes through `Database` or shared configuration types.
+
+```text
+┌─────────────────────────────────────────┐
+│            services/ layer              │
+│  (pipeline, embedding, search, ...)     │
+└──────────────────┬──────────────────────┘
+                   │ depends on
+┌──────────────────▼──────────────────────┐
+│           core layer                    │
+│  Database, Collection, HnswIndex,       │
+│  Filter, DistanceFunction, NeedleError  │
+└─────────────────────────────────────────┘
+```
+
+| Directory | Purpose | Files |
+|-----------|---------|------:|
+| `ai/` | LLM integration, semantic cache, GraphRAG | 10 |
+| `client/` | Client SDKs and protocol bindings (Python, gRPC, WebSocket) | 8 |
+| `collection/` | Collection lifecycle, RBAC, federation, point-in-time recovery | 11 |
+| `compute/` | Adaptive optimization, GPU kernels, vector transactions | 7 |
+| `embedding/` | Embedding generation, inference engine, model routing | 10 |
+| `governance/` | API stability auditing, compliance, community governance | 9 |
+| `infrastructure/` | Cloud deploy, cluster bootstrap, tenant routing | 11 |
+| `observability/` | Drift monitoring, benchmarking, vector lineage | 9 |
+| `pipeline/` | Data ingestion, streaming ingest, CDC framework | 9 |
+| `plugin/` | Plugin API, ecosystem management, WASM plugin runtime | 8 |
+| `search/` | Query optimization, NeedleQL executor, encrypted search | 7 |
+| `storage/` | Tiered storage, snapshot management, HNSW compaction | 7 |
+| `sync/` | Sync engine, live replication, distributed federation | 9 |
+
+> **Note:** All service domains currently carry `#[allow(clippy::unwrap_used)]` overrides
+> and should be treated as scaffolding. When working in services, prefer `?` for new code.
+> See [Error Handling Tech Debt](#error-handling-tech-debt) for cleanup guidance.
 
 ### Adding Features
 
