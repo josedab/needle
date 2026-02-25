@@ -229,15 +229,17 @@ impl IngestionMetrics {
 
     /// Record vectors ingested
     pub fn record_vectors(&self, source: &str, collection: &str, count: u64) {
+        let collection = sanitize_label(collection);
         self.vectors_total
-            .with_label_values(&[source, collection])
+            .with_label_values(&[source, &collection])
             .inc_by(count as f64);
     }
 
     /// Record bytes ingested
     pub fn record_bytes(&self, source: &str, collection: &str, bytes: u64) {
+        let collection = sanitize_label(collection);
         self.bytes_total
-            .with_label_values(&[source, collection])
+            .with_label_values(&[source, &collection])
             .inc_by(bytes as f64);
     }
 
@@ -261,6 +263,22 @@ impl IngestionMetrics {
             .with_label_values(&[source])
             .inc();
     }
+}
+
+/// Sanitize a collection name for use in Prometheus metric labels.
+/// Replaces non-alphanumeric characters (except underscores and hyphens) to prevent
+/// leaking internal names and avoid label cardinality issues.
+fn sanitize_label(name: &str) -> String {
+    name.chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .take(128) // Limit label length to prevent cardinality explosion
+        .collect()
 }
 
 /// Normalize path for metrics to avoid cardinality explosion
@@ -485,12 +503,13 @@ impl NeedleMetrics {
 
     /// Record an operation start, returns a guard that records duration on drop
     pub fn operation(&self, collection: &str, operation: &str) -> OperationTimer {
+        let collection = sanitize_label(collection);
         self.operations_total
-            .with_label_values(&[collection, operation])
+            .with_label_values(&[&collection, operation])
             .inc();
 
         OperationTimer {
-            collection: collection.to_string(),
+            collection,
             operation: operation.to_string(),
             start: Instant::now(),
             histogram: self.operation_duration_seconds.clone(),
@@ -499,15 +518,17 @@ impl NeedleMetrics {
 
     /// Record an error
     pub fn error(&self, collection: &str, operation: &str, error_type: &str) {
+        let collection = sanitize_label(collection);
         self.errors_total
-            .with_label_values(&[collection, operation, error_type])
+            .with_label_values(&[&collection, operation, error_type])
             .inc();
     }
 
     /// Record search result count
     pub fn record_search_results(&self, collection: &str, count: usize) {
+        let collection = sanitize_label(collection);
         self.search_result_count
-            .with_label_values(&[collection])
+            .with_label_values(&[&collection])
             .observe(count as f64);
     }
 
@@ -518,44 +539,48 @@ impl NeedleMetrics {
         visited_nodes: usize,
         layers_traversed: usize,
     ) {
+        let collection = sanitize_label(collection);
         self.hnsw_visited_nodes
-            .with_label_values(&[collection])
+            .with_label_values(&[&collection])
             .observe(visited_nodes as f64);
         self.hnsw_layers_traversed
-            .with_label_values(&[collection])
+            .with_label_values(&[&collection])
             .observe(layers_traversed as f64);
     }
 
     /// Update collection metrics
     pub fn update_collection(&self, collection: &str, vectors: usize, deleted: usize, dims: usize) {
+        let collection = sanitize_label(collection);
         self.collection_vectors
-            .with_label_values(&[collection])
+            .with_label_values(&[&collection])
             .set(vectors as f64);
         self.collection_deleted_vectors
-            .with_label_values(&[collection])
+            .with_label_values(&[&collection])
             .set(deleted as f64);
         self.collection_dimensions
-            .with_label_values(&[collection])
+            .with_label_values(&[&collection])
             .set(dims as f64);
     }
 
     /// Update index metrics
     pub fn update_index(&self, collection: &str, levels: usize) {
+        let collection = sanitize_label(collection);
         self.index_levels
-            .with_label_values(&[collection])
+            .with_label_values(&[&collection])
             .set(levels as f64);
     }
 
     /// Update memory metrics
     pub fn update_memory(&self, collection: &str, vectors: usize, metadata: usize, index: usize) {
+        let collection = sanitize_label(collection);
         self.memory_bytes
-            .with_label_values(&[collection, "vectors"])
+            .with_label_values(&[&collection, "vectors"])
             .set(vectors as f64);
         self.memory_bytes
-            .with_label_values(&[collection, "metadata"])
+            .with_label_values(&[&collection, "metadata"])
             .set(metadata as f64);
         self.memory_bytes
-            .with_label_values(&[collection, "index"])
+            .with_label_values(&[&collection, "index"])
             .set(index as f64);
     }
 
