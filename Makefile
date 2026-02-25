@@ -480,17 +480,49 @@ count-debt:
 	echo "Top 5 Largest Files"; \
 	find src/ -name '*.rs' -exec wc -l {} + | sort -rn | head -n 6 | tail -n 5 | awk '{printf "  %6d  %s\n", $$1, $$2}'; \
 	echo ""; \
-	echo "Per-Directory Breakdown (files / lines / unwrap)"; \
+	echo "Per-Directory Breakdown (files / lines / unwrap / expect)"; \
 	for dir in $$(find src/ -mindepth 1 -maxdepth 1 -type d | sort); do \
 		d_files=$$(find "$$dir" -name '*.rs' | wc -l | tr -d ' '); \
 		d_lines=$$(find "$$dir" -name '*.rs' -exec cat {} + 2>/dev/null | wc -l | tr -d ' '); \
 		d_unwrap=$$(grep -r 'unwrap()' "$$dir" --include='*.rs' 2>/dev/null | wc -l | tr -d ' '); \
-		printf "  %-30s %4s files  %6s lines  %4s unwrap()\n" "$$dir" "$$d_files" "$$d_lines" "$$d_unwrap"; \
+		d_expect=$$(grep -r 'expect(' "$$dir" --include='*.rs' 2>/dev/null | wc -l | tr -d ' '); \
+		printf "  %-30s %4s files  %6s lines  %4s unwrap()  %4s expect()\n" "$$dir" "$$d_files" "$$d_lines" "$$d_unwrap" "$$d_expect"; \
 	done; \
 	root_files=$$(find src/ -maxdepth 1 -name '*.rs' | wc -l | tr -d ' '); \
 	root_lines=$$(find src/ -maxdepth 1 -name '*.rs' -exec cat {} + 2>/dev/null | wc -l | tr -d ' '); \
 	root_unwrap=$$(grep -r 'unwrap()' src/ --maxdepth 1 --include='*.rs' 2>/dev/null | wc -l | tr -d ' '); \
-	printf "  %-30s %4s files  %6s lines  %4s unwrap()\n" "src/ (root)" "$$root_files" "$$root_lines" "$$root_unwrap"
+	root_expect=$$(grep -r 'expect(' src/ --maxdepth 1 --include='*.rs' 2>/dev/null | wc -l | tr -d ' '); \
+	printf "  %-30s %4s files  %6s lines  %4s unwrap()  %4s expect()\n" "src/ (root)" "$$root_files" "$$root_lines" "$$root_unwrap" "$$root_expect"
+
+THRESHOLD ?= 1000
+
+# List all .rs files above THRESHOLD lines (default: 1000), sorted by size
+list-large-files:
+	@echo "Rust files in src/ exceeding $(THRESHOLD) lines:"; \
+	echo ""; \
+	find src/ -name '*.rs' -exec wc -l {} + | grep -v ' total$$' | sort -rn | \
+		awk -v threshold=$(THRESHOLD) '$$1 > threshold { printf "  %6d  %s\n", $$1, $$2; count++ } END { print ""; print count+0 " file(s) above " threshold " lines" }'
+
+# Scaffold a test module in an existing file: make scaffold-test FILE=src/indexing/hnsw.rs
+scaffold-test:
+	@test -n "$(FILE)" || { echo "Usage: make scaffold-test FILE=src/path/to/module.rs"; exit 1; }
+	@test -f "$(FILE)" || { echo "Error: file '$(FILE)' does not exist."; exit 1; }
+	@if grep -q '#\[cfg(test)\]' "$(FILE)"; then \
+		echo "File '$(FILE)' already contains a #[cfg(test)] block — skipping."; \
+	else \
+		echo '' >> "$(FILE)"; \
+		echo '#[cfg(test)]' >> "$(FILE)"; \
+		echo 'mod tests {' >> "$(FILE)"; \
+		echo '    use super::*;' >> "$(FILE)"; \
+		echo '' >> "$(FILE)"; \
+		echo '    #[test]' >> "$(FILE)"; \
+		echo '    fn test_placeholder() {' >> "$(FILE)"; \
+		echo '        // TODO: Replace with real tests' >> "$(FILE)"; \
+		echo '        assert!(true);' >> "$(FILE)"; \
+		echo '    }' >> "$(FILE)"; \
+		echo '}' >> "$(FILE)"; \
+		echo "✓ Added test scaffold to $(FILE)"; \
+	fi
 
 # Docker convenience targets
 docker-up:

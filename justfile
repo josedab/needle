@@ -293,15 +293,19 @@ count-debt:
     echo "Top 5 Largest Files"
     find src/ -name '*.rs' -exec wc -l {} + | sort -rn | head -n 6 | tail -n 5 | awk '{printf "  %6d  %s\n", $1, $2}'
     echo ""
-    echo "Per-Directory Breakdown (files / lines)"
+    echo "Per-Directory Breakdown (files / lines / unwrap / expect)"
     for dir in $(find src/ -mindepth 1 -maxdepth 1 -type d | sort); do
         d_files=$(find "$dir" -name '*.rs' | wc -l | tr -d ' ')
         d_lines=$(find "$dir" -name '*.rs' -exec cat {} + 2>/dev/null | wc -l | tr -d ' ')
-        printf "  %-30s %4s files  %6s lines\n" "$dir" "$d_files" "$d_lines"
+        d_unwrap=$(grep -r 'unwrap()' "$dir" --include='*.rs' 2>/dev/null | wc -l | tr -d ' ')
+        d_expect=$(grep -r 'expect(' "$dir" --include='*.rs' 2>/dev/null | wc -l | tr -d ' ')
+        printf "  %-30s %4s files  %6s lines  %4s unwrap()  %4s expect()\n" "$dir" "$d_files" "$d_lines" "$d_unwrap" "$d_expect"
     done
     root_files=$(find src/ -maxdepth 1 -name '*.rs' | wc -l | tr -d ' ')
     root_lines=$(find src/ -maxdepth 1 -name '*.rs' -exec cat {} + 2>/dev/null | wc -l | tr -d ' ')
-    printf "  %-30s %4s files  %6s lines\n" "src/ (root)" "$root_files" "$root_lines"
+    root_unwrap=$(grep -r 'unwrap()' src/ --maxdepth 1 --include='*.rs' 2>/dev/null | wc -l | tr -d ' ')
+    root_expect=$(grep -r 'expect(' src/ --maxdepth 1 --include='*.rs' 2>/dev/null | wc -l | tr -d ' ')
+    printf "  %-30s %4s files  %6s lines  %4s unwrap()  %4s expect()\n" "src/ (root)" "$root_files" "$root_lines" "$root_unwrap" "$root_expect"
 
 # Start Needle via Docker Compose
 docker-up:
