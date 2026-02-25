@@ -75,6 +75,37 @@ check_optional "just" just "cargo install just (or use make instead)"
 check_optional "pre-commit" pre-commit "pip install pre-commit"
 check_optional "maturin" maturin "pip install maturin (for Python bindings)"
 
+# Fast linker detection
+echo ""
+echo "Fast Linker:"
+case "$(uname -s)" in
+  Linux)
+    if command -v mold >/dev/null 2>&1; then
+      echo "✓ mold: $(mold --version 2>/dev/null | head -n 1)"
+    elif command -v lld >/dev/null 2>&1; then
+      echo "✓ lld: $(lld --version 2>/dev/null | head -n 1)"
+    else
+      echo "· No fast linker found (optional — speeds up incremental builds)"
+      echo "  Install mold: sudo apt install mold   (or https://github.com/rui314/mold/releases)"
+      echo "  Then uncomment the [target.x86_64-unknown-linux-gnu] section in .cargo/config.toml"
+      warn=1
+    fi
+    ;;
+  Darwin)
+    if command -v lld >/dev/null 2>&1; then
+      echo "✓ lld: $(lld --version 2>/dev/null | head -n 1)"
+    else
+      echo "· lld not found (optional — speeds up incremental builds)"
+      echo "  Install: brew install llvm"
+      echo "  Then uncomment the [target.aarch64-apple-darwin] section in .cargo/config.toml"
+      warn=1
+    fi
+    ;;
+  *)
+    echo "· Fast linker detection not supported on this platform"
+    ;;
+esac
+
 echo ""
 
 if [ "$fail" -ne 0 ]; then
