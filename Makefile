@@ -2,10 +2,10 @@
 # Usage: make <recipe>
 
 .PHONY: help quick check check-all build build-all build-release test test-unit test-integration \
-        fmt fmt-check lint lint-fix lint-dirty lint-new watch test-watch lint-watch serve serve-env demo doctor doc bench clean playground setup setup-tools dev test-single coverage \
+        fmt fmt-check lint lint-fix lint-dirty lint-new lint-module watch test-watch lint-watch serve serve-env demo doctor doc bench bench-single clean playground setup setup-tools dev test-single coverage \
         new-module verify-docs check-quick check-local test-feature count-debt test-changed open-docs \
         docker-up docker-down docker-build docker-logs test-coverage-check \
-        profile-build test-doc new-example verify-examples
+        profile-build test-doc new-example verify-examples update-deps
 
 help:
 	@echo "Available recipes:"
@@ -31,6 +31,7 @@ help:
 	@echo "  make lint-fix      — Auto-fix clippy suggestions"
 	@echo "  make lint-dirty    — Lint only uncommitted .rs files (fast)"
 	@echo "  make lint-new      — Lint filtering out known service/experimental warnings"
+	@echo "  make lint-module   — Lint a single module: make lint-module MODULE=collection"
 	@echo "  make watch         — Continuous check on file changes (requires cargo-watch)"
 	@echo "  make test-watch    — Continuous test on save — TDD workflow (requires cargo-watch)"
 	@echo "  make lint-watch    — Continuous clippy lint on save (requires cargo-watch)"
@@ -41,10 +42,12 @@ help:
 	@echo "  make doc           — Generate and open documentation"
 	@echo "  make open-docs     — Open existing rustdoc (no rebuild)"
 	@echo "  make bench         — Run benchmarks"
+	@echo "  make bench-single  — Run a single benchmark: make bench-single NAME=search"
 	@echo "  make coverage      — Generate HTML coverage report (requires cargo-llvm-cov)"
 	@echo "  make test-coverage-check — Fail if coverage is below 75% (codecov.yml threshold)"
 	@echo "  make outdated      — Check for outdated dependencies (requires cargo-outdated)"
 	@echo "  make count-debt    — Show tech debt & module size dashboard"
+	@echo "  make update-deps   — Update dependencies and run tests"
 	@echo "  make verify-docs   — Check that all markdown links resolve"
 	@echo "  make playground    — Interactive guided walkthrough"
 	@echo "  make new-module    — Scaffold a new service module (DOMAIN=x NAME=y)"
@@ -202,6 +205,13 @@ lint-new:
 	@echo "Note: Warnings from src/services/ and src/experimental/ are hidden."
 	@echo "Run 'make lint' to see all warnings."
 
+# Lint a single module: make lint-module MODULE=collection
+lint-module:
+	@test -n "$(MODULE)" || { echo "Usage: make lint-module MODULE=<module_name>"; echo "Example: make lint-module MODULE=collection"; exit 1; }
+	@echo "Linting src/$(MODULE)/…"
+	@cargo clippy --all-targets --features full -- -D warnings 2>&1 | \
+		grep -E '^\s*--> src/$(MODULE)/|^error|^warning' || echo "✓ No warnings in src/$(MODULE)/"
+
 # Continuous check on save (requires: cargo install cargo-watch)
 watch:
 	@command -v cargo-watch > /dev/null 2>&1 || { echo "Error: cargo-watch not found. Install with: cargo install cargo-watch"; exit 1; }
@@ -265,6 +275,11 @@ open-docs:
 bench:
 	cargo bench
 
+# Run a single benchmark: make bench-single NAME=search
+bench-single:
+	@test -n "$(NAME)" || { echo "Usage: make bench-single NAME=<benchmark_name>"; exit 1; }
+	cargo bench -- $(NAME)
+
 # Coverage report (requires: cargo install cargo-llvm-cov)
 coverage:
 	cargo llvm-cov --features full --html --open
@@ -285,6 +300,16 @@ outdated:
 	@command -v cargo-outdated > /dev/null 2>&1 || { echo "Error: cargo-outdated not found. Install with: cargo install cargo-outdated"; exit 1; }
 	cargo outdated -R
 
+# Update dependencies and verify with tests
+update-deps:
+	@echo "Updating dependencies…"
+	cargo update
+	@echo ""
+	@echo "Running tests to verify update…"
+	cargo test --features full
+	@echo ""
+	@echo "✓ Dependencies updated and tests passed"
+
 playground:
 	./scripts/playground.sh
 
@@ -292,8 +317,18 @@ clean:
 	cargo clean
 
 setup:
-	./scripts/doctor.sh
-	@if command -v pre-commit > /dev/null 2>&1; then \
+	@total_start=$$(date +%s); \
+	echo "=== make setup ==="; \
+	\
+	echo ""; echo "[1/3] doctor…"; \
+	step_start=$$(date +%s); \
+	./scripts/doctor.sh; \
+	step_end=$$(date +%s); \
+	echo "  ↳ doctor: $$((step_end - step_start))s"; \
+	\
+	echo ""; echo "[2/3] pre-commit + cargo-audit…"; \
+	step_start=$$(date +%s); \
+	if command -v pre-commit > /dev/null 2>&1; then \
 		pre-commit install; \
 	else \
 		echo ""; \
@@ -301,13 +336,23 @@ setup:
 		echo "   Install with: pip install pre-commit"; \
 		echo "   Then run:     pre-commit install"; \
 		echo ""; \
-	fi
-	@if ! command -v cargo-audit > /dev/null 2>&1; then \
+	fi; \
+	if ! command -v cargo-audit > /dev/null 2>&1; then \
 		echo "⚠  cargo-audit not found — push hooks won't run audit."; \
 		echo "   Install with: cargo install cargo-audit"; \
 		echo ""; \
-	fi
-	cargo build
+	fi; \
+	step_end=$$(date +%s); \
+	echo "  ↳ pre-commit + cargo-audit: $$((step_end - step_start))s"; \
+	\
+	echo ""; echo "[3/3] cargo build…"; \
+	step_start=$$(date +%s); \
+	cargo build; \
+	step_end=$$(date +%s); \
+	echo "  ↳ cargo build: $$((step_end - step_start))s"; \
+	\
+	total_end=$$(date +%s); \
+	echo ""; echo "=== setup completed in $$((total_end - total_start))s ==="
 
 # Install optional Cargo tools used by other targets (watch, coverage, outdated, audit)
 setup-tools:
@@ -435,15 +480,17 @@ count-debt:
 	echo "Top 5 Largest Files"; \
 	find src/ -name '*.rs' -exec wc -l {} + | sort -rn | head -n 6 | tail -n 5 | awk '{printf "  %6d  %s\n", $$1, $$2}'; \
 	echo ""; \
-	echo "Per-Directory Breakdown (files / lines)"; \
+	echo "Per-Directory Breakdown (files / lines / unwrap)"; \
 	for dir in $$(find src/ -mindepth 1 -maxdepth 1 -type d | sort); do \
 		d_files=$$(find "$$dir" -name '*.rs' | wc -l | tr -d ' '); \
 		d_lines=$$(find "$$dir" -name '*.rs' -exec cat {} + 2>/dev/null | wc -l | tr -d ' '); \
-		printf "  %-30s %4s files  %6s lines\n" "$$dir" "$$d_files" "$$d_lines"; \
+		d_unwrap=$$(grep -r 'unwrap()' "$$dir" --include='*.rs' 2>/dev/null | wc -l | tr -d ' '); \
+		printf "  %-30s %4s files  %6s lines  %4s unwrap()\n" "$$dir" "$$d_files" "$$d_lines" "$$d_unwrap"; \
 	done; \
 	root_files=$$(find src/ -maxdepth 1 -name '*.rs' | wc -l | tr -d ' '); \
 	root_lines=$$(find src/ -maxdepth 1 -name '*.rs' -exec cat {} + 2>/dev/null | wc -l | tr -d ' '); \
-	printf "  %-30s %4s files  %6s lines\n" "src/ (root)" "$$root_files" "$$root_lines"
+	root_unwrap=$$(grep -r 'unwrap()' src/ --maxdepth 1 --include='*.rs' 2>/dev/null | wc -l | tr -d ' '); \
+	printf "  %-30s %4s files  %6s lines  %4s unwrap()\n" "src/ (root)" "$$root_files" "$$root_lines" "$$root_unwrap"
 
 # Docker convenience targets
 docker-up:
