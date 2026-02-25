@@ -5,7 +5,8 @@
         fmt fmt-check lint lint-fix lint-dirty lint-new lint-module watch test-watch lint-watch serve serve-env demo doctor doc bench bench-single clean playground setup setup-tools dev test-single coverage \
         new-module verify-docs check-quick check-local test-feature count-debt test-changed open-docs \
         docker-up docker-down docker-build docker-logs test-coverage-check \
-        profile-build test-doc new-example verify-examples update-deps
+        profile-build test-doc new-example verify-examples update-deps \
+        check-deps coverage-summary list-large-files scaffold-test
 
 help:
 	@echo "Available recipes:"
@@ -45,8 +46,10 @@ help:
 	@echo "  make bench-single  — Run a single benchmark: make bench-single NAME=search"
 	@echo "  make coverage      — Generate HTML coverage report (requires cargo-llvm-cov)"
 	@echo "  make test-coverage-check — Fail if coverage is below 75% (codecov.yml threshold)"
+	@echo "  make coverage-summary — Print coverage percentage (no browser)"
 	@echo "  make outdated      — Check for outdated dependencies (requires cargo-outdated)"
 	@echo "  make count-debt    — Show tech debt & module size dashboard"
+	@echo "  make list-large-files — List .rs files above threshold (THRESHOLD=1000)"
 	@echo "  make update-deps   — Update dependencies and run tests"
 	@echo "  make verify-docs   — Check that all markdown links resolve"
 	@echo "  make playground    — Interactive guided walkthrough"
@@ -58,7 +61,9 @@ help:
 	@echo "  make profile-build — Build with timing/profiling (cargo build --timings)"
 	@echo "  make test-doc      — Run documentation tests (cargo test --doc)"
 	@echo "  make new-example   — Scaffold a new example (NAME=x)"
+	@echo "  make scaffold-test — Add test boilerplate to a file (FILE=src/path.rs)"
 	@echo "  make verify-examples — Compile and check all examples"
+	@echo "  make check-deps    — Check all optional tools and print install summary"
 	@echo "  make clean         — Clean build artifacts"
 	@echo ""
 	@echo "Feature flag combinations:"
@@ -131,6 +136,7 @@ check:
 # Full CI equivalent: everything CI runs, locally
 # NOTE: Keep flags in sync with justfile check-all recipe
 check-all: fmt-check lint test
+	$(MAKE) --no-print-directory test-doc
 	RUSTDOCFLAGS='-D warnings' cargo doc --no-deps --features full
 	cargo build --examples --features full
 	cargo run --example quickstart
@@ -234,6 +240,7 @@ serve:
 	@echo "Starting Needle server on 127.0.0.1:$(NEEDLE_PORT)"
 	@echo "Tip: change port with NEEDLE_PORT=9090 make serve"
 	@echo "Tip: RUST_LOG=debug make serve (for verbose logging)"
+	@echo "Tip: RUST_LOG=needle=debug,tower_http=info make serve (per-module filtering)"
 	@echo "Tip: 'make serve-env' to auto-load .env before starting"
 	RUST_LOG=$(RUST_LOG) cargo run --features server -- serve -a 127.0.0.1:$(NEEDLE_PORT)
 
@@ -288,12 +295,24 @@ coverage:
 # Requires: cargo install cargo-llvm-cov
 test-coverage-check:
 	@command -v cargo-llvm-cov > /dev/null 2>&1 || { echo "Error: cargo-llvm-cov not found. Install with: cargo install cargo-llvm-cov"; exit 1; }
+	@command -v python3 > /dev/null 2>&1 || { echo "Error: python3 not found. Install Python 3 from https://www.python.org/ or via your package manager."; exit 1; }
 	@echo "Running coverage check (project threshold: 75%)…"
 	@cargo llvm-cov --features full --json 2>/dev/null | \
 		python3 -c "import sys,json; d=json.load(sys.stdin); pct=d['data'][0]['totals']['lines']['percent']; \
 		print(f'Coverage: {pct:.2f}%'); sys.exit(0 if pct >= 75.0 else 1)" \
 		|| { echo '✗ Coverage is below the 75% project threshold (see codecov.yml)'; exit 1; }
 	@echo "✓ Coverage meets the 75% project threshold"
+
+# Print coverage percentage without opening a browser (requires cargo-llvm-cov + python3)
+coverage-summary:
+	@command -v cargo-llvm-cov > /dev/null 2>&1 || { echo "Error: cargo-llvm-cov not found. Install with: cargo install cargo-llvm-cov"; exit 1; }
+	@command -v python3 > /dev/null 2>&1 || { echo "Error: python3 not found. Install Python 3 from https://www.python.org/ or via your package manager."; exit 1; }
+	@echo "Generating coverage summary…"
+	@cargo llvm-cov --features full --json 2>/dev/null | \
+		python3 -c "import sys,json; d=json.load(sys.stdin); t=d['data'][0]['totals']; \
+		print(f\"Lines:     {t['lines']['percent']:.2f}% ({t['lines']['covered']}/{t['lines']['count']})\"); \
+		print(f\"Functions: {t['functions']['percent']:.2f}% ({t['functions']['covered']}/{t['functions']['count']})\"); \
+		print(f\"Regions:   {t['regions']['percent']:.2f}% ({t['regions']['covered']}/{t['regions']['count']})\")"
 
 # Check for outdated dependencies (requires: cargo install cargo-outdated)
 outdated:
@@ -353,6 +372,32 @@ setup:
 	\
 	total_end=$$(date +%s); \
 	echo ""; echo "=== setup completed in $$((total_end - total_start))s ==="
+
+# Check all optional tools and print a summary with install commands for missing ones
+check-deps:
+	@echo "Checking optional tools…"; \
+	echo ""; \
+	missing=0; \
+	check_tool() { \
+		if command -v "$$1" > /dev/null 2>&1; then \
+			printf "  ✓  %-20s found\n" "$$1"; \
+		else \
+			printf "  ✗  %-20s MISSING  →  %s\n" "$$1" "$$2"; \
+			missing=$$((missing + 1)); \
+		fi; \
+	}; \
+	check_tool cargo-watch    "cargo install cargo-watch"; \
+	check_tool cargo-llvm-cov "cargo install cargo-llvm-cov"; \
+	check_tool cargo-outdated "cargo install cargo-outdated"; \
+	check_tool cargo-audit    "cargo install cargo-audit"; \
+	check_tool pre-commit     "pip install pre-commit"; \
+	check_tool maturin        "pip install maturin"; \
+	echo ""; \
+	if [ "$$missing" -eq 0 ]; then \
+		echo "All optional tools are installed."; \
+	else \
+		echo "$$missing tool(s) missing. Run 'make setup-tools' to install Cargo tools."; \
+	fi
 
 # Install optional Cargo tools used by other targets (watch, coverage, outdated, audit)
 setup-tools:
