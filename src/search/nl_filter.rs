@@ -1451,4 +1451,301 @@ mod tests {
 
         assert!(result.intents.contains(&QueryIntent::Exclude));
     }
+
+    // ========================================================================
+    // ConversationContext tests
+    // ========================================================================
+
+    #[test]
+    fn test_conversation_context_new() {
+        let ctx = ConversationContext::new();
+        assert!(ctx.history.is_empty());
+        assert!(ctx.active_filters.is_empty());
+        assert!(ctx.current_topic.is_none());
+        assert!(!ctx.has_context());
+    }
+
+    #[test]
+    fn test_conversation_context_add_query() {
+        let mut ctx = ConversationContext::new();
+        let parsed = NLFilterParser::new().parse("machine learning");
+        ctx.add_query("machine learning", parsed);
+
+        assert_eq!(ctx.history.len(), 1);
+        assert!(ctx.has_context());
+        assert_eq!(ctx.last_query().unwrap().query, "machine learning");
+    }
+
+    #[test]
+    fn test_conversation_context_history_limit() {
+        let mut ctx = ConversationContext::new();
+        ctx.max_history = 3;
+        let parser = NLFilterParser::new();
+
+        for i in 0..5 {
+            let parsed = parser.parse(&format!("query {}", i));
+            ctx.add_query(&format!("query {}", i), parsed);
+        }
+
+        assert_eq!(ctx.history.len(), 3);
+        // Oldest queries should be trimmed
+        assert_eq!(ctx.history[0].query, "query 2");
+    }
+
+    #[test]
+    fn test_conversation_context_filters() {
+        let mut ctx = ConversationContext::new();
+        ctx.add_filter(Filter::eq("category", serde_json::json!("tech")));
+        assert_eq!(ctx.active_filters.len(), 1);
+        assert!(ctx.has_context());
+
+        ctx.clear_filters();
+        assert!(ctx.active_filters.is_empty());
+    }
+
+    #[test]
+    fn test_conversation_context_topic() {
+        let mut ctx = ConversationContext::new();
+        ctx.set_topic("machine learning");
+        assert_eq!(ctx.current_topic.as_deref(), Some("machine learning"));
+        assert!(ctx.has_context());
+    }
+
+    #[test]
+    fn test_conversation_context_entities() {
+        let mut ctx = ConversationContext::new();
+        ctx.store_entity("user", serde_json::json!("alice"));
+        assert_eq!(ctx.get_entity("user"), Some(&serde_json::json!("alice")));
+        assert_eq!(ctx.get_entity("nonexistent"), None);
+    }
+
+    // ========================================================================
+    // ConversationalQueryParser tests
+    // ========================================================================
+
+    #[test]
+    fn test_conversational_parser_basic() {
+        let parser = ConversationalQueryParser::new();
+        let parsed = parser.parse_with_context("find documents about AI");
+        assert!(!parsed.search_text.is_empty());
+    }
+
+    #[test]
+    fn test_conversational_parser_multi_turn() {
+        let parser = ConversationalQueryParser::new();
+        parser.parse_with_context("show me articles about machine learning");
+
+        // Second query referencing context
+        let parsed2 = parser.parse_with_context("more about deep learning");
+        assert!(!parsed2.search_text.is_empty());
+
+        // Context should have 2 entries
+        assert_eq!(parser.context().history.len(), 2);
+    }
+
+    #[test]
+    fn test_conversational_parser_intent_search() {
+        let parser = ConversationalQueryParser::new();
+        let classification = parser.classify_intent("find documents about AI");
+        assert_eq!(classification.primary_intent, QueryIntent::Search);
+    }
+
+    #[test]
+    fn test_conversational_parser_intent_aggregate() {
+        let parser = ConversationalQueryParser::new();
+        let classification = parser.classify_intent("how many items in category electronics");
+        assert_eq!(classification.primary_intent, QueryIntent::Aggregate);
+    }
+
+    #[test]
+    fn test_conversational_parser_intent_temporal() {
+        let parser = ConversationalQueryParser::new();
+        let classification = parser.classify_intent("show me recent articles from last week");
+        assert!(
+            classification.primary_intent == QueryIntent::Temporal
+                || classification
+                    .secondary_intents
+                    .contains(&QueryIntent::Temporal)
+        );
+    }
+
+    #[test]
+    fn test_conversational_parser_intent_exclude() {
+        let parser = ConversationalQueryParser::new();
+        let classification = parser.classify_intent("everything except archived items");
+        assert_eq!(classification.primary_intent, QueryIntent::Exclude);
+    }
+
+    #[test]
+    fn test_conversational_parser_intent_compare() {
+        let parser = ConversationalQueryParser::new();
+        let classification = parser.classify_intent("compare product A versus product B");
+        assert_eq!(classification.primary_intent, QueryIntent::Compare);
+    }
+
+    #[test]
+    fn test_conversational_parser_intent_default_search() {
+        let parser = ConversationalQueryParser::new();
+        let classification = parser.classify_intent("xyzzy");
+        assert_eq!(classification.primary_intent, QueryIntent::Search);
+    }
+
+    #[test]
+    fn test_conversational_parser_reset() {
+        let parser = ConversationalQueryParser::new();
+        parser.parse_with_context("first query");
+        assert!(parser.context().has_context());
+
+        parser.reset_context();
+        assert!(!parser.context().has_context());
+    }
+
+    #[test]
+    fn test_conversational_parser_context_filters() {
+        let parser = ConversationalQueryParser::new();
+        parser
+            .context_mut()
+            .add_filter(Filter::eq("status", serde_json::json!("active")));
+
+        let parsed = parser.parse_with_context("find documents");
+        // Context filter should be applied
+        assert!(parsed.filter.is_some());
+    }
+
+    #[test]
+    fn test_conversational_parser_entity_extraction() {
+        let parser = ConversationalQueryParser::new();
+        let classification = parser.classify_intent("score above 0.8 from last week");
+        // Should extract number entity
+        assert!(classification.entities.iter().any(|e| e.entity_type == "number"));
+        // Should extract relative period
+        assert!(
+            classification
+                .entities
+                .iter()
+                .any(|e| e.entity_type == "relative_period")
+        );
+    }
+
+    // ========================================================================
+    // QuerySuggester tests
+    // ========================================================================
+
+    #[test]
+    fn test_query_suggester_examples() {
+        let suggester = QuerySuggester::new();
+        let examples = suggester.examples();
+        assert!(!examples.is_empty());
+    }
+
+    #[test]
+    fn test_query_suggester_suggest_short_query() {
+        let suggester = QuerySuggester::new();
+        let suggestions = suggester.suggest("find", 5);
+        assert!(!suggestions.is_empty());
+    }
+
+    #[test]
+    fn test_query_suggester_field_hints() {
+        let mut suggester = QuerySuggester::new();
+        suggester.add_field_hints(
+            "category",
+            vec!["tech".to_string(), "science".to_string()],
+        );
+
+        let suggestions = suggester.suggest("category", 5);
+        assert!(!suggestions.is_empty());
+        assert!(suggestions.iter().any(|s| s.contains("tech")));
+    }
+
+    #[test]
+    fn test_query_suggester_empty_query() {
+        let suggester = QuerySuggester::new();
+        let suggestions = suggester.suggest("", 5);
+        // Short/empty queries should still produce some suggestions
+        assert!(suggestions.len() <= 5);
+    }
+
+    #[test]
+    fn test_query_suggester_limit() {
+        let suggester = QuerySuggester::new();
+        let suggestions = suggester.suggest("find", 2);
+        assert!(suggestions.len() <= 2);
+    }
+
+    // ========================================================================
+    // to_search_params tests
+    // ========================================================================
+
+    #[test]
+    fn test_to_search_params_basic() {
+        let parser = NLFilterParser::new();
+        let parsed = parser.parse("machine learning");
+        let params = parsed.to_search_params(10);
+
+        assert!(!params.search_text.is_empty());
+        assert_eq!(params.k, 10);
+        assert!(params.filter.is_none());
+    }
+
+    #[test]
+    fn test_to_search_params_with_temporal() {
+        let parser = NLFilterParser::new();
+        let parsed = parser.parse("articles from last week");
+        let params = parsed.to_search_params(10);
+
+        assert!(params.time_field.is_some());
+        assert!(params.time_start.is_some());
+    }
+
+    #[test]
+    fn test_to_search_params_with_top_k() {
+        let parsed = ParsedQuery {
+            search_text: "top 5 machine learning papers".to_string(),
+            filter: None,
+            temporal: None,
+            confidence: 1.0,
+            intents: vec![QueryIntent::Search],
+        };
+        let params = parsed.to_search_params(10);
+        assert_eq!(params.k, 5);
+    }
+
+    #[test]
+    fn test_to_search_params_default_k() {
+        let parsed = ParsedQuery {
+            search_text: "machine learning papers".to_string(),
+            filter: None,
+            temporal: None,
+            confidence: 1.0,
+            intents: vec![QueryIntent::Search],
+        };
+        let params = parsed.to_search_params(20);
+        assert_eq!(params.k, 20);
+    }
+
+    // ========================================================================
+    // parse_nl_query convenience function
+    // ========================================================================
+
+    #[test]
+    fn test_parse_nl_query() {
+        let params = parse_nl_query("find documents about AI", 10);
+        assert!(!params.search_text.is_empty());
+        assert_eq!(params.k, 10);
+    }
+
+    #[test]
+    fn test_format_parsed_query_output() {
+        let parsed = ParsedQuery {
+            search_text: "test query".to_string(),
+            filter: None,
+            temporal: None,
+            confidence: 0.85,
+            intents: vec![QueryIntent::Search],
+        };
+        let formatted = format_parsed_query(&parsed);
+        assert!(formatted.contains("test query"));
+        assert!(formatted.contains("85%"));
+    }
 }
