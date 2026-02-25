@@ -534,4 +534,174 @@ mod tests {
         assert!((centroid[1] - 1.0 / 3.0).abs() < 1e-6);
         assert!((centroid[2] - 1.0 / 3.0).abs() < 1e-6);
     }
+
+    // ========================================================================
+    // Extended multi-vector tests
+    // ========================================================================
+
+    #[test]
+    fn test_with_tokens_constructor() {
+        let doc = MultiVector::with_tokens(
+            "doc1",
+            vec![vec![1.0, 0.0], vec![0.0, 1.0]],
+            vec!["hello".to_string(), "world".to_string()],
+        );
+
+        assert_eq!(doc.len(), 2);
+        assert_eq!(doc.dimensions(), Some(2));
+        assert_eq!(doc.tokens.as_ref().unwrap().len(), 2);
+        assert!(!doc.is_empty());
+    }
+
+    #[test]
+    fn test_empty_multi_vector() {
+        let doc = MultiVector::new("empty", vec![]);
+        assert!(doc.is_empty());
+        assert_eq!(doc.len(), 0);
+        assert_eq!(doc.dimensions(), None);
+    }
+
+    #[test]
+    fn test_with_dot_product_config() {
+        let config = MultiVectorConfig::new(3).with_dot_product();
+        assert_eq!(config.distance, DistanceFunction::DotProduct);
+        assert_eq!(config.dimensions, 3);
+    }
+
+    #[test]
+    fn test_insert_dimension_mismatch() {
+        let mut index = MultiVectorIndex::with_dimensions(3);
+        let doc = MultiVector::new("bad", vec![vec![1.0, 2.0]]); // 2 dims, expected 3
+        let result = index.insert(doc);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_remove_nonexistent() {
+        let mut index = MultiVectorIndex::with_dimensions(3);
+        assert!(!index.remove("nonexistent"));
+    }
+
+    #[test]
+    fn test_remove_existing() {
+        let mut index = MultiVectorIndex::with_dimensions(3);
+        index
+            .insert(MultiVector::new("doc1", vec![vec![1.0, 0.0, 0.0]]))
+            .unwrap();
+        assert_eq!(index.len(), 1);
+
+        assert!(index.remove("doc1"));
+        assert_eq!(index.len(), 0);
+        assert!(index.is_empty());
+        assert!(index.get("doc1").is_none());
+    }
+
+    #[test]
+    fn test_variable_token_counts() {
+        let mut index = MultiVectorIndex::with_dimensions(3);
+
+        // Document with 1 token
+        index
+            .insert(MultiVector::new("doc1", vec![vec![1.0, 0.0, 0.0]]))
+            .unwrap();
+        // Document with 5 tokens
+        let vecs: Vec<Vec<f32>> = (0..5).map(|_| random_vector(3)).collect();
+        index
+            .insert(MultiVector::new("doc5", vecs))
+            .unwrap();
+
+        assert_eq!(index.len(), 2);
+        let results = index.search(&vec![vec![1.0, 0.0, 0.0]], 2);
+        assert_eq!(results.len(), 2);
+    }
+
+    #[test]
+    fn test_search_empty_query() {
+        let mut index = MultiVectorIndex::with_dimensions(3);
+        index
+            .insert(MultiVector::new(
+                "doc1",
+                vec![vec![1.0, 0.0, 0.0]],
+            ))
+            .unwrap();
+
+        // Empty query falls through to two_stage's search call
+        let results = index.search(&[], 5);
+        assert_eq!(results.len(), 1);
+    }
+
+    #[test]
+    fn test_search_wrong_query_dims() {
+        let mut index = MultiVectorIndex::with_dimensions(3);
+        index
+            .insert(MultiVector::new("doc1", vec![vec![1.0, 0.0, 0.0]]))
+            .unwrap();
+
+        // Query with wrong dimensions
+        let results = index.search(&vec![vec![1.0, 0.0]], 5);
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_explain_match_missing_doc() {
+        let index = MultiVectorIndex::with_dimensions(3);
+        let result = index.explain_match(&vec![vec![1.0, 0.0, 0.0]], "nonexistent");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_search_two_stage_empty_query() {
+        let mut index = MultiVectorIndex::with_dimensions(3);
+        index
+            .insert(MultiVector::new("doc1", vec![vec![1.0, 0.0, 0.0]]))
+            .unwrap();
+
+        let results = index.search_two_stage(&[], 5, 3);
+        // Empty query with centroid enabled falls back to search
+        assert_eq!(results.len(), 1);
+    }
+
+    #[test]
+    fn test_centroid_empty_vectors() {
+        let centroid = MultiVectorIndex::compute_centroid(&[]);
+        assert!(centroid.is_empty());
+    }
+
+    #[test]
+    fn test_dot_product_index_search() {
+        let config = MultiVectorConfig::new(3).with_dot_product();
+        let mut index = MultiVectorIndex::new(config);
+
+        index
+            .insert(MultiVector::new(
+                "doc1",
+                vec![vec![1.0, 0.0, 0.0], vec![0.0, 1.0, 0.0]],
+            ))
+            .unwrap();
+        index
+            .insert(MultiVector::new("doc2", vec![vec![0.0, 0.0, 1.0]]))
+            .unwrap();
+
+        let query = vec![vec![1.0, 0.0, 0.0]];
+        let results = index.search(&query, 2);
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].id, "doc1");
+    }
+
+    #[test]
+    fn test_index_overwrite_doc() {
+        let mut index = MultiVectorIndex::with_dimensions(3);
+
+        index
+            .insert(MultiVector::new("doc1", vec![vec![1.0, 0.0, 0.0]]))
+            .unwrap();
+        // Insert again with same ID - should overwrite
+        index
+            .insert(MultiVector::new("doc1", vec![vec![0.0, 1.0, 0.0]]))
+            .unwrap();
+
+        assert_eq!(index.len(), 1);
+        let doc = index.get("doc1").unwrap();
+        assert_eq!(doc.vectors[0], vec![0.0, 1.0, 0.0]);
+    }
 }
