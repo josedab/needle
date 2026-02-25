@@ -412,6 +412,13 @@ Understanding the codebase structure will help you contribute effectively.
 
 ### Adding Features
 
+#### MCP Integration
+
+Needle exposes an [MCP](https://modelcontextprotocol.io/) server so AI agents can
+manage vector collections directly. The tool manifest lives in
+[`mcp-registry.json`](../mcp-registry.json) at the repository root. When you add or
+rename an MCP tool, update this file so external registries stay in sync.
+
 #### New Error Type
 
 ```rust
