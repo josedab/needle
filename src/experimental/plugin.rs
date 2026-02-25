@@ -476,7 +476,9 @@ impl PluginManager {
         // Register new
         if let Err(e) = self.register(new_plugin) {
             // Try to restore old plugin on failure
-            let _ = self.register(old);
+            if let Err(restore_err) = self.register(old) {
+                tracing::error!("Failed to restore plugin '{}' after hot-reload failure: {}", name, restore_err);
+            }
             return Err(PluginError::LifecycleError(format!(
                 "Hot-reload failed for '{}': {}",
                 name, e

@@ -217,8 +217,10 @@ impl PubSub {
 
     /// Publish a change event to all matching subscribers
     pub async fn publish(&self, event: ChangeEvent) -> StreamResult<()> {
-        // Send to broadcast channel
-        let _ = self.broadcast_tx.send(event.clone());
+        // Send to broadcast channel (receivers may have been dropped)
+        if self.broadcast_tx.send(event.clone()).is_err() {
+            tracing::debug!("No active broadcast receivers for change event");
+        }
 
         // Send to collection-specific subscribers
         let subs = self.subscriptions.read().await;

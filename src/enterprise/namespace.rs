@@ -462,7 +462,9 @@ impl NamespaceManager {
             // Delete all collections in namespace
             let collections = ns.list_collections();
             for coll_name in collections {
-                let _ = ns.delete_collection(&coll_name);
+                if let Err(e) = ns.delete_collection(&coll_name) {
+                    tracing::warn!("Failed to delete collection '{}' during namespace cleanup: {}", coll_name, e);
+                }
             }
             Ok(true)
         } else {

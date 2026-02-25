@@ -39,7 +39,9 @@ static GLOBAL_TELEMETRY: OnceLock<Arc<Telemetry>> = OnceLock::new();
 /// Initialize the global telemetry provider
 pub fn init_telemetry(config: TelemetryConfig) -> Arc<Telemetry> {
     let telemetry = Arc::new(Telemetry::new(config));
-    let _ = GLOBAL_TELEMETRY.set(telemetry.clone());
+    if GLOBAL_TELEMETRY.set(telemetry.clone()).is_err() {
+        tracing::debug!("Global telemetry already initialized, ignoring re-init");
+    }
     telemetry
 }
 
