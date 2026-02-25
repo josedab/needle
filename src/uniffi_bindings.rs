@@ -581,7 +581,7 @@ impl SyncQueue {
                 }
                 if has_conflict {
                     // LocalWins: delete existing and re-insert
-                    let _ = collection.delete(id.clone());
+                    collection.delete(id.clone())?;
                 }
                 collection.insert(id.clone(), vector.clone(), metadata_json.clone())?;
                 Ok(has_conflict)
@@ -596,7 +596,7 @@ impl SyncQueue {
                     collection.insert(id.clone(), vector.clone(), metadata_json.clone())?;
                 } else {
                     // Delete and re-insert (Collection API pattern)
-                    let _ = collection.delete(id.clone());
+                    collection.delete(id.clone())?;
                     collection.insert(id.clone(), vector.clone(), metadata_json.clone())?;
                 }
                 Ok(has_conflict)

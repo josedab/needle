@@ -305,7 +305,7 @@ impl ReplicatedDatabase {
                 let coll = self.db.collection(collection)?;
                 let ids = coll.ids()?;
                 for id in ids {
-                    let _ = coll.delete(&id);
+                    coll.delete(&id)?;
                 }
                 Ok(())
             }

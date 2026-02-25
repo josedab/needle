@@ -411,7 +411,7 @@ impl SyncEngine {
                     if let Ok(coll) = db.collection(collection) {
                         // Upsert semantics: delete if exists, then insert
                         if coll.get(id).is_some() {
-                            let _ = coll.delete(id);
+                            coll.delete(id)?;
                         }
                         coll.insert(id.clone(), vector, metadata.clone())?;
                     }
@@ -429,7 +429,7 @@ impl SyncEngine {
                 }
                 SyncOpKind::Delete { collection, id } => {
                     if let Ok(coll) = db.collection(collection) {
-                        let _ = coll.delete(id);
+                        coll.delete(id)?;
                     }
                 }
             }

@@ -278,10 +278,10 @@ impl<'a> ReplicationManager<'a> {
                 } => {
                     if let Ok(coll) = self.db.collection(&op.collection) {
                         if coll.get(id).is_some() {
-                            let _ = coll.delete(id);
+                            coll.delete(id)?;
                             conflicts += 1;
                         }
-                        let _ = coll.insert(id.clone(), vector, metadata.clone());
+                        coll.insert(id.clone(), vector, metadata.clone())?;
                         received += 1;
                     }
                 }
@@ -290,16 +290,16 @@ impl<'a> ReplicationManager<'a> {
                 } => {
                     if let Ok(coll) = self.db.collection(&op.collection) {
                         if coll.get(id).is_some() {
-                            let _ = coll.update(id, vector, metadata.clone());
+                            coll.update(id, vector, metadata.clone())?;
                         } else {
-                            let _ = coll.insert(id.clone(), vector, metadata.clone());
+                            coll.insert(id.clone(), vector, metadata.clone())?;
                         }
                         received += 1;
                     }
                 }
                 ReplicationOpKind::Delete { id } => {
                     if let Ok(coll) = self.db.collection(&op.collection) {
-                        let _ = coll.delete(id);
+                        coll.delete(id)?;
                         received += 1;
                     }
                 }
