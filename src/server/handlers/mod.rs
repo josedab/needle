@@ -91,8 +91,9 @@ pub(in crate::server) fn validate_collection_name(name: &str) -> std::result::Re
 /// Validate metadata JSON size and nesting depth.
 pub(in crate::server) fn validate_metadata(metadata: &Option<Value>) -> std::result::Result<(), (StatusCode, Json<ApiError>)> {
     if let Some(value) = metadata {
-        let serialized = serde_json::to_string(value).unwrap_or_default();
-        if serialized.len() > MAX_METADATA_BYTES {
+        // Estimate JSON size without full re-serialization
+        let estimated_size = json_byte_size(value);
+        if estimated_size > MAX_METADATA_BYTES {
             return Err((
                 StatusCode::PAYLOAD_TOO_LARGE,
                 Json(ApiError::new(
@@ -112,6 +113,30 @@ pub(in crate::server) fn validate_metadata(metadata: &Option<Value>) -> std::res
         }
     }
     Ok(())
+}
+
+/// Estimate the serialized byte size of a JSON value without allocating a string.
+fn json_byte_size(value: &Value) -> usize {
+    match value {
+        Value::Null => 4,   // "null"
+        Value::Bool(b) => if *b { 4 } else { 5 }, // "true" or "false"
+        Value::Number(n) => {
+            // Estimate number length (format as string length)
+            let s = n.to_string();
+            s.len()
+        }
+        Value::String(s) => s.len() + 2, // quotes + content (conservative for escapes)
+        Value::Array(arr) => {
+            // brackets + commas + element sizes
+            2 + arr.iter().map(json_byte_size).sum::<usize>()
+                + arr.len().saturating_sub(1) // commas
+        }
+        Value::Object(map) => {
+            // braces + commas + key/value sizes
+            2 + map.iter().map(|(k, v)| k.len() + 2 + 1 + json_byte_size(v)).sum::<usize>()
+                + map.len().saturating_sub(1) // commas
+        }
+    }
 }
 
 /// Compute the maximum nesting depth of a JSON value.
