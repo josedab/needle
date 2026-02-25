@@ -3883,6 +3883,7 @@ dependencies = [
  "hkdf",
  "hmac",
  "js-sys",
+ "jsonwebtoken",
  "lru 0.12.5",
  "memmap2",
  "metal",

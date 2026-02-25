@@ -4,7 +4,7 @@
 
 use crate::security::{Role, User};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
-use hmac::{Hmac, Mac};
+use jsonwebtoken::{decode, encode, Algorithm, DecodingKey, EncodingKey, Header, Validation};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -185,8 +185,12 @@ pub struct AuthConfig {
     pub require_auth: bool,
     /// API keys for authentication
     pub api_keys: Vec<ApiKey>,
-    /// JWT secret for token validation (HS256)
+    /// JWT secret for token validation (HS256) — the current/primary signing key
     pub jwt_secret: Option<String>,
+    /// Previous JWT secrets still accepted for validation during key rotation.
+    /// Tokens signed with these keys will be accepted but new tokens are always
+    /// signed with `jwt_secret`.
+    pub jwt_previous_secrets: Vec<String>,
     /// Endpoints that don't require authentication (e.g., "/health")
     pub public_endpoints: Vec<String>,
 }
@@ -197,6 +201,7 @@ impl std::fmt::Debug for AuthConfig {
             .field("require_auth", &self.require_auth)
             .field("api_keys", &format!("[{} keys]", self.api_keys.len()))
             .field("jwt_secret", &self.jwt_secret.as_ref().map(|_| "[REDACTED]"))
+            .field("jwt_previous_secrets", &format!("[{} keys]", self.jwt_previous_secrets.len()))
             .field("public_endpoints", &self.public_endpoints)
             .finish()
     }
@@ -209,6 +214,7 @@ impl AuthConfig {
             require_auth: false,
             api_keys: Vec::new(),
             jwt_secret: None,
+            jwt_previous_secrets: Vec::new(),
             public_endpoints: vec!["/health".to_string(), "/".to_string()],
         }
     }
@@ -240,6 +246,15 @@ impl AuthConfig {
         self
     }
 
+    /// Add a previous JWT secret for key rotation.
+    ///
+    /// During validation, if the current secret fails, previous secrets are tried
+    /// in order. New tokens are always signed with the current `jwt_secret`.
+    pub fn with_previous_jwt_secret(mut self, secret: impl Into<String>) -> Self {
+        self.jwt_previous_secrets.push(secret.into());
+        self
+    }
+
     /// Validate the authentication configuration.
     ///
     /// Returns an error if the JWT secret is configured but shorter than 32 bytes.
@@ -251,10 +266,26 @@ impl AuthConfig {
                 ));
             }
         }
+        for secret in &self.jwt_previous_secrets {
+            if secret.len() < 32 {
+                return Err(AuthError::InvalidToken(
+                    "JWT previous secret must be at least 32 bytes".into(),
+                ));
+            }
+        }
         Ok(())
     }
 
     /// Add a public endpoint that doesn't require authentication.
+    ///
+    /// Public endpoints are matched using prefix semantics: a path is considered
+    /// public if it exactly matches the endpoint, or if the path starts with the
+    /// endpoint followed by `/` or `?`. For example, adding `/api` would make
+    /// `/api/foo` and `/api?bar` public as well.
+    ///
+    /// **Warning:** Adding short prefixes like `/api` or `/collections` may
+    /// unintentionally expose more endpoints than intended. Prefer specific paths
+    /// (e.g., `/health`, `/collections/public-data`) to minimize risk.
     pub fn with_public_endpoint(mut self, endpoint: impl Into<String>) -> Self {
         self.public_endpoints.push(endpoint.into());
         self
@@ -287,90 +318,60 @@ impl AuthConfig {
     }
 
     /// Validate a JWT token and return the claims.
+    ///
+    /// Tries the current secret first. If validation fails with an invalid signature,
+    /// previous secrets are tried in order to support key rotation.
     pub fn validate_jwt(&self, token: &str) -> Result<JwtClaims, AuthError> {
         let secret = self.jwt_secret.as_ref().ok_or(AuthError::NoJwtSecret)?;
 
-        // Split token into parts
-        let parts: Vec<&str> = token.split('.').collect();
-        if parts.len() != 3 {
-            return Err(AuthError::InvalidToken("Invalid token format".into()));
+        // Try the current secret first
+        match self.validate_jwt_with_secret(token, secret) {
+            Ok(claims) => return Ok(claims),
+            Err(AuthError::InvalidSignature) => {
+                // Signature mismatch — try previous secrets for key rotation
+            }
+            Err(e) => return Err(e), // Non-signature errors (expired, malformed) fail immediately
         }
 
-        let header = parts[0];
-        let payload = parts[1];
-        let signature = parts[2];
-
-        // Decode and validate header algorithm
-        let header_bytes = URL_SAFE_NO_PAD
-            .decode(header)
-            .map_err(|_| AuthError::InvalidToken("Invalid header encoding".into()))?;
-        let header_json: Value = serde_json::from_slice(&header_bytes)
-            .map_err(|_| AuthError::InvalidToken("Invalid header JSON".into()))?;
-        match header_json.get("alg").and_then(|v| v.as_str()) {
-            Some("HS256") => {}
-            Some(alg) => {
-                return Err(AuthError::InvalidToken(format!(
-                    "Unsupported algorithm: {}. Only HS256 is supported",
-                    alg
-                )));
-            }
-            None => {
-                return Err(AuthError::InvalidToken(
-                    "Missing algorithm in header".into(),
-                ));
+        // Try previous secrets in order
+        for prev_secret in &self.jwt_previous_secrets {
+            if let Ok(claims) = self.validate_jwt_with_secret(token, prev_secret) {
+                return Ok(claims);
             }
         }
 
-        // Verify signature (HS256)
-        type HmacSha256 = Hmac<Sha256>;
-        let mut mac = HmacSha256::new_from_slice(secret.as_bytes())
-            .map_err(|_| AuthError::InvalidToken("Invalid secret".into()))?;
-        mac.update(format!("{}.{}", header, payload).as_bytes());
+        Err(AuthError::InvalidSignature)
+    }
 
-        let sig_bytes = URL_SAFE_NO_PAD
-            .decode(signature)
-            .map_err(|_| AuthError::InvalidToken("Invalid signature encoding".into()))?;
+    /// Validate a JWT token against a specific secret.
+    fn validate_jwt_with_secret(&self, token: &str, secret: &str) -> Result<JwtClaims, AuthError> {
+        let mut validation = Validation::new(Algorithm::HS256);
+        validation.leeway = JWT_CLOCK_LEEWAY_SECS;
+        validation.validate_exp = true;
+        validation.required_spec_claims.clear();
 
-        mac.verify_slice(&sig_bytes)
-            .map_err(|_| AuthError::InvalidSignature)?;
+        let key = DecodingKey::from_secret(secret.as_bytes());
+        let token_data = decode::<JwtClaims>(token, &key, &validation).map_err(|e| {
+            match e.kind() {
+                jsonwebtoken::errors::ErrorKind::ExpiredSignature => AuthError::TokenExpired,
+                jsonwebtoken::errors::ErrorKind::InvalidSignature => AuthError::InvalidSignature,
+                jsonwebtoken::errors::ErrorKind::InvalidAlgorithm => {
+                    AuthError::InvalidToken("Unsupported algorithm. Only HS256 is supported".into())
+                }
+                _ => AuthError::InvalidToken(format!("JWT validation failed: {}", e)),
+            }
+        })?;
 
-        // Decode payload
-        let payload_bytes = URL_SAFE_NO_PAD
-            .decode(payload)
-            .map_err(|_| AuthError::InvalidToken("Invalid payload encoding".into()))?;
-        let claims: JwtClaims = serde_json::from_slice(&payload_bytes)
-            .map_err(|e| AuthError::InvalidToken(format!("Invalid claims: {}", e)))?;
-
-        // Check expiration
-        if claims.is_expired() {
-            return Err(AuthError::TokenExpired);
-        }
-
-        Ok(claims)
+        Ok(token_data.claims)
     }
 
     /// Generate a JWT token for the given claims.
     pub fn generate_jwt(&self, claims: &JwtClaims) -> Result<String, AuthError> {
         let secret = self.jwt_secret.as_ref().ok_or(AuthError::NoJwtSecret)?;
 
-        // Header (always HS256)
-        let header = r#"{"alg":"HS256","typ":"JWT"}"#;
-        let header_b64 = URL_SAFE_NO_PAD.encode(header.as_bytes());
-
-        // Payload
-        let payload = serde_json::to_string(claims)
-            .map_err(|e| AuthError::InvalidToken(format!("Failed to serialize claims: {}", e)))?;
-        let payload_b64 = URL_SAFE_NO_PAD.encode(payload.as_bytes());
-
-        // Signature
-        type HmacSha256 = Hmac<Sha256>;
-        let mut mac = HmacSha256::new_from_slice(secret.as_bytes())
-            .map_err(|_| AuthError::InvalidToken("Invalid secret".into()))?;
-        mac.update(format!("{}.{}", header_b64, payload_b64).as_bytes());
-        let sig = mac.finalize().into_bytes();
-        let sig_b64 = URL_SAFE_NO_PAD.encode(sig);
-
-        Ok(format!("{}.{}.{}", header_b64, payload_b64, sig_b64))
+        let key = EncodingKey::from_secret(secret.as_bytes());
+        encode(&Header::new(Algorithm::HS256), claims, &key)
+            .map_err(|e| AuthError::InvalidToken(format!("Failed to generate JWT: {}", e)))
     }
 }
 
@@ -747,5 +748,33 @@ mod tests {
         };
         let debug = format!("{:?}", ctx);
         assert!(debug.contains("ApiKey"));
+    }
+
+    #[test]
+    fn test_jwt_key_rotation() {
+        let old_secret = "old-secret-key-that-is-at-least-32-bytes-long!!";
+        let new_secret = "new-secret-key-that-is-at-least-32-bytes-long!!";
+
+        // Generate token with old secret
+        let old_config = AuthConfig::new().with_jwt_secret(old_secret);
+        let claims = JwtClaims::new("user1", 3600);
+        let token = old_config.generate_jwt(&claims).unwrap();
+
+        // New config with rotated key — old secret as previous
+        let new_config = AuthConfig::new()
+            .with_jwt_secret(new_secret)
+            .with_previous_jwt_secret(old_secret);
+
+        // Token signed with old key should still validate
+        let validated = new_config.validate_jwt(&token);
+        assert!(validated.is_ok());
+        assert_eq!(validated.unwrap().sub, "user1");
+
+        // New tokens use the new secret
+        let new_token = new_config.generate_jwt(&claims).unwrap();
+        assert!(new_config.validate_jwt(&new_token).is_ok());
+
+        // Old config can't validate new tokens
+        assert!(old_config.validate_jwt(&new_token).is_err());
     }
 }

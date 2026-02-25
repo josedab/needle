@@ -213,6 +213,7 @@ mongodb = { version = "3.1", optional = true }
 sha2 = "0.10"
 
 # Authentication - JWT support (optional, used with server)
+jsonwebtoken = { version = "9", optional = true }
 hmac = { version = "0.12", optional = true }
 base64 = { version = "0.22", optional = true }
 subtle = { version = "2.6", optional = true }
@@ -290,7 +291,7 @@ simd = []
 # Async API without HTTP server - enables embedded async usage
 async = ["tokio", "futures"]
 # HTTP server (depends on async)
-server = ["async", "axum", "tower", "tower-http", "governor", "hmac", "base64", "subtle"]
+server = ["async", "axum", "tower", "tower-http", "governor", "jsonwebtoken", "hmac", "base64", "subtle"]
 web-ui = ["async", "axum"]
 metrics = ["prometheus"]
 # Observability modules: telemetry, drift detection, anomaly detection, profiling

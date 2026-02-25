@@ -59,12 +59,9 @@ use axum::{
     routing::{delete, get, post, put},
     Json, Router,
 };
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use governor::{clock::DefaultClock, state::keyed::DashMapStateStore, Quota, RateLimiter};
-use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use sha2::Sha256;
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::num::NonZeroU32;
