@@ -148,20 +148,24 @@ pub use services::{
 };
 
 // ── Next-Gen Services ────────────────────────────────────────────────────────
+#[cfg(feature = "experimental")]
 pub use services::{
     adaptive_optimizer, edge_runtime, graphrag_service, incremental_sync, managed_embeddings,
     nl_filter_parser, streaming_ingest, time_travel_query, visual_explorer, wasm_sdk,
 };
 
 // ── Next-Gen v2 Services ─────────────────────────────────────────────────────
+#[cfg(feature = "experimental")]
 pub use services::{
-    inference_engine, plugin_api, semantic_cache, streaming_protocol, sync_engine,
+    inference_engine, plugin_api, streaming_protocol, sync_engine,
     vector_transactions, wasm_browser,
 };
+pub use services::semantic_cache;
 pub use search::cost_estimator;
 pub use indexing::{graph_vector_fusion, multimodal_fusion};
 
 // ── Next-Gen v3 Services ─────────────────────────────────────────────────────
+#[cfg(feature = "experimental")]
 pub use services::{
     agentic_memory_protocol, graph_knowledge_service, live_replication, llm_cache_middleware,
     multimodal_collection, plugin_ecosystem, query_optimizer, text_to_vector, transactional_api,
@@ -169,35 +173,41 @@ pub use services::{
 };
 
 // ── Next-Gen v4 Services ─────────────────────────────────────────────────────
+#[cfg(feature = "experimental")]
 pub use services::{
     collection_bundle, collection_federation, collection_rbac, drift_monitor, materialized_views,
     otel_tracing, query_replay, smart_auto_embed, snapshot_time_travel, vector_pipeline,
 };
 
 // ── Next-Gen v5 Services ─────────────────────────────────────────────────────
+#[cfg(feature = "experimental")]
 pub use services::{
     ann_benchmark, api_stability, cdc_framework, cloud_deploy, community, compliance, format_spec,
     model_runtime, module_audit, python_sdk,
 };
 
 // ── Next-Gen v6 Services ─────────────────────────────────────────────────────
+#[cfg(feature = "experimental")]
 pub use services::{
     adaptive_index_selector, edge_serverless, encrypted_search, gpu_kernels, graph_query,
     llm_tools, managed_cloud, multi_writer, realtime_streaming, vector_lineage,
 };
 
 // ── Next-Gen v7 Services ─────────────────────────────────────────────────────
+#[cfg(feature = "experimental")]
 pub use services::{
     benchmark_runner, cluster_bootstrap, evidence_collector, model_downloader, pricing, rag_sdk,
     triage_report, unwrap_audit, vscode_extension, ws_protocol,
 };
 
 // ── Next-Gen v8 Services ─────────────────────────────────────────────────────
+#[cfg(feature = "experimental")]
 pub use services::{
     hnsw_compactor, matryoshka_service, pipeline_manager, snapshot_manager, wasm_plugin_runtime,
 };
 
 // ── Next-Gen v9 Services ─────────────────────────────────────────────────────
+#[cfg(feature = "experimental")]
 pub use services::{
     auto_embed_endpoint, backup_command, change_stream, client_sdk, format_validator, grpc_schema,
     notebook, query_cache_middleware, readiness_probe, tenant_router,

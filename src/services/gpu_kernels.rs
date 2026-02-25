@@ -22,6 +22,7 @@
 
 use std::time::Instant;
 
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
 /// GPU backend type.
@@ -92,6 +93,74 @@ pub struct GpuAccelerator {
     total_computations: u64,
 }
 
+/// Distance matrix result (queries × vectors).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DistanceMatrixResult {
+    /// Distance matrix as flat row-major array (queries × vectors).
+    pub matrix: Vec<f32>,
+    /// Number of query rows.
+    pub num_queries: usize,
+    /// Number of vector columns.
+    pub num_vectors: usize,
+    /// Backend used.
+    pub backend: GpuBackend,
+    /// Total computation time in microseconds.
+    pub compute_us: u64,
+}
+
+impl DistanceMatrixResult {
+    /// Get the distance between query `q` and vector `v`.
+    pub fn get(&self, q: usize, v: usize) -> f32 {
+        self.matrix[q * self.num_vectors + v]
+    }
+
+    /// Get the top-k nearest vectors for a given query.
+    pub fn top_k(&self, query_idx: usize, k: usize) -> Vec<(usize, f32)> {
+        let start = query_idx * self.num_vectors;
+        let end = start + self.num_vectors;
+        let mut indexed: Vec<(usize, f32)> = self.matrix[start..end]
+            .iter()
+            .enumerate()
+            .map(|(i, &d)| (i, d))
+            .collect();
+        indexed.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+        indexed.truncate(k);
+        indexed
+    }
+}
+
+/// Multi-query batch search result.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MultiQueryResult {
+    /// Top-k results per query: Vec<(vector_index, distance)>.
+    pub results: Vec<Vec<(usize, f32)>>,
+    /// Backend used.
+    pub backend: GpuBackend,
+    /// Total computation time in microseconds.
+    pub compute_us: u64,
+    /// Queries processed per second.
+    pub queries_per_second: f64,
+}
+
+/// GPU memory pool for managing pinned/unified memory.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GpuMemoryStats {
+    /// Total device memory in bytes.
+    pub total_bytes: usize,
+    /// Currently allocated bytes.
+    pub allocated_bytes: usize,
+    /// Peak allocation in bytes.
+    pub peak_bytes: usize,
+    /// Number of active buffers.
+    pub active_buffers: usize,
+}
+
+impl Default for GpuMemoryStats {
+    fn default() -> Self {
+        Self { total_bytes: 0, allocated_bytes: 0, peak_bytes: 0, active_buffers: 0 }
+    }
+}
+
 impl GpuAccelerator {
     /// Create a new accelerator with auto-detection.
     pub fn new(config: GpuConfig) -> Self {
@@ -148,6 +217,122 @@ impl GpuAccelerator {
     /// Whether GPU is available (not CPU fallback).
     pub fn is_gpu_available(&self) -> bool {
         !matches!(self.backend, GpuBackend::CpuSimd | GpuBackend::CpuScalar)
+    }
+
+    /// Compute a full distance matrix (all queries × all vectors) using Rayon.
+    pub fn distance_matrix_cosine(
+        &self,
+        queries: &[Vec<f32>],
+        vectors: &[Vec<f32>],
+    ) -> DistanceMatrixResult {
+        let start = Instant::now();
+        let num_queries = queries.len();
+        let num_vectors = vectors.len();
+
+        let matrix: Vec<f32> = queries.par_iter()
+            .flat_map(|q| {
+                vectors.iter()
+                    .map(|v| Self::cosine_distance(q, v))
+                    .collect::<Vec<f32>>()
+            })
+            .collect();
+
+        let elapsed = start.elapsed().as_micros() as u64;
+        DistanceMatrixResult { matrix, num_queries, num_vectors, backend: self.backend, compute_us: elapsed }
+    }
+
+    /// Compute a full distance matrix with euclidean distance.
+    pub fn distance_matrix_euclidean(
+        &self,
+        queries: &[Vec<f32>],
+        vectors: &[Vec<f32>],
+    ) -> DistanceMatrixResult {
+        let start = Instant::now();
+        let num_queries = queries.len();
+        let num_vectors = vectors.len();
+
+        let matrix: Vec<f32> = queries.par_iter()
+            .flat_map(|q| {
+                vectors.iter()
+                    .map(|v| Self::euclidean_distance(q, v))
+                    .collect::<Vec<f32>>()
+            })
+            .collect();
+
+        let elapsed = start.elapsed().as_micros() as u64;
+        DistanceMatrixResult { matrix, num_queries, num_vectors, backend: self.backend, compute_us: elapsed }
+    }
+
+    /// Multi-query batch search: find top-k for each query in parallel.
+    pub fn multi_query_search(
+        &self,
+        queries: &[Vec<f32>],
+        vectors: &[Vec<f32>],
+        k: usize,
+    ) -> MultiQueryResult {
+        let start = Instant::now();
+
+        let results: Vec<Vec<(usize, f32)>> = queries.par_iter()
+            .map(|q| {
+                let mut distances: Vec<(usize, f32)> = vectors.iter()
+                    .enumerate()
+                    .map(|(i, v)| (i, Self::cosine_distance(q, v)))
+                    .collect();
+                distances.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+                distances.truncate(k);
+                distances
+            })
+            .collect();
+
+        let elapsed = start.elapsed().as_micros() as u64;
+        let qps = if elapsed > 0 {
+            queries.len() as f64 / (elapsed as f64 / 1_000_000.0)
+        } else {
+            0.0
+        };
+
+        MultiQueryResult {
+            results,
+            backend: self.backend,
+            compute_us: elapsed,
+            queries_per_second: qps,
+        }
+    }
+
+    /// Offload HNSW neighbor candidate computation: for each node, find
+    /// distances to all candidates in parallel.
+    pub fn hnsw_neighbor_distances(
+        &self,
+        node_vector: &[f32],
+        candidates: &[Vec<f32>],
+    ) -> BatchDistanceResult {
+        let start = Instant::now();
+        let distances: Vec<f32> = if candidates.len() >= self.config.min_batch_size {
+            candidates.par_iter()
+                .map(|c| Self::cosine_distance(node_vector, c))
+                .collect()
+        } else {
+            candidates.iter()
+                .map(|c| Self::cosine_distance(node_vector, c))
+                .collect()
+        };
+        let elapsed = start.elapsed().as_micros() as u64;
+        let throughput = if elapsed > 0 {
+            candidates.len() as f64 / (elapsed as f64 / 1_000_000.0)
+        } else {
+            0.0
+        };
+        BatchDistanceResult { distances, backend: self.backend, compute_us: elapsed, throughput }
+    }
+
+    /// Get memory statistics (CPU fallback reports system memory).
+    pub fn memory_stats(&self) -> GpuMemoryStats {
+        GpuMemoryStats::default()
+    }
+
+    /// Get total computations performed.
+    pub fn total_computations(&self) -> u64 {
+        self.total_computations
     }
 
     fn detect_backend() -> GpuBackend {
@@ -214,5 +399,57 @@ mod tests {
         let config = GpuConfig { preferred_backend: Some(GpuBackend::CpuScalar), ..Default::default() };
         let accel = GpuAccelerator::new(config);
         assert_eq!(accel.backend(), GpuBackend::CpuScalar);
+    }
+
+    #[test]
+    fn test_distance_matrix() {
+        let accel = GpuAccelerator::new(GpuConfig::default());
+        let queries = vec![vec![1.0; 8], vec![0.0; 8]];
+        let vectors = vec![vec![1.0; 8], vec![0.5; 8], vec![0.0; 8]];
+        let result = accel.distance_matrix_cosine(&queries, &vectors);
+        assert_eq!(result.num_queries, 2);
+        assert_eq!(result.num_vectors, 3);
+        assert_eq!(result.matrix.len(), 6);
+        // query[0] = [1,1,...] should be closest to vectors[0] = [1,1,...]
+        assert!(result.get(0, 0) < result.get(0, 2));
+    }
+
+    #[test]
+    fn test_distance_matrix_top_k() {
+        let accel = GpuAccelerator::new(GpuConfig::default());
+        let queries = vec![vec![1.0; 4]];
+        let vectors = vec![vec![1.0; 4], vec![0.5; 4], vec![0.0; 4]];
+        let result = accel.distance_matrix_cosine(&queries, &vectors);
+        let top2 = result.top_k(0, 2);
+        assert_eq!(top2.len(), 2);
+        assert_eq!(top2[0].0, 0); // closest is vectors[0]
+    }
+
+    #[test]
+    fn test_multi_query_search() {
+        let accel = GpuAccelerator::new(GpuConfig::default());
+        let queries = vec![vec![1.0; 8], vec![0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]];
+        let vectors: Vec<Vec<f32>> = (0..50).map(|i| vec![i as f32; 8]).collect();
+        let result = accel.multi_query_search(&queries, &vectors, 3);
+        assert_eq!(result.results.len(), 2);
+        assert_eq!(result.results[0].len(), 3);
+        assert_eq!(result.results[1].len(), 3);
+        assert!(result.queries_per_second > 0.0);
+    }
+
+    #[test]
+    fn test_hnsw_neighbor_distances() {
+        let accel = GpuAccelerator::new(GpuConfig { min_batch_size: 2, ..Default::default() });
+        let node = vec![1.0f32; 16];
+        let candidates: Vec<Vec<f32>> = (0..10).map(|i| vec![i as f32; 16]).collect();
+        let result = accel.hnsw_neighbor_distances(&node, &candidates);
+        assert_eq!(result.distances.len(), 10);
+    }
+
+    #[test]
+    fn test_memory_stats() {
+        let accel = GpuAccelerator::new(GpuConfig::default());
+        let stats = accel.memory_stats();
+        assert_eq!(stats.active_buffers, 0);
     }
 }

@@ -379,9 +379,69 @@ impl VersionedStore {
     }
 
     fn enforce_retention(&mut self) {
+        // Enforce max versions
         while self.log.len() > self.retention.max_versions {
             self.log.remove(0);
         }
+
+        // Enforce max age
+        if let Some(max_age) = self.retention.max_age_secs {
+            let cutoff = now_secs().saturating_sub(max_age);
+            self.log.retain(|entry| entry.timestamp >= cutoff);
+        }
+    }
+
+    /// Manually prune snapshots older than a given timestamp.
+    pub fn prune_before(&mut self, timestamp: u64) -> usize {
+        let before = self.log.len();
+        self.log.retain(|entry| entry.timestamp >= timestamp);
+        before - self.log.len()
+    }
+
+    /// Prune snapshots keeping only the last N versions.
+    pub fn prune_keep_last(&mut self, n: usize) -> usize {
+        if self.log.len() <= n {
+            return 0;
+        }
+        let to_remove = self.log.len() - n;
+        self.log.drain(..to_remove);
+        to_remove
+    }
+
+    /// Search at a specific version number.
+    pub fn search_at_version(
+        &self,
+        query: &[f32],
+        k: usize,
+        version: u64,
+    ) -> Result<Vec<(String, f32)>> {
+        let snap = self.at_version(version)?;
+        Ok(snap.search(query, k))
+    }
+
+    /// Parse an ISO 8601 or RFC 3339 date string to a Unix timestamp.
+    pub fn parse_datetime(datetime: &str) -> Option<u64> {
+        // Try parsing as ISO 8601 via chrono
+        if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(datetime) {
+            return Some(dt.timestamp() as u64);
+        }
+        // Try parsing as "YYYY-MM-DD"
+        if let Ok(dt) = chrono::NaiveDate::parse_from_str(datetime, "%Y-%m-%d") {
+            return dt.and_hms_opt(0, 0, 0).map(|dt| dt.and_utc().timestamp() as u64);
+        }
+        // Try as raw Unix timestamp
+        datetime.parse().ok()
+    }
+
+    /// Get retention policy.
+    pub fn retention(&self) -> &RetentionPolicy {
+        &self.retention
+    }
+
+    /// Set retention policy.
+    pub fn set_retention(&mut self, policy: RetentionPolicy) {
+        self.retention = policy;
+        self.enforce_retention();
     }
 }
 
@@ -521,5 +581,78 @@ mod tests {
         assert_eq!(timeline.len(), 3);
         assert!(timeline[0].2.starts_with("insert:"));
         assert!(timeline[2].2.starts_with("delete:"));
+    }
+
+    #[test]
+    fn test_prune_keep_last() {
+        let mut store = VersionedStore::new();
+        for i in 0..10 {
+            store.insert(&format!("v{i}"), vec![i as f32; 4], None);
+        }
+        let pruned = store.prune_keep_last(3);
+        assert_eq!(pruned, 7);
+        assert_eq!(store.log_len(), 3);
+    }
+
+    #[test]
+    fn test_prune_before_timestamp() {
+        let mut store = VersionedStore::new();
+        store.insert("a", vec![1.0; 4], None);
+        store.insert("b", vec![2.0; 4], None);
+        // All entries have `now` timestamp, so pruning before future = 0
+        let pruned = store.prune_before(now_secs() + 100);
+        assert_eq!(pruned, 2); // all entries are before future
+    }
+
+    #[test]
+    fn test_search_at_version() {
+        let mut store = VersionedStore::new();
+        store.insert("a", vec![1.0, 0.0, 0.0, 0.0], None);
+        let v1 = store.current_version();
+        store.insert("b", vec![0.0, 1.0, 0.0, 0.0], None);
+        store.delete("a");
+
+        // Search at v1 should find "a" but not "b"
+        let results = store.search_at_version(&[1.0, 0.0, 0.0, 0.0], 5, v1).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].0, "a");
+    }
+
+    #[test]
+    fn test_parse_datetime() {
+        // Unix timestamp
+        assert_eq!(VersionedStore::parse_datetime("1700000000"), Some(1700000000));
+        // ISO 8601 date
+        assert!(VersionedStore::parse_datetime("2026-01-15").is_some());
+        // Invalid
+        assert!(VersionedStore::parse_datetime("not-a-date").is_none());
+    }
+
+    #[test]
+    fn test_age_based_retention() {
+        let mut store = VersionedStore::new().with_retention(RetentionPolicy {
+            max_versions: 10_000,
+            max_age_secs: Some(0), // expire immediately
+        });
+        store.insert("a", vec![1.0; 4], None);
+        // After insertion with max_age=0, the entry may get pruned on next insert
+        store.insert("b", vec![2.0; 4], None);
+        // At least the latest should survive
+        assert!(store.log_len() >= 1);
+    }
+
+    #[test]
+    fn test_set_retention() {
+        let mut store = VersionedStore::new();
+        for i in 0..10 {
+            store.insert(&format!("v{i}"), vec![i as f32; 4], None);
+        }
+        assert_eq!(store.log_len(), 10);
+
+        store.set_retention(RetentionPolicy {
+            max_versions: 3,
+            max_age_secs: None,
+        });
+        assert!(store.log_len() <= 3);
     }
 }

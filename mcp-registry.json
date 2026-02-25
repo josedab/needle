@@ -62,6 +62,10 @@
     {
       "name": "forget",
       "description": "Delete a specific memory by ID"
+    },
+    {
+      "name": "memory_consolidate",
+      "description": "Consolidate memories: promote important episodic to semantic tier, forget expired entries"
     }
   ],
   "resources": [

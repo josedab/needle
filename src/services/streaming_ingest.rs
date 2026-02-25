@@ -578,6 +578,23 @@ pub struct PipelineHealth {
     pub avg_flush_latency_us: u64,
 }
 
+// ── Lag Monitoring ───────────────────────────────────────────────────────────
+
+/// Lag metrics for monitoring pipeline health.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct LagMetrics {
+    /// Records buffered but not yet flushed.
+    pub buffer_lag: u64,
+    /// Milliseconds since the last flush.
+    pub time_since_flush_ms: u64,
+    /// Whether a flush is overdue based on the configured interval.
+    pub flush_overdue: bool,
+    /// Records received but not yet committed through checkpointing.
+    pub checkpoint_lag: u64,
+    /// Number of records in the dead-letter queue.
+    pub dead_letter_count: u64,
+}
+
 // ── Pipeline ─────────────────────────────────────────────────────────────────
 
 /// Streaming ingestion pipeline with backpressure and exactly-once semantics.
@@ -827,6 +844,63 @@ impl<'a> StreamingIngestPipeline<'a> {
             total_errors: self.stats.records_dead_lettered,
             avg_flush_latency_us: self.stats.avg_flush_latency_us,
         }
+    }
+
+    /// Get lag metrics for monitoring.
+    pub fn lag_metrics(&self) -> LagMetrics {
+        let buffer_lag = self.buffer.len() as u64;
+        let time_since_flush_ms = self.last_flush.elapsed().as_millis() as u64;
+        let flush_overdue = time_since_flush_ms > self.config.flush_interval_ms && !self.buffer.is_empty();
+        LagMetrics {
+            buffer_lag,
+            time_since_flush_ms,
+            flush_overdue,
+            checkpoint_lag: self.stats.records_received.saturating_sub(self.stats.records_flushed),
+            dead_letter_count: self.dead_letters.len() as u64,
+        }
+    }
+
+    /// Export Prometheus-compatible metrics as text.
+    pub fn prometheus_metrics(&self) -> String {
+        let lag = self.lag_metrics();
+        format!(
+            "# HELP needle_streaming_records_received Total records received\n\
+             # TYPE needle_streaming_records_received counter\n\
+             needle_streaming_records_received {}\n\
+             # HELP needle_streaming_records_flushed Total records flushed\n\
+             # TYPE needle_streaming_records_flushed counter\n\
+             needle_streaming_records_flushed {}\n\
+             # HELP needle_streaming_records_deduped Total records deduplicated\n\
+             # TYPE needle_streaming_records_deduped counter\n\
+             needle_streaming_records_deduped {}\n\
+             # HELP needle_streaming_records_dead_lettered Total dead-lettered records\n\
+             # TYPE needle_streaming_records_dead_lettered counter\n\
+             needle_streaming_records_dead_lettered {}\n\
+             # HELP needle_streaming_buffer_lag Current buffer lag\n\
+             # TYPE needle_streaming_buffer_lag gauge\n\
+             needle_streaming_buffer_lag {}\n\
+             # HELP needle_streaming_buffer_usage Buffer utilization ratio\n\
+             # TYPE needle_streaming_buffer_usage gauge\n\
+             needle_streaming_buffer_usage {:.4}\n\
+             # HELP needle_streaming_flush_latency_us Average flush latency\n\
+             # TYPE needle_streaming_flush_latency_us gauge\n\
+             needle_streaming_flush_latency_us {}\n\
+             # HELP needle_streaming_checkpoint_lag Records not yet checkpointed\n\
+             # TYPE needle_streaming_checkpoint_lag gauge\n\
+             needle_streaming_checkpoint_lag {}\n\
+             # HELP needle_streaming_flush_count Total flushes\n\
+             # TYPE needle_streaming_flush_count counter\n\
+             needle_streaming_flush_count {}\n",
+            self.stats.records_received,
+            self.stats.records_flushed,
+            self.stats.records_deduped,
+            self.stats.records_dead_lettered,
+            lag.buffer_lag,
+            self.buffer.len() as f64 / self.config.max_buffer_size as f64,
+            self.stats.avg_flush_latency_us,
+            lag.checkpoint_lag,
+            self.stats.flush_count,
+        )
     }
 
     fn dead_letter(&mut self, record: IngestRecord, error: &str) {
@@ -1193,5 +1267,47 @@ mod tests {
                 serde_json::from_str(&serialized).unwrap();
             assert_eq!(fmt, deserialized);
         }
+    }
+
+    #[test]
+    fn test_lag_metrics() {
+        let db = test_db();
+        let config = StreamingIngestConfig::builder()
+            .collection("test")
+            .batch_size(100)
+            .flush_interval_ms(1000)
+            .build();
+
+        let mut pipeline = StreamingIngestPipeline::new(&db, config).unwrap();
+        pipeline.push(IngestRecord::new("v1", vec![1.0; 4])).unwrap();
+        pipeline.push(IngestRecord::new("v2", vec![2.0; 4])).unwrap();
+
+        let lag = pipeline.lag_metrics();
+        assert_eq!(lag.buffer_lag, 2);
+        assert_eq!(lag.checkpoint_lag, 2);
+        assert_eq!(lag.dead_letter_count, 0);
+
+        pipeline.flush().unwrap();
+        let lag = pipeline.lag_metrics();
+        assert_eq!(lag.buffer_lag, 0);
+        assert_eq!(lag.checkpoint_lag, 0);
+    }
+
+    #[test]
+    fn test_prometheus_metrics() {
+        let db = test_db();
+        let config = StreamingIngestConfig::builder()
+            .collection("test")
+            .batch_size(100)
+            .build();
+
+        let mut pipeline = StreamingIngestPipeline::new(&db, config).unwrap();
+        pipeline.push(IngestRecord::new("v1", vec![1.0; 4])).unwrap();
+        pipeline.flush().unwrap();
+
+        let metrics = pipeline.prometheus_metrics();
+        assert!(metrics.contains("needle_streaming_records_received 1"));
+        assert!(metrics.contains("needle_streaming_records_flushed 1"));
+        assert!(metrics.contains("needle_streaming_flush_count 1"));
     }
 }
