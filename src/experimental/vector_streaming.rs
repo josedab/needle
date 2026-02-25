@@ -2940,4 +2940,508 @@ mod tests {
         controller.evaluate_capacity(96_000, 100_000);
         assert_eq!(controller.state(), BackpressureState::Paused);
     }
+
+    // ========================================================================
+    // Extended streaming tests
+    // ========================================================================
+
+    #[test]
+    fn test_consumer_lifecycle() {
+        let consumer = VectorConsumer::new(ConsumerConfig::mock()).unwrap();
+        assert!(!consumer.is_running());
+
+        consumer.start().unwrap();
+        assert!(consumer.is_running());
+
+        // Double start should error
+        let result = consumer.start();
+        assert!(result.is_err());
+
+        consumer.stop().unwrap();
+        assert!(!consumer.is_running());
+    }
+
+    #[test]
+    fn test_consumer_poll_not_started() {
+        let consumer = VectorConsumer::new(ConsumerConfig::mock()).unwrap();
+        // Poll without starting should return None
+        let result = consumer.poll().unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_consumer_poll_empty_buffer() {
+        let consumer = VectorConsumer::new(ConsumerConfig::mock()).unwrap();
+        consumer.start().unwrap();
+        // Poll with empty buffer should return None
+        let result = consumer.poll().unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_consumer_batch_size_limit() {
+        let config = ConsumerConfig::mock().batch_size(2);
+        let consumer = VectorConsumer::new(config).unwrap();
+        consumer.start().unwrap();
+
+        // Add 5 messages
+        let messages: Vec<VectorMessage> = (0..5)
+            .map(|i| VectorMessage {
+                id: format!("v{}", i),
+                vector: vec![i as f32],
+                metadata: None,
+                offset: i as u64,
+                partition: None,
+                timestamp: 0,
+                key: None,
+            })
+            .collect();
+        consumer.add_mock_messages(messages);
+
+        // First poll should return 2 (batch_size limit)
+        let batch = consumer.poll().unwrap().unwrap();
+        assert_eq!(batch.len(), 2);
+
+        // Second poll should return 2 more
+        let batch = consumer.poll().unwrap().unwrap();
+        assert_eq!(batch.len(), 2);
+    }
+
+    #[test]
+    fn test_consumer_stats() {
+        let consumer = VectorConsumer::new(ConsumerConfig::mock()).unwrap();
+        consumer.start().unwrap();
+
+        consumer.add_mock_messages(vec![VectorMessage {
+            id: "v1".to_string(),
+            vector: vec![1.0, 2.0, 3.0],
+            metadata: None,
+            offset: 0,
+            partition: None,
+            timestamp: 0,
+            key: None,
+        }]);
+
+        consumer.poll().unwrap();
+        let stats = consumer.stats();
+        assert_eq!(stats.messages_consumed, 1);
+        assert!(stats.bytes_consumed > 0);
+    }
+
+    #[test]
+    fn test_json_parsing_missing_id() {
+        let consumer = VectorConsumer::new(ConsumerConfig::mock()).unwrap();
+        let json = r#"{"vector": [1.0, 2.0]}"#;
+        let result = consumer.parse_json_message(json, 0);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_json_parsing_missing_vector() {
+        let consumer = VectorConsumer::new(ConsumerConfig::mock()).unwrap();
+        let json = r#"{"id": "v1"}"#;
+        let result = consumer.parse_json_message(json, 0);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_json_parsing_empty_vector() {
+        let consumer = VectorConsumer::new(ConsumerConfig::mock()).unwrap();
+        let json = r#"{"id": "v1", "vector": []}"#;
+        let result = consumer.parse_json_message(json, 0);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_json_parsing_invalid_json() {
+        let consumer = VectorConsumer::new(ConsumerConfig::mock()).unwrap();
+        let result = consumer.parse_json_message("not json", 0);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_binary_parsing_wrong_length() {
+        let config = ConsumerConfig::mock().vector_format(VectorFormat::BinaryF32LE);
+        let consumer = VectorConsumer::new(config).unwrap();
+        // 3 bytes is not a multiple of 4
+        let result = consumer.parse_binary_vector(&[1, 2, 3]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_binary_parsing_be() {
+        let config = ConsumerConfig::mock().vector_format(VectorFormat::BinaryF32BE);
+        let consumer = VectorConsumer::new(config).unwrap();
+        let mut data = Vec::new();
+        data.extend_from_slice(&1.0f32.to_be_bytes());
+        let vector = consumer.parse_binary_vector(&data).unwrap();
+        assert_eq!(vector, vec![1.0]);
+    }
+
+    #[test]
+    fn test_producer_batch() {
+        let producer = VectorProducer::new(ProducerConfig::default()).unwrap();
+        let batch = vec![
+            ("id1".to_string(), vec![1.0], None),
+            ("id2".to_string(), vec![2.0], None),
+        ];
+        let sent = producer.send_batch(&batch).unwrap();
+        assert_eq!(sent, 2);
+
+        let output = producer.get_mock_output();
+        assert_eq!(output.len(), 2);
+    }
+
+    #[test]
+    fn test_producer_stats() {
+        let producer = VectorProducer::new(ProducerConfig::default()).unwrap();
+        producer.send("v1", &[1.0], None).unwrap();
+        let stats = producer.stats();
+        assert_eq!(stats.messages_sent, 1);
+    }
+
+    #[test]
+    fn test_producer_flush() {
+        let producer = VectorProducer::new(ProducerConfig::default()).unwrap();
+        assert!(producer.flush().is_ok());
+    }
+
+    #[test]
+    fn test_stream_processor() {
+        let consumer = Arc::new(VectorConsumer::new(ConsumerConfig::mock()).unwrap());
+        let producer = Arc::new(VectorProducer::new(ProducerConfig::default()).unwrap());
+
+        consumer.start().unwrap();
+        consumer.add_mock_messages(vec![VectorMessage {
+            id: "v1".to_string(),
+            vector: vec![1.0, 2.0],
+            metadata: None,
+            offset: 0,
+            partition: None,
+            timestamp: 0,
+            key: None,
+        }]);
+
+        let processor = StreamProcessor::new(consumer.clone(), |msg| {
+            // Double each value
+            let mut m = msg;
+            m.vector = m.vector.iter().map(|v| v * 2.0).collect();
+            Some(m)
+        })
+        .with_producer(producer.clone());
+
+        let processed = processor.process_batch().unwrap();
+        assert_eq!(processed, 1);
+
+        let output = producer.get_mock_output();
+        assert_eq!(output.len(), 1);
+        assert_eq!(output[0].vector, vec![2.0, 4.0]);
+    }
+
+    #[test]
+    fn test_stream_processor_filter() {
+        let consumer = Arc::new(VectorConsumer::new(ConsumerConfig::mock()).unwrap());
+        consumer.start().unwrap();
+        consumer.add_mock_messages(vec![
+            VectorMessage {
+                id: "keep".to_string(),
+                vector: vec![1.0],
+                metadata: None,
+                offset: 0,
+                partition: None,
+                timestamp: 0,
+                key: None,
+            },
+            VectorMessage {
+                id: "drop".to_string(),
+                vector: vec![2.0],
+                metadata: None,
+                offset: 1,
+                partition: None,
+                timestamp: 0,
+                key: None,
+            },
+        ]);
+
+        let processor = StreamProcessor::new(consumer.clone(), |msg| {
+            if msg.id == "keep" {
+                Some(msg)
+            } else {
+                None
+            }
+        });
+
+        let processed = processor.process_batch().unwrap();
+        assert_eq!(processed, 1);
+    }
+
+    #[test]
+    fn test_checkpoint_trim_processed_ids() {
+        let mut cp = Checkpoint::new("g", "t");
+        for i in 0..100 {
+            cp.mark_processed(&format!("msg-{}", i));
+        }
+        assert_eq!(cp.processed_ids.len(), 100);
+
+        cp.trim_processed_ids(10);
+        assert!(cp.processed_ids.len() <= 10);
+    }
+
+    #[test]
+    fn test_checkpoint_watermark_only_increases() {
+        let mut cp = Checkpoint::new("g", "t");
+        cp.update_watermark(100);
+        assert_eq!(cp.watermark, 100);
+
+        cp.update_watermark(50); // Lower - should not change
+        assert_eq!(cp.watermark, 100);
+
+        cp.update_watermark(200);
+        assert_eq!(cp.watermark, 200);
+    }
+
+    #[test]
+    fn test_dlq_capacity_eviction() {
+        let dlq = DeadLetterQueue::new(2);
+
+        for i in 0..3 {
+            dlq.push(
+                VectorMessage {
+                    id: format!("m{}", i),
+                    vector: vec![],
+                    metadata: None,
+                    offset: i as u64,
+                    partition: None,
+                    timestamp: 0,
+                    key: None,
+                },
+                "error",
+                1,
+            );
+        }
+
+        assert_eq!(dlq.len(), 2);
+        let stats = dlq.stats();
+        assert_eq!(stats.permanently_failed, 1);
+    }
+
+    #[test]
+    fn test_dlq_clear() {
+        let dlq = DeadLetterQueue::new(10);
+        dlq.push(
+            VectorMessage {
+                id: "m1".to_string(),
+                vector: vec![],
+                metadata: None,
+                offset: 0,
+                partition: None,
+                timestamp: 0,
+                key: None,
+            },
+            "error",
+            0,
+        );
+        assert!(!dlq.is_empty());
+
+        dlq.clear();
+        assert!(dlq.is_empty());
+        assert_eq!(dlq.len(), 0);
+    }
+
+    #[test]
+    fn test_dlq_peek_all() {
+        let dlq = DeadLetterQueue::new(10);
+        dlq.push(
+            VectorMessage {
+                id: "m1".to_string(),
+                vector: vec![1.0],
+                metadata: None,
+                offset: 0,
+                partition: None,
+                timestamp: 0,
+                key: None,
+            },
+            "err1",
+            0,
+        );
+        dlq.push(
+            VectorMessage {
+                id: "m2".to_string(),
+                vector: vec![2.0],
+                metadata: None,
+                offset: 1,
+                partition: None,
+                timestamp: 0,
+                key: None,
+            },
+            "err2",
+            1,
+        );
+
+        let all = dlq.peek_all();
+        assert_eq!(all.len(), 2);
+        // peek_all should not remove items
+        assert_eq!(dlq.len(), 2);
+    }
+
+    #[test]
+    fn test_backpressure_stats() {
+        let controller = BackpressureController::new(BackpressureConfig {
+            max_in_flight: 10,
+            max_in_flight_pause: 50,
+            ..Default::default()
+        });
+
+        controller.on_receive(20); // Triggers throttle
+        let stats = controller.stats();
+        assert_eq!(stats.state, BackpressureState::Throttled);
+        assert_eq!(stats.in_flight, 20);
+        assert_eq!(stats.throttle_events, 1);
+    }
+
+    #[test]
+    fn test_backpressure_zero_capacity() {
+        let controller = BackpressureController::new(Default::default());
+        // Zero max_vectors should not change state
+        controller.evaluate_capacity(100, 0);
+        assert_eq!(controller.state(), BackpressureState::Flowing);
+    }
+
+    #[test]
+    fn test_consumer_config_variants() {
+        let pulsar = ConsumerConfig::pulsar("pulsar://localhost:6650", "vectors");
+        assert_eq!(pulsar.source, MessageSource::Pulsar);
+
+        let pg = ConsumerConfig::postgres("postgres://localhost/db", "embeddings");
+        assert_eq!(pg.source, MessageSource::Postgres);
+
+        let mongo = ConsumerConfig::mongodb("mongodb://localhost", "vectors");
+        assert_eq!(mongo.source, MessageSource::MongoDB);
+    }
+
+    #[test]
+    fn test_producer_config_variants() {
+        let kafka = ProducerConfig::kafka("localhost:9092", "output");
+        assert_eq!(kafka.source, MessageSource::Kafka);
+
+        let pulsar = ProducerConfig::pulsar("pulsar://localhost:6650", "output");
+        assert_eq!(pulsar.source, MessageSource::Pulsar);
+    }
+
+    #[test]
+    fn test_consumer_commit_pending_offsets() {
+        let consumer = VectorConsumer::new(ConsumerConfig::mock()).unwrap();
+
+        // Manually add pending offsets (via commit_offset)
+        consumer.commit_offset(0, 100).unwrap();
+        consumer.commit_offset(1, 200).unwrap();
+
+        // Commit should succeed
+        consumer.commit().unwrap();
+
+        let state = consumer.offset_state();
+        assert_eq!(state.committed.get(&0), Some(&100));
+    }
+
+    #[test]
+    fn test_dedup_without_dedup_enabled() {
+        let config = ConsumerConfig::mock().deduplication(false);
+        let consumer = VectorConsumer::new(config).unwrap();
+        consumer.start().unwrap();
+
+        let messages = vec![
+            VectorMessage {
+                id: "v1".to_string(),
+                vector: vec![1.0],
+                metadata: None,
+                offset: 0,
+                partition: None,
+                timestamp: 0,
+                key: None,
+            },
+            VectorMessage {
+                id: "v1".to_string(),
+                vector: vec![2.0],
+                metadata: None,
+                offset: 1,
+                partition: None,
+                timestamp: 0,
+                key: None,
+            },
+        ];
+        consumer.add_mock_messages(messages);
+
+        let batch = consumer.poll().unwrap().unwrap();
+        // Both should come through since dedup is disabled
+        assert_eq!(batch.len(), 2);
+    }
+
+    #[test]
+    fn test_transactional_processor_with_failures() {
+        let consumer = Arc::new(VectorConsumer::new(ConsumerConfig::mock()).unwrap());
+        let store = Arc::new(InMemoryCheckpointStore::new());
+
+        let processor = TransactionalProcessor::new(
+            consumer.clone(),
+            store,
+            |msg: &VectorMessage| {
+                if msg.id == "fail" {
+                    Err(NeedleError::InvalidInput("forced failure".into()))
+                } else {
+                    Ok(())
+                }
+            },
+        )
+        .unwrap()
+        .with_max_retries(1)
+        .with_checkpoint_interval(100);
+
+        consumer.start().unwrap();
+        consumer.add_mock_messages(vec![
+            VectorMessage {
+                id: "ok".to_string(),
+                vector: vec![1.0],
+                metadata: None,
+                offset: 0,
+                partition: Some(0),
+                timestamp: 0,
+                key: None,
+            },
+            VectorMessage {
+                id: "fail".to_string(),
+                vector: vec![2.0],
+                metadata: None,
+                offset: 1,
+                partition: Some(0),
+                timestamp: 0,
+                key: None,
+            },
+        ]);
+
+        let result = processor.process_batch().unwrap();
+        assert_eq!(result.processed, 1);
+        assert_eq!(result.failed, 1);
+
+        // Failed message should be in DLQ
+        assert_eq!(processor.dlq().len(), 1);
+    }
+
+    #[test]
+    fn test_transactional_processor_save_checkpoint() {
+        let consumer = Arc::new(VectorConsumer::new(ConsumerConfig::mock()).unwrap());
+        let store = Arc::new(InMemoryCheckpointStore::new());
+
+        let processor =
+            TransactionalProcessor::new(consumer.clone(), store.clone(), |_: &VectorMessage| {
+                Ok(())
+            })
+            .unwrap();
+
+        // Save checkpoint
+        processor.save_checkpoint().unwrap();
+
+        // Verify checkpoint was persisted
+        let loaded = store.load("needle-consumer", "vectors").unwrap();
+        assert!(loaded.is_some());
+    }
 }
