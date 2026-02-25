@@ -554,4 +554,216 @@ mod tests {
         assert!((sv.get(0) - 0.6).abs() < 1e-6);
         assert!((sv.get(1) - 0.8).abs() < 1e-6);
     }
+
+    // ========================================================================
+    // SparseVector edge cases
+    // ========================================================================
+
+    #[test]
+    fn test_sparse_empty_vector() {
+        let sv = SparseVector::new(vec![], vec![]);
+        assert!(sv.is_empty());
+        assert_eq!(sv.len(), 0);
+        assert_eq!(sv.l2_norm(), 0.0);
+        assert_eq!(sv.get(0), 0.0);
+        assert_eq!(sv.max_dimension(), None);
+    }
+
+    #[test]
+    fn test_sparse_normalized_empty() {
+        let sv = SparseVector::new(vec![], vec![]);
+        let norm = sv.normalized();
+        assert!(norm.is_empty());
+    }
+
+    #[test]
+    fn test_sparse_from_hashmap() {
+        let mut map = HashMap::new();
+        map.insert(5u32, 2.0f32);
+        map.insert(1, 1.0);
+        map.insert(10, 3.0);
+
+        let sv = SparseVector::from_hashmap(&map);
+        assert_eq!(sv.len(), 3);
+        assert_eq!(sv.get(1), 1.0);
+        assert_eq!(sv.get(5), 2.0);
+        assert_eq!(sv.get(10), 3.0);
+        // Should be sorted by index
+        assert!(sv.indices.windows(2).all(|w| w[0] < w[1]));
+    }
+
+    #[test]
+    fn test_sparse_from_hashmap_empty() {
+        let map: HashMap<u32, f32> = HashMap::new();
+        let sv = SparseVector::from_hashmap(&map);
+        assert!(sv.is_empty());
+    }
+
+    #[test]
+    fn test_sparse_max_dimension() {
+        let sv = SparseVector::new(vec![2, 100, 50], vec![1.0, 2.0, 3.0]);
+        assert_eq!(sv.max_dimension(), Some(100));
+    }
+
+    #[test]
+    fn test_sparse_to_dense_out_of_range() {
+        let sv = SparseVector::new(vec![0, 10], vec![1.0, 2.0]);
+        let dense = sv.to_dense(5); // dimension 10 is out of range
+        assert_eq!(dense.len(), 5);
+        assert_eq!(dense[0], 1.0);
+        // Index 10 should be ignored since dim is 5
+    }
+
+    #[test]
+    #[should_panic(expected = "Indices and values must have the same length")]
+    fn test_sparse_mismatched_lengths() {
+        SparseVector::new(vec![0, 1, 2], vec![1.0, 2.0]);
+    }
+
+    #[test]
+    #[should_panic(expected = "not finite")]
+    fn test_sparse_nan_value() {
+        SparseVector::new(vec![0], vec![f32::NAN]);
+    }
+
+    #[test]
+    #[should_panic(expected = "not finite")]
+    fn test_sparse_infinity_value() {
+        SparseVector::new(vec![0], vec![f32::INFINITY]);
+    }
+
+    // ========================================================================
+    // SparseDistance edge cases
+    // ========================================================================
+
+    #[test]
+    fn test_sparse_cosine_distance() {
+        let a = SparseVector::new(vec![0, 1], vec![1.0, 0.0]);
+        let b = SparseVector::new(vec![0, 1], vec![0.0, 1.0]);
+        let dist = SparseDistance::cosine_distance(&a, &b);
+        assert!((dist - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_sparse_euclidean_distance() {
+        let a = SparseVector::new(vec![0, 1], vec![3.0, 0.0]);
+        let b = SparseVector::new(vec![0, 1], vec![0.0, 4.0]);
+        let dist = SparseDistance::euclidean_distance(&a, &b);
+        assert!((dist - 5.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_sparse_euclidean_no_overlap() {
+        let a = SparseVector::new(vec![0], vec![3.0]);
+        let b = SparseVector::new(vec![1], vec![4.0]);
+        let dist = SparseDistance::euclidean_distance(&a, &b);
+        assert!((dist - 5.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_sparse_cosine_with_zero_vector() {
+        let a = SparseVector::new(vec![], vec![]);
+        let b = SparseVector::new(vec![0], vec![1.0]);
+        let sim = SparseDistance::cosine_similarity(&a, &b);
+        assert_eq!(sim, 0.0);
+    }
+
+    // ========================================================================
+    // SparseIndex CRUD and search tests
+    // ========================================================================
+
+    #[test]
+    fn test_sparse_index_insert_with_id() {
+        let mut index = SparseIndex::new();
+        let v = SparseVector::new(vec![0, 1], vec![1.0, 2.0]);
+        index.insert_with_id(42, v);
+
+        assert_eq!(index.len(), 1);
+        assert!(index.get(42).is_some());
+        assert_eq!(index.get(42).unwrap().get(0), 1.0);
+    }
+
+    #[test]
+    fn test_sparse_index_insert_with_id_replace() {
+        let mut index = SparseIndex::new();
+        index.insert_with_id(0, SparseVector::new(vec![0], vec![1.0]));
+        index.insert_with_id(0, SparseVector::new(vec![0], vec![2.0]));
+
+        assert_eq!(index.len(), 1);
+        assert_eq!(index.get(0).unwrap().get(0), 2.0);
+    }
+
+    #[test]
+    fn test_sparse_index_remove() {
+        let mut index = SparseIndex::new();
+        let id = index.insert(SparseVector::new(vec![0], vec![1.0]));
+        assert_eq!(index.len(), 1);
+
+        assert!(index.remove(id));
+        assert_eq!(index.len(), 0);
+        assert!(index.get(id).is_none());
+    }
+
+    #[test]
+    fn test_sparse_index_remove_nonexistent() {
+        let mut index = SparseIndex::new();
+        assert!(!index.remove(999));
+    }
+
+    #[test]
+    fn test_sparse_index_search_k_zero() {
+        let mut index = SparseIndex::new();
+        index.insert(SparseVector::new(vec![0], vec![1.0]));
+
+        let results = index.search(&SparseVector::new(vec![0], vec![1.0]), 0);
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_sparse_index_search_k_greater_than_len() {
+        let mut index = SparseIndex::new();
+        index.insert(SparseVector::new(vec![0], vec![1.0]));
+        index.insert(SparseVector::new(vec![0], vec![2.0]));
+
+        let results = index.search(&SparseVector::new(vec![0], vec![1.0]), 100);
+        assert_eq!(results.len(), 2);
+    }
+
+    #[test]
+    fn test_sparse_index_search_cosine() {
+        let mut index = SparseIndex::new();
+        index.insert(SparseVector::new(vec![0, 1], vec![1.0, 0.0]));
+        index.insert(SparseVector::new(vec![0, 1], vec![0.5, 0.5]));
+        index.insert(SparseVector::new(vec![0, 1], vec![0.0, 1.0]));
+
+        let query = SparseVector::new(vec![0], vec![1.0]);
+        let results = index.search_cosine(&query, 3);
+        assert!(!results.is_empty());
+        // First result should be most similar (vector at [1, 0])
+        assert_eq!(results[0].0, 0);
+    }
+
+    #[test]
+    fn test_sparse_index_search_cosine_zero_query() {
+        let mut index = SparseIndex::new();
+        index.insert(SparseVector::new(vec![0], vec![1.0]));
+
+        let results = index.search_cosine(&SparseVector::new(vec![], vec![]), 10);
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_sparse_index_empty_search() {
+        let index = SparseIndex::new();
+        let results = index.search(&SparseVector::new(vec![0], vec![1.0]), 5);
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_sparse_index_is_empty() {
+        let mut index = SparseIndex::new();
+        assert!(index.is_empty());
+        index.insert(SparseVector::new(vec![0], vec![1.0]));
+        assert!(!index.is_empty());
+    }
 }
