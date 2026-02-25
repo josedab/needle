@@ -1,0 +1,13 @@
+# Auto-detect text files and normalize line endings to LF
+* text=auto eol=lf
+
+# Rust source files
+*.rs text eol=lf
+*.toml text eol=lf
+
+# Generated files (exclude from language stats)
+Cargo.lock linguist-generated
+
+# Binary database files
+*.needle binary
+*.needle.bak binary

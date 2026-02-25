@@ -29,6 +29,10 @@ use needle::query_builder::{QueryAnalyzer, VisualQueryBuilder};
 #[command(name = "needle")]
 #[command(author, version, about = "Embedded Vector Database - SQLite for Vectors", long_about = None)]
 struct Cli {
+    /// Enable debug logging (sets RUST_LOG=debug)
+    #[arg(short, long, global = true)]
+    verbose: bool,
+
     #[command(subcommand)]
     command: Commands,
 }
@@ -763,6 +767,10 @@ enum MemoryCommands {
 
 fn main() {
     let cli = Cli::parse();
+
+    if cli.verbose {
+        std::env::set_var("RUST_LOG", "debug");
+    }
 
     if let Err(err) = run(cli) {
         print_error(&err);
