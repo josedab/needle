@@ -1,6 +1,5 @@
 //! Admin, infrastructure, dashboard, and operational handlers.
 
-use crate::database::Database;
 use crate::metadata::Filter;
 use crate::server::AppState;
 use crate::server::types::*;
@@ -260,23 +259,14 @@ pub(in crate::server) async fn mcp_http_handler(
     Json(request): Json<crate::mcp::JsonRpcRequest>,
 ) -> impl IntoResponse {
     let db_guard = state.db.read().await;
-    // Create a temporary MCP server wrapping the database
-    // Safety: we clone the inner data for the MCP handler
-    let db = Database::in_memory();
-    // For HTTP MCP, we delegate to a shared server instance pattern
-    // by directly handling the request with the database reference
+    let shared_db = db_guard.shared_handle();
     drop(db_guard);
 
-    // Re-acquire for the actual operation
-    let db_guard = state.db.read().await;
     let mcp_server = crate::mcp::McpServer::from_arc_db(
-        std::sync::Arc::new(Database::in_memory()),
+        std::sync::Arc::new(shared_db),
         false,
     );
-    drop(db_guard);
 
-    // For production, the MCP server should share the AppState database.
-    // This handler provides the HTTP transport layer.
     let response = crate::mcp::handle_http_request(&mcp_server, request);
     Json(serde_json::to_value(&response).unwrap_or_default())
 }
