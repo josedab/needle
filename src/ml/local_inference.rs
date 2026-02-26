@@ -1,4 +1,3 @@
-#![allow(clippy::unwrap_used)]
 //! Built-in Embedding Inference
 //!
 //! Local embedding model execution with automatic model downloading, caching,

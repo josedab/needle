@@ -1,4 +1,3 @@
-#![allow(clippy::unwrap_used)]
 //! Columnar Export/Import for Vector Collections
 //!
 //! Provides export/import in a columnar JSON format that maps directly to

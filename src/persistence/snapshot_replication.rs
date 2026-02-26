@@ -1,4 +1,3 @@
-#![allow(clippy::unwrap_used)]
 //! Vector Snapshot Replication
 //!
 //! Efficient snapshot-based replication protocol enabling read replicas,

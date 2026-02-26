@@ -1,4 +1,3 @@
-#![allow(clippy::unwrap_used)]
 //! Native Graph Vector Index
 //!
 //! Combines knowledge graphs with vector embeddings for relationship-aware retrieval.

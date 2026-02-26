@@ -1,4 +1,3 @@
-#![allow(clippy::unwrap_used)]
 //! NeedleQL Language Server Protocol (LSP)
 //!
 //! IDE integration providing autocomplete, syntax validation, inline query results,

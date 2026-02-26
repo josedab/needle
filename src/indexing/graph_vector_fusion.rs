@@ -1,4 +1,3 @@
-#![allow(clippy::unwrap_used)]
 //! Graph-Vector Fusion Index
 //!
 //! Unified index structure combining knowledge graph edges with vector

@@ -1,4 +1,3 @@
-#![allow(clippy::unwrap_used)]
 //! Multi-Modal Unified Index
 //!
 //! Unified index supporting text, image, and audio embeddings with cross-modal

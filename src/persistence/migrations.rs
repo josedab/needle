@@ -1,4 +1,3 @@
-#![allow(clippy::unwrap_used)]
 //! Schema Versioning & Migrations
 //!
 //! Provides database schema versioning and migration capabilities for Needle databases.

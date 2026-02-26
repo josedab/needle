@@ -1,4 +1,3 @@
-#![allow(clippy::unwrap_used)]
 //! Query Profiler - EXPLAIN ANALYZE for vector search operations.
 //!
 //! Provides detailed performance analysis of vector search queries,

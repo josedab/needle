@@ -1,4 +1,3 @@
-#![allow(clippy::unwrap_used)]
 #![allow(dead_code)]
 
 //! Concurrent HNSW Graph Operations

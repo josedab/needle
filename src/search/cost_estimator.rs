@@ -1,4 +1,3 @@
-#![allow(clippy::unwrap_used)]
 //! Query Cost Estimator & Optimizer
 //!
 //! SQL-style EXPLAIN ANALYZE for vector queries showing estimated I/O, memory,

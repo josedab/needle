@@ -1,4 +1,3 @@
-#![allow(clippy::unwrap_used)]
 // Allow dead_code for this public API module - types are exported for library users
 #![allow(dead_code)]
 #![allow(clippy::wrong_self_convention)]

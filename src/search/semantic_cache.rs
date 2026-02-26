@@ -1,4 +1,3 @@
-#![allow(clippy::unwrap_used)]
 //! Semantic Caching Layer
 //!
 //! A multi-tier LLM response cache that uses vector similarity to match

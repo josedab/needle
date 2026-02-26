@@ -1,4 +1,3 @@
-#![allow(clippy::unwrap_used)]
 //! Copy-on-Write HNSW Index
 //!
 //! Provides concurrent reads during writes without lock contention by using

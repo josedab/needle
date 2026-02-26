@@ -1,4 +1,3 @@
-#![allow(clippy::unwrap_used)]
 //! # Vector Quantization
 //!
 //! This module provides quantization techniques for compressing vectors to reduce

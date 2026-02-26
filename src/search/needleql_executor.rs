@@ -1,4 +1,3 @@
-#![allow(clippy::unwrap_used)]
 //! NeedleQL Query Executor Service
 //!
 //! Full query language execution with SELECT, WHERE, NEAREST_TO(), HYBRID_SEARCH(),

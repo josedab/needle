@@ -1,4 +1,3 @@
-#![allow(clippy::unwrap_used)]
 //! Embedding Providers
 //!
 //! Abstraction layer for various embedding model providers including OpenAI, Cohere,

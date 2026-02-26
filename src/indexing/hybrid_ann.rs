@@ -1,4 +1,3 @@
-#![allow(clippy::unwrap_used)]
 //! # ANN + Exact Hybrid Search
 //!
 //! This module provides a hybrid search strategy that combines Approximate

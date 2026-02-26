@@ -1,4 +1,3 @@
-#![allow(clippy::unwrap_used)]
 //! Model Registry for Automatic Embedding Inference
 //!
 //! Provides a registry of pre-configured embedding models with automatic

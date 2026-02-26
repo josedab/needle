@@ -1,4 +1,3 @@
-#![allow(clippy::unwrap_used)]
 //! Unified Query Planner Service
 //!
 //! Integrates the cost-based query optimizer with Collection-level statistics

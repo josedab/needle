@@ -1,4 +1,3 @@
-#![allow(clippy::unwrap_used)]
 //! Unified Inference Engine
 //!
 //! Provides a single entry-point for "text in, results out" workflows by combining

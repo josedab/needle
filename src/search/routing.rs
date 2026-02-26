@@ -1,4 +1,3 @@
-#![allow(clippy::unwrap_used)]
 //! # Query Routing Module
 //!
 //! Provides distributed query routing and result aggregation for sharded deployments.

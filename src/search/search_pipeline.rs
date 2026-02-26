@@ -1,4 +1,3 @@
-#![allow(clippy::unwrap_used)]
 //! Composable Search Pipeline DSL
 //!
 //! A declarative pipeline DSL for chaining search operations:

@@ -1,4 +1,3 @@
-#![allow(clippy::unwrap_used)]
 //! Vector Compression Advisor
 //!
 //! Automatic recommendation engine that analyzes vector distributions and

@@ -1,4 +1,3 @@
-#![allow(clippy::unwrap_used)]
 //! Haystack Document Store Integration
 //!
 //! Provides a Needle-backed document store compatible with the Haystack

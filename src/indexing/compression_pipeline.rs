@@ -1,4 +1,3 @@
-#![allow(clippy::unwrap_used)]
 #![allow(dead_code)]
 
 //! Adaptive Vector Compression Pipeline

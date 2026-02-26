@@ -1,4 +1,3 @@
-#![allow(clippy::unwrap_used)]
 //! Query Cost Optimizer with EXPLAIN
 //!
 //! SQL-like EXPLAIN for vector queries showing index scan paths, filter

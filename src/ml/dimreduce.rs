@@ -1,4 +1,3 @@
-#![allow(clippy::unwrap_used)]
 //! Dimensionality Reduction
 //!
 //! Reduce vector dimensions for visualization and compression:

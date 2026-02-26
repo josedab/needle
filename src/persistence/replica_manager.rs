@@ -1,4 +1,3 @@
-#![allow(clippy::unwrap_used)]
 #![allow(dead_code)]
 
 //! Snapshot-Based Replication Manager

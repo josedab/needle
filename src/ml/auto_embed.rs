@@ -1,4 +1,3 @@
-#![allow(clippy::unwrap_used)]
 //! Automatic Embedding Generation
 //!
 //! Provides automatic text-to-vector embedding generation for collections,

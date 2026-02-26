@@ -1,4 +1,3 @@
-#![allow(clippy::unwrap_used)]
 //! Cross-Collection Search
 //!
 //! Enables unified search across multiple collections within a single database
