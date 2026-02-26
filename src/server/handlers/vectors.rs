@@ -15,6 +15,9 @@ use tracing::{error, warn};
 
 use super::{validate_metadata, validate_vector_id, validate_vector_dimensions};
 
+/// Maximum allowed size of a single text input in bytes.
+const MAX_TEXT_BYTES: usize = 100_000;
+
 // ============ Vector CRUD ============
 
 /// Insert a single vector into a collection.
@@ -425,6 +428,11 @@ pub(in crate::server) async fn batch_insert_text_handler(
     for item in &body.texts {
         if item.text.is_empty() {
             errors.push(json!({ "id": item.id, "error": "Empty text" }));
+            continue;
+        }
+
+        if item.text.len() > MAX_TEXT_BYTES {
+            errors.push(json!({ "id": item.id, "error": format!("Text exceeds maximum size of {} bytes", MAX_TEXT_BYTES) }));
             continue;
         }
 
