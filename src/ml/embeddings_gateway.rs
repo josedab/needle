@@ -1353,6 +1353,152 @@ impl CostBudget {
 }
 
 // ============================================================================
+// Collection-Level Auto-Embed
+// ============================================================================
+
+/// Configuration for automatic embedding at the collection level.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AutoEmbedConfig {
+    /// Provider to use for this collection.
+    pub provider: ProviderType,
+    /// Model name (provider-specific).
+    pub model: String,
+    /// Expected embedding dimensions.
+    pub dimensions: usize,
+    /// Whether to store original text in metadata.
+    pub store_text: bool,
+    /// Metadata key under which original text is stored.
+    pub text_metadata_key: String,
+}
+
+impl Default for AutoEmbedConfig {
+    fn default() -> Self {
+        Self {
+            provider: ProviderType::Mock,
+            model: String::new(),
+            dimensions: 384,
+            store_text: true,
+            text_metadata_key: "_text".into(),
+        }
+    }
+}
+
+impl AutoEmbedConfig {
+    /// Create config for OpenAI embeddings.
+    pub fn openai(model: &str, dimensions: usize) -> Self {
+        Self {
+            provider: ProviderType::OpenAI,
+            model: model.into(),
+            dimensions,
+            ..Self::default()
+        }
+    }
+
+    /// Create config for Ollama embeddings.
+    pub fn ollama(model: &str, dimensions: usize) -> Self {
+        Self {
+            provider: ProviderType::Ollama,
+            model: model.into(),
+            dimensions,
+            ..Self::default()
+        }
+    }
+}
+
+/// Wraps a gateway and collection for text-first insert/search operations.
+pub struct AutoEmbedCollection<'a> {
+    gateway: &'a EmbeddingsGateway,
+    db: &'a crate::database::Database,
+    collection_name: String,
+    config: AutoEmbedConfig,
+}
+
+impl<'a> AutoEmbedCollection<'a> {
+    /// Create a new auto-embed collection wrapper.
+    pub fn new(
+        gateway: &'a EmbeddingsGateway,
+        db: &'a crate::database::Database,
+        collection_name: &str,
+        config: AutoEmbedConfig,
+    ) -> Self {
+        Self {
+            gateway,
+            db,
+            collection_name: collection_name.into(),
+            config,
+        }
+    }
+
+    /// Insert a text document: automatically embed and store.
+    pub fn insert_text(
+        &self,
+        id: &str,
+        text: &str,
+        metadata: Option<serde_json::Value>,
+    ) -> Result<()> {
+        let result = self.gateway.embed(text)?;
+
+        let mut meta = metadata.unwrap_or(serde_json::json!({}));
+        if self.config.store_text {
+            if let Some(obj) = meta.as_object_mut() {
+                obj.insert(
+                    self.config.text_metadata_key.clone(),
+                    serde_json::Value::String(text.to_string()),
+                );
+            }
+        }
+
+        let coll = self.db.collection(&self.collection_name)?;
+        coll.insert(id, &result.embedding, Some(meta))?;
+        Ok(())
+    }
+
+    /// Search by text: automatically embed the query and search.
+    pub fn search_text(
+        &self,
+        query: &str,
+        k: usize,
+    ) -> Result<Vec<crate::collection::SearchResult>> {
+        let result = self.gateway.embed(query)?;
+        let coll = self.db.collection(&self.collection_name)?;
+        coll.search(&result.embedding, k)
+    }
+
+    /// Batch insert text documents.
+    pub fn insert_text_batch(
+        &self,
+        items: &[(&str, &str, Option<serde_json::Value>)],
+    ) -> Result<usize> {
+        let texts: Vec<&str> = items.iter().map(|(_, text, _)| *text).collect();
+        let batch_result = self.gateway.embed_batch(&texts)?;
+
+        let coll = self.db.collection(&self.collection_name)?;
+        let mut inserted = 0;
+
+        for ((id, text, metadata), embedding) in items.iter().zip(batch_result.embeddings.iter()) {
+            let mut meta = metadata.clone().unwrap_or(serde_json::json!({}));
+            if self.config.store_text {
+                if let Some(obj) = meta.as_object_mut() {
+                    obj.insert(
+                        self.config.text_metadata_key.clone(),
+                        serde_json::Value::String(text.to_string()),
+                    );
+                }
+            }
+            coll.insert(*id, embedding, Some(meta))?;
+            inserted += 1;
+        }
+
+        Ok(inserted)
+    }
+
+    /// Get the auto-embed config.
+    pub fn config(&self) -> &AutoEmbedConfig {
+        &self.config
+    }
+}
+
+// ============================================================================
 // Tests
 // ============================================================================
 
@@ -1532,5 +1678,37 @@ mod tests {
         budget.record_spend(0.5);
         assert!(!budget.can_spend(0.01));
         assert!((budget.remaining() - 0.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_auto_embed_config_defaults() {
+        let config = AutoEmbedConfig::default();
+        assert_eq!(config.dimensions, 384);
+        assert!(config.store_text);
+        assert_eq!(config.text_metadata_key, "_text");
+    }
+
+    #[test]
+    fn test_auto_embed_collection() {
+        let gw_config = GatewayConfig::new().add_provider(ProviderConfig::mock(64));
+        let gateway = EmbeddingsGateway::new(gw_config).unwrap();
+        let db = crate::database::Database::in_memory();
+        db.create_collection("docs", 64).unwrap();
+
+        let auto_config = AutoEmbedConfig {
+            provider: ProviderType::Mock,
+            dimensions: 64,
+            ..AutoEmbedConfig::default()
+        };
+
+        let col = AutoEmbedCollection::new(&gateway, &db, "docs", auto_config);
+
+        // Insert text
+        col.insert_text("doc1", "hello world", None).unwrap();
+
+        // Search text
+        let results = col.search_text("hello", 1).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].id, "doc1");
     }
 }
