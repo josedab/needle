@@ -348,7 +348,7 @@ impl AuthConfig {
         let mut validation = Validation::new(Algorithm::HS256);
         validation.leeway = JWT_CLOCK_LEEWAY_SECS;
         validation.validate_exp = true;
-        validation.required_spec_claims.clear();
+        validation.required_spec_claims = std::collections::HashSet::from(["exp".to_string()]);
 
         let key = DecodingKey::from_secret(secret.as_bytes());
         let token_data = decode::<JwtClaims>(token, &key, &validation).map_err(|e| {
