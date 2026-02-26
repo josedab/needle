@@ -90,6 +90,71 @@ pub(super) fn create_rate_limiter(config: &RateLimitConfig) -> Option<Arc<PerIpR
     Some(Arc::new(RateLimiter::dashmap(quota)))
 }
 
+pub(super) fn create_write_rate_limiter(config: &RateLimitConfig) -> Option<Arc<PerIpRateLimiter>> {
+    if !config.enabled {
+        return None;
+    }
+    let rps = config.write_requests_per_second.unwrap_or(
+        (config.requests_per_second / 5).max(1)
+    );
+    let burst = config.write_burst_size.unwrap_or(
+        (config.burst_size / 5).max(1)
+    );
+
+    let quota = Quota::per_second(
+        NonZeroU32::new(rps).unwrap_or(NonZeroU32::new(20).expect("20 is non-zero")),
+    )
+    .allow_burst(
+        NonZeroU32::new(burst).unwrap_or(NonZeroU32::new(1).expect("1 is non-zero")),
+    );
+
+    Some(Arc::new(RateLimiter::dashmap(quota)))
+}
+
+pub(super) fn create_admin_rate_limiter(config: &RateLimitConfig) -> Option<Arc<PerIpRateLimiter>> {
+    if !config.enabled {
+        return None;
+    }
+    let rps = config.admin_requests_per_second.unwrap_or(5);
+    let burst = config.admin_burst_size.unwrap_or(3);
+
+    let quota = Quota::per_second(
+        NonZeroU32::new(rps).unwrap_or(NonZeroU32::new(5).expect("5 is non-zero")),
+    )
+    .allow_burst(
+        NonZeroU32::new(burst).unwrap_or(NonZeroU32::new(1).expect("1 is non-zero")),
+    );
+
+    Some(Arc::new(RateLimiter::dashmap(quota)))
+}
+
+/// Classify a request into a rate limit tier based on path and method.
+fn classify_rate_limit_tier(method: &Method, path: &str) -> RateLimitTier {
+    // Admin operations: save, webhooks, aliases mutations, compact
+    if path == "/save"
+        || path.starts_with("/webhooks")
+        || (path.starts_with("/aliases") && !matches!(*method, Method::GET | Method::HEAD))
+        || path.ends_with("/compact")
+    {
+        return RateLimitTier::Admin;
+    }
+
+    // Write/search operations: inserts, deletes, search, upserts
+    if matches!(*method, Method::POST | Method::PUT | Method::DELETE) {
+        return RateLimitTier::Write;
+    }
+
+    // Everything else is a read
+    RateLimitTier::Read
+}
+
+#[derive(Debug, Clone, Copy)]
+enum RateLimitTier {
+    Read,
+    Write,
+    Admin,
+}
+
 
 pub(super) fn extract_client_ip(request: &Request<Body>, trusted_proxies: &[IpAddr]) -> IpAddr {
     /// Maximum number of IPs to parse from X-Forwarded-For to prevent DoS.
@@ -138,13 +203,21 @@ pub(super) async fn rate_limit_middleware(
     request: Request<Body>,
     next: Next,
 ) -> Response {
-    if let Some(limiter) = &state.rate_limiter {
+    let tier = classify_rate_limit_tier(request.method(), request.uri().path());
+    let limiter = match tier {
+        RateLimitTier::Admin => state.admin_rate_limiter.as_ref().or(state.rate_limiter.as_ref()),
+        RateLimitTier::Write => state.write_rate_limiter.as_ref().or(state.rate_limiter.as_ref()),
+        RateLimitTier::Read => state.rate_limiter.as_ref(),
+    };
+
+    if let Some(limiter) = limiter {
         let client_ip = extract_client_ip(&request, &state.trusted_proxies);
         match limiter.check_key(&client_ip) {
             Ok(_) => next.run(request).await,
             Err(_) => {
                 warn!(
                     client_ip = %client_ip,
+                    tier = ?tier,
                     "Rate limit exceeded"
                 );
                 let error = ApiError::new(
@@ -609,6 +682,10 @@ mod tests {
             enabled: false,
             requests_per_second: 100,
             burst_size: 200,
+            write_requests_per_second: None,
+            write_burst_size: None,
+            admin_requests_per_second: None,
+            admin_burst_size: None,
         };
         let limiter = create_rate_limiter(&config);
         assert!(limiter.is_none());
@@ -620,6 +697,10 @@ mod tests {
             enabled: true,
             requests_per_second: 100,
             burst_size: 200,
+            write_requests_per_second: None,
+            write_burst_size: None,
+            admin_requests_per_second: None,
+            admin_burst_size: None,
         };
         let limiter = create_rate_limiter(&config);
         assert!(limiter.is_some());
@@ -763,8 +844,43 @@ mod tests {
             enabled: true,
             requests_per_second: 1000,
             burst_size: 5000,
+            write_requests_per_second: None,
+            write_burst_size: None,
+            admin_requests_per_second: None,
+            admin_burst_size: None,
         };
         let limiter = create_rate_limiter(&config);
         assert!(limiter.is_some());
+    }
+
+    // ── tiered rate limiting ─────────────────────────────────────────────
+
+    #[test]
+    fn test_classify_rate_limit_tier_reads() {
+        assert!(matches!(classify_rate_limit_tier(&Method::GET, "/health"), RateLimitTier::Read));
+        assert!(matches!(classify_rate_limit_tier(&Method::GET, "/collections"), RateLimitTier::Read));
+        assert!(matches!(classify_rate_limit_tier(&Method::HEAD, "/health"), RateLimitTier::Read));
+    }
+
+    #[test]
+    fn test_classify_rate_limit_tier_writes() {
+        assert!(matches!(classify_rate_limit_tier(&Method::POST, "/collections/test/vectors"), RateLimitTier::Write));
+        assert!(matches!(classify_rate_limit_tier(&Method::POST, "/collections/test/search"), RateLimitTier::Write));
+        assert!(matches!(classify_rate_limit_tier(&Method::DELETE, "/collections/test/vectors/v1"), RateLimitTier::Write));
+    }
+
+    #[test]
+    fn test_classify_rate_limit_tier_admin() {
+        assert!(matches!(classify_rate_limit_tier(&Method::POST, "/save"), RateLimitTier::Admin));
+        assert!(matches!(classify_rate_limit_tier(&Method::POST, "/webhooks"), RateLimitTier::Admin));
+        assert!(matches!(classify_rate_limit_tier(&Method::POST, "/collections/test/compact"), RateLimitTier::Admin));
+    }
+
+    #[test]
+    fn test_create_tiered_rate_limiters() {
+        let config = RateLimitConfig::default();
+        assert!(create_rate_limiter(&config).is_some());
+        assert!(create_write_rate_limiter(&config).is_some());
+        assert!(create_admin_rate_limiter(&config).is_some());
     }
 }

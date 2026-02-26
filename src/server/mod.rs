@@ -206,10 +206,20 @@ impl CorsConfig {
 pub struct RateLimitConfig {
     /// Enable rate limiting
     pub enabled: bool,
-    /// Requests per second (global limit)
+    /// Requests per second for read operations (GET /health, GET /collections, etc.)
     pub requests_per_second: u32,
     /// Burst size (allows short bursts above the rate)
     pub burst_size: u32,
+    /// Requests per second for write/search operations (POST insert, search, etc.)
+    /// Defaults to requests_per_second / 5 if not set.
+    pub write_requests_per_second: Option<u32>,
+    /// Burst size for write/search operations
+    pub write_burst_size: Option<u32>,
+    /// Requests per second for admin operations (POST /save, webhooks, etc.)
+    /// Defaults to 5 if not set.
+    pub admin_requests_per_second: Option<u32>,
+    /// Burst size for admin operations
+    pub admin_burst_size: Option<u32>,
 }
 
 impl Default for RateLimitConfig {
@@ -218,6 +228,10 @@ impl Default for RateLimitConfig {
             enabled: true,
             requests_per_second: 100,
             burst_size: 50,
+            write_requests_per_second: Some(20),
+            write_burst_size: Some(10),
+            admin_requests_per_second: Some(5),
+            admin_burst_size: Some(3),
         }
     }
 }
@@ -229,6 +243,10 @@ impl RateLimitConfig {
             enabled: false,
             requests_per_second: 0,
             burst_size: 0,
+            write_requests_per_second: None,
+            write_burst_size: None,
+            admin_requests_per_second: None,
+            admin_burst_size: None,
         }
     }
 
@@ -332,6 +350,10 @@ type PerIpRateLimiter = RateLimiter<IpAddr, DashMapStateStore<IpAddr>, DefaultCl
 pub struct AppState {
     db: RwLock<Database>,
     rate_limiter: Option<Arc<PerIpRateLimiter>>,
+    /// Rate limiter for write/search operations (stricter than reads)
+    write_rate_limiter: Option<Arc<PerIpRateLimiter>>,
+    /// Rate limiter for admin operations (most restrictive)
+    admin_rate_limiter: Option<Arc<PerIpRateLimiter>>,
     /// Authentication configuration
     auth: AuthConfig,
     /// Maximum items allowed in batch operations
@@ -349,6 +371,8 @@ impl AppState {
         Self {
             db: RwLock::new(db),
             rate_limiter: None,
+            write_rate_limiter: None,
+            admin_rate_limiter: None,
             auth: AuthConfig::default(),
             max_batch_size: DEFAULT_MAX_BATCH_SIZE,
             trusted_proxies: default_trusted_proxies(),
@@ -362,6 +386,8 @@ impl AppState {
         Self {
             db: RwLock::new(db),
             rate_limiter: create_rate_limiter(config),
+            write_rate_limiter: create_write_rate_limiter(config),
+            admin_rate_limiter: create_admin_rate_limiter(config),
             auth: AuthConfig::default(),
             max_batch_size: DEFAULT_MAX_BATCH_SIZE,
             trusted_proxies: default_trusted_proxies(),
@@ -375,6 +401,8 @@ impl AppState {
         Self {
             db: RwLock::new(db),
             rate_limiter: create_rate_limiter(&config.rate_limit),
+            write_rate_limiter: create_write_rate_limiter(&config.rate_limit),
+            admin_rate_limiter: create_admin_rate_limiter(&config.rate_limit),
             auth: config.auth.clone(),
             max_batch_size: config.max_batch_size,
             trusted_proxies: config.trusted_proxies.clone(),
