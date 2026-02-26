@@ -13,7 +13,7 @@ use serde_json::{json, Value};
 use std::sync::Arc;
 use tracing::warn;
 
-use super::MAX_SEARCH_K;
+use super::{MAX_SEARCH_K, validate_vector_dimensions};
 
 /// Maximum allowed post-filter factor to prevent memory exhaustion.
 const MAX_POST_FILTER_FACTOR: usize = 100;
@@ -55,10 +55,28 @@ pub(in crate::server) async fn search(
         ));
     }
 
+    validate_vector_dimensions(&req.vector)?;
+
     let db = state.db.read().await;
     let coll = db
         .collection(&collection)
         .map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
+
+    if let Some(expected) = coll.dimensions() {
+        if req.vector.len() != expected {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(ApiError::new(
+                    format!(
+                        "Vector dimension mismatch: expected {}, got {}",
+                        expected,
+                        req.vector.len()
+                    ),
+                    "DIMENSION_MISMATCH",
+                )),
+            ));
+        }
+    }
 
     // Parse filters once
     let pre_filter = if let Some(filter_value) = &req.filter {
@@ -262,10 +280,31 @@ pub(in crate::server) async fn batch_search(
         ));
     }
 
+    for query in &req.vectors {
+        validate_vector_dimensions(query)?;
+    }
+
     let db = state.db.read().await;
     let coll = db
         .collection(&collection)
         .map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
+
+    if let Some(expected) = coll.dimensions() {
+        for (i, query) in req.vectors.iter().enumerate() {
+            if query.len() != expected {
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    Json(ApiError::new(
+                        format!(
+                            "Query vector [{}] dimension mismatch: expected {}, got {}",
+                            i, expected, query.len()
+                        ),
+                        "DIMENSION_MISMATCH",
+                    )),
+                ));
+            }
+        }
+    }
 
     let all_results: Vec<Vec<SearchResultResponse>> = if let Some(filter_value) = &req.filter {
         let filter = Filter::parse(filter_value).map_err(|e| {
@@ -331,10 +370,28 @@ pub(in crate::server) async fn radius_search(
         ));
     }
 
+    validate_vector_dimensions(&req.vector)?;
+
     let db = state.db.read().await;
     let coll = db
         .collection(&collection)
         .map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
+
+    if let Some(expected) = coll.dimensions() {
+        if req.vector.len() != expected {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(ApiError::new(
+                    format!(
+                        "Vector dimension mismatch: expected {}, got {}",
+                        expected,
+                        req.vector.len()
+                    ),
+                    "DIMENSION_MISMATCH",
+                )),
+            ));
+        }
+    }
 
     // Perform radius search with optional filter
     let raw_results = if let Some(filter_value) = &req.filter {

@@ -42,6 +42,33 @@ const MAX_METADATA_DEPTH: usize = 10;
 /// Maximum vector ID length in bytes.
 const MAX_VECTOR_ID_BYTES: usize = 1024;
 
+/// Validate vector dimensions are within the allowed maximum.
+pub(in crate::server) fn validate_vector_dimensions(vector: &[f32]) -> std::result::Result<(), (StatusCode, Json<ApiError>)> {
+    if vector.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ApiError::new(
+                "Vector must not be empty",
+                "INVALID_VECTOR",
+            )),
+        ));
+    }
+    if vector.len() > MAX_DIMENSIONS {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ApiError::new(
+                format!(
+                    "Vector dimensions {} exceed maximum allowed {}",
+                    vector.len(),
+                    MAX_DIMENSIONS
+                ),
+                "DIMENSIONS_TOO_LARGE",
+            )),
+        ));
+    }
+    Ok(())
+}
+
 /// Validate that a vector ID is safe: non-empty, no control characters, bounded length.
 pub(in crate::server) fn validate_vector_id(id: &str) -> std::result::Result<(), (StatusCode, Json<ApiError>)> {
     if id.is_empty() || id.len() > MAX_VECTOR_ID_BYTES {
@@ -717,7 +744,7 @@ mod tests {
         Ok(())
     }
 
-    // ── batch_insert: partial failure with dimension mismatch ───────────
+    // ── batch_insert: dimension mismatch rejected early ────────────────
 
     #[tokio::test]
     async fn test_batch_insert_dimension_mismatch() -> Result<(), Box<dyn std::error::Error>> {
@@ -741,12 +768,11 @@ mod tests {
             axum::extract::Path("test".to_string()),
             Json(BatchInsertRequest { vectors }),
         ).await;
-        // batch_insert uses partial failure: valid vectors succeed, invalid ones produce errors
-        assert!(result.is_ok(), "Batch insert should succeed with partial errors");
-        // v1 should have been inserted
-        let db = state.db.read().await;
-        let coll = db.collection("test").unwrap();
-        assert!(coll.get("v1").is_some());
+        // Dimension mismatch is now rejected at the API layer before any inserts
+        assert!(result.is_err(), "Batch insert should fail with dimension mismatch");
+        if let Err((status, _)) = result {
+            assert_eq!(status, StatusCode::BAD_REQUEST);
+        }
         Ok(())
     }
 

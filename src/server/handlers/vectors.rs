@@ -13,7 +13,7 @@ use serde_json::{json, Value};
 use std::sync::Arc;
 use tracing::{error, warn};
 
-use super::{validate_metadata, validate_vector_id};
+use super::{validate_metadata, validate_vector_id, validate_vector_dimensions};
 
 // ============ Vector CRUD ============
 
@@ -28,11 +28,28 @@ pub(in crate::server) async fn insert_vector(
 ) -> Result<impl IntoResponse, (StatusCode, Json<ApiError>)> {
     validate_vector_id(&req.id)?;
     validate_metadata(&req.metadata)?;
+    validate_vector_dimensions(&req.vector)?;
 
     let db = state.db.write().await;
     let coll = db
         .collection(&collection)
         .map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
+
+    if let Some(expected) = coll.dimensions() {
+        if req.vector.len() != expected {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(ApiError::new(
+                    format!(
+                        "Vector dimension mismatch: expected {}, got {}",
+                        expected,
+                        req.vector.len()
+                    ),
+                    "DIMENSION_MISMATCH",
+                )),
+            ));
+        }
+    }
 
     coll.insert_with_ttl(&req.id, &req.vector, req.metadata, req.ttl_seconds)
         .map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
@@ -64,12 +81,30 @@ pub(in crate::server) async fn batch_insert(
     for item in &req.vectors {
         validate_vector_id(&item.id)?;
         validate_metadata(&item.metadata)?;
+        validate_vector_dimensions(&item.vector)?;
     }
 
     let db = state.db.write().await;
     let coll = db
         .collection(&collection)
         .map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
+
+    if let Some(expected) = coll.dimensions() {
+        for item in &req.vectors {
+            if item.vector.len() != expected {
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    Json(ApiError::new(
+                        format!(
+                            "Vector '{}' dimension mismatch: expected {}, got {}",
+                            item.id, expected, item.vector.len()
+                        ),
+                        "DIMENSION_MISMATCH",
+                    )),
+                ));
+            }
+        }
+    }
 
     let mut inserted = 0;
     let mut errors = Vec::new();
@@ -100,11 +135,28 @@ pub(in crate::server) async fn upsert_vector(
     Json(req): Json<UpsertRequest>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<ApiError>)> {
     validate_metadata(&req.metadata)?;
+    validate_vector_dimensions(&req.vector)?;
 
     let db = state.db.write().await;
     let coll = db
         .collection(&collection)
         .map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
+
+    if let Some(expected) = coll.dimensions() {
+        if req.vector.len() != expected {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(ApiError::new(
+                    format!(
+                        "Vector dimension mismatch: expected {}, got {}",
+                        expected,
+                        req.vector.len()
+                    ),
+                    "DIMENSION_MISMATCH",
+                )),
+            ));
+        }
+    }
 
     // Check if exists and update or insert
     let existed = if coll.get(&req.id).is_some() {
