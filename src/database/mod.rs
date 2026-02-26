@@ -307,6 +307,27 @@ impl Database {
         }
     }
 
+    /// Create a lightweight handle that shares the same internal state (collections,
+    /// versioned stores, etc.) as this database. The returned instance has no
+    /// storage engine and is intended for read-heavy access patterns such as the
+    /// MCP HTTP transport where `Arc<Database>` ownership is required.
+    pub fn shared_handle(&self) -> Self {
+        Self {
+            config: self.config.clone(),
+            storage: None,
+            state: Arc::clone(&self.state),
+            dirty: AtomicBool::new(false),
+            modification_gen: AtomicU64::new(0),
+            saved_gen: AtomicU64::new(0),
+            adaptive_tuner: self.adaptive_tuner.clone(),
+            adaptive_index_manager: self.adaptive_index_manager.clone(),
+            replica_manager: self.replica_manager.clone(),
+            versioned_stores: Arc::clone(&self.versioned_stores),
+            #[cfg(feature = "observability")]
+            dashboard_metrics: self.dashboard_metrics.clone(),
+        }
+    }
+
     /// Attach an adaptive tuner for online index-parameter learning.
     /// After each search, the tuner receives latency feedback.
     pub fn set_adaptive_tuner(&mut self, tuner: Arc<AdaptiveTuner>) {
