@@ -1017,7 +1017,6 @@ pub mod collection_ref;
 pub use collection_ref::{CollectionRef, SearchParams};
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use crate::test_utils::random_vector;

@@ -172,7 +172,6 @@ impl Collection {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)]
 mod tests {
     use crate::collection::Collection;
     use crate::error::NeedleError;

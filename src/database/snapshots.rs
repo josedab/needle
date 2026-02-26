@@ -65,7 +65,6 @@ impl Database {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)]
 mod tests {
     use crate::Database;
     use crate::error::NeedleError;
