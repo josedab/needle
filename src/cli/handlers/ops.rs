@@ -1151,3 +1151,8 @@ pub fn partition_command(
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+}

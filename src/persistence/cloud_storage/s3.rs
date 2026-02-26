@@ -385,3 +385,8 @@ impl StorageBackend for S3Backend {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+}

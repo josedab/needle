@@ -672,3 +672,8 @@ impl ZipkinSpan {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+}

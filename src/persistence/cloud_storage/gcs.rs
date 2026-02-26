@@ -339,3 +339,8 @@ impl StorageBackend for GCSBackend {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+}

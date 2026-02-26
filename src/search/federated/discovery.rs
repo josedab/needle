@@ -505,3 +505,8 @@ pub struct GossipTickResult {
     /// Total known peers (including dead/left).
     pub total_known: usize,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+}

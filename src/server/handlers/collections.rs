@@ -433,3 +433,8 @@ pub(in crate::server) async fn ttl_stats_handler(
         "needs_sweep": coll.needs_expiration_sweep(0.1)
     })))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+}

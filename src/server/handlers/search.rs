@@ -783,3 +783,8 @@ pub(in crate::server) async fn cache_store_handler(
         "ttl_seconds": body.ttl_seconds,
     })))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+}

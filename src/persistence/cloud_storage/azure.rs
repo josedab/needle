@@ -372,3 +372,8 @@ impl StorageBackend for AzureBlobBackend {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+}

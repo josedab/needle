@@ -567,3 +567,8 @@ pub(in crate::server) fn text_to_deterministic_vector(text: &str, dimensions: us
 
     result
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+}

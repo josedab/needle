@@ -1047,3 +1047,8 @@ pub fn quick_rag_pipeline(db: Arc<Database>, dimensions: usize) -> Result<RagPip
         .with_cache(500, 3600)
         .build(db)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+}

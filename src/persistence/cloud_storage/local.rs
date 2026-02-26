@@ -180,3 +180,8 @@ impl StorageBackend for LocalBackend {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+}

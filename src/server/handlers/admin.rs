@@ -1003,3 +1003,8 @@ pub(in crate::server) async fn embedding_router_status_handler() -> impl IntoRes
 pub(in crate::server) async fn embedding_router_status_handler() -> impl IntoResponse {
     (StatusCode::NOT_IMPLEMENTED, Json(json!({ "error": "Requires 'experimental' feature" })))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+}

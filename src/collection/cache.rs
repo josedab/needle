@@ -191,3 +191,8 @@ impl Collection {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+}

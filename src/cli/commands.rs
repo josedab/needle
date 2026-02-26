@@ -1126,3 +1126,8 @@ pub enum ViewsCommands {
         name: String,
     },
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+}
