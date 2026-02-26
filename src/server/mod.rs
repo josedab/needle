@@ -151,6 +151,7 @@ impl CorsConfig {
     /// Note: Credentials are NOT enabled by default even in permissive mode.
     /// Combining allow-all-origins with credentials is a CSRF vulnerability.
     /// Use `with_credentials(true)` only with specific origins for secure apps.
+    #[must_use]
     pub fn permissive() -> Self {
         Self {
             enabled: true,
@@ -165,12 +166,14 @@ impl CorsConfig {
     /// WARNING: Only enable credentials with specific allowed_origins, not with
     /// wildcard origins. Combining both creates a CSRF vulnerability where any
     /// website can make authenticated requests on behalf of users.
+    #[must_use]
     pub fn with_credentials(mut self, allow: bool) -> Self {
         self.allow_credentials = allow;
         self
     }
 
     /// Create a restrictive CORS config
+    #[must_use]
     pub fn restrictive() -> Self {
         Self {
             enabled: true,
@@ -181,6 +184,7 @@ impl CorsConfig {
     }
 
     /// Add an allowed origin
+    #[must_use]
     pub fn with_origin(mut self, origin: impl Into<String>) -> Self {
         let origins = self.allowed_origins.get_or_insert_with(Vec::new);
         origins.push(origin.into());
@@ -238,6 +242,7 @@ impl Default for RateLimitConfig {
 
 impl RateLimitConfig {
     /// Disable rate limiting
+    #[must_use]
     pub fn disabled() -> Self {
         Self {
             enabled: false,
@@ -251,12 +256,14 @@ impl RateLimitConfig {
     }
 
     /// Set requests per second
+    #[must_use]
     pub fn with_rate(mut self, rps: u32) -> Self {
         self.requests_per_second = rps;
         self
     }
 
     /// Set burst size
+    #[must_use]
     pub fn with_burst(mut self, burst: u32) -> Self {
         self.burst_size = burst;
         self
@@ -294,49 +301,58 @@ impl ServerConfig {
         })
     }
 
+    #[must_use]
     pub fn with_db_path(mut self, path: impl Into<String>) -> Self {
         self.db_path = Some(path.into());
         self
     }
 
+    #[must_use]
     pub fn with_cors(mut self, config: CorsConfig) -> Self {
         self.cors_config = config;
         self
     }
 
+    #[must_use]
     pub fn with_rate_limit(mut self, config: RateLimitConfig) -> Self {
         self.rate_limit = config;
         self
     }
 
+    #[must_use]
     pub fn with_max_body_size(mut self, bytes: usize) -> Self {
         self.max_body_size = bytes;
         self
     }
 
+    #[must_use]
     pub fn with_max_batch_size(mut self, size: usize) -> Self {
         self.max_batch_size = size;
         self
     }
 
+    #[must_use]
     pub fn with_request_timeout(mut self, secs: u64) -> Self {
         self.request_timeout_secs = secs;
         self
     }
 
     /// Add a trusted proxy IP for forwarded header handling.
+    #[must_use]
     pub fn with_trusted_proxy(mut self, proxy: IpAddr) -> Self {
         self.trusted_proxies.push(proxy);
         self
     }
 
     /// Replace the trusted proxy list. Use an empty list to disable trust.
+    #[must_use]
     pub fn with_trusted_proxies(mut self, proxies: Vec<IpAddr>) -> Self {
         self.trusted_proxies = proxies;
         self
     }
 
     /// Set authentication configuration.
+    #[must_use]
     pub fn with_auth(mut self, config: AuthConfig) -> Self {
         self.auth = config;
         self
@@ -1389,7 +1405,6 @@ pub fn openapi_spec_json() -> String {
 
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use axum::http::StatusCode;
@@ -1442,7 +1457,7 @@ mod tests {
         assert!(config.enabled);
         assert!(!config.allow_credentials);
         assert_eq!(config.max_age_secs, 3600);
-        let origins = config.allowed_origins.unwrap();
+        let origins = config.allowed_origins.expect("should have origins");
         assert!(origins.contains(&"http://localhost:3000".to_string()));
         assert!(origins.contains(&"http://localhost:8080".to_string()));
     }
@@ -1469,14 +1484,14 @@ mod tests {
         assert!(config.enabled);
         assert!(!config.allow_credentials);
         assert_eq!(config.max_age_secs, 0);
-        let origins = config.allowed_origins.unwrap();
+        let origins = config.allowed_origins.expect("should have origins");
         assert!(origins.is_empty()); // No external origins
     }
 
     #[test]
     fn test_cors_config_with_origin() {
         let config = CorsConfig::restrictive().with_origin("https://example.com");
-        let origins = config.allowed_origins.unwrap();
+        let origins = config.allowed_origins.expect("should have origins");
         assert_eq!(origins.len(), 1);
         assert!(origins.contains(&"https://example.com".to_string()));
     }
@@ -1486,7 +1501,7 @@ mod tests {
         let config = CorsConfig::restrictive()
             .with_origin("https://example.com")
             .with_origin("https://api.example.com");
-        let origins = config.allowed_origins.unwrap();
+        let origins = config.allowed_origins.expect("should have origins");
         assert_eq!(origins.len(), 2);
     }
 
@@ -1602,7 +1617,7 @@ mod tests {
         // Key expires in the future
         let future_ts = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
+            .expect("system time should be after epoch")
             .as_secs()
             + 3600; // 1 hour from now
         let valid_key = ApiKey::new("valid").expires_at(future_ts);
@@ -1712,7 +1727,7 @@ mod tests {
         let config = AuthConfig::new().with_jwt_secret("correct-secret");
 
         let claims = JwtClaims::new("user", 3600);
-        let token = config.generate_jwt(&claims).unwrap();
+        let token = config.generate_jwt(&claims).expect("should generate JWT");
 
         // Try validating with a different secret
         let wrong_config = AuthConfig::new().with_jwt_secret("wrong-secret");
@@ -1728,12 +1743,12 @@ mod tests {
         // Create claims that are already expired (negative expiration)
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
+            .expect("system time should be after epoch")
             .as_secs();
         let mut claims = JwtClaims::new("user", 0);
         claims.exp = now - 100; // Expired 100 seconds ago
 
-        let token = config.generate_jwt(&claims).unwrap();
+        let token = config.generate_jwt(&claims).expect("should generate JWT");
         let result = config.validate_jwt(&token);
         assert!(matches!(result, Err(AuthError::TokenExpired)));
     }
@@ -1798,7 +1813,7 @@ mod tests {
         let json = openapi_spec_json();
         assert!(json.contains("Needle Vector Database API"));
         assert!(json.contains("searchVectors"));
-        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).expect("should parse valid JSON");
         assert!(parsed.is_object());
     }
 }

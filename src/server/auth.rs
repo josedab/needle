@@ -41,24 +41,28 @@ impl ApiKey {
     }
 
     /// Set a name/description for this key.
+    #[must_use]
     pub fn with_name(mut self, name: impl Into<String>) -> Self {
         self.name = Some(name.into());
         self
     }
 
     /// Set the roles for this API key.
+    #[must_use]
     pub fn with_role(mut self, role: impl Into<String>) -> Self {
         self.roles = vec![role.into()];
         self
     }
 
     /// Add multiple roles to this API key.
+    #[must_use]
     pub fn with_roles(mut self, roles: Vec<String>) -> Self {
         self.roles = roles;
         self
     }
 
     /// Set an expiration time for this key (Unix epoch seconds).
+    #[must_use]
     pub fn expires_at(mut self, timestamp: u64) -> Self {
         self.expires_at = Some(timestamp);
         self
@@ -220,18 +224,21 @@ impl AuthConfig {
     }
 
     /// Require authentication for all endpoints except public ones.
+    #[must_use]
     pub fn require_auth(mut self, require: bool) -> Self {
         self.require_auth = require;
         self
     }
 
     /// Add an API key for authentication.
+    #[must_use]
     pub fn with_api_key(mut self, key: ApiKey) -> Self {
         self.api_keys.push(key);
         self
     }
 
     /// Add multiple API keys.
+    #[must_use]
     pub fn with_api_keys(mut self, keys: Vec<ApiKey>) -> Self {
         self.api_keys.extend(keys);
         self
@@ -241,6 +248,7 @@ impl AuthConfig {
     ///
     /// The secret must be at least 32 bytes to prevent brute-force attacks on HS256.
     /// Shorter secrets will cause [`validate`](Self::validate) to return an error.
+    #[must_use]
     pub fn with_jwt_secret(mut self, secret: impl Into<String>) -> Self {
         self.jwt_secret = Some(secret.into());
         self
@@ -250,6 +258,7 @@ impl AuthConfig {
     ///
     /// During validation, if the current secret fails, previous secrets are tried
     /// in order. New tokens are always signed with the current `jwt_secret`.
+    #[must_use]
     pub fn with_previous_jwt_secret(mut self, secret: impl Into<String>) -> Self {
         self.jwt_previous_secrets.push(secret.into());
         self
@@ -286,6 +295,7 @@ impl AuthConfig {
     /// **Warning:** Adding short prefixes like `/api` or `/collections` may
     /// unintentionally expose more endpoints than intended. Prefer specific paths
     /// (e.g., `/health`, `/collections/public-data`) to minimize risk.
+    #[must_use]
     pub fn with_public_endpoint(mut self, endpoint: impl Into<String>) -> Self {
         self.public_endpoints.push(endpoint.into());
         self
@@ -431,7 +441,6 @@ pub enum AuthMethod {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 
@@ -622,8 +631,8 @@ mod tests {
         let config = auth_config_with_jwt();
         let claims = JwtClaims::new("user1", 3600)
             .with_roles(vec!["admin".into()]);
-        let token = config.generate_jwt(&claims).unwrap();
-        let validated = config.validate_jwt(&token).unwrap();
+        let token = config.generate_jwt(&claims).expect("should generate JWT");
+        let validated = config.validate_jwt(&token).expect("should validate JWT");
         assert_eq!(validated.sub, "user1");
         assert_eq!(validated.roles, vec!["admin".to_string()]);
     }
@@ -635,7 +644,7 @@ mod tests {
         // Force expiration far in the past
         claims.exp = 0;
         claims.iat = 0;
-        let token = config.generate_jwt(&claims).unwrap();
+        let token = config.generate_jwt(&claims).expect("should generate JWT");
         let result = config.validate_jwt(&token);
         assert!(matches!(result, Err(AuthError::TokenExpired)));
     }
@@ -658,7 +667,7 @@ mod tests {
     fn test_jwt_tampered_payload() {
         let config = auth_config_with_jwt();
         let claims = JwtClaims::new("user1", 3600);
-        let token = config.generate_jwt(&claims).unwrap();
+        let token = config.generate_jwt(&claims).expect("should generate JWT");
         // Tamper with the payload
         let parts: Vec<&str> = token.split('.').collect();
         let tampered = format!("{}.{}.{}", parts[0], "dGFtcGVyZWQ", parts[2]);
@@ -673,7 +682,7 @@ mod tests {
         let config2 = AuthConfig::new()
             .with_jwt_secret("secret-two-that-is-at-least-32-bytes-long!!");
         let claims = JwtClaims::new("user1", 3600);
-        let token = config1.generate_jwt(&claims).unwrap();
+        let token = config1.generate_jwt(&claims).expect("should generate JWT");
         let result = config2.validate_jwt(&token);
         assert!(result.is_err());
     }
@@ -758,7 +767,7 @@ mod tests {
         // Generate token with old secret
         let old_config = AuthConfig::new().with_jwt_secret(old_secret);
         let claims = JwtClaims::new("user1", 3600);
-        let token = old_config.generate_jwt(&claims).unwrap();
+        let token = old_config.generate_jwt(&claims).expect("should generate JWT");
 
         // New config with rotated key — old secret as previous
         let new_config = AuthConfig::new()
@@ -768,10 +777,10 @@ mod tests {
         // Token signed with old key should still validate
         let validated = new_config.validate_jwt(&token);
         assert!(validated.is_ok());
-        assert_eq!(validated.unwrap().sub, "user1");
+        assert_eq!(validated.expect("should validate JWT").sub, "user1");
 
         // New tokens use the new secret
-        let new_token = new_config.generate_jwt(&claims).unwrap();
+        let new_token = new_config.generate_jwt(&claims).expect("should generate JWT");
         assert!(new_config.validate_jwt(&new_token).is_ok());
 
         // Old config can't validate new tokens

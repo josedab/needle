@@ -224,7 +224,6 @@ pub(super) fn check_collection_access(
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use crate::database::Database;
@@ -239,7 +238,7 @@ mod tests {
         let state = make_state();
         {
             let db = state.db.write().await;
-            db.create_collection(name, dims).unwrap();
+            db.create_collection(name, dims).expect("test collection creation should succeed");
         }
         state
     }
@@ -682,7 +681,7 @@ mod tests {
 
         // Verify vector was inserted
         let db = state.db.read().await;
-        let coll = db.collection("test").unwrap();
+        let coll = db.collection("test").expect("test collection should exist");
         assert!(coll.get("v1").is_some());
         Ok(())
     }
@@ -714,7 +713,7 @@ mod tests {
         assert!(result.is_ok());
 
         let db = state.db.read().await;
-        let coll = db.collection("test").unwrap();
+        let coll = db.collection("test").expect("test collection should exist");
         assert!(coll.get("v1").is_some());
         assert!(coll.get("v2").is_some());
         Ok(())
@@ -1089,7 +1088,7 @@ mod tests {
         assert!(result.is_ok());
         let db = state.db.read().await;
         let coll = db.collection("test")?;
-        let (vec, meta) = coll.get("v1").unwrap();
+        let (vec, meta) = coll.get("v1").expect("vector v1 should exist");
         assert!((vec[1] - 1.0).abs() < 0.001);
         assert!(meta.is_some());
         Ok(())

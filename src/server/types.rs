@@ -656,7 +656,6 @@ pub struct DeltaSyncResponse {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use axum::http::StatusCode;
@@ -667,7 +666,7 @@ mod tests {
     #[test]
     fn test_create_collection_request_minimal() {
         let json = json!({"name": "test", "dimensions": 128});
-        let req: CreateCollectionRequest = serde_json::from_value(json).unwrap();
+        let req: CreateCollectionRequest = serde_json::from_value(json).expect("should deserialize");
         assert_eq!(req.name, "test");
         assert_eq!(req.dimensions, 128);
         assert!(req.distance.is_none());
@@ -684,7 +683,7 @@ mod tests {
             "m": 32,
             "ef_construction": 400
         });
-        let req: CreateCollectionRequest = serde_json::from_value(json).unwrap();
+        let req: CreateCollectionRequest = serde_json::from_value(json).expect("should deserialize");
         assert_eq!(req.name, "test");
         assert_eq!(req.dimensions, 384);
         assert_eq!(req.distance.as_deref(), Some("cosine"));
@@ -695,7 +694,7 @@ mod tests {
     #[test]
     fn test_create_collection_request_extra_fields_ignored() {
         let json = json!({"name": "test", "dimensions": 4, "extra_field": "ignored"});
-        let req: CreateCollectionRequest = serde_json::from_value(json).unwrap();
+        let req: CreateCollectionRequest = serde_json::from_value(json).expect("should deserialize");
         assert_eq!(req.name, "test");
     }
 
@@ -711,7 +710,7 @@ mod tests {
     #[test]
     fn test_search_request_minimal() {
         let json = json!({"vector": [1.0, 0.0, 0.0]});
-        let req: SearchRequest = serde_json::from_value(json).unwrap();
+        let req: SearchRequest = serde_json::from_value(json).expect("should deserialize");
         assert_eq!(req.vector, vec![1.0, 0.0, 0.0]);
         assert_eq!(req.k, 10); // default
         assert!(req.filter.is_none());
@@ -731,7 +730,7 @@ mod tests {
             "explain": true,
             "distance": "euclidean"
         });
-        let req: SearchRequest = serde_json::from_value(json).unwrap();
+        let req: SearchRequest = serde_json::from_value(json).expect("should deserialize");
         assert_eq!(req.k, 5);
         assert!(req.filter.is_some());
         assert!(req.post_filter.is_some());
@@ -837,7 +836,7 @@ mod tests {
     #[test]
     fn test_insert_request_deserialization() {
         let json = json!({"id": "v1", "vector": [1.0, 2.0, 3.0]});
-        let req: InsertRequest = serde_json::from_value(json).unwrap();
+        let req: InsertRequest = serde_json::from_value(json).expect("should deserialize");
         assert_eq!(req.id, "v1");
         assert_eq!(req.vector, vec![1.0, 2.0, 3.0]);
         assert!(req.metadata.is_none());
@@ -846,7 +845,7 @@ mod tests {
     #[test]
     fn test_insert_request_with_metadata() {
         let json = json!({"id": "v1", "vector": [1.0], "metadata": {"key": "val"}});
-        let req: InsertRequest = serde_json::from_value(json).unwrap();
+        let req: InsertRequest = serde_json::from_value(json).expect("should deserialize");
         assert!(req.metadata.is_some());
     }
 
@@ -858,14 +857,14 @@ mod tests {
                 {"id": "v2", "vector": [2.0]}
             ]
         });
-        let req: BatchInsertRequest = serde_json::from_value(json).unwrap();
+        let req: BatchInsertRequest = serde_json::from_value(json).expect("should deserialize");
         assert_eq!(req.vectors.len(), 2);
     }
 
     #[test]
     fn test_insert_request_empty_vector() {
         let json = json!({"id": "v1", "vector": []});
-        let req: InsertRequest = serde_json::from_value(json).unwrap();
+        let req: InsertRequest = serde_json::from_value(json).expect("should deserialize");
         assert!(req.vector.is_empty());
     }
 
@@ -883,7 +882,7 @@ mod tests {
             }],
             explanation: None,
         };
-        let json = serde_json::to_value(&resp).unwrap();
+        let json = serde_json::to_value(&resp).expect("should serialize");
         assert_eq!(json["results"][0]["id"], "v1");
         assert_eq!(json["results"][0]["distance"], 0.5);
         assert!(json.get("explanation").is_none());
@@ -900,7 +899,7 @@ mod tests {
                 profiling: None,
             }),
         };
-        let json = serde_json::to_value(&resp).unwrap();
+        let json = serde_json::to_value(&resp).expect("should serialize");
         assert!(json.get("explanation").is_some());
     }
 
@@ -909,7 +908,7 @@ mod tests {
     #[test]
     fn test_query_params_defaults() {
         let json = json!({});
-        let params: QueryParams = serde_json::from_value(json).unwrap();
+        let params: QueryParams = serde_json::from_value(json).expect("should deserialize");
         assert!(params.offset.is_none());
         assert!(params.limit.is_none());
     }
@@ -917,7 +916,7 @@ mod tests {
     #[test]
     fn test_query_params_with_values() {
         let json = json!({"offset": 10, "limit": 50});
-        let params: QueryParams = serde_json::from_value(json).unwrap();
+        let params: QueryParams = serde_json::from_value(json).expect("should deserialize");
         assert_eq!(params.offset, Some(10));
         assert_eq!(params.limit, Some(50));
     }
@@ -927,7 +926,7 @@ mod tests {
     #[test]
     fn test_radius_search_request_defaults() {
         let json = json!({"vector": [1.0, 0.0], "max_distance": 0.5});
-        let req: RadiusSearchRequest = serde_json::from_value(json).unwrap();
+        let req: RadiusSearchRequest = serde_json::from_value(json).expect("should deserialize");
         assert_eq!(req.limit, 1000);
         assert!(!req.include_vectors);
     }
@@ -935,14 +934,14 @@ mod tests {
     #[test]
     fn test_radius_search_request_zero_radius() {
         let json = json!({"vector": [1.0], "max_distance": 0.0});
-        let req: RadiusSearchRequest = serde_json::from_value(json).unwrap();
+        let req: RadiusSearchRequest = serde_json::from_value(json).expect("should deserialize");
         assert_eq!(req.max_distance, 0.0);
     }
 
     #[test]
     fn test_radius_search_request_negative_radius() {
         let json = json!({"vector": [1.0], "max_distance": -1.0});
-        let req: RadiusSearchRequest = serde_json::from_value(json).unwrap();
+        let req: RadiusSearchRequest = serde_json::from_value(json).expect("should deserialize");
         assert_eq!(req.max_distance, -1.0);
     }
 
@@ -959,7 +958,7 @@ mod tests {
     #[test]
     fn test_api_error_serialization() {
         let err = ApiError::new("test error", "TEST_CODE");
-        let json = serde_json::to_value(&err).unwrap();
+        let json = serde_json::to_value(&err).expect("should serialize");
         assert_eq!(json["error"], "test error");
         assert_eq!(json["code"], "TEST_CODE");
         assert!(json.get("help").is_none());
@@ -1009,7 +1008,7 @@ mod tests {
             "k": 5,
             "filter": {"category": "books"}
         });
-        let req: BatchSearchRequest = serde_json::from_value(json).unwrap();
+        let req: BatchSearchRequest = serde_json::from_value(json).expect("should deserialize");
         assert_eq!(req.vectors.len(), 2);
         assert_eq!(req.k, 5);
         assert!(req.filter.is_some());
@@ -1018,7 +1017,7 @@ mod tests {
     #[test]
     fn test_batch_search_request_defaults() {
         let json = json!({"vectors": [[1.0]]});
-        let req: BatchSearchRequest = serde_json::from_value(json).unwrap();
+        let req: BatchSearchRequest = serde_json::from_value(json).expect("should deserialize");
         assert_eq!(req.k, 10); // default
         assert!(req.filter.is_none());
     }
@@ -1033,7 +1032,7 @@ mod tests {
             "metadata": {"key": "val"},
             "ttl_seconds": 3600
         });
-        let req: UpsertRequest = serde_json::from_value(json).unwrap();
+        let req: UpsertRequest = serde_json::from_value(json).expect("should deserialize");
         assert_eq!(req.id, "u1");
         assert_eq!(req.vector.len(), 3);
         assert!(req.metadata.is_some());
@@ -1043,7 +1042,7 @@ mod tests {
     #[test]
     fn test_upsert_request_minimal() {
         let json = json!({"id": "u1", "vector": [1.0]});
-        let req: UpsertRequest = serde_json::from_value(json).unwrap();
+        let req: UpsertRequest = serde_json::from_value(json).expect("should deserialize");
         assert!(req.metadata.is_none());
         assert!(req.ttl_seconds.is_none());
     }
@@ -1060,7 +1059,7 @@ mod tests {
             "sequence_id": "seq-001",
             "flush": true
         });
-        let req: StreamingInsertRequest = serde_json::from_value(json).unwrap();
+        let req: StreamingInsertRequest = serde_json::from_value(json).expect("should deserialize");
         assert_eq!(req.vectors.len(), 2);
         assert_eq!(req.sequence_id, Some("seq-001".to_string()));
         assert!(req.flush);
@@ -1069,7 +1068,7 @@ mod tests {
     #[test]
     fn test_streaming_insert_defaults() {
         let json = json!({"vectors": []});
-        let req: StreamingInsertRequest = serde_json::from_value(json).unwrap();
+        let req: StreamingInsertRequest = serde_json::from_value(json).expect("should deserialize");
         assert!(req.vectors.is_empty());
         assert!(req.sequence_id.is_none());
         assert!(!req.flush);
@@ -1084,7 +1083,7 @@ mod tests {
             "k": 5,
             "max_hops": 3
         });
-        let req: GraphSearchRequest = serde_json::from_value(json).unwrap();
+        let req: GraphSearchRequest = serde_json::from_value(json).expect("should deserialize");
         assert_eq!(req.vector.len(), 3);
         assert_eq!(req.k, 5);
     }
@@ -1099,7 +1098,7 @@ mod tests {
             "coarse_dims": 64,
             "oversample": 4
         });
-        let req: MatryoshkaSearchRequest = serde_json::from_value(json).unwrap();
+        let req: MatryoshkaSearchRequest = serde_json::from_value(json).expect("should deserialize");
         assert_eq!(req.vector.len(), 4);
         assert_eq!(req.k, 10);
     }
@@ -1109,7 +1108,7 @@ mod tests {
     #[test]
     fn test_cache_lookup_request() {
         let json = json!({"vector": [1.0, 0.0], "threshold": 0.95});
-        let req: CacheLookupRequest = serde_json::from_value(json).unwrap();
+        let req: CacheLookupRequest = serde_json::from_value(json).expect("should deserialize");
         assert_eq!(req.vector.len(), 2);
     }
 
@@ -1121,7 +1120,7 @@ mod tests {
             "model": "gpt-4",
             "ttl_seconds": 600
         });
-        let req: CacheStoreRequest = serde_json::from_value(json).unwrap();
+        let req: CacheStoreRequest = serde_json::from_value(json).expect("should deserialize");
         assert_eq!(req.model, Some("gpt-4".to_string()));
     }
 
@@ -1134,7 +1133,7 @@ mod tests {
             "k": 5,
             "snapshot": "snap_v1"
         });
-        let req: TimeTravelSearchRequest = serde_json::from_value(json).unwrap();
+        let req: TimeTravelSearchRequest = serde_json::from_value(json).expect("should deserialize");
         assert_eq!(req.k, 5);
     }
 
@@ -1143,7 +1142,7 @@ mod tests {
     #[test]
     fn test_snapshot_diff_request() {
         let json = json!({"from": "snap1", "to": "snap2"});
-        let req: SnapshotDiffRequest = serde_json::from_value(json).unwrap();
+        let req: SnapshotDiffRequest = serde_json::from_value(json).expect("should deserialize");
         assert_eq!(req.from, "snap1");
         assert_eq!(req.to, "snap2");
     }
@@ -1153,7 +1152,7 @@ mod tests {
     #[test]
     fn test_benchmark_request() {
         let json = json!({"num_queries": 100, "k": 10});
-        let req: BenchmarkRequest = serde_json::from_value(json).unwrap();
+        let req: BenchmarkRequest = serde_json::from_value(json).expect("should deserialize");
         assert_eq!(req.num_queries, 100);
         assert_eq!(req.k, 10);
     }
@@ -1166,7 +1165,7 @@ mod tests {
             "content": "important fact",
             "vector": [1.0, 0.0, 0.0, 0.0]
         });
-        let req: RememberRequest = serde_json::from_value(json).unwrap();
+        let req: RememberRequest = serde_json::from_value(json).expect("should deserialize");
         assert_eq!(req.content, "important fact");
     }
 
@@ -1176,7 +1175,7 @@ mod tests {
             "vector": [1.0, 0.0],
             "k": 5
         });
-        let req: RecallRequest = serde_json::from_value(json).unwrap();
+        let req: RecallRequest = serde_json::from_value(json).expect("should deserialize");
         assert_eq!(req.k, 5);
     }
 
@@ -1189,7 +1188,7 @@ mod tests {
             vector: vec![1.0, 0.0],
             metadata: Some(json!({"key": "val"})),
         };
-        let json = serde_json::to_value(&resp).unwrap();
+        let json = serde_json::to_value(&resp).expect("should serialize");
         assert_eq!(json["id"], "v1");
         assert_eq!(json["vector"], json!([1.0, 0.0]));
     }
@@ -1204,7 +1203,7 @@ mod tests {
             count: 1000,
             deleted_count: 50,
         };
-        let json = serde_json::to_value(&info).unwrap();
+        let json = serde_json::to_value(&info).expect("should serialize");
         assert_eq!(json["name"], "test");
         assert_eq!(json["dimensions"], 128);
         assert_eq!(json["count"], 1000);
@@ -1219,7 +1218,7 @@ mod tests {
             alias: "my_alias".to_string(),
             collection: "my_coll".to_string(),
         };
-        let json = serde_json::to_value(&info).unwrap();
+        let json = serde_json::to_value(&info).expect("should serialize");
         assert_eq!(json["alias"], "my_alias");
         assert_eq!(json["collection"], "my_coll");
     }
@@ -1229,7 +1228,7 @@ mod tests {
     #[test]
     fn test_create_alias_request() {
         let json = json!({"alias": "a1", "collection": "c1"});
-        let req: CreateAliasRequest = serde_json::from_value(json).unwrap();
+        let req: CreateAliasRequest = serde_json::from_value(json).expect("should deserialize");
         assert_eq!(req.alias, "a1");
         assert_eq!(req.collection, "c1");
     }
@@ -1239,7 +1238,7 @@ mod tests {
     #[test]
     fn test_update_alias_request() {
         let json = json!({"collection": "new_coll"});
-        let req: UpdateAliasRequest = serde_json::from_value(json).unwrap();
+        let req: UpdateAliasRequest = serde_json::from_value(json).expect("should deserialize");
         assert_eq!(req.collection, "new_coll");
     }
 
@@ -1248,7 +1247,7 @@ mod tests {
     #[test]
     fn test_update_metadata_request_null() {
         let json = json!({"metadata": null});
-        let req: UpdateMetadataRequest = serde_json::from_value(json).unwrap();
+        let req: UpdateMetadataRequest = serde_json::from_value(json).expect("should deserialize");
         assert!(req.metadata.is_none());
     }
 
@@ -1257,7 +1256,7 @@ mod tests {
     #[test]
     fn test_insert_request_with_ttl() {
         let json = json!({"id": "v1", "vector": [1.0], "ttl_seconds": 300});
-        let req: InsertRequest = serde_json::from_value(json).unwrap();
+        let req: InsertRequest = serde_json::from_value(json).expect("should deserialize");
         assert_eq!(req.ttl_seconds, Some(300));
     }
 
@@ -1270,7 +1269,7 @@ mod tests {
             "distance": "manhattan",
             "k": 3
         });
-        let req: SearchRequest = serde_json::from_value(json).unwrap();
+        let req: SearchRequest = serde_json::from_value(json).expect("should deserialize");
         assert_eq!(req.distance.as_deref(), Some("manhattan"));
     }
 
@@ -1282,7 +1281,7 @@ mod tests {
             "vector": [1.0, 0.0],
             "k": 10
         });
-        let req: CostEstimateRequest = serde_json::from_value(json).unwrap();
+        let req: CostEstimateRequest = serde_json::from_value(json).expect("should deserialize");
         assert_eq!(req.k, 10);
     }
 }

@@ -611,7 +611,7 @@ mod tests {
             .method(Method::GET)
             .uri("/health")
             .body(Body::empty())
-            .unwrap();
+            .expect("should build request");
         assert_eq!(infer_permission_from_request(&req), crate::security::Permission::Read);
     }
 
@@ -621,7 +621,7 @@ mod tests {
             .method(Method::POST)
             .uri("/collections")
             .body(Body::empty())
-            .unwrap();
+            .expect("should build request");
         assert_eq!(infer_permission_from_request(&req), crate::security::Permission::Write);
     }
 
@@ -631,7 +631,7 @@ mod tests {
             .method(Method::DELETE)
             .uri("/collections/test")
             .body(Body::empty())
-            .unwrap();
+            .expect("should build request");
         assert_eq!(infer_permission_from_request(&req), crate::security::Permission::Delete);
     }
 
@@ -642,7 +642,7 @@ mod tests {
         let req = Request::builder()
             .uri("/health")
             .body(Body::empty())
-            .unwrap();
+            .expect("should build request");
         let ip = extract_client_ip(&req, &[]);
         assert_eq!(ip, IpAddr::V4(Ipv4Addr::LOCALHOST));
     }
@@ -751,7 +751,7 @@ mod tests {
             .method(Method::HEAD)
             .uri("/health")
             .body(Body::empty())
-            .unwrap();
+            .expect("should build request");
         assert_eq!(infer_permission_from_request(&req), crate::security::Permission::Read);
     }
 
@@ -763,7 +763,7 @@ mod tests {
             .method(Method::PUT)
             .uri("/collections/test/vectors")
             .body(Body::empty())
-            .unwrap();
+            .expect("should build request");
         assert_eq!(infer_permission_from_request(&req), crate::security::Permission::Write);
     }
 
@@ -809,7 +809,7 @@ mod tests {
         let req = Request::builder()
             .uri("/health")
             .body(Body::empty())
-            .unwrap();
+            .expect("should build request");
         let auth_config = AuthConfig::default();
         let result = try_authenticate(&req, &auth_config);
         assert!(result.is_none());
@@ -822,8 +822,8 @@ mod tests {
         let mut req = Request::builder()
             .uri("/collections")
             .body(Body::empty())
-            .unwrap();
-        req.headers_mut().insert("x-api-key", "invalid-key".parse().unwrap());
+            .expect("should build request");
+        req.headers_mut().insert("x-api-key", "invalid-key".parse().expect("should parse"));
         let auth_config = AuthConfig::default();
         let result = try_authenticate(&req, &auth_config);
         assert!(result.is_none());
@@ -837,7 +837,7 @@ mod tests {
             .header("x-forwarded-for", "1.2.3.4")
             .uri("/health")
             .body(Body::empty())
-            .unwrap();
+            .expect("should build request");
         // Without ConnectInfo extension, should fall back to localhost
         // (trusted_proxies check fails without extension)
         let ip = extract_client_ip(&req, &[]);
