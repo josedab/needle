@@ -1,4 +1,3 @@
-#![allow(clippy::unwrap_used)]
 //! Caching layers: simple cache and 3-tier smart cache.
 
 use super::config::{CacheConfig, StorageBackend};

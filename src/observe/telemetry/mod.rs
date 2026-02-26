@@ -877,7 +877,6 @@ impl Default for Telemetry {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 
