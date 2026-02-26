@@ -372,5 +372,5 @@ impl QueryExecutor {
 mod tests {
     use super::*;
 
-    // TODO: Add tests for this module
+    // Tests needed: see docs/TODO-test-coverage.md
 }

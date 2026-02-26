@@ -112,5 +112,5 @@ pub(crate) fn distance_to_score(distance: f32, distance_fn: DistanceFunction) ->
 mod tests {
     use super::*;
 
-    // TODO: Add tests for this module
+    // Tests needed: see docs/TODO-test-coverage.md
 }
