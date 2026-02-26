@@ -13,10 +13,19 @@ use serde_json::{json, Value};
 use std::sync::Arc;
 use tracing::warn;
 
-use super::{MAX_SEARCH_K, validate_vector_dimensions};
+use super::{MAX_SEARCH_K, MAX_DIMENSIONS, validate_vector_dimensions};
 
 /// Maximum allowed post-filter factor to prevent memory exhaustion.
 const MAX_POST_FILTER_FACTOR: usize = 100;
+
+/// Maximum number of vectors allowed for graph search export.
+const MAX_GRAPH_VECTORS: usize = 50_000;
+
+/// Maximum allowed hops for graph traversal.
+const MAX_GRAPH_HOPS: usize = 10;
+
+/// Maximum allowed oversample factor for matryoshka search.
+const MAX_OVERSAMPLE: usize = 20;
 
 // ============ Search Handlers ============
 
@@ -446,6 +455,22 @@ pub(in crate::server) async fn matryoshka_search_handler(
     Path(collection): Path<String>,
     Json(body): Json<MatryoshkaSearchRequest>,
 ) -> impl IntoResponse {
+    if body.k == 0 || body.k > MAX_SEARCH_K {
+        return (StatusCode::BAD_REQUEST, Json(json!({
+            "error": format!("k must be between 1 and {MAX_SEARCH_K}")
+        })));
+    }
+    if body.coarse_dims == 0 || body.coarse_dims > MAX_DIMENSIONS {
+        return (StatusCode::BAD_REQUEST, Json(json!({
+            "error": format!("coarse_dims must be between 1 and {MAX_DIMENSIONS}")
+        })));
+    }
+    if body.oversample == 0 || body.oversample > MAX_OVERSAMPLE {
+        return (StatusCode::BAD_REQUEST, Json(json!({
+            "error": format!("oversample must be between 1 and {MAX_OVERSAMPLE}")
+        })));
+    }
+
     let db = state.db.read().await;
     let coll = match db.collection(&collection) {
         Ok(c) => c,
@@ -615,11 +640,22 @@ pub(in crate::server) async fn graph_search_handler(
         Err(e) => return (StatusCode::NOT_FOUND, Json(json!({ "error": e.to_string() }))),
     };
 
+    let count = coll.len();
+    if count > MAX_GRAPH_VECTORS {
+        return (StatusCode::PAYLOAD_TOO_LARGE, Json(json!({
+            "error": format!(
+                "Collection has {} vectors, exceeding graph search limit of {}. Use standard search for large collections.",
+                count, MAX_GRAPH_VECTORS
+            )
+        })));
+    }
+
     // Build a GraphRAG index from the collection's vectors and metadata
     let dims = coll.dimensions().unwrap_or(0);
+    let max_hops = body.max_hops.min(MAX_GRAPH_HOPS);
     let config = GraphRAGConfig {
         dimensions: dims,
-        max_hops: body.max_hops,
+        max_hops,
         ..GraphRAGConfig::default()
     };
     let mut graph = GraphRAG::new(config);
@@ -653,7 +689,7 @@ pub(in crate::server) async fn graph_search_handler(
         }
     }
 
-    let results = match graph.search(&body.vector, body.k, Some(body.max_hops)) {
+    let results = match graph.search(&body.vector, body.k, Some(max_hops)) {
         Ok(r) => r,
         Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))),
     };
