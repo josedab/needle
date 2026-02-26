@@ -14,7 +14,7 @@ use serde_json::{json, Value};
 use std::sync::Arc;
 use tracing::warn;
 
-use super::html_escape;
+use super::{html_escape, MAX_SEARCH_K};
 
 // ============ Health / Info / Save ============
 
@@ -370,6 +370,9 @@ pub(in crate::server) async fn cost_estimate_handler(
     })))
 }
 
+/// Maximum number of vectors per collection for diff operations.
+const MAX_DIFF_VECTORS: usize = 100_000;
+
 /// Compute the diff between two collections.
 ///
 /// `POST /collections/:name/diff` — compares vector IDs and values between
@@ -389,6 +392,15 @@ pub(in crate::server) async fn vector_diff_handler(
         Ok(c) => c,
         Err(e) => return (StatusCode::NOT_FOUND, Json(json!({ "error": format!("Target: {}", e) }))),
     };
+
+    if coll_a.len() > MAX_DIFF_VECTORS || coll_b.len() > MAX_DIFF_VECTORS {
+        return (StatusCode::PAYLOAD_TOO_LARGE, Json(json!({
+            "error": format!(
+                "Collection size exceeds diff limit of {}. Source: {}, Target: {}",
+                MAX_DIFF_VECTORS, coll_a.len(), coll_b.len()
+            )
+        })));
+    }
 
     let ids_a: std::collections::HashSet<String> = coll_a.ids().unwrap_or_default().into_iter().collect();
     let ids_b: std::collections::HashSet<String> = coll_b.ids().unwrap_or_default().into_iter().collect();
@@ -604,6 +616,7 @@ pub(in crate::server) async fn benchmark_handler(
     }
 
     let num_queries = body.num_queries.min(10_000);
+    let k = body.k.min(MAX_SEARCH_K).max(1);
     let mut rng = rand::thread_rng();
     let mut latencies = Vec::with_capacity(num_queries);
 
@@ -611,7 +624,7 @@ pub(in crate::server) async fn benchmark_handler(
         use rand::Rng;
         let query: Vec<f32> = (0..dims).map(|_| rng.gen::<f32>()).collect();
         let start = std::time::Instant::now();
-        let _ = coll.search(&query, body.k);
+        let _ = coll.search(&query, k);
         latencies.push(start.elapsed().as_micros() as f64);
     }
 
@@ -626,7 +639,7 @@ pub(in crate::server) async fn benchmark_handler(
         "collection": collection,
         "vectors": coll.len(),
         "dimensions": dims,
-        "k": body.k,
+        "k": k,
         "queries": num_queries,
         "latency_us": {
             "p50": p50,
