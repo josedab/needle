@@ -322,16 +322,24 @@ pub(super) fn extract_collection_from_path(path: &str) -> Option<String> {
 }
 
 
-/// Check if a non-collection endpoint requires admin permission.
-/// Gates mutating operations on /save, /webhooks, and /aliases.
+/// Check if an endpoint requires admin permission.
+/// Gates mutating operations on /save, /webhooks, /aliases,
+/// and CPU-intensive collection endpoints (benchmark, diff, compact).
 fn requires_admin(path: &str, method: &Method) -> bool {
     let is_mutating = matches!(*method, Method::POST | Method::PUT | Method::DELETE);
     if !is_mutating {
         return false;
     }
-    path == "/save"
+    if path == "/save"
         || path.starts_with("/webhooks")
         || path.starts_with("/aliases")
+    {
+        return true;
+    }
+    // CPU-intensive collection endpoints
+    path.ends_with("/benchmark")
+        || path.ends_with("/diff")
+        || path.ends_with("/compact")
 }
 
 pub(super) fn infer_permission_from_request(request: &Request<Body>) -> crate::security::Permission {
