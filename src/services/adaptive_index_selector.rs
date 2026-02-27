@@ -240,6 +240,155 @@ impl AdaptiveSelector {
 
 impl Default for AdaptiveSelector { fn default() -> Self { Self::new() } }
 
+// ── Cost Model ───────────────────────────────────────────────────────────────
+
+/// Per-index cost model for memory and latency estimation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IndexCostModel {
+    /// Strategy this model describes.
+    pub strategy: IndexStrategy,
+    /// Estimated memory in bytes for the given parameters.
+    pub memory_bytes: usize,
+    /// Estimated p50 search latency in milliseconds.
+    pub p50_latency_ms: f64,
+    /// Estimated p99 search latency in milliseconds.
+    pub p99_latency_ms: f64,
+    /// Estimated recall@10.
+    pub estimated_recall: f64,
+    /// Build time estimate in seconds.
+    pub build_time_secs: f64,
+}
+
+/// Estimate costs for all index strategies given collection parameters.
+pub fn estimate_costs(vector_count: usize, dimensions: usize) -> Vec<IndexCostModel> {
+    let raw_bytes = vector_count * dimensions * 4;
+    let n = vector_count as f64;
+    let d = dimensions as f64;
+
+    vec![
+        IndexCostModel {
+            strategy: IndexStrategy::BruteForce,
+            memory_bytes: raw_bytes,
+            p50_latency_ms: n * d * 1e-9 * 1000.0, // O(n*d) comparison
+            p99_latency_ms: n * d * 1.5e-9 * 1000.0,
+            estimated_recall: 1.0,
+            build_time_secs: 0.0,
+        },
+        IndexCostModel {
+            strategy: IndexStrategy::Hnsw,
+            // HNSW overhead: ~M*2 neighbors per node * 8 bytes each + vector storage
+            memory_bytes: raw_bytes + vector_count * 16 * 2 * 8,
+            p50_latency_ms: (n.ln() * d * 1e-8 * 1000.0).max(0.1),
+            p99_latency_ms: (n.ln() * d * 2e-8 * 1000.0).max(0.2),
+            estimated_recall: 0.95,
+            build_time_secs: n * 1e-5,
+        },
+        IndexCostModel {
+            strategy: IndexStrategy::HnswQuantized,
+            // Quantized: ~4x compression on vectors
+            memory_bytes: raw_bytes / 4 + vector_count * 16 * 2 * 8,
+            p50_latency_ms: (n.ln() * d * 0.8e-8 * 1000.0).max(0.1),
+            p99_latency_ms: (n.ln() * d * 1.6e-8 * 1000.0).max(0.2),
+            estimated_recall: 0.90,
+            build_time_secs: n * 1.5e-5,
+        },
+        IndexCostModel {
+            strategy: IndexStrategy::Ivf,
+            // IVF: centroids + inverted lists
+            memory_bytes: raw_bytes + (n.sqrt() as usize) * dimensions * 4,
+            p50_latency_ms: ((n / n.sqrt()) * d * 1e-9 * 1000.0).max(0.1),
+            p99_latency_ms: ((n / n.sqrt()) * d * 2e-9 * 1000.0).max(0.2),
+            estimated_recall: 0.85,
+            build_time_secs: n * 2e-5,
+        },
+        IndexCostModel {
+            strategy: IndexStrategy::DiskAnn,
+            // DiskANN: compact in-memory graph + disk-resident vectors
+            memory_bytes: vector_count * 64, // graph-only memory
+            p50_latency_ms: (n.ln() * 0.5e-3).max(1.0), // includes disk I/O
+            p99_latency_ms: (n.ln() * 1.5e-3).max(3.0),
+            estimated_recall: 0.92,
+            build_time_secs: n * 3e-5,
+        },
+    ]
+}
+
+/// Select the best strategy given constraints, using the cost model.
+pub fn select_by_cost(
+    vector_count: usize,
+    dimensions: usize,
+    memory_budget: Option<usize>,
+    latency_target_ms: Option<f64>,
+    min_recall: Option<f64>,
+) -> SelectionResult {
+    let costs = estimate_costs(vector_count, dimensions);
+    let min_recall = min_recall.unwrap_or(0.80);
+
+    let mut candidates: Vec<(IndexStrategy, f32, String)> = Vec::new();
+    for cost in &costs {
+        let mut score: f32 = 0.0;
+        let mut reason = String::new();
+
+        // Filter by memory budget
+        if let Some(budget) = memory_budget {
+            if cost.memory_bytes > budget {
+                continue;
+            }
+        }
+
+        // Filter by minimum recall
+        if cost.estimated_recall < min_recall {
+            continue;
+        }
+
+        // Score: prefer low latency
+        score += (1.0 / (cost.p50_latency_ms + 0.01)) as f32;
+
+        // Bonus for meeting latency target
+        if let Some(target) = latency_target_ms {
+            if cost.p50_latency_ms <= target {
+                score += 2.0;
+                reason = format!("meets latency target ({:.1}ms <= {:.1}ms)", cost.p50_latency_ms, target);
+            }
+        }
+
+        // Bonus for high recall
+        score += cost.estimated_recall as f32;
+
+        // Penalty for build time
+        score -= (cost.build_time_secs / 60.0) as f32 * 0.1;
+
+        candidates.push((cost.strategy, score, reason));
+    }
+
+    if candidates.is_empty() {
+        // Fallback: HNSW is always a reasonable default
+        return SelectionResult {
+            strategy: IndexStrategy::Hnsw,
+            confidence: 0.3,
+            rationale: vec!["No strategy meets all constraints; defaulting to HNSW".into()],
+            alternatives: Vec::new(),
+            suggested_params: HashMap::new(),
+        };
+    }
+
+    candidates.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    let max_score = candidates[0].1;
+    let confidence = (max_score / 5.0).min(1.0);
+
+    SelectionResult {
+        strategy: candidates[0].0,
+        confidence,
+        rationale: if candidates[0].2.is_empty() {
+            vec![format!("Best cost-model fit for {} vectors × {} dims", vector_count, dimensions)]
+        } else {
+            vec![candidates[0].2.clone()]
+        },
+        alternatives: candidates.iter().skip(1).map(|(s, sc, _)| (*s, *sc)).collect(),
+        suggested_params: HashMap::new(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -321,5 +470,35 @@ mod tests {
         // Medium dataset is good for HNSW
         let rec = s.should_migrate(50_000, 128);
         assert!(rec.is_none());
+    }
+
+    #[test]
+    fn test_cost_model_estimates() {
+        let costs = estimate_costs(100_000, 384);
+        assert_eq!(costs.len(), 5);
+        // BruteForce should have perfect recall
+        let bf = costs.iter().find(|c| c.strategy == IndexStrategy::BruteForce).unwrap();
+        assert!((bf.estimated_recall - 1.0).abs() < f64::EPSILON);
+        assert_eq!(bf.build_time_secs, 0.0);
+        // DiskANN should have lowest memory
+        let da = costs.iter().find(|c| c.strategy == IndexStrategy::DiskAnn).unwrap();
+        assert!(da.memory_bytes < bf.memory_bytes);
+    }
+
+    #[test]
+    fn test_select_by_cost_memory_constraint() {
+        // Tight memory budget should prefer DiskANN or quantized
+        let r = select_by_cost(1_000_000, 384, Some(200 * 1024 * 1024), None, None);
+        assert!(matches!(
+            r.strategy,
+            IndexStrategy::DiskAnn | IndexStrategy::HnswQuantized
+        ));
+    }
+
+    #[test]
+    fn test_select_by_cost_small_dataset() {
+        let r = select_by_cost(1_000, 128, None, None, None);
+        // Small dataset — brute force has perfect recall and no build cost
+        assert_eq!(r.strategy, IndexStrategy::BruteForce);
     }
 }
