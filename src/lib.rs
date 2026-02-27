@@ -645,12 +645,19 @@ pub use ml::embeddings_provider::{
 /// use needle::prelude::*;
 /// ```
 pub mod prelude {
+    /// Core collection type holding vectors, HNSW index, and metadata.
     pub use crate::collection::{Collection, CollectionConfig, SearchResult};
+    /// Parameters for tuning search queries (k, ef_search, filter).
     pub use crate::database::collection_ref::SearchParams;
+    /// Thread-safe database handle and collection reference.
     pub use crate::database::{CollectionRef, Database, DatabaseConfig};
+    /// Distance metric used for similarity computation.
     pub use crate::distance::DistanceFunction;
+    /// Error types and the crate-wide `Result` alias.
     pub use crate::error::{NeedleError, Result};
+    /// HNSW index configuration (M, ef_construction, ef_search).
     pub use crate::hnsw::HnswConfig;
+    /// MongoDB-style metadata filter for search queries.
     pub use crate::metadata::Filter;
 }
 
