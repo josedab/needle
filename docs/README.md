@@ -125,6 +125,7 @@ For more examples, see [How-To Guides](how-to-guides.md).
 | [Architecture Decision Records](adr/) | Design decisions and rationale |
 | [Governance](GOVERNANCE.md) | Project governance model and decision-making process |
 | [Support](SUPPORT.md) | How to get help, report bugs, and request features |
+| [Test Coverage TODOs](TODO-test-coverage.md) | Consolidated test coverage gaps and priorities |
 | [CLAUDE.md](../CLAUDE.md) | AI assistant context and codebase overview |
 
 ---
