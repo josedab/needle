@@ -96,6 +96,31 @@
 //! - **DiskANN** stores vectors on disk with memory-efficient navigation
 //! - Choose HNSW for datasets that fit in memory
 //! - Choose DiskANN for datasets exceeding available RAM
+//!
+//! ## Insertion Algorithm
+//!
+//! New vectors are inserted via the following steps (Malkov & Yashunin, 2016):
+//!
+//! 1. **Layer assignment**: A random layer `l` is chosen using an exponentially decaying
+//!    probability: `l = floor(-ln(uniform(0,1)) * m_l)` where `m_l = 1/ln(M)`. Most
+//!    vectors land on layer 0; higher layers are exponentially rarer.
+//!
+//! 2. **Greedy descent (layers > l)**: Starting from the entry point at the top layer,
+//!    greedily traverse toward the new vector through layers above `l`, keeping only the
+//!    single closest node at each layer.
+//!
+//! 3. **Insertion into layers l..0**: At each layer from `l` down to 0, search for the
+//!    `ef_construction` nearest neighbors, then connect the new node to the closest `M`
+//!    neighbors (or `M * 2` on layer 0 for denser connectivity).
+//!
+//! 4. **Connection pruning**: When adding bidirectional edges would exceed the maximum
+//!    connection count for an existing neighbor, the neighbor's connections are pruned
+//!    using a heuristic that keeps diverse, short-distance edges. The heuristic prefers
+//!    neighbors that are not only close to the node but also distant from each other,
+//!    preserving graph navigability.
+//!
+//! 5. **Entry point update**: If the new vector's assigned layer exceeds the current
+//!    maximum layer, the new node becomes the new global entry point.
 
 use crate::distance::DistanceFunction;
 use crate::error::Result;
