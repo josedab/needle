@@ -545,6 +545,7 @@ cargo run --features server -- serve -a 127.0.0.1:8080 -d vectors.needle
 | POST | `/collections/:collection/ingest` | Streaming vector ingest |
 | POST | `/collections/:collection/diff` | Diff two collections |
 | GET | `/collections/:collection/changes` | Change feed |
+| GET | `/collections/:collection/changes/stream` | SSE change stream |
 | **Benchmarks & Index** | | |
 | POST | `/collections/:collection/benchmark` | Run search benchmark |
 | GET | `/collections/:collection/index/status` | Index and WAL status |
@@ -1337,6 +1338,35 @@ Get a change feed for the collection.
 ```bash
 curl "http://localhost:8080/collections/docs/changes?limit=50"
 # {"collection":"docs","vector_count":1500,"feed_config":{...}}
+```
+
+#### `GET /collections/:collection/changes/stream`
+
+Server-Sent Events (SSE) stream for real-time collection changes. The server polls the CDC log every second and pushes new events as SSE messages. The connection stays open until the client disconnects.
+
+| Query Param | Type | Default | Description |
+|-------------|------|---------|-------------|
+| `after` | integer | `0` | Resume from this sequence cursor |
+
+Each SSE event contains a JSON array of change records:
+
+```json
+[
+  {
+    "sequence": 42,
+    "event_type": "Insert",
+    "vector_id": "doc-7",
+    "timestamp_ms": 1709337600000
+  }
+]
+```
+
+The `id` field of each SSE event is set to the latest sequence number, enabling automatic resume with `Last-Event-ID`.
+
+```bash
+curl -N "http://localhost:8080/collections/docs/changes/stream?after=0"
+# data: [{"sequence":1,"event_type":"Insert","vector_id":"v1","timestamp_ms":1709337600000}]
+# id: 1
 ```
 
 ---
