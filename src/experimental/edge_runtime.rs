@@ -352,7 +352,7 @@ impl IndexSegment {
     #[allow(dead_code)]
     pub fn compress(&self) -> Result<Vec<u8>> {
         let bytes = self.to_bytes()?;
-        // FIXME: placeholder — returns uncompressed bytes until a compression
+        // FIXME(#34): placeholder — returns uncompressed bytes until a compression
         // feature (LZ4 or similar) is added to the edge runtime.
         Ok(bytes)
     }
@@ -360,7 +360,7 @@ impl IndexSegment {
     /// Decompress segment data (placeholder - assumes uncompressed bytes)
     #[allow(dead_code)]
     pub fn decompress(bytes: &[u8]) -> Result<Self> {
-        // FIXME: placeholder — assumes uncompressed bytes until a compression
+        // FIXME(#34): placeholder — assumes uncompressed bytes until a compression
         // feature (LZ4 or similar) is added to the edge runtime.
         Self::from_bytes(bytes)
     }
@@ -866,7 +866,7 @@ impl EdgeRuntime {
 
             let mut segment_meta = segment.metadata.clone();
             segment_meta.uncompressed_size = segment_bytes.len();
-            segment_meta.compressed_size = segment_bytes.len(); // FIXME: no compression yet — same as uncompressed
+            segment_meta.compressed_size = segment_bytes.len(); // FIXME(#34): no compression yet — same as uncompressed
 
             storage.put(&segment_key, &segment_bytes)?;
             manifest.add_segment(segment_meta);
