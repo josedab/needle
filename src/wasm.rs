@@ -1,4 +1,43 @@
-//! WebAssembly bindings for Needle using wasm-bindgen
+//! WebAssembly bindings for Needle using wasm-bindgen.
+//!
+//! This module provides JavaScript/TypeScript bindings for Needle's vector
+//! database functionality, enabling browser and edge-runtime applications to
+//! use Needle for similarity search.
+//!
+//! # Features
+//!
+//! - In-memory vector collections with HNSW indexing
+//! - Cosine, Euclidean, and Dot Product distance functions
+//! - Metadata filtering with MongoDB-style query syntax
+//! - Serialization/deserialization for IndexedDB or file persistence
+//! - Zero server dependencies — runs entirely in the browser
+//!
+//! # Building
+//!
+//! ```bash
+//! wasm-pack build --target web --features wasm
+//! ```
+//!
+//! # Usage
+//!
+//! ```javascript
+//! import init, { WasmNeedle } from './pkg/needle.js';
+//!
+//! await init();
+//!
+//! // Create a collection (128-dimensional vectors, cosine distance)
+//! const db = new WasmNeedle("my_collection", 128, "cosine");
+//!
+//! // Insert a vector with metadata
+//! db.insert("vec1", new Float32Array(128).fill(0.1), '{"category": "demo"}');
+//!
+//! // Search for nearest neighbors
+//! const results = db.search(new Float32Array(128).fill(0.1), 5);
+//! console.log(results); // [{ id: "vec1", distance: 0.0, metadata: {...} }]
+//! ```
+//!
+//! For framework integration guides (React, Vue, Next.js, SvelteKit) and
+//! edge deployment recipes, see the [WASM Guide](../docs/WASM_GUIDE.md).
 
 use crate::collection::{Collection, CollectionConfig, SearchResult as RustSearchResult};
 use crate::database::Database;
