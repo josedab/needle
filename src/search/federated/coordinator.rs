@@ -267,3 +267,6 @@ pub struct FederationStatsSnapshot {
     pub partial_results: u64,
     pub timeouts: u64,
 }
+
+#[cfg(test)]
+mod tests {}

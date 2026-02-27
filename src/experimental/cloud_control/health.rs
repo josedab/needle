@@ -281,3 +281,6 @@ impl WebConsole {
         html
     }
 }
+
+#[cfg(test)]
+mod tests {}

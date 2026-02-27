@@ -322,3 +322,6 @@ pub(super) fn rand_jitter(max: f64) -> f64 {
     let hash = hasher.finish();
     (hash as f64 / u64::MAX as f64) * max
 }
+
+#[cfg(test)]
+mod tests {}

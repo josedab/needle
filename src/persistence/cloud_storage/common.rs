@@ -70,3 +70,6 @@ impl MockStorage {
         storage.contains_key(&full_key)
     }
 }
+
+#[cfg(test)]
+mod tests {}

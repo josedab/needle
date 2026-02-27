@@ -100,3 +100,6 @@ impl Default for ApiKeyManager {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests {}

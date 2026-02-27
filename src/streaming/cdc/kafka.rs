@@ -259,3 +259,6 @@ impl KafkaConnector {
         Self { _config: config }
     }
 }
+
+#[cfg(test)]
+mod tests {}

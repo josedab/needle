@@ -165,3 +165,6 @@ impl RagCache {
         self.cache.lock().is_empty()
     }
 }
+
+#[cfg(test)]
+mod tests {}

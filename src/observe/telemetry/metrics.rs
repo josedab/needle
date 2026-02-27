@@ -47,3 +47,6 @@ pub struct HistogramStats {
     /// 99th percentile.
     pub p99: f64,
 }
+
+#[cfg(test)]
+mod tests {}

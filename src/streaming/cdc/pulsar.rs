@@ -293,3 +293,6 @@ impl PulsarConnector {
         Self { _config: config }
     }
 }
+
+#[cfg(test)]
+mod tests {}

@@ -199,3 +199,6 @@ impl DebeziumParser {
         Ok(event)
     }
 }
+
+#[cfg(test)]
+mod tests {}

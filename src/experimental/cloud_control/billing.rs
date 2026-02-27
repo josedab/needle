@@ -243,3 +243,6 @@ impl Default for BillingEngine {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests {}

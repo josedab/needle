@@ -201,3 +201,6 @@ impl RecursiveTextSplitter {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {}

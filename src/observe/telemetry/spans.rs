@@ -342,3 +342,6 @@ impl<'a> OperationTimer<'a> {
         duration
     }
 }
+
+#[cfg(test)]
+mod tests {}

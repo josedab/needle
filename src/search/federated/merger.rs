@@ -156,3 +156,6 @@ impl ResultMerger {
         sorted.into_iter().take(k).map(|(_, _, r)| r).collect()
     }
 }
+
+#[cfg(test)]
+mod tests {}

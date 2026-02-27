@@ -332,3 +332,6 @@ impl InstanceRegistry {
         self.instances.read().is_empty()
     }
 }
+
+#[cfg(test)]
+mod tests {}

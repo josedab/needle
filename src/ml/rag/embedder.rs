@@ -69,3 +69,6 @@ impl SimpleRng {
         (self.next_u64() as f32) / (u64::MAX as f32)
     }
 }
+
+#[cfg(test)]
+mod tests {}

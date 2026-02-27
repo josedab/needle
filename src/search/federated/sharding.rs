@@ -431,3 +431,6 @@ pub struct RebalanceResult {
     pub shard_moves: Vec<ShardMove>,
     pub total_shards: usize,
 }
+
+#[cfg(test)]
+mod tests {}

@@ -543,3 +543,6 @@ pub(crate) fn percent(current: u64, limit: u64) -> f64 {
         (current as f64 / limit as f64) * 100.0
     }
 }
+
+#[cfg(test)]
+mod tests {}
