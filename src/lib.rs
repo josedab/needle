@@ -205,6 +205,19 @@ pub use integrations::{langchain, llamaindex};
 // ── High-Level Services ──────────────────────────────────────────────────────
 // Database-level service wrappers with builders and lifecycle management.
 // See src/services/README.md for the full directory layout.
+//
+// ## Why `#[doc(hidden)]`?
+//
+// The service re-exports below are marked `#[doc(hidden)]` because they are
+// internal implementation details, not part of Needle's public API surface.
+// They are `pub` only so that integration tests, benchmarks, and binary
+// crates within the workspace can access them. Users should interact with
+// these capabilities through `Database`, `CollectionRef`, or the REST API.
+//
+// **Stability**: These modules follow the "Experimental" tier of our API
+// stability policy (see docs/api-stability.md). They may be renamed,
+// reorganized, or removed in any release without a deprecation cycle.
+// Do not depend on them in external crates.
 
 /// High-level service wrappers: ingestion, multi-modal, PITR, text collections, and more.
 ///
