@@ -748,8 +748,7 @@ pub struct BanditsStats {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    const TEST_API_KEY: &str = "test-key";
+    use crate::test_utils::TEST_API_KEY;
 
     #[tokio::test]
     async fn test_cohere_reranker() {

@@ -5,6 +5,9 @@
 
 use rand::Rng;
 
+/// Shared placeholder API key for tests that require an API key value.
+pub const TEST_API_KEY: &str = "test-api-key";
+
 /// Generate a random vector of the given dimensionality with values in [0, 1).
 pub fn random_vector(dim: usize) -> Vec<f32> {
     let mut rng = rand::thread_rng();

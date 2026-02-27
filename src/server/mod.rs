@@ -1408,8 +1408,7 @@ pub fn openapi_spec_json() -> String {
 mod tests {
     use super::*;
     use axum::http::StatusCode;
-
-    const TEST_API_KEY: &str = "test-key";
+    use crate::test_utils::TEST_API_KEY;
 
     // RateLimitConfig tests
     #[test]

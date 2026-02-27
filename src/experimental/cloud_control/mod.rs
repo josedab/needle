@@ -57,8 +57,7 @@ pub use tiers::*;
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    const TEST_API_KEY: &str = "test-api-key";
+    use crate::test_utils::TEST_API_KEY;
 
     #[test]
     fn test_create_tenant() {

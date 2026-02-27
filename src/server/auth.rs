@@ -443,8 +443,8 @@ pub enum AuthMethod {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_utils::TEST_API_KEY;
 
-    const TEST_API_KEY: &str = "test-key";
     const TEST_SECRET: &str = "this-is-a-test-secret-at-least-32-bytes-long!!";
 
     fn auth_config_with_key(key: &str) -> AuthConfig {

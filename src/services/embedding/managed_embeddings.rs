@@ -518,8 +518,7 @@ fn normalize_whitespace(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    const TEST_API_KEY: &str = "test-api-key";
+    use crate::test_utils::TEST_API_KEY;
 
     fn test_db() -> Database {
         let db = Database::in_memory();
