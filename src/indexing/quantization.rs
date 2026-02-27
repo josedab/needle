@@ -83,6 +83,26 @@
 //! let distance = BinaryQuantizer::hamming_distance(&binary, &binary2);
 //! assert!(distance <= 8); // Max 8 bits can differ
 //! ```
+//!
+//! ## Theoretical Background
+//!
+//! ### Product Quantization — k-means Subvector Partitioning
+//!
+//! Product quantization (PQ) partitions each vector into `m` equal-length subvectors and
+//! independently clusters each subspace using k-means. This decomposition exploits the
+//! observation that high-dimensional distances can be well-approximated by summing
+//! per-subvector distances, reducing the codebook size from `k^d` (full-space quantization)
+//! to `m * k` (sum of subspace codebooks). Each subvector is replaced by the index of its
+//! nearest centroid, yielding compact `m`-byte codes.
+//!
+//! ### Asymmetric Distance Computation (ADC)
+//!
+//! During search, PQ uses asymmetric distance computation: the query vector is left
+//! unquantized while database vectors are represented by their PQ codes. For each query,
+//! a lookup table of distances from the query's subvectors to all centroids is precomputed
+//! (`m * k` distance calculations). The approximate distance to any database vector is then
+//! a sum of `m` table lookups — O(m) per candidate instead of O(d). This asymmetry yields
+//! better accuracy than symmetric (quantized-vs-quantized) comparison at negligible extra cost.
 
 use rand::seq::SliceRandom;
 use rand::Rng;
