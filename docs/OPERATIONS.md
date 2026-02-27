@@ -857,6 +857,8 @@ specified in more than one place, the **highest-priority source wins**:
 | `NEEDLE_WAL_DIR` | WAL directory | `<db_path>.wal/` |
 | `NEEDLE_CHECKPOINT_INTERVAL` | WAL checkpoint frequency | `10000` |
 | `NEEDLE_METRICS_PORT` | Metrics endpoint port | `9090` |
+| `NEEDLE_EMBEDDING_PROVIDER` | Primary embedding provider (`openai`, `cohere`, `ollama`) | — |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | OpenTelemetry collector endpoint (e.g., `http://localhost:4317`) | — |
 
 ### CLI Reference
 
