@@ -224,6 +224,143 @@ impl CacheMiddleware {
     }
 }
 
+// ── Provider-Specific Wrappers ───────────────────────────────────────────────
+
+/// LLM provider type for cache namespace routing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum LlmProvider {
+    OpenAI,
+    Anthropic,
+    Ollama,
+    Custom,
+}
+
+impl LlmProvider {
+    /// Default model namespace prefix.
+    pub fn prefix(&self) -> &str {
+        match self {
+            Self::OpenAI => "openai",
+            Self::Anthropic => "anthropic",
+            Self::Ollama => "ollama",
+            Self::Custom => "custom",
+        }
+    }
+
+    /// Default cost per query for this provider.
+    pub fn default_cost_per_query(&self) -> f32 {
+        match self {
+            Self::OpenAI => 0.002,
+            Self::Anthropic => 0.003,
+            Self::Ollama => 0.0,
+            Self::Custom => 0.001,
+        }
+    }
+}
+
+/// Wrap a prompt for a specific LLM provider with caching.
+pub struct ProviderCacheWrapper<'a> {
+    middleware: &'a mut CacheMiddleware,
+    provider: LlmProvider,
+    model: String,
+}
+
+impl<'a> ProviderCacheWrapper<'a> {
+    /// Create a new provider cache wrapper.
+    pub fn new(middleware: &'a mut CacheMiddleware, provider: LlmProvider, model: &str) -> Self {
+        Self {
+            middleware,
+            provider,
+            model: format!("{}/{}", provider.prefix(), model),
+        }
+    }
+
+    /// Check cache for a prompt. Returns cached response if found.
+    pub fn check(&mut self, prompt_embedding: &[f32], prompt: &str) -> Result<Option<String>> {
+        self.middleware.check(&self.model, prompt_embedding, prompt)
+    }
+
+    /// Store a prompt-response pair in the cache.
+    pub fn store(
+        &mut self,
+        prompt_embedding: &[f32],
+        prompt: &str,
+        response: &str,
+    ) -> Result<()> {
+        self.middleware
+            .store(&self.model, prompt_embedding, prompt, response)
+    }
+
+    /// Get analytics for this provider/model.
+    pub fn analytics(&self) -> CacheAnalytics {
+        self.middleware.analytics(&self.model)
+    }
+}
+
+// ── Dashboard API ────────────────────────────────────────────────────────────
+
+/// Cache dashboard summary for monitoring.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CacheDashboard {
+    /// Per-model hit/miss rates.
+    pub models: Vec<ModelCacheStats>,
+    /// Total estimated cost savings.
+    pub total_savings: f32,
+    /// Overall hit rate.
+    pub overall_hit_rate: f32,
+    /// Total cached entries across all models.
+    pub total_entries: usize,
+}
+
+/// Per-model cache statistics.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModelCacheStats {
+    /// Model namespace.
+    pub model: String,
+    /// Number of cached entries.
+    pub entries: usize,
+    /// Hit count.
+    pub hits: u64,
+    /// Miss count.
+    pub misses: u64,
+    /// Hit rate (0.0–1.0).
+    pub hit_rate: f32,
+    /// Estimated cost savings.
+    pub savings: f32,
+}
+
+impl CacheMiddleware {
+    /// Generate a dashboard summary.
+    pub fn dashboard(&self) -> CacheDashboard {
+        let models: Vec<ModelCacheStats> = self
+            .all_namespaces()
+            .into_iter()
+            .map(|ns| {
+                let analytics = self.analytics(&ns.model);
+                let total = analytics.hits + analytics.misses;
+                ModelCacheStats {
+                    model: ns.model,
+                    entries: ns.entries,
+                    hits: analytics.hits,
+                    misses: analytics.misses,
+                    hit_rate: if total > 0 {
+                        analytics.hits as f32 / total as f32
+                    } else {
+                        0.0
+                    },
+                    savings: analytics.hits as f32 * self.config.cost_per_query,
+                }
+            })
+            .collect();
+
+        CacheDashboard {
+            total_savings: self.total_savings(),
+            overall_hit_rate: self.total_hit_rate(),
+            total_entries: models.iter().map(|m| m.entries).sum(),
+            models,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -306,5 +443,37 @@ mod tests {
         let different: Vec<f32> = (0..8).map(|i| if i % 2 == 0 { 1.0 } else { -1.0 }).collect();
         let hit = mw.check("strict", &different, "q").unwrap();
         assert!(hit.is_none());
+    }
+
+    #[test]
+    fn test_provider_wrapper() {
+        let mut mw = CacheMiddleware::new(MiddlewareConfig::new(8));
+        {
+            let mut wrapper = ProviderCacheWrapper::new(&mut mw, LlmProvider::OpenAI, "gpt-4");
+            let e = emb(0.5, 8);
+            wrapper.store(&e, "hello", "world").unwrap();
+            let hit = wrapper.check(&e, "hello").unwrap();
+            assert!(hit.is_some());
+        }
+        assert_eq!(mw.model_count(), 1);
+    }
+
+    #[test]
+    fn test_dashboard() {
+        let mut mw = CacheMiddleware::new(MiddlewareConfig::new(8));
+        mw.store("gpt-4", &emb(0.1, 8), "q1", "r1").unwrap();
+        mw.store("claude", &emb(0.2, 8), "q2", "r2").unwrap();
+        mw.check("gpt-4", &emb(0.1, 8), "q1").unwrap();
+
+        let dashboard = mw.dashboard();
+        assert_eq!(dashboard.models.len(), 2);
+        assert!(dashboard.total_entries >= 2);
+    }
+
+    #[test]
+    fn test_llm_provider_defaults() {
+        assert_eq!(LlmProvider::OpenAI.prefix(), "openai");
+        assert!(LlmProvider::OpenAI.default_cost_per_query() > 0.0);
+        assert_eq!(LlmProvider::Ollama.default_cost_per_query(), 0.0);
     }
 }
