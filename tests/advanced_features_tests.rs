@@ -15,9 +15,7 @@ use needle::query_builder::{CollectionProfile, QueryAnalyzer, QueryClass, Visual
 use needle::Database;
 use tempfile::TempDir;
 
-fn random_vector(dim: usize) -> Vec<f32> {
-    common::random_vector(dim)
-}
+use common::random_vector;
 
 // ============================================================================
 // Query Builder Tests

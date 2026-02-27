@@ -6,9 +6,7 @@ mod common;
 use needle::{Collection, CollectionConfig, Database, DistanceFunction};
 use serde_json::json;
 
-fn random_vector(dim: usize) -> Vec<f32> {
-    common::random_vector(dim)
-}
+use common::random_vector;
 
 // ============================================================================
 // Empty Collection Tests

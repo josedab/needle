@@ -65,10 +65,7 @@ where
     (result, start.elapsed())
 }
 
-/// Generate random vector using simple PRNG
-fn random_vector(dim: usize) -> Vec<f32> {
-    common::random_vector(dim)
-}
+use common::random_vector;
 
 // ============================================================================
 // Module Combination Tests

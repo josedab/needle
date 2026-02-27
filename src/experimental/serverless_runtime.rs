@@ -465,14 +465,12 @@ impl ServerlessRuntime {
 mod tests {
     use super::*;
 
+    use crate::test_utils::random_vector;
+
     fn make_runtime() -> ServerlessRuntime {
         let config = ServerlessConfig::default();
         let kv = Box::new(InMemoryKV::new());
         ServerlessRuntime::new(config, kv)
-    }
-
-    fn random_vector(dim: usize) -> Vec<f32> {
-        (0..dim).map(|i| (i as f32 * 0.1).sin()).collect()
     }
 
     #[test]

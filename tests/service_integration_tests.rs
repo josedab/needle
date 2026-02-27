@@ -15,9 +15,7 @@ use needle::{
     PitrServiceConfig, RecoveryTarget, TieredService, TieredServiceConfig,
 };
 
-fn random_vector(dim: usize) -> Vec<f32> {
-    common::random_vector(dim)
-}
+use common::random_vector;
 
 // ============================================================================
 // IngestionService tests

@@ -15,10 +15,7 @@ use needle::distance::DistanceFunction;
 use needle::metadata::Filter;
 use serde_json::json;
 
-/// Helper to create a random vector of given dimension
-fn random_vector(dim: usize) -> Vec<f32> {
-    common::random_vector(dim)
-}
+use common::random_vector;
 
 // ============================================================================
 // Database Lifecycle Tests

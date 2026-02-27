@@ -974,7 +974,6 @@ impl<B: StorageBackend> StorageBackend for CachedBackend<B> {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use std::collections::HashMap;

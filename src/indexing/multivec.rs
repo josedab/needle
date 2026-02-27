@@ -1,4 +1,3 @@
-#![allow(clippy::unwrap_used)]
 //! Multi-Vector Support (ColBERT-style)
 //!
 //! Provides late interaction retrieval where documents are represented as
@@ -397,15 +396,7 @@ mod tests {
     use super::*;
 
     fn random_vector(dim: usize) -> Vec<f32> {
-        use rand::Rng;
-        let mut rng = rand::thread_rng();
-        let mut vec: Vec<f32> = (0..dim).map(|_| rng.gen::<f32>()).collect();
-        // Normalize
-        let norm: f32 = vec.iter().map(|x| x * x).sum::<f32>().sqrt();
-        for v in &mut vec {
-            *v /= norm;
-        }
-        vec
+        crate::test_utils::normalized_vector(dim)
     }
 
     #[test]
