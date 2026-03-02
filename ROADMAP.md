@@ -82,12 +82,12 @@ Needle is currently in **v0.1.x** (pre-1.0), focusing on API stabilization and c
 
 ### Performance
 - [ ] Improved SIMD support (AVX-512)
-- [ ] GPU acceleration improvements
+- [x] GPU acceleration scaffolding (CUDA/Metal/OpenCL — `src/experimental/gpu/`, CPU fallback)
 - [ ] Query planning and optimization
 - [ ] Connection pooling for server mode
 
 ### Features
-- [ ] GraphQL API option
+- [x] GraphQL API option (`src/search/graphql_api.rs`)
 - [ ] Improved streaming and pagination
 - [ ] Custom distance function plugins
 - [ ] Vector compression improvements
@@ -105,7 +105,7 @@ Needle is currently in **v0.1.x** (pre-1.0), focusing on API stabilization and c
 - [ ] Production deployment guides
 
 ### Enterprise Readiness
-- [ ] SOC 2 compliance documentation
+- [x] SOC 2 compliance toolkit (`src/services/governance/compliance.rs`)
 - [ ] High availability deployment patterns
 - [ ] Disaster recovery documentation
 - [ ] Performance SLA guidelines
@@ -114,8 +114,8 @@ Needle is currently in **v0.1.x** (pre-1.0), focusing on API stabilization and c
 
 These items are under consideration but not yet planned:
 
-- **Vector Streaming**: Real-time vector ingestion from message queues
-- **Federated Search**: Cross-instance search coordination
+- **Vector Streaming**: ~~Real-time vector ingestion from message queues~~ Implemented (`src/experimental/vector_streaming/`)
+- **Federated Search**: ~~Cross-instance search coordination~~ Implemented (`src/search/federated/`)
 - **Vector Compression Research**: New quantization techniques
 - **Hardware Acceleration**: TPU/specialized hardware support
 - **Managed Service**: Cloud-hosted Needle offering
