@@ -1,6 +1,6 @@
 # Python SDK
 
-> **Canonical documentation**: [python/README.md](../python/README.md) — the Python SDK README is the most complete and up-to-date reference.
+> **Canonical documentation**: [python/README.md](../python/README.md) — the Python SDK README is the most complete and up-to-date reference. This page provides a quick-start summary; see the canonical docs for package structure, development setup, and full details.
 
 ## Installation
 

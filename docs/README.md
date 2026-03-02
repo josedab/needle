@@ -122,7 +122,7 @@ For more examples, see [How-To Guides](how-to-guides.md).
 
 | Document | Description |
 |----------|-------------|
-| [Architecture Decision Records](adr/) | Design decisions and rationale |
+| [Architecture Decision Records](adr/README.md) | ADR index with reading order and design decisions |
 | [Governance](GOVERNANCE.md) | Project governance model and decision-making process |
 | [Support](SUPPORT.md) | How to get help, report bugs, and request features |
 | [Test Coverage TODOs](TODO-test-coverage.md) | Consolidated test coverage gaps and priorities |
