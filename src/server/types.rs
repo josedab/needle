@@ -69,6 +69,7 @@ impl From<NeedleError> for (StatusCode, Json<ApiError>) {
 
 // ============ Request/Response Types ============
 
+/// Request body for creating a new vector collection.
 #[derive(Debug, Deserialize)]
 pub struct CreateCollectionRequest {
     pub name: String,
@@ -81,6 +82,7 @@ pub struct CreateCollectionRequest {
     pub ef_construction: Option<usize>,
 }
 
+/// Summary information about a collection.
 #[derive(Debug, Serialize)]
 pub struct CollectionInfo {
     pub name: String,
@@ -89,6 +91,7 @@ pub struct CollectionInfo {
     pub deleted_count: usize,
 }
 
+/// Request body for inserting a single vector into a collection.
 #[derive(Debug, Deserialize)]
 pub struct InsertRequest {
     pub id: String,
@@ -100,11 +103,13 @@ pub struct InsertRequest {
     pub ttl_seconds: Option<u64>,
 }
 
+/// Request body for inserting multiple vectors in a single batch.
 #[derive(Debug, Deserialize)]
 pub struct BatchInsertRequest {
     pub vectors: Vec<InsertRequest>,
 }
 
+/// Request body for upserting (insert or update) a single vector.
 #[derive(Debug, Deserialize)]
 pub struct UpsertRequest {
     pub id: String,
@@ -116,6 +121,7 @@ pub struct UpsertRequest {
     pub ttl_seconds: Option<u64>,
 }
 
+/// Request body for approximate nearest neighbor search.
 #[derive(Debug, Deserialize)]
 pub struct SearchRequest {
     pub vector: Vec<f32>,
@@ -149,6 +155,7 @@ fn default_post_filter_factor() -> usize {
     3
 }
 
+/// Response body for a search operation, containing ranked results and optional explanation.
 #[derive(Debug, Serialize)]
 pub struct SearchResponse {
     pub results: Vec<SearchResultResponse>,
@@ -156,6 +163,7 @@ pub struct SearchResponse {
     pub explanation: Option<SearchExplanation>,
 }
 
+/// A single search result with distance, score, and optional metadata/vector.
 #[derive(Debug, Serialize)]
 pub struct SearchResultResponse {
     pub id: String,
@@ -167,6 +175,7 @@ pub struct SearchResultResponse {
     pub vector: Option<Vec<f32>>,
 }
 
+/// Detailed explanation of how a search was executed, including profiling data.
 #[derive(Debug, Serialize)]
 pub struct SearchExplanation {
     pub query_norm: f32,
@@ -177,6 +186,7 @@ pub struct SearchExplanation {
     pub profiling: Option<ProfilingData>,
 }
 
+/// Timing and candidate-count profiling data for a search operation.
 #[derive(Debug, Serialize)]
 pub struct ProfilingData {
     /// Total search time in microseconds
@@ -207,6 +217,7 @@ pub struct ProfilingData {
     pub filter_applied: bool,
 }
 
+/// HNSW-specific statistics collected during a search traversal.
 #[derive(Debug, Serialize)]
 pub struct HnswStatsResponse {
     /// Number of nodes visited during the search
@@ -219,6 +230,7 @@ pub struct HnswStatsResponse {
     pub traversal_time_us: u64,
 }
 
+/// Contribution of a single dimension to the query vector norm.
 #[derive(Debug, Serialize)]
 pub struct DimensionContribution {
     pub dimension: usize,
@@ -226,6 +238,7 @@ pub struct DimensionContribution {
     pub contribution: f32,
 }
 
+/// Request body for searching multiple vectors in a single batch.
 #[derive(Debug, Deserialize)]
 pub struct BatchSearchRequest {
     pub vectors: Vec<Vec<f32>>,
@@ -257,6 +270,7 @@ fn default_radius_limit() -> usize {
     1000
 }
 
+/// Response body for a single vector retrieval.
 #[derive(Debug, Serialize)]
 pub struct VectorResponse {
     pub id: String,
@@ -264,11 +278,13 @@ pub struct VectorResponse {
     pub metadata: Option<Value>,
 }
 
+/// Request body for updating a vector's metadata.
 #[derive(Debug, Deserialize)]
 pub struct UpdateMetadataRequest {
     pub metadata: Option<Value>,
 }
 
+/// Query string parameters for paginated list endpoints.
 #[derive(Debug, Deserialize)]
 pub struct QueryParams {
     #[serde(default)]
@@ -279,23 +295,27 @@ pub struct QueryParams {
 
 // ============ Alias Request/Response Types ============
 
+/// Request body for creating a collection alias.
 #[derive(Debug, Deserialize)]
 pub struct CreateAliasRequest {
     pub alias: String,
     pub collection: String,
 }
 
+/// Request body for updating an alias to point to a different collection.
 #[derive(Debug, Deserialize)]
 pub struct UpdateAliasRequest {
     pub collection: String,
 }
 
+/// Summary information about a collection alias.
 #[derive(Debug, Serialize)]
 pub struct AliasInfo {
     pub alias: String,
     pub collection: String,
 }
 
+/// Request body for creating a collection snapshot.
 #[derive(Deserialize)]
 pub struct SnapshotRequest {
     pub name: String,
@@ -411,6 +431,7 @@ pub struct StreamingInsertRequest {
     pub flush: bool,
 }
 
+/// A single vector in a streaming batch insert.
 #[derive(Deserialize)]
 pub struct StreamingVector {
     pub id: String,
