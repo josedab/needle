@@ -1159,6 +1159,95 @@ impl std::fmt::Display for IngestionStatus {
 }
 
 // ============================================================================
+// Prometheus Metrics (feature: metrics)
+// ============================================================================
+
+/// Register ingestion pipeline counters with a Prometheus registry.
+///
+/// Call this at startup to expose ingestion metrics alongside other Needle metrics.
+#[cfg(feature = "metrics")]
+pub fn register_ingestion_metrics(
+    registry: &prometheus::Registry,
+) -> std::result::Result<IngestPrometheusCounters, prometheus::Error> {
+    let ingested = prometheus::IntCounter::new(
+        "needle_ingestion_vectors_total",
+        "Total vectors successfully ingested via streaming pipeline",
+    )?;
+    let failed = prometheus::IntCounter::new(
+        "needle_ingestion_vectors_failed_total",
+        "Total vectors that failed during ingestion",
+    )?;
+    let skipped = prometheus::IntCounter::new(
+        "needle_ingestion_vectors_skipped_total",
+        "Total vectors skipped (duplicates) during ingestion",
+    )?;
+    let batches = prometheus::IntCounter::new(
+        "needle_ingestion_batches_total",
+        "Total batches processed by ingestion pipeline",
+    )?;
+    let backpressure = prometheus::IntCounter::new(
+        "needle_ingestion_backpressure_events_total",
+        "Total backpressure events during ingestion",
+    )?;
+    let bytes = prometheus::IntCounter::new(
+        "needle_ingestion_bytes_total",
+        "Total bytes ingested via streaming pipeline",
+    )?;
+
+    registry.register(Box::new(ingested.clone()))?;
+    registry.register(Box::new(failed.clone()))?;
+    registry.register(Box::new(skipped.clone()))?;
+    registry.register(Box::new(batches.clone()))?;
+    registry.register(Box::new(backpressure.clone()))?;
+    registry.register(Box::new(bytes.clone()))?;
+
+    Ok(IngestPrometheusCounters {
+        ingested,
+        failed,
+        skipped,
+        batches,
+        backpressure,
+        bytes,
+    })
+}
+
+/// Prometheus counters for the ingestion pipeline.
+#[cfg(feature = "metrics")]
+pub struct IngestPrometheusCounters {
+    /// vectors successfully ingested
+    pub ingested: prometheus::IntCounter,
+    /// vectors that failed
+    pub failed: prometheus::IntCounter,
+    /// vectors skipped (duplicates)
+    pub skipped: prometheus::IntCounter,
+    /// batches processed
+    pub batches: prometheus::IntCounter,
+    /// backpressure events
+    pub backpressure: prometheus::IntCounter,
+    /// bytes ingested
+    pub bytes: prometheus::IntCounter,
+}
+
+#[cfg(feature = "metrics")]
+impl IngestPrometheusCounters {
+    /// Sync from atomic counters in `IngestionMetrics`.
+    pub fn sync_from(&self, m: &IngestionMetrics) {
+        let ingested = m.vectors_ingested_total.load(Ordering::Relaxed);
+        let _ = self.ingested.inc_by(ingested.saturating_sub(self.ingested.get() as u64));
+        let failed = m.vectors_failed_total.load(Ordering::Relaxed);
+        let _ = self.failed.inc_by(failed.saturating_sub(self.failed.get() as u64));
+        let skipped = m.vectors_skipped_total.load(Ordering::Relaxed);
+        let _ = self.skipped.inc_by(skipped.saturating_sub(self.skipped.get() as u64));
+        let batches = m.batches_processed_total.load(Ordering::Relaxed);
+        let _ = self.batches.inc_by(batches.saturating_sub(self.batches.get() as u64));
+        let bp = m.backpressure_events_total.load(Ordering::Relaxed);
+        let _ = self.backpressure.inc_by(bp.saturating_sub(self.backpressure.get() as u64));
+        let bytes = m.bytes_ingested_total.load(Ordering::Relaxed);
+        let _ = self.bytes.inc_by(bytes.saturating_sub(self.bytes.get() as u64));
+    }
+}
+
+// ============================================================================
 // Tests
 // ============================================================================
 
