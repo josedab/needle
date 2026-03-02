@@ -981,6 +981,125 @@ impl QueryVectorCache {
     pub fn len(&self) -> usize { self.entries.len() }
 }
 
+// ============================================================================
+// Bloom Filter for Cache Invalidation
+// ============================================================================
+
+/// A simple bloom filter for tracking which vector IDs have been involved in
+/// mutations, enabling targeted cache invalidation instead of full wipes.
+pub struct BloomFilterInvalidator {
+    /// Bit array for the bloom filter.
+    bits: Vec<u64>,
+    /// Number of hash functions to use.
+    num_hashes: usize,
+    /// Total bits in the filter.
+    num_bits: usize,
+    /// Count of IDs added since last reset.
+    count: usize,
+}
+
+impl BloomFilterInvalidator {
+    /// Create a new bloom filter with the given capacity (expected number of unique IDs).
+    pub fn new(expected_items: usize) -> Self {
+        // ~1% false positive rate: bits = -n * ln(p) / (ln(2))^2
+        let num_bits = ((expected_items as f64 * 10.0).max(64.0)) as usize;
+        let num_words = (num_bits + 63) / 64;
+        let num_hashes = 7; // ~optimal for 1% FPR
+        Self {
+            bits: vec![0u64; num_words],
+            num_hashes,
+            num_bits: num_words * 64,
+            count: 0,
+        }
+    }
+
+    /// Record that a vector ID was mutated (inserted, deleted, or updated).
+    pub fn record_mutation(&mut self, vector_id: &str) {
+        for i in 0..self.num_hashes {
+            let hash = self.hash(vector_id, i);
+            let idx = hash % self.num_bits;
+            self.bits[idx / 64] |= 1u64 << (idx % 64);
+        }
+        self.count += 1;
+    }
+
+    /// Check if a vector ID *might* have been mutated (may return false positives).
+    pub fn might_be_mutated(&self, vector_id: &str) -> bool {
+        for i in 0..self.num_hashes {
+            let hash = self.hash(vector_id, i);
+            let idx = hash % self.num_bits;
+            if self.bits[idx / 64] & (1u64 << (idx % 64)) == 0 {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// Reset the filter (e.g., after a full cache invalidation cycle).
+    pub fn reset(&mut self) {
+        for word in &mut self.bits {
+            *word = 0;
+        }
+        self.count = 0;
+    }
+
+    /// Number of IDs recorded since last reset.
+    pub fn mutation_count(&self) -> usize {
+        self.count
+    }
+
+    fn hash(&self, key: &str, seed: usize) -> usize {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+        let mut hasher = DefaultHasher::new();
+        key.hash(&mut hasher);
+        seed.hash(&mut hasher);
+        hasher.finish() as usize
+    }
+}
+
+// ============================================================================
+// Prometheus Counters (feature: metrics)
+// ============================================================================
+
+/// Register semantic cache counters with a Prometheus registry.
+#[cfg(feature = "metrics")]
+pub fn register_cache_metrics(
+    registry: &prometheus::Registry,
+) -> std::result::Result<CachePrometheusCounters, prometheus::Error> {
+    let hits = prometheus::IntCounter::new(
+        "needle_semantic_cache_hits_total",
+        "Total semantic cache hits",
+    )?;
+    let misses = prometheus::IntCounter::new(
+        "needle_semantic_cache_misses_total",
+        "Total semantic cache misses",
+    )?;
+    registry.register(Box::new(hits.clone()))?;
+    registry.register(Box::new(misses.clone()))?;
+    Ok(CachePrometheusCounters { hits, misses })
+}
+
+/// Prometheus counters for the semantic cache.
+#[cfg(feature = "metrics")]
+pub struct CachePrometheusCounters {
+    /// Cache hits.
+    pub hits: prometheus::IntCounter,
+    /// Cache misses.
+    pub misses: prometheus::IntCounter,
+}
+
+#[cfg(feature = "metrics")]
+impl CachePrometheusCounters {
+    /// Sync from a `QueryVectorCacheStats`.
+    pub fn sync_from(&self, stats: &QueryVectorCacheStats) {
+        let h = stats.hits;
+        let _ = self.hits.inc_by(h.saturating_sub(self.hits.get() as u64));
+        let m = stats.misses;
+        let _ = self.misses.inc_by(m.saturating_sub(self.misses.get() as u64));
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
