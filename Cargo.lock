@@ -3883,7 +3883,7 @@ dependencies = [
  "hkdf",
  "hmac",
  "js-sys",
- "lru 0.12.5",
+ "lru 0.16.3",
  "memmap2",
  "metal",
  "mongodb",
