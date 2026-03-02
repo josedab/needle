@@ -298,6 +298,7 @@ helm uninstall needle
 | `NEEDLE_DATABASE` | Database filename within data directory | `needle.db` |
 | `RUST_LOG` | Log level (error, warn, info, debug, trace) | `info` |
 | `NEEDLE_ADDRESS` | Server bind address | `0.0.0.0:8080` |
+| `NEEDLE_ENCRYPTION_KEY` | Hex-encoded encryption key for encrypted collections (ChaCha20-Poly1305). **Security-critical** — use a secrets manager in production. | — |
 | `NEEDLE_METRICS_PORT` | Prometheus metrics port (used in Kubernetes deployments) | `9090` |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | OpenTelemetry OTLP collector endpoint | — |
 | `OTEL_SERVICE_NAME` | Service name for distributed traces | `needle` |
@@ -310,6 +311,9 @@ helm uninstall needle
 | `NEEDLE_DB_PATH` | Database file path (used in cloud deploy configs: GCP Cloud Run, AWS App Runner, Azure Container Instances) | `/data/vectors.needle` |
 | `NEEDLE_HOST` | Server bind host (used in cloud deploy configs) | `0.0.0.0` |
 | `NEEDLE_PORT` | Server bind port (used in cloud deploy configs) | `8080` |
+| `GOOGLE_APPLICATION_CREDENTIALS` | Path to GCP service account JSON key file (used by GCS cloud storage backend, requires `cloud-storage-gcs` feature) | — |
+| `XDG_CACHE_HOME` | Base directory for cached ONNX models and embedded model weights (falls back to `~/.cache`) | — |
+| `HOSTNAME` | Hostname included in telemetry/observability metadata (auto-detected if not set) | — |
 
 ### Embedding & Observability Configuration
 
