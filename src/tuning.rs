@@ -669,6 +669,152 @@ pub fn quick_recommend_index(vectors: usize, dimensions: usize) -> RecommendedIn
     recommend_index(&IndexSelectionConstraints::new(vectors, dimensions)).recommended
 }
 
+// ============================================================================
+// What-If Analysis for Index Advisor
+// ============================================================================
+
+/// Cost/benefit preview for a single index type under a given workload.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IndexCostPreview {
+    /// Index type being evaluated.
+    pub index_type: RecommendedIndex,
+    /// Estimated memory usage in bytes.
+    pub estimated_memory_bytes: usize,
+    /// Estimated average query latency in microseconds.
+    pub estimated_query_latency_us: f64,
+    /// Estimated index build time in seconds.
+    pub estimated_build_time_secs: f64,
+    /// Estimated recall at default parameters.
+    pub estimated_recall: f32,
+    /// Estimated queries per second.
+    pub estimated_qps: f64,
+    /// Whether data fits in the given memory budget.
+    pub fits_in_memory: bool,
+    /// Suitability score (0.0-1.0, higher is better).
+    pub suitability_score: f64,
+}
+
+/// Full what-if analysis comparing all index types for a workload.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WhatIfAnalysis {
+    /// Vector count used for analysis.
+    pub vector_count: usize,
+    /// Vector dimensionality.
+    pub dimensions: usize,
+    /// Available memory budget in bytes (if specified).
+    pub memory_budget: Option<usize>,
+    /// Cost previews for each index type.
+    pub previews: Vec<IndexCostPreview>,
+    /// Recommended index type.
+    pub recommended: RecommendedIndex,
+    /// Explanation of the recommendation.
+    pub explanation: Vec<String>,
+}
+
+/// Run a what-if analysis comparing all index types for a given workload.
+pub fn what_if_analysis(
+    vector_count: usize,
+    dimensions: usize,
+    memory_budget: Option<usize>,
+    current_avg_latency_us: Option<f64>,
+) -> WhatIfAnalysis {
+    let mut previews = Vec::new();
+    let mut explanation = Vec::new();
+
+    let index_types = [
+        RecommendedIndex::Hnsw,
+        RecommendedIndex::Ivf,
+        RecommendedIndex::DiskAnn,
+    ];
+
+    explanation.push(format!(
+        "Analyzing {} vectors × {} dimensions",
+        vector_count, dimensions
+    ));
+
+    for &idx in &index_types {
+        let memory = AdaptiveIndexManager::estimate_memory(idx, vector_count, dimensions);
+        let query_us = AdaptiveIndexManager::estimate_query_cost(idx, vector_count, dimensions);
+        let build_secs = AdaptiveIndexManager::estimate_build_cost(idx, vector_count, dimensions);
+        let fits = memory_budget.map_or(true, |budget| memory <= budget);
+
+        let estimated_recall = match idx {
+            RecommendedIndex::Hnsw => {
+                let r = auto_tune(&TuningConstraints::new(vector_count, dimensions));
+                r.estimated_recall
+            }
+            RecommendedIndex::Ivf => {
+                // IVF typically achieves ~90% recall at default nprobe
+                0.90_f32.min(0.95 - 0.02 * (vector_count as f32 / 1_000_000.0).min(1.0))
+            }
+            RecommendedIndex::DiskAnn => {
+                // DiskANN achieves high recall but with disk latency
+                0.93_f32.min(0.97 - 0.02 * (vector_count as f32 / 10_000_000.0).min(1.0))
+            }
+        };
+
+        let qps = if query_us > 0.0 { 1_000_000.0 / query_us } else { 0.0 };
+
+        // Suitability score: weighted combination of recall, latency, memory efficiency
+        let recall_score = estimated_recall as f64;
+        let latency_score = 1.0 / (1.0 + query_us / 1000.0);
+        let memory_score = if fits { 1.0 } else { 0.3 };
+        let suitability = recall_score * 0.4 + latency_score * 0.3 + memory_score * 0.3;
+
+        previews.push(IndexCostPreview {
+            index_type: idx,
+            estimated_memory_bytes: memory,
+            estimated_query_latency_us: query_us,
+            estimated_build_time_secs: build_secs,
+            estimated_recall,
+            estimated_qps: qps,
+            fits_in_memory: fits,
+            suitability_score: suitability,
+        });
+    }
+
+    // Sort by suitability, pick the best
+    previews.sort_by(|a, b| {
+        b.suitability_score
+            .partial_cmp(&a.suitability_score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    let recommended = previews[0].index_type;
+
+    if let Some(current_lat) = current_avg_latency_us {
+        let best_lat = previews[0].estimated_query_latency_us;
+        if best_lat < current_lat * 0.8 {
+            explanation.push(format!(
+                "Switching to {} could reduce latency by ~{:.0}%",
+                recommended,
+                (1.0 - best_lat / current_lat) * 100.0
+            ));
+        }
+    }
+
+    for p in &previews {
+        explanation.push(format!(
+            "{}: memory={:.1}MB, latency={:.0}μs, recall={:.1}%, QPS={:.0}, score={:.2}",
+            p.index_type,
+            p.estimated_memory_bytes as f64 / 1_048_576.0,
+            p.estimated_query_latency_us,
+            p.estimated_recall * 100.0,
+            p.estimated_qps,
+            p.suitability_score,
+        ));
+    }
+
+    WhatIfAnalysis {
+        vector_count,
+        dimensions,
+        memory_budget,
+        previews,
+        recommended,
+        explanation,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
