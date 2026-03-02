@@ -641,6 +641,164 @@ impl EmbeddingRuntime {
 }
 
 // ============================================================================
+// Built-in Hash Embedding Model (zero dependencies, feature: embedded-models)
+// ============================================================================
+
+/// Built-in embedding model that produces deterministic embeddings from text
+/// using a hash-based approach. Used as the default backend when external
+/// model runtimes (Candle, ONNX) are not available.
+///
+/// This is NOT a semantic embedding model — it produces consistent vectors
+/// for identical text but does not capture meaning. It's useful for:
+/// - Testing and development
+/// - Deduplication (exact-match)
+/// - Fallback when no ML runtime is configured
+#[cfg(feature = "embedded-models")]
+pub struct BuiltinHashEmbeddingModel {
+    model_id: String,
+    dimensions: usize,
+}
+
+#[cfg(feature = "embedded-models")]
+impl BuiltinHashEmbeddingModel {
+    /// Create a new hash-based embedding model.
+    pub fn new(model_id: &str, dimensions: usize) -> Self {
+        Self {
+            model_id: model_id.to_string(),
+            dimensions,
+        }
+    }
+}
+
+#[cfg(feature = "embedded-models")]
+impl EmbeddingModel for BuiltinHashEmbeddingModel {
+    fn model_id(&self) -> &str {
+        &self.model_id
+    }
+
+    fn dimensions(&self) -> usize {
+        self.dimensions
+    }
+
+    fn max_tokens(&self) -> usize {
+        512
+    }
+
+    fn embed(&self, text: &str) -> Result<Vec<f32>> {
+        if text.is_empty() {
+            return Err(NeedleError::InvalidVector("Cannot embed empty text".to_string()));
+        }
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+
+        let mut embedding = Vec::with_capacity(self.dimensions);
+        for i in 0..self.dimensions {
+            let mut hasher = DefaultHasher::new();
+            text.hash(&mut hasher);
+            i.hash(&mut hasher);
+            let h = hasher.finish();
+            embedding.push((h as f64 / u64::MAX as f64 * 2.0 - 1.0) as f32);
+        }
+
+        // L2 normalize
+        let norm: f32 = embedding.iter().map(|x| x * x).sum::<f32>().sqrt();
+        if norm > 0.0 {
+            for v in &mut embedding {
+                *v /= norm;
+            }
+        }
+
+        Ok(embedding)
+    }
+
+    fn metadata(&self) -> ModelMetadata {
+        ModelMetadata {
+            model_id: self.model_id.clone(),
+            dimensions: self.dimensions,
+            max_tokens: 512,
+            backend: "builtin-hash".to_string(),
+            quantization: None,
+            file_size_bytes: 0,
+        }
+    }
+}
+
+// ============================================================================
+// Model Download & Cache Management
+// ============================================================================
+
+/// Describes a downloadable model with HuggingFace Hub coordinates.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DownloadableModel {
+    /// Model identifier (e.g., "all-MiniLM-L6-v2").
+    pub model_id: String,
+    /// HuggingFace Hub repository (e.g., "sentence-transformers/all-MiniLM-L6-v2").
+    pub hf_repo: String,
+    /// Output dimensionality.
+    pub dimensions: usize,
+    /// Maximum sequence length.
+    pub max_tokens: usize,
+    /// File name for GGUF/safetensors weights.
+    pub weights_file: String,
+    /// Approximate file size in bytes.
+    pub file_size_bytes: u64,
+}
+
+/// List of well-known downloadable models.
+pub fn well_known_models() -> Vec<DownloadableModel> {
+    vec![
+        DownloadableModel {
+            model_id: "all-MiniLM-L6-v2".to_string(),
+            hf_repo: "sentence-transformers/all-MiniLM-L6-v2".to_string(),
+            dimensions: 384,
+            max_tokens: 256,
+            weights_file: "model.safetensors".to_string(),
+            file_size_bytes: 90_000_000,
+        },
+        DownloadableModel {
+            model_id: "bge-small-en-v1.5".to_string(),
+            hf_repo: "BAAI/bge-small-en-v1.5".to_string(),
+            dimensions: 384,
+            max_tokens: 512,
+            weights_file: "model.safetensors".to_string(),
+            file_size_bytes: 134_000_000,
+        },
+    ]
+}
+
+/// Check if a model is already cached locally.
+pub fn is_model_cached(model_id: &str, cache_dir: &std::path::Path) -> bool {
+    cache_dir.join(model_id).join("model.safetensors").exists()
+        || cache_dir.join(model_id).join("model.gguf").exists()
+}
+
+/// List locally cached models.
+pub fn list_cached_models(cache_dir: &std::path::Path) -> Vec<String> {
+    let mut models = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(cache_dir) {
+        for entry in entries.flatten() {
+            if entry.path().is_dir() {
+                if let Some(name) = entry.file_name().to_str() {
+                    models.push(name.to_string());
+                }
+            }
+        }
+    }
+    models
+}
+
+/// Remove a cached model.
+pub fn remove_cached_model(model_id: &str, cache_dir: &std::path::Path) -> Result<()> {
+    let model_dir = cache_dir.join(model_id);
+    if model_dir.exists() {
+        std::fs::remove_dir_all(&model_dir).map_err(|e| {
+            NeedleError::InvalidConfig(format!("Failed to remove model '{}': {}", model_id, e))
+        })?;
+    }
+    Ok(())
+}
+
+// ============================================================================
 // Tests
 // ============================================================================
 
