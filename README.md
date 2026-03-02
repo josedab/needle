@@ -530,6 +530,12 @@ echo '{"id":"doc1","vector":[0.1,0.2,0.3],"metadata":{"title":"Hello"}}' | ./tar
 # Search for similar vectors
 ./target/release/needle search mydata.needle -c documents -q "0.1,0.2,0.3" -k 10
 
+# Search with query profiling
+./target/release/needle search mydata.needle -c documents -q "0.1,0.2,0.3" -k 10 --explain
+
+# Search with a different distance function (uses brute-force when different from index)
+./target/release/needle search mydata.needle -c documents -q "0.1,0.2,0.3" -k 10 --distance euclidean
+
 # Delete a vector
 ./target/release/needle delete mydata.needle -c documents -i doc1
 
@@ -550,14 +556,14 @@ echo '{"id":"doc1","vector":[0.1,0.2,0.3],"metadata":{"title":"Hello"}}' | ./tar
 | Command | Description |
 |---------|-------------|
 | `create` | Create a new database file |
-| `create-collection` | Create a new collection with specified dimensions |
+| `create-collection` | Create a new collection with specified dimensions (`--distance` to set metric) |
 | `info` | Show database information |
 | `collections` | List all collections |
 | `stats` | Show collection statistics (including deleted vectors) |
 | `insert` | Insert vectors from stdin (JSON format, one per line) |
 | `get` | Retrieve a vector by ID |
-| `search` | Search for similar vectors |
-| `query` | Natural language query interface with analysis hints |
+| `search` | Search for similar vectors (`--explain` for profiling, `--distance` to override metric) |
+| `query` | Natural language query interface with analysis hints (`--analyze` for optimization hints) |
 | `delete` | Delete a vector by ID |
 | `export` | Export collection to JSON |
 | `import` | Import vectors from JSON file |
