@@ -857,6 +857,7 @@ specified in more than one place, the **highest-priority source wins**:
 | `NEEDLE_WAL_DIR` | WAL directory | `<db_path>.wal/` |
 | `NEEDLE_CHECKPOINT_INTERVAL` | WAL checkpoint frequency | `10000` |
 | `NEEDLE_METRICS_PORT` | Metrics endpoint port | `9090` |
+| `NEEDLE_ENCRYPTION_KEY` | Hex-encoded encryption key for encrypted collections (ChaCha20-Poly1305). **Security-critical** — store in a secrets manager, never in plain-text config files. | — |
 | `NEEDLE_EMBEDDING_PROVIDER` | Primary embedding provider (`openai`, `cohere`, `ollama`) | — |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | OpenTelemetry collector endpoint (e.g., `http://localhost:4317`) | — |
 
