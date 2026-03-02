@@ -176,6 +176,99 @@ impl SemanticDedupConfig {
     }
 }
 
+/// Configuration for multi-modal fusion search.
+///
+/// Defines named embedding spaces within a single collection, enabling
+/// cross-modal search with configurable fusion strategies.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModalFusionConfig {
+    /// Named embedding spaces: maps a modality name (e.g., "text", "image")
+    /// to its dimensionality.
+    pub embedding_spaces: Vec<EmbeddingSpace>,
+    /// Fusion strategy for combining scores across modalities.
+    pub fusion_strategy: FusionStrategyConfig,
+}
+
+/// A named embedding space within a collection.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EmbeddingSpace {
+    /// Modality name (e.g., "text", "image", "audio").
+    pub name: String,
+    /// Dimensionality of this embedding space.
+    pub dimensions: usize,
+    /// Distance function for this space.
+    pub distance: DistanceFunction,
+    /// Weight for fusion scoring (0.0-1.0).
+    pub weight: f32,
+}
+
+/// Fusion strategy configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum FusionStrategyConfig {
+    /// Late fusion: search each space independently, combine with RRF.
+    LateFusion {
+        /// RRF k parameter (default 60).
+        rrf_k: usize,
+    },
+    /// Early fusion: project all spaces into a shared space.
+    EarlyFusion {
+        /// Shared space dimensionality.
+        shared_dimensions: usize,
+    },
+    /// Hybrid: combine late and early fusion results.
+    Hybrid {
+        /// Weight for late fusion component (0.0-1.0).
+        late_weight: f32,
+        /// RRF k parameter for late fusion.
+        rrf_k: usize,
+    },
+}
+
+impl Default for FusionStrategyConfig {
+    fn default() -> Self {
+        Self::LateFusion { rrf_k: 60 }
+    }
+}
+
+impl Default for ModalFusionConfig {
+    fn default() -> Self {
+        Self {
+            embedding_spaces: vec![
+                EmbeddingSpace {
+                    name: "text".to_string(),
+                    dimensions: 384,
+                    distance: DistanceFunction::Cosine,
+                    weight: 1.0,
+                },
+            ],
+            fusion_strategy: FusionStrategyConfig::default(),
+        }
+    }
+}
+
+impl ModalFusionConfig {
+    /// Create a config with text+image embedding spaces.
+    pub fn text_image(text_dim: usize, image_dim: usize) -> Self {
+        Self {
+            embedding_spaces: vec![
+                EmbeddingSpace {
+                    name: "text".to_string(),
+                    dimensions: text_dim,
+                    distance: DistanceFunction::Cosine,
+                    weight: 0.6,
+                },
+                EmbeddingSpace {
+                    name: "image".to_string(),
+                    dimensions: image_dim,
+                    distance: DistanceFunction::Cosine,
+                    weight: 0.4,
+                },
+            ],
+            fusion_strategy: FusionStrategyConfig::LateFusion { rrf_k: 60 },
+        }
+    }
+}
+
 impl QueryCacheStats {
     /// Returns the cache hit ratio (0.0 to 1.0)
     pub fn hit_ratio(&self) -> f64 {
@@ -274,6 +367,9 @@ pub struct CollectionConfig {
     /// Semantic deduplication configuration
     #[serde(default)]
     pub dedup: Option<SemanticDedupConfig>,
+    /// Multi-modal fusion search configuration
+    #[serde(default)]
+    pub modal_fusion: Option<ModalFusionConfig>,
 }
 
 fn default_lazy_expiration() -> bool {
@@ -336,6 +432,7 @@ impl CollectionConfig {
             lazy_expiration: true,
             semantic_cache: None,
             dedup: None,
+            modal_fusion: None,
         }
     }
 
@@ -507,6 +604,13 @@ impl CollectionConfig {
     #[must_use]
     pub fn with_dedup(mut self, dedup: SemanticDedupConfig) -> Self {
         self.dedup = Some(dedup);
+        self
+    }
+
+    /// Set multi-modal fusion search configuration
+    #[must_use]
+    pub fn with_modal_fusion(mut self, config: ModalFusionConfig) -> Self {
+        self.modal_fusion = Some(config);
         self
     }
 }
