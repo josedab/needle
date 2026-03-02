@@ -169,6 +169,102 @@ impl Default for CdcLog {
     }
 }
 
+// ============================================================================
+// Consumer Offset Tracking
+// ============================================================================
+
+/// Tracks consumer offsets for resumable CDC consumption.
+///
+/// Each consumer is identified by a string name and stores the last
+/// successfully processed sequence number.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ConsumerOffsetTracker {
+    offsets: std::collections::HashMap<String, u64>,
+}
+
+impl ConsumerOffsetTracker {
+    /// Create a new empty tracker.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Record that a consumer has processed up to the given sequence.
+    pub fn commit(&mut self, consumer_id: &str, sequence: u64) {
+        self.offsets.insert(consumer_id.to_string(), sequence);
+    }
+
+    /// Get the last committed offset for a consumer (0 if unknown).
+    pub fn get_offset(&self, consumer_id: &str) -> u64 {
+        self.offsets.get(consumer_id).copied().unwrap_or(0)
+    }
+
+    /// Remove a consumer.
+    pub fn remove_consumer(&mut self, consumer_id: &str) {
+        self.offsets.remove(consumer_id);
+    }
+
+    /// List all registered consumers and their offsets.
+    pub fn list_consumers(&self) -> Vec<(String, u64)> {
+        self.offsets.iter().map(|(k, v)| (k.clone(), *v)).collect()
+    }
+}
+
+// ============================================================================
+// Webhook Delivery Configuration
+// ============================================================================
+
+/// Configuration for webhook-based CDC delivery.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WebhookDeliveryConfig {
+    /// Target URL for POST delivery.
+    pub url: String,
+    /// Maximum retry attempts for failed deliveries.
+    pub max_retries: u32,
+    /// Base delay between retries in milliseconds (exponential backoff).
+    pub retry_base_delay_ms: u64,
+    /// Maximum batch size per delivery.
+    pub batch_size: usize,
+    /// Optional secret for HMAC signing of payloads.
+    pub secret: Option<String>,
+    /// Whether delivery is active.
+    pub enabled: bool,
+}
+
+impl Default for WebhookDeliveryConfig {
+    fn default() -> Self {
+        Self {
+            url: String::new(),
+            max_retries: 3,
+            retry_base_delay_ms: 1000,
+            batch_size: 100,
+            secret: None,
+            enabled: false,
+        }
+    }
+}
+
+/// A pending webhook delivery batch.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WebhookBatch {
+    /// Events in this batch.
+    pub events: Vec<CdcEvent>,
+    /// Number of delivery attempts so far.
+    pub attempts: u32,
+    /// Timestamp of last attempt (unix epoch ms).
+    pub last_attempt_ms: u64,
+}
+
+/// Result of a webhook delivery attempt.
+#[derive(Debug, Clone)]
+pub enum WebhookDeliveryResult {
+    /// Successfully delivered.
+    Delivered { events_count: usize },
+    /// Failed, will retry.
+    RetryScheduled { attempt: u32, next_retry_ms: u64 },
+    /// Permanently failed (max retries exceeded).
+    PermanentlyFailed { reason: String },
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
