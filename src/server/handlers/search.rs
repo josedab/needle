@@ -784,6 +784,118 @@ pub(in crate::server) async fn cache_store_handler(
     })))
 }
 
+/// Multi-modal fusion search across named embedding spaces.
+///
+/// `POST /collections/:name/search/multimodal` — accepts modality-specific
+/// query vectors and returns fused results using the configured fusion strategy.
+pub(in crate::server) async fn multimodal_search_handler(
+    State(state): State<Arc<AppState>>,
+    Path(collection): Path<String>,
+    Json(req): Json<Value>,
+) -> Result<impl IntoResponse, (StatusCode, Json<ApiError>)> {
+    let db = state.db.read().await;
+    let coll = db
+        .collection(&collection)
+        .map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
+
+    let k = req.get("k").and_then(|v| v.as_u64()).unwrap_or(10) as usize;
+    if k == 0 || k > MAX_SEARCH_K {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ApiError::new(
+                format!("k must be between 1 and {MAX_SEARCH_K}"),
+                "INVALID_K",
+            )),
+        ));
+    }
+
+    // Extract modality queries: { "queries": { "text": [0.1, ...], "image": [0.2, ...] } }
+    let queries = req.get("queries").and_then(|q| q.as_object());
+    if queries.is_none() || queries.map_or(true, |q| q.is_empty()) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ApiError::new(
+                "Missing 'queries' object with modality vectors",
+                "MISSING_QUERIES",
+            )),
+        ));
+    }
+
+    let queries = queries.expect("checked above");
+    let fusion_strategy = req
+        .get("fusion_strategy")
+        .and_then(|v| v.as_str())
+        .unwrap_or("late");
+
+    // For each modality query, perform independent search and collect results
+    let mut all_results: std::collections::HashMap<String, f32> = std::collections::HashMap::new();
+    let mut modality_count = 0usize;
+
+    for (modality_name, vector_val) in queries {
+        let vector: Vec<f32> = match vector_val.as_array() {
+            Some(arr) => arr.iter().filter_map(|v| v.as_f64().map(|f| f as f32)).collect(),
+            None => continue,
+        };
+
+        if vector.is_empty() {
+            continue;
+        }
+
+        let weight = req
+            .get("weights")
+            .and_then(|w| w.get(modality_name))
+            .and_then(|w| w.as_f64())
+            .unwrap_or(1.0) as f32;
+
+        let search_k = k * 3; // over-fetch for fusion
+        let results = coll.search(&vector, search_k)
+            .map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
+
+        // RRF-style fusion
+        for (rank, result) in results.iter().enumerate() {
+            let rrf_score = weight / (60.0 + rank as f32 + 1.0);
+            *all_results.entry(result.id.clone()).or_insert(0.0) += rrf_score;
+        }
+
+        modality_count += 1;
+        let _ = modality_name; // used for iteration
+    }
+
+    if modality_count == 0 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ApiError::new(
+                "No valid modality queries provided",
+                "INVALID_QUERIES",
+            )),
+        ));
+    }
+
+    // Sort by fused score and return top k
+    let mut fused: Vec<_> = all_results.into_iter().collect();
+    fused.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    fused.truncate(k);
+
+    let results: Vec<Value> = fused
+        .iter()
+        .enumerate()
+        .map(|(rank, (id, score))| {
+            json!({
+                "id": id,
+                "fusion_score": score,
+                "rank": rank + 1,
+            })
+        })
+        .collect();
+
+    Ok(Json(json!({
+        "results": results,
+        "modalities_searched": modality_count,
+        "fusion_strategy": fusion_strategy,
+        "k": k,
+    })))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

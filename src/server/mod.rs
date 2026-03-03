@@ -467,6 +467,8 @@ pub fn create_router_with_config(state: Arc<AppState>, config: &ServerConfig) ->
         .route("/collections/:collection/search/graph", post(graph_search_handler))
         // Matryoshka two-phase search
         .route("/collections/:collection/search/matryoshka", post(matryoshka_search_handler))
+        // Multi-modal fusion search
+        .route("/collections/:collection/search/multimodal", post(multimodal_search_handler))
         // Semantic cache
         .route("/collections/:collection/cache/lookup", post(cache_lookup_handler))
         .route("/collections/:collection/cache/store", post(cache_store_handler))
@@ -488,6 +490,12 @@ pub fn create_router_with_config(state: Arc<AppState>, config: &ServerConfig) ->
         .route("/collections/:collection/changes/stream", get(change_stream_sse_handler))
         // In-process benchmark
         .route("/collections/:collection/benchmark", post(benchmark_handler))
+        // Index advisor with what-if analysis
+        .route("/collections/:collection/advise", get(advise_collection_handler))
+        // Dedup scan
+        .route("/collections/:collection/dedup/scan", post(dedup_scan_handler))
+        // Incremental sync delta
+        .route("/sync/delta", get(sync_delta_handler))
         // Index status (incremental index / WAL)
         .route("/collections/:collection/index/status", get(index_status_handler))
         // Cluster/shard topology

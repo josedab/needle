@@ -1004,6 +1004,51 @@ pub(in crate::server) async fn embedding_router_status_handler() -> impl IntoRes
     (StatusCode::NOT_IMPLEMENTED, Json(json!({ "error": "Requires 'experimental' feature" })))
 }
 
+/// Get incremental sync delta from a given LSN.
+///
+/// `GET /sync/delta?from=<lsn>&replica_id=<id>` — returns delta entries since the given LSN.
+pub(in crate::server) async fn sync_delta_handler(
+    State(state): State<Arc<AppState>>,
+    Query(params): Query<std::collections::HashMap<String, String>>,
+) -> Result<impl IntoResponse, (StatusCode, Json<ApiError>)> {
+    let from_lsn: u64 = params
+        .get("from")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0);
+
+    let replica_id = params
+        .get("replica_id")
+        .cloned()
+        .unwrap_or_else(|| "anonymous".to_string());
+
+    let db = state.db.read().await;
+    let collections = db.list_collections();
+
+    // Collect CDC events across all collections as sync entries
+    let mut entries = Vec::new();
+    for name in &collections {
+        if let Ok(coll) = db.collection(name) {
+            let events = coll.cdc_events_since(from_lsn, 10_000);
+            for event in events {
+                entries.push(json!({
+                    "collection": name,
+                    "sequence": event.sequence,
+                    "event_type": event.event_type,
+                    "vector_id": event.vector_id,
+                    "timestamp_ms": event.timestamp_ms,
+                }));
+            }
+        }
+    }
+
+    Ok(Json(json!({
+        "replica_id": replica_id,
+        "from_lsn": from_lsn,
+        "entry_count": entries.len(),
+        "entries": entries,
+    })))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

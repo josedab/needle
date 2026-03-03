@@ -434,6 +434,58 @@ pub(in crate::server) async fn ttl_stats_handler(
     })))
 }
 
+/// Get index advisor recommendations with what-if analysis.
+///
+/// `GET /collections/:name/advise` — returns cost/benefit preview for each index type.
+pub(in crate::server) async fn advise_collection_handler(
+    State(state): State<Arc<AppState>>,
+    Path(collection): Path<String>,
+) -> Result<impl IntoResponse, (StatusCode, Json<ApiError>)> {
+    use crate::tuning::what_if_analysis;
+
+    let db = state.db.read().await;
+    let coll = db
+        .collection(&collection)
+        .map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
+
+    let num_vectors = coll.len();
+    let dimensions = coll.dimensions().unwrap_or(0);
+
+    if num_vectors == 0 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ApiError::new(
+                "Collection is empty. Insert vectors first.",
+                "EMPTY_COLLECTION",
+            )),
+        ));
+    }
+
+    let analysis = what_if_analysis(num_vectors, dimensions, None, None);
+    Ok(Json(json!(analysis)))
+}
+
+/// Scan a collection for near-duplicate vectors.
+///
+/// `POST /collections/:name/dedup/scan` — accepts optional threshold override.
+/// Returns groups of duplicate vectors.
+pub(in crate::server) async fn dedup_scan_handler(
+    State(state): State<Arc<AppState>>,
+    Path(collection): Path<String>,
+    Json(req): Json<Value>,
+) -> Result<impl IntoResponse, (StatusCode, Json<ApiError>)> {
+    let db = state.db.read().await;
+    let coll = db
+        .collection(&collection)
+        .map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
+
+    let threshold = req.get("threshold").and_then(|v| v.as_f64()).map(|t| t as f32);
+
+    let result = coll.dedup_scan(threshold)
+        .map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
+    Ok(Json(json!(result)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
