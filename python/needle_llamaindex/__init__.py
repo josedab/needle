@@ -58,6 +58,7 @@ class NeedleVectorStoreIndex:
         collection_name: str = "llamaindex",
         dimensions: int = 384,
         distance: str = "cosine",
+        embed_model: Optional[Any] = None,
         **kwargs: Any,
     ) -> None:
         self._config = NeedleIndexConfig(
@@ -66,6 +67,22 @@ class NeedleVectorStoreIndex:
             distance=distance,
         )
         self._nodes: Dict[str, TextNode] = {}
+        self._embed_model = embed_model
+
+    @classmethod
+    def from_nodes(
+        cls,
+        nodes: List[TextNode],
+        collection_name: str = "llamaindex",
+        **kwargs: Any,
+    ) -> "NeedleVectorStoreIndex":
+        """Create an index from pre-embedded nodes."""
+        dims = 384
+        if nodes and nodes[0].embedding:
+            dims = len(nodes[0].embedding)
+        index = cls(collection_name=collection_name, dimensions=dims, **kwargs)
+        index.add(nodes)
+        return index
 
     def add(self, nodes: List[TextNode], **kwargs: Any) -> List[str]:
         """Add nodes to the index. Returns node IDs."""
@@ -107,6 +124,85 @@ class NeedleVectorStoreIndex:
     def get_by_id(self, node_id: str) -> Optional[TextNode]:
         """Get a node by ID."""
         return self._nodes.get(node_id)
+
+    def query_with_mmr(
+        self,
+        query_embedding: List[float],
+        similarity_top_k: int = 10,
+        mmr_threshold: float = 0.5,
+        fetch_k: int = 20,
+        filters: Optional[Dict[str, Any]] = None,
+        **kwargs: Any,
+    ) -> List[NodeWithScore]:
+        """Query with Maximal Marginal Relevance for diverse results.
+
+        Args:
+            query_embedding: Query vector.
+            similarity_top_k: Final number of results.
+            mmr_threshold: Balance relevance (1.0) vs diversity (0.0).
+            fetch_k: Candidates to fetch before MMR re-ranking.
+            filters: Optional metadata filters.
+        """
+        candidates = self.query(query_embedding, fetch_k, filters=filters)
+        if not candidates:
+            return []
+
+        selected: List[int] = []
+        for _ in range(min(similarity_top_k, len(candidates))):
+            best_idx = -1
+            best_score = float("-inf")
+            for i, nws in enumerate(candidates):
+                if i in selected or nws.node.embedding is None:
+                    continue
+                relevance = nws.score
+                max_sim = 0.0
+                for j in selected:
+                    other = candidates[j]
+                    if other.node.embedding is not None:
+                        sim = 1.0 - self._cosine_distance(nws.node.embedding, other.node.embedding)
+                        max_sim = max(max_sim, sim)
+                mmr_score = mmr_threshold * relevance - (1.0 - mmr_threshold) * max_sim
+                if mmr_score > best_score:
+                    best_score = mmr_score
+                    best_idx = i
+            if best_idx >= 0:
+                selected.append(best_idx)
+
+        return [candidates[i] for i in selected]
+
+    # ── Async interface ─────────────────────────────────────────────────
+
+    async def aadd(self, nodes: List[TextNode], **kwargs: Any) -> List[str]:
+        """Async version of add."""
+        return self.add(nodes, **kwargs)
+
+    async def adelete(self, ref_doc_id: str, **kwargs: Any) -> None:
+        """Async version of delete."""
+        self.delete(ref_doc_id, **kwargs)
+
+    async def aquery(
+        self,
+        query_embedding: List[float],
+        similarity_top_k: int = 10,
+        filters: Optional[Dict[str, Any]] = None,
+        **kwargs: Any,
+    ) -> List[NodeWithScore]:
+        """Async version of query."""
+        return self.query(query_embedding, similarity_top_k, filters=filters, **kwargs)
+
+    async def aquery_with_mmr(
+        self,
+        query_embedding: List[float],
+        similarity_top_k: int = 10,
+        mmr_threshold: float = 0.5,
+        fetch_k: int = 20,
+        **kwargs: Any,
+    ) -> List[NodeWithScore]:
+        """Async version of query_with_mmr."""
+        return self.query_with_mmr(
+            query_embedding, similarity_top_k, mmr_threshold=mmr_threshold,
+            fetch_k=fetch_k, **kwargs,
+        )
 
     @property
     def count(self) -> int:
