@@ -323,6 +323,8 @@ impl CollectionPrivacyPolicy {
 pub struct PrivacyPolicyRegistry {
     policies: HashMap<String, CollectionPrivacyPolicy>,
     budget: PrivacyBudget,
+    /// Tracks which sessions have queried each collection (for compliance reports).
+    collection_sessions: HashMap<String, std::collections::HashSet<String>>,
 }
 
 impl PrivacyPolicyRegistry {
@@ -388,7 +390,7 @@ impl PrivacyPolicyRegistry {
     ) -> Result<Vec<SearchResult>> {
         let policy = match self.policies.get(collection_name) {
             Some(p) => p.clone(),
-            None => return Ok(results), // No policy, return unchanged
+            None => return Ok(results),
         };
 
         if policy.enforced
@@ -410,12 +412,17 @@ impl PrivacyPolicyRegistry {
             policy.config.max_budget_per_session,
         );
 
+        // Track which sessions queried which collections
+        self.collection_sessions
+            .entry(collection_name.to_string())
+            .or_default()
+            .insert(session_id.to_string());
+
         let mechanism = PrivacyMechanism::new(policy.config.clone());
         let mut perturbed_results = results;
         for result in &mut perturbed_results {
             result.distance = mechanism.perturb_distance(result.distance, policy.config.sensitivity);
         }
-        // Re-sort by perturbed distance
         perturbed_results.sort_by(|a, b| {
             a.distance
                 .partial_cmp(&b.distance)
@@ -434,6 +441,145 @@ impl PrivacyPolicyRegistry {
     pub fn budget_mut(&mut self) -> &mut PrivacyBudget {
         &mut self.budget
     }
+
+    /// Generate a compliance report for all registered policies.
+    /// Only sessions that actually queried each collection are included.
+    pub fn compliance_report(&self) -> PrivacyComplianceReport {
+        let mut policy_summaries = Vec::new();
+        for (name, policy) in &self.policies {
+            let relevant_sessions = self.collection_sessions.get(name);
+            let all_sessions = self.budget.summary();
+            let collection_sessions: Vec<_> = all_sessions
+                .iter()
+                .filter(|(s, _)| {
+                    relevant_sessions.map_or(false, |rs| rs.contains(s))
+                })
+                .map(|(s, e)| SessionBudgetSummary {
+                    session_id: s.clone(),
+                    epsilon_consumed: *e,
+                    remaining: self.budget.remaining(s, policy.config.max_budget_per_session),
+                })
+                .collect();
+
+            policy_summaries.push(PolicyComplianceSummary {
+                collection_name: name.clone(),
+                epsilon: policy.config.epsilon,
+                delta: policy.config.delta,
+                mechanism: format!("{:?}", policy.config.mechanism),
+                sensitivity: policy.config.sensitivity,
+                max_budget: policy.config.max_budget_per_session,
+                enforced: policy.enforced,
+                composition: format!("{:?}", policy.composition),
+                sessions: collection_sessions,
+            });
+        }
+
+        PrivacyComplianceReport {
+            generated_at: chrono::Utc::now().to_rfc3339(),
+            total_queries: self.budget.total_queries(),
+            total_policies: self.policies.len(),
+            policies: policy_summaries,
+        }
+    }
+}
+
+/// Privacy compliance report for audit purposes.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PrivacyComplianceReport {
+    /// ISO 8601 timestamp of report generation.
+    pub generated_at: String,
+    /// Total queries processed across all sessions.
+    pub total_queries: u64,
+    /// Number of registered privacy policies.
+    pub total_policies: usize,
+    /// Per-policy compliance summaries.
+    pub policies: Vec<PolicyComplianceSummary>,
+}
+
+impl PrivacyComplianceReport {
+    /// Export report as JSON.
+    pub fn to_json(&self) -> String {
+        serde_json::to_string_pretty(self).unwrap_or_else(|_| "{}".to_string())
+    }
+
+    /// Export report as human-readable text.
+    pub fn to_text(&self) -> String {
+        let mut s = String::new();
+        s.push_str("═══ Privacy Compliance Report ═══\n");
+        s.push_str(&format!("Generated: {}\n", self.generated_at));
+        s.push_str(&format!("Total queries: {}\n", self.total_queries));
+        s.push_str(&format!("Policies: {}\n\n", self.total_policies));
+
+        for p in &self.policies {
+            s.push_str(&format!("Collection: {}\n", p.collection_name));
+            s.push_str(&format!("  ε={}, δ={}, mechanism={}\n", p.epsilon, p.delta, p.mechanism));
+            s.push_str(&format!("  sensitivity={}, max_budget={}, enforced={}\n",
+                               p.sensitivity, p.max_budget, p.enforced));
+            s.push_str(&format!("  composition={}\n", p.composition));
+            if !p.sessions.is_empty() {
+                s.push_str("  Sessions:\n");
+                for sess in &p.sessions {
+                    s.push_str(&format!("    {}: consumed={:.2}, remaining={:.2}\n",
+                                       sess.session_id, sess.epsilon_consumed, sess.remaining));
+                }
+            }
+            s.push('\n');
+        }
+        s
+    }
+}
+
+/// Per-policy compliance summary.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PolicyComplianceSummary {
+    /// Collection this policy applies to.
+    pub collection_name: String,
+    /// Epsilon parameter.
+    pub epsilon: f64,
+    /// Delta parameter.
+    pub delta: f64,
+    /// Noise mechanism used.
+    pub mechanism: String,
+    /// Distance sensitivity.
+    pub sensitivity: f64,
+    /// Maximum budget per session.
+    pub max_budget: f64,
+    /// Whether enforcement is active.
+    pub enforced: bool,
+    /// Composition theorem used.
+    pub composition: String,
+    /// Per-session budget usage.
+    pub sessions: Vec<SessionBudgetSummary>,
+}
+
+/// Budget summary for a single session.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionBudgetSummary {
+    /// Session identifier.
+    pub session_id: String,
+    /// Total epsilon consumed.
+    pub epsilon_consumed: f64,
+    /// Remaining budget.
+    pub remaining: f64,
+}
+
+/// Audit log entry for privacy-related operations.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PrivacyAuditEntry {
+    /// Timestamp of the operation.
+    pub timestamp: String,
+    /// Session ID.
+    pub session_id: String,
+    /// Collection name.
+    pub collection_name: String,
+    /// Operation type.
+    pub operation: String,
+    /// Epsilon consumed.
+    pub epsilon_consumed: f64,
+    /// Remaining budget after operation.
+    pub remaining_budget: f64,
+    /// Number of results returned.
+    pub result_count: usize,
 }
 
 #[cfg(test)]
@@ -565,5 +711,67 @@ mod tests {
         assert!(registry.apply_privacy("coll", "s1", results.clone()).is_ok());
         // Second query: would exceed budget (5.0 + 5.0 > 6.0)
         assert!(registry.apply_privacy("coll", "s1", results).is_err());
+    }
+
+    #[test]
+    fn test_compliance_report_generation() {
+        let mut registry = PrivacyPolicyRegistry::new();
+        let policy_docs = CollectionPrivacyPolicy::new(
+            "docs",
+            PrivacyConfig::new(1.0, 1e-5).with_max_budget(10.0),
+        );
+        let policy_images = CollectionPrivacyPolicy::new(
+            "images",
+            PrivacyConfig::new(2.0, 1e-5).with_max_budget(20.0),
+        );
+        registry.register(policy_docs);
+        registry.register(policy_images);
+
+        let results = vec![SearchResult {
+            id: "v1".to_string(),
+            distance: 0.5,
+            metadata: None,
+        }];
+        // user-1 queries docs, user-2 queries images
+        registry.apply_privacy("docs", "user-1", results.clone()).unwrap();
+        registry.apply_privacy("docs", "user-1", results.clone()).unwrap();
+        registry.apply_privacy("images", "user-2", results).unwrap();
+
+        let report = registry.compliance_report();
+        assert_eq!(report.total_queries, 3);
+        assert_eq!(report.total_policies, 2);
+
+        // Find each policy's report
+        let docs_report = report.policies.iter().find(|p| p.collection_name == "docs").unwrap();
+        let images_report = report.policies.iter().find(|p| p.collection_name == "images").unwrap();
+
+        // docs should only show user-1 (not user-2)
+        assert_eq!(docs_report.sessions.len(), 1);
+        assert_eq!(docs_report.sessions[0].session_id, "user-1");
+
+        // images should only show user-2 (not user-1)
+        assert_eq!(images_report.sessions.len(), 1);
+        assert_eq!(images_report.sessions[0].session_id, "user-2");
+
+        let text = report.to_text();
+        assert!(text.contains("Privacy Compliance Report"));
+        let json = report.to_json();
+        assert!(json.contains("total_queries"));
+    }
+
+    #[test]
+    fn test_privacy_audit_entry() {
+        let entry = PrivacyAuditEntry {
+            timestamp: "2025-01-01T00:00:00Z".to_string(),
+            session_id: "s1".to_string(),
+            collection_name: "docs".to_string(),
+            operation: "search".to_string(),
+            epsilon_consumed: 1.0,
+            remaining_budget: 9.0,
+            result_count: 5,
+        };
+        let json = serde_json::to_string(&entry).unwrap();
+        assert!(json.contains("s1"));
+        assert!(json.contains("search"));
     }
 }
