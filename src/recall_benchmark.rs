@@ -455,6 +455,129 @@ impl ComparisonReport {
 }
 
 // ============================================================================
+// ANN-Benchmarks Standard Datasets
+// ============================================================================
+
+/// Standard ANN-benchmarks dataset specification.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AnnDataset {
+    /// Dataset name (e.g., "sift-128-euclidean").
+    pub name: String,
+    /// Vector dimensions.
+    pub dimensions: usize,
+    /// Distance metric.
+    pub distance: DistanceFunction,
+    /// Number of base vectors.
+    pub num_vectors: usize,
+    /// Number of query vectors.
+    pub num_queries: usize,
+    /// HDF5 file URL for downloading.
+    pub url: String,
+}
+
+impl AnnDataset {
+    /// SIFT-1M: 128-dim, 1M vectors, Euclidean distance.
+    pub fn sift_1m() -> Self {
+        Self {
+            name: "sift-128-euclidean".to_string(),
+            dimensions: 128,
+            distance: DistanceFunction::Euclidean,
+            num_vectors: 1_000_000,
+            num_queries: 10_000,
+            url: "http://ann-benchmarks.com/sift-128-euclidean.hdf5".to_string(),
+        }
+    }
+
+    /// GloVe-200: 200-dim, ~1.2M vectors, Angular (Cosine) distance.
+    pub fn glove_200() -> Self {
+        Self {
+            name: "glove-200-angular".to_string(),
+            dimensions: 200,
+            distance: DistanceFunction::Cosine,
+            num_vectors: 1_183_514,
+            num_queries: 10_000,
+            url: "http://ann-benchmarks.com/glove-200-angular.hdf5".to_string(),
+        }
+    }
+
+    /// GIST-960: 960-dim, 1M vectors, Euclidean distance.
+    pub fn gist_960() -> Self {
+        Self {
+            name: "gist-960-euclidean".to_string(),
+            dimensions: 960,
+            distance: DistanceFunction::Euclidean,
+            num_vectors: 1_000_000,
+            num_queries: 1_000,
+            url: "http://ann-benchmarks.com/gist-960-euclidean.hdf5".to_string(),
+        }
+    }
+
+    /// All standard ANN-benchmark datasets.
+    pub fn all_standard() -> Vec<Self> {
+        vec![Self::sift_1m(), Self::glove_200(), Self::gist_960()]
+    }
+}
+
+/// Result of running an ANN-benchmarks-style evaluation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AnnBenchmarkResult {
+    /// Dataset used.
+    pub dataset: String,
+    /// Algorithm name (e.g., "needle-hnsw").
+    pub algorithm: String,
+    /// Parameters used (for Pareto curve).
+    pub parameters: std::collections::HashMap<String, String>,
+    /// Recall@10 (standard metric).
+    pub recall_at_10: f64,
+    /// Queries per second.
+    pub qps: f64,
+    /// Index build time in seconds.
+    pub build_time_seconds: f64,
+    /// Peak memory usage in bytes.
+    pub memory_bytes: usize,
+}
+
+impl AnnBenchmarkResult {
+    /// Format as ann-benchmarks.com compatible JSON output.
+    pub fn to_ann_benchmarks_json(&self) -> String {
+        serde_json::to_string_pretty(self).unwrap_or_else(|_| "{}".to_string())
+    }
+}
+
+/// Run a standardized ANN-benchmark evaluation using synthetic data
+/// matching dataset dimensions and distance metric.
+pub fn run_ann_benchmark(dataset: &AnnDataset, ef_search_values: &[usize]) -> Vec<AnnBenchmarkResult> {
+    let config = BenchmarkConfig {
+        num_vectors: dataset.num_vectors.min(10_000), // Cap for synthetic test
+        dimensions: dataset.dimensions,
+        num_queries: dataset.num_queries.min(100),
+        k_values: vec![10],
+        distance: dataset.distance.clone(),
+        ef_search_values: ef_search_values.to_vec(),
+        seed: 42,
+    };
+
+    let report = run_recall_benchmark(&config);
+    report
+        .metrics
+        .iter()
+        .map(|m| {
+            let mut params = std::collections::HashMap::new();
+            params.insert("ef_search".to_string(), m.ef_search.to_string());
+            AnnBenchmarkResult {
+                dataset: dataset.name.clone(),
+                algorithm: "needle-hnsw".to_string(),
+                parameters: params,
+                recall_at_10: m.recall,
+                qps: m.qps,
+                build_time_seconds: report.build_time_ms as f64 / 1000.0,
+                memory_bytes: report.memory_estimate_bytes,
+            }
+        })
+        .collect()
+}
+
+// ============================================================================
 // Tests
 // ============================================================================
 
@@ -593,5 +716,36 @@ mod tests {
         assert!(summary.contains("Benchmark Comparison"));
         let md = comparison.to_markdown();
         assert!(md.contains("# Benchmark Comparison"));
+    }
+
+    #[test]
+    fn test_ann_dataset_definitions() {
+        let sift = AnnDataset::sift_1m();
+        assert_eq!(sift.dimensions, 128);
+        assert_eq!(sift.num_vectors, 1_000_000);
+
+        let glove = AnnDataset::glove_200();
+        assert_eq!(glove.dimensions, 200);
+
+        let gist = AnnDataset::gist_960();
+        assert_eq!(gist.dimensions, 960);
+
+        let all = AnnDataset::all_standard();
+        assert_eq!(all.len(), 3);
+    }
+
+    #[test]
+    fn test_ann_benchmark_run() {
+        let mut dataset = AnnDataset::sift_1m();
+        dataset.num_vectors = 100; // tiny for test
+        dataset.num_queries = 10;
+
+        let results = run_ann_benchmark(&dataset, &[50]);
+        assert!(!results.is_empty());
+        assert!(results[0].recall_at_10 > 0.0);
+        assert!(results[0].qps > 0.0);
+
+        let json = results[0].to_ann_benchmarks_json();
+        assert!(json.contains("needle-hnsw"));
     }
 }
