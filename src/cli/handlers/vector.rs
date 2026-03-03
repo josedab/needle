@@ -63,6 +63,8 @@ pub fn search_command(
     k: usize,
     explain: bool,
     distance_override: Option<&str>,
+    max_age: Option<u64>,
+    truncate_dims: Option<usize>,
 ) -> Result<()> {
     let db = Database::open(path)?;
     let coll = db.collection(collection_name)?;
@@ -128,15 +130,32 @@ pub fn search_command(
         println!("  ef_search: {}", explain_data.ef_search);
         println!("  Distance function: {}", explain_data.distance_function);
     } else {
-        let results = if let Some(dist) = distance_fn {
-            coll.search_with_options(&query, k, Some(dist), None, None, 3)?
-        } else {
-            coll.search(&query, k)?
-        };
+        // Build a SearchParams query with all configured options
+        let mut search = coll.query(&query).limit(k);
+
+        if let Some(dist) = distance_fn {
+            search = search.distance(dist);
+        }
+        if let Some(dims) = truncate_dims {
+            search = search.with_dimensions(dims);
+        }
+        if let Some(age) = max_age {
+            search = search.with_time_decay(
+                needle::collection::pipeline::TimeDecay::Step { window_seconds: age }
+            );
+        }
+
+        let results = search.execute()?;
 
         println!("Search results (k={}):", k);
-        if let Some(dist) = distance_fn {
-            println!("  (using distance override: {:?})", dist);
+        if distance_override.is_some() {
+            println!("  (using distance override: {:?})", distance_fn);
+        }
+        if truncate_dims.is_some() {
+            println!("  (using Matryoshka truncation to {} dims)", truncate_dims.expect("checked"));
+        }
+        if max_age.is_some() {
+            println!("  (using max_age filter: {}s)", max_age.expect("checked"));
         }
         for result in results {
             let meta = result

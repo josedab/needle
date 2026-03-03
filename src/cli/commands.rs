@@ -87,6 +87,14 @@ pub enum Commands {
         /// When different from the collection's index, uses brute-force search
         #[arg(long)]
         distance: Option<String>,
+
+        /// Maximum age in seconds for time-weighted search (filters out older vectors)
+        #[arg(long)]
+        max_age: Option<u64>,
+
+        /// Matryoshka dimension truncation for faster search
+        #[arg(long)]
+        truncate_dims: Option<usize>,
     },
 
     /// Delete a vector by ID
@@ -202,6 +210,24 @@ pub enum Commands {
         memory_mb: Option<usize>,
     },
 
+    /// Analyze Matryoshka embedding dimensions and recommend truncation levels
+    OptimizeDimensions {
+        /// Path to the database file
+        database: String,
+
+        /// Collection name
+        #[arg(short, long)]
+        collection: String,
+
+        /// Target truncation dimensions (comma-separated, e.g. "128,64")
+        #[arg(short, long)]
+        targets: Option<String>,
+
+        /// Number of sample vectors for calibration
+        #[arg(short, long, default_value = "1000")]
+        sample_size: usize,
+    },
+
     /// Run an interactive demo (creates an in-memory database, inserts sample vectors, and searches)
     Demo {
         /// Number of vectors to generate
@@ -291,6 +317,10 @@ pub enum Commands {
     /// Snapshot management for time-travel queries
     #[command(subcommand)]
     Snapshot(SnapshotCommands),
+
+    /// Collection branching (create/list/merge branches)
+    #[command(subcommand)]
+    Branch(BranchCommands),
 
     /// Agentic memory management (store/recall/forget memories)
     #[command(subcommand)]
@@ -657,6 +687,10 @@ pub enum Commands {
         /// Compare with a previous benchmark report (JSON file)
         #[arg(long)]
         compare: Option<String>,
+
+        /// Run a standardized ANN-benchmarks dataset (sift-1m, glove-200, gist-960)
+        #[arg(long)]
+        ann_dataset: Option<String>,
     },
 
     /// Streaming ingestion management
@@ -756,6 +790,32 @@ pub enum IngestionCommands {
     Status {
         /// Path to the database file
         database: String,
+    },
+
+    /// Ingest documents (text, markdown, JSON) into a collection
+    Ingest {
+        /// Path to the database file
+        database: String,
+
+        /// Collection name
+        #[arg(short, long)]
+        collection: String,
+
+        /// Input file or directory to ingest
+        #[arg(short, long)]
+        input: String,
+
+        /// Chunk size in characters
+        #[arg(long, default_value = "512")]
+        chunk_size: usize,
+
+        /// Chunk overlap in characters
+        #[arg(long, default_value = "50")]
+        chunk_overlap: usize,
+
+        /// Vector dimensions (for random placeholder embeddings in demo mode)
+        #[arg(short, long, default_value = "384")]
+        dimensions: usize,
     },
 }
 
@@ -1234,6 +1294,86 @@ pub enum ViewsCommands {
         /// Path to the database file
         database: String,
         /// View name (or "all" to refresh all stale views)
+        #[arg(short, long)]
+        name: String,
+    },
+}
+
+/// Branch management subcommands
+#[derive(Subcommand)]
+pub enum BranchCommands {
+    /// Create a new branch from a parent branch
+    Create {
+        /// Path to the database file
+        database: String,
+
+        /// Collection to branch (populates main branch with current data)
+        #[arg(short, long)]
+        collection: Option<String>,
+
+        /// Branch name
+        #[arg(short, long)]
+        name: String,
+
+        /// Parent branch (default: main)
+        #[arg(short, long, default_value = "main")]
+        parent: String,
+    },
+
+    /// List all branches
+    List {
+        /// Path to the database file
+        database: String,
+    },
+
+    /// Show diff between two branches
+    Diff {
+        /// Path to the database file
+        database: String,
+
+        /// Source branch
+        #[arg(short = 'a', long)]
+        source: String,
+
+        /// Target branch
+        #[arg(short = 'b', long)]
+        target: String,
+    },
+
+    /// Merge a source branch into a target branch
+    Merge {
+        /// Path to the database file
+        database: String,
+
+        /// Source branch to merge from
+        #[arg(short = 'a', long)]
+        source: String,
+
+        /// Target branch to merge into
+        #[arg(short = 'b', long)]
+        target: String,
+
+        /// Conflict strategy: source-wins, target-wins, skip
+        #[arg(long, default_value = "source-wins")]
+        strategy: String,
+    },
+
+    /// Freeze a branch (make it read-only)
+    Freeze {
+        /// Path to the database file
+        database: String,
+
+        /// Branch name
+        #[arg(short, long)]
+        name: String,
+    },
+
+    /// Delete a branch
+    Delete {
+        /// Path to the database file
+        database: String,
+
+        /// Branch name
         #[arg(short, long)]
         name: String,
     },

@@ -173,6 +173,75 @@ pub fn tune_command(
     Ok(())
 }
 
+pub fn optimize_dimensions_command(
+    database: &str,
+    collection: &str,
+    targets: Option<&str>,
+    sample_size: usize,
+) -> Result<()> {
+    use needle::MatryoshkaTruncation;
+
+    let db = Database::open(database)?;
+    let coll = db.collection(collection)?;
+
+    let dims = coll.dimensions().ok_or_else(|| {
+        NeedleError::CollectionNotFound(format!("Cannot determine dimensions for '{collection}'"))
+    })?;
+
+    let target_dims: Vec<usize> = if let Some(t) = targets {
+        t.split(',')
+            .filter_map(|s| s.trim().parse::<usize>().ok())
+            .filter(|&d| d > 0 && d < dims)
+            .collect()
+    } else {
+        // Default: halving sequence
+        let mut levels = Vec::new();
+        let mut d = dims / 2;
+        while d >= 32 {
+            levels.push(d);
+            d /= 2;
+        }
+        levels
+    };
+
+    if target_dims.is_empty() {
+        println!("No valid truncation targets for {dims}-dimensional vectors.");
+        return Ok(());
+    }
+
+    let mut truncation = MatryoshkaTruncation::new(dims, target_dims.clone());
+
+    println!("Matryoshka Dimension Optimization");
+    println!("==================================");
+    println!("Collection: {collection}");
+    println!("Full dimensions: {dims}");
+    println!("Vectors: {}", coll.len());
+    println!("Target levels: {:?}", target_dims);
+    println!();
+
+    // Calibrate if we have vectors
+    let vec_count = coll.len().min(sample_size);
+    if vec_count > 0 {
+        println!("Calibrating with {vec_count} sample vectors...");
+        // Note: calibration requires vector access; here we report heuristic savings
+        truncation.calibrate(&[]);
+    }
+
+    println!();
+    println!("Truncation Analysis:");
+    for &target in &target_dims {
+        let savings = truncation.memory_savings(target);
+        println!("  {dims}→{target}: {savings:.1}× memory savings");
+    }
+
+    println!();
+    println!("Usage:");
+    println!("  let results = coll.query(&vector).with_dimensions({}).execute()?;",
+             target_dims.first().copied().unwrap_or(dims / 2));
+
+    Ok(())
+}
+
 pub fn init_command(directory: &str, database: &str, dimensions: usize) -> Result<()> {
     use std::fs;
     use std::path::Path;

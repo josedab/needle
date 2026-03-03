@@ -71,6 +71,8 @@ pub fn run(cli: Cli) -> Result<()> {
             k,
             explain,
             distance,
+            max_age,
+            truncate_dims,
         } => search_command(
             &database,
             &collection,
@@ -78,6 +80,8 @@ pub fn run(cli: Cli) -> Result<()> {
             k,
             explain,
             distance.as_deref(),
+            max_age,
+            truncate_dims,
         ),
         Commands::Delete {
             database,
@@ -116,6 +120,12 @@ pub fn run(cli: Cli) -> Result<()> {
             profile,
             memory_mb,
         } => tune_command(vectors, dimensions, &profile, memory_mb),
+        Commands::OptimizeDimensions {
+            database,
+            collection,
+            targets,
+            sample_size,
+        } => optimize_dimensions_command(&database, &collection, targets.as_deref(), sample_size),
         Commands::Demo { count, dimensions } => demo_command(count, dimensions),
         Commands::Query {
             database,
@@ -140,6 +150,7 @@ pub fn run(cli: Cli) -> Result<()> {
         Commands::Init { directory, database, dimensions } => init_command(&directory, &database, dimensions),
         Commands::Doctor => doctor_command(),
         Commands::Snapshot(cmd) => snapshot_command(cmd),
+        Commands::Branch(cmd) => branch_command(cmd),
         Commands::Memory(cmd) => memory_command(cmd),
         Commands::Diff { database, source, target, limit, threshold } =>
             diff_command(&database, &source, &target, limit, threshold),
@@ -179,8 +190,13 @@ pub fn run(cli: Cli) -> Result<()> {
             health_command(&database, &collection, &format),
         Commands::Playground { database } =>
             playground_command(database.as_deref()),
-        Commands::Bench { vectors, dimensions, queries, k_values, format, output, compare } =>
-            bench_command(vectors, dimensions, queries, &k_values, &format, output.as_deref(), compare.as_deref()),
+        Commands::Bench { vectors, dimensions, queries, k_values, format, output, compare, ann_dataset } => {
+            if let Some(dataset_name) = ann_dataset {
+                ann_bench_command(&dataset_name, &format, output.as_deref())
+            } else {
+                bench_command(vectors, dimensions, queries, &k_values, &format, output.as_deref(), compare.as_deref())
+            }
+        }
         Commands::Ingestion(cmd) => ingestion_command(cmd),
         Commands::Cache(cmd) => cache_command(cmd),
         Commands::Models(cmd) => models_command(cmd),

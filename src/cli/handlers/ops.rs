@@ -203,6 +203,123 @@ pub fn snapshot_command(cmd: SnapshotCommands) -> Result<()> {
 }
 
 // ============================================================================
+// Branch commands
+// ============================================================================
+
+pub fn branch_command(cmd: BranchCommands) -> Result<()> {
+    use needle::collection_branch::{BranchTree, MergeStrategy};
+
+    /// Load a BranchTree from the sidecar JSON file, or create a fresh one.
+    fn load_tree(db_path: &str) -> BranchTree {
+        let sidecar = format!("{}.branches.json", db_path);
+        std::fs::read_to_string(&sidecar)
+            .ok()
+            .and_then(|data| serde_json::from_str(&data).ok())
+            .unwrap_or_else(BranchTree::new)
+    }
+
+    /// Save a BranchTree to the sidecar JSON file.
+    fn save_tree(db_path: &str, tree: &BranchTree) -> Result<()> {
+        let sidecar = format!("{}.branches.json", db_path);
+        let data = serde_json::to_string_pretty(tree)
+            .map_err(|e| needle::NeedleError::InvalidConfig(format!("Failed to serialize branch tree: {e}")))?;
+        std::fs::write(&sidecar, data)
+            .map_err(|e| needle::NeedleError::InvalidConfig(format!("Failed to write branch file: {e}")))?;
+        Ok(())
+    }
+
+    match cmd {
+        BranchCommands::Create { database, collection, name, parent } => {
+            let db = Database::open(&database)?;
+            let mut tree = load_tree(&database);
+
+            // If a collection is specified and tree is fresh, snapshot its data
+            if let Some(coll_name) = &collection {
+                if tree.list_branches().len() <= 1 {
+                    let coll = db.collection(coll_name)?;
+                    let count = coll.len();
+                    // Use CollectionRef.create_branch which handles snapshot internally
+                    let snapped_tree = coll.create_branch(&name)?;
+                    tree = snapped_tree;
+                    save_tree(&database, &tree)?;
+                    println!("Snapshotted {} vectors from '{}' into main branch", count, coll_name);
+                    println!("Created branch '{}' from 'main'", name);
+                    return Ok(());
+                }
+            }
+
+            tree.create_branch(&name, &parent)?;
+            save_tree(&database, &tree)?;
+            println!("Created branch '{}' from '{}'", name, parent);
+            Ok(())
+        }
+        BranchCommands::List { database } => {
+            let _db = Database::open(&database)?;
+            let tree = load_tree(&database);
+            let branches = tree.list_branches();
+            println!("Branches:");
+            for info in &branches {
+                let frozen = if info.frozen { " (frozen)" } else { "" };
+                let parent = info.parent.as_deref().unwrap_or("(root)");
+                println!("  {} (parent: {}, changes: {}){}", info.name, parent, info.change_count, frozen);
+            }
+            Ok(())
+        }
+        BranchCommands::Diff { database, source, target } => {
+            let _db = Database::open(&database)?;
+            let tree = load_tree(&database);
+            let diff = tree.diff(&source, &target)?;
+            if diff.is_empty() {
+                println!("No differences between '{}' and '{}'", source, target);
+            } else {
+                println!("Diff: {} -> {} ({} changes)", source, target, diff.len());
+                for entry in &diff {
+                    match entry {
+                        needle::collection_branch::DiffEntry::Added { id } => println!("  + {}", id),
+                        needle::collection_branch::DiffEntry::Deleted { id } => println!("  - {}", id),
+                        needle::collection_branch::DiffEntry::Modified { id } => println!("  ~ {}", id),
+                    }
+                }
+            }
+            Ok(())
+        }
+        BranchCommands::Merge { database, source, target, strategy } => {
+            let _db = Database::open(&database)?;
+            let mut tree = load_tree(&database);
+            let merge_strategy = match strategy.to_lowercase().as_str() {
+                "target-wins" | "targetwins" => MergeStrategy::TargetWins,
+                "skip" => MergeStrategy::Skip,
+                _ => MergeStrategy::SourceWins,
+            };
+            let result = tree.merge(&source, &target, merge_strategy)?;
+            save_tree(&database, &tree)?;
+            println!("Merge complete: {} merged, {} conflicts, {} skipped",
+                     result.merged, result.conflicts, result.skipped);
+            for conflict in &result.conflict_details {
+                println!("  Conflict: {} — {}", conflict.vector_id, conflict.description);
+            }
+            Ok(())
+        }
+        BranchCommands::Freeze { database, name } => {
+            let _db = Database::open(&database)?;
+            let mut tree = load_tree(&database);
+            tree.freeze(&name)?;
+            save_tree(&database, &tree)?;
+            println!("Branch '{}' is now frozen (read-only)", name);
+            Ok(())
+        }
+        BranchCommands::Delete { database, name } => {
+            let _db = Database::open(&database)?;
+            let mut tree = load_tree(&database);
+            tree.delete_branch(&name)?;
+            save_tree(&database, &tree)?;
+            println!("Deleted branch '{}'", name);
+            Ok(())
+        }
+    }
+}
+
+// ============================================================================
 // Memory commands
 // ============================================================================
 
@@ -1303,6 +1420,65 @@ pub fn bench_command(
         let comparison = compare_reports(&baseline, &report);
         println!("\n── Regression Analysis ──");
         println!("{}", comparison.summary());
+    }
+
+    Ok(())
+}
+
+/// Run an ANN-benchmarks standardized benchmark.
+pub fn ann_bench_command(dataset_name: &str, format: &str, output: Option<&str>) -> Result<()> {
+    use needle::recall_benchmark::{AnnDataset, run_ann_benchmark};
+
+    let dataset = match dataset_name.to_lowercase().as_str() {
+        "sift" | "sift-1m" | "sift-128-euclidean" => AnnDataset::sift_1m(),
+        "glove" | "glove-200" | "glove-200-angular" => AnnDataset::glove_200(),
+        "gist" | "gist-960" | "gist-960-euclidean" => AnnDataset::gist_960(),
+        _ => {
+            let all = AnnDataset::all_standard();
+            let names: Vec<_> = all.iter().map(|d| d.name.as_str()).collect();
+            return Err(NeedleError::InvalidConfig(format!(
+                "Unknown ANN dataset '{}'. Available: {}", dataset_name, names.join(", ")
+            )));
+        }
+    };
+
+    println!("═══ ANN-Benchmarks: {} ═══", dataset.name);
+    println!("  Dimensions: {}", dataset.dimensions);
+    println!("  Distance:   {:?}", dataset.distance);
+    println!("  Full dataset: {} vectors, {} queries", dataset.num_vectors, dataset.num_queries);
+    println!("  (Running with synthetic subset for local evaluation)");
+    println!();
+
+    let ef_values = vec![20, 50, 100, 200, 400];
+    let results = run_ann_benchmark(&dataset, &ef_values);
+
+    if results.is_empty() {
+        println!("No results generated.");
+        return Ok(());
+    }
+
+    match format {
+        "json" => {
+            let json_str = serde_json::to_string_pretty(&results)
+                .unwrap_or_else(|_| "[]".to_string());
+            if let Some(path) = output {
+                std::fs::write(path, &json_str).map_err(|e| {
+                    NeedleError::InvalidConfig(format!("Cannot write report: {e}"))
+                })?;
+                println!("ANN-benchmarks report saved to {path}");
+            } else {
+                println!("{json_str}");
+            }
+        }
+        _ => {
+            println!("{:<12} {:<12} {:<12} {:<12}", "ef_search", "recall@10", "QPS", "memory_MB");
+            println!("{}", "-".repeat(50));
+            for r in &results {
+                let ef = r.parameters.get("ef_search").map(|s| s.as_str()).unwrap_or("?");
+                println!("{:<12} {:<12.4} {:<12.1} {:<12.1}",
+                    ef, r.recall_at_10, r.qps, r.memory_bytes as f64 / 1_048_576.0);
+            }
+        }
     }
 
     Ok(())
