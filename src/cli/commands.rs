@@ -628,6 +628,37 @@ pub enum Commands {
         database: Option<String>,
     },
 
+    /// Run standardized ANN benchmarks with recall and QPS metrics
+    Bench {
+        /// Number of vectors (default: 10000)
+        #[arg(short, long, default_value = "10000")]
+        vectors: usize,
+
+        /// Vector dimensions (default: 128)
+        #[arg(short, long, default_value = "128")]
+        dimensions: usize,
+
+        /// Number of queries to run (default: 100)
+        #[arg(short, long, default_value = "100")]
+        queries: usize,
+
+        /// K values for recall measurement (comma-separated)
+        #[arg(long, default_value = "1,10,100")]
+        k_values: String,
+
+        /// Output format (text, json, html)
+        #[arg(long, default_value = "text")]
+        format: String,
+
+        /// Output file path for report
+        #[arg(short, long)]
+        output: Option<String>,
+
+        /// Compare with a previous benchmark report (JSON file)
+        #[arg(long)]
+        compare: Option<String>,
+    },
+
     /// Streaming ingestion management
     #[command(subcommand)]
     Ingestion(IngestionCommands),
