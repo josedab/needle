@@ -667,6 +667,14 @@ pub enum Commands {
     #[command(subcommand)]
     Cache(CacheCommands),
 
+    /// Embedded model management (list/download/remove)
+    #[command(subcommand)]
+    Models(ModelCommands),
+
+    /// WASM plugin management (install/list/remove)
+    #[command(subcommand)]
+    Plugin(PluginCommands),
+
     /// Analyze collection for auto-partitioning recommendations
     Partition {
         /// Path to the database file
@@ -701,6 +709,43 @@ pub enum CacheCommands {
         /// Skip confirmation prompt
         #[arg(long)]
         force: bool,
+    },
+}
+
+/// Model management subcommands
+#[derive(Subcommand)]
+pub enum ModelCommands {
+    /// List available and cached embedding models
+    List,
+    /// Download a model to the local cache
+    Download {
+        /// Model ID (e.g., "all-MiniLM-L6-v2")
+        model_id: String,
+    },
+    /// Remove a cached model
+    Remove {
+        /// Model ID to remove
+        model_id: String,
+    },
+}
+
+/// Plugin management subcommands
+#[derive(Subcommand)]
+pub enum PluginCommands {
+    /// List installed plugins
+    List,
+    /// Install a plugin from a WASM file
+    Install {
+        /// Path to the .wasm plugin file
+        path: String,
+        /// Plugin name (defaults to file name)
+        #[arg(short, long)]
+        name: Option<String>,
+    },
+    /// Remove an installed plugin
+    Remove {
+        /// Plugin name to remove
+        name: String,
     },
 }
 

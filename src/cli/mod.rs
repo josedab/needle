@@ -183,6 +183,8 @@ pub fn run(cli: Cli) -> Result<()> {
             bench_command(vectors, dimensions, queries, &k_values, &format, output.as_deref(), compare.as_deref()),
         Commands::Ingestion(cmd) => ingestion_command(cmd),
         Commands::Cache(cmd) => cache_command(cmd),
+        Commands::Models(cmd) => models_command(cmd),
+        Commands::Plugin(cmd) => plugin_command(cmd),
         Commands::Partition { database, collection, analyze, target_size } =>
             partition_command(&database, &collection, analyze, target_size),
     }

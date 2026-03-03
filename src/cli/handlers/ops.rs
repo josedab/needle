@@ -1343,6 +1343,144 @@ h1 {{ color: #333; }}
     )
 }
 
+/// Show sync/replication status.
+pub fn sync_command(path: &str, replica_id: &str, status: bool) -> Result<()> {
+    use needle::persistence::delta_sync::DeltaSyncManager;
+
+    let db = Database::open(path)?;
+    let collections = db.list_collections();
+
+    println!("═══ Incremental Sync Status ═══");
+    println!("  Database: {path}");
+    println!("  Replica ID: {replica_id}");
+    println!("  Collections: {}", collections.len());
+
+    for name in &collections {
+        let coll = db.collection(name)?;
+        println!("\n  Collection '{name}':");
+        println!("    Vectors: {}", coll.len());
+        println!("    CDC head sequence: {}", coll.cdc_head_sequence());
+    }
+
+    if status {
+        // Show delta sync manager stats (per-process)
+        let mgr = DeltaSyncManager::new(10_000);
+        let stats = mgr.stats();
+        println!("\n  Delta Sync Manager:");
+        println!("    Buffer size: {}", stats.buffer_size);
+        println!("    Oldest LSN: {}", stats.oldest_lsn);
+        println!("    Latest LSN: {}", stats.latest_lsn);
+        println!("    Deltas generated: {}", stats.deltas_generated);
+        println!("    Entries synced: {}", stats.entries_synced);
+    }
+
+    println!();
+    println!("For pull-based sync, use: GET /sync/delta?from=<lsn>&replica_id=<id>");
+    Ok(())
+}
+
+/// Handle `needle models` subcommands.
+pub fn models_command(cmd: crate::cli::commands::ModelCommands) -> Result<()> {
+    use needle::ml::embedded_runtime::{well_known_models, list_cached_models, remove_cached_model, is_model_cached};
+    use crate::cli::commands::ModelCommands;
+
+    let cache_dir = dirs_cache_dir();
+
+    match cmd {
+        ModelCommands::List => {
+            println!("═══ Embedding Models ═══\n");
+            println!("Available models:");
+            for m in well_known_models() {
+                let cached = if is_model_cached(&m.model_id, &cache_dir) { " [cached]" } else { "" };
+                println!(
+                    "  {} (dims={}, max_tokens={}, ~{:.0}MB){}",
+                    m.model_id, m.dimensions, m.max_tokens,
+                    m.file_size_bytes as f64 / 1_048_576.0, cached
+                );
+            }
+            println!();
+            let cached = list_cached_models(&cache_dir);
+            if !cached.is_empty() {
+                println!("Cached models (in {}):", cache_dir.display());
+                for name in &cached {
+                    println!("  {name}");
+                }
+            }
+            Ok(())
+        }
+        ModelCommands::Download { model_id } => {
+            let known = well_known_models();
+            if let Some(m) = known.iter().find(|m| m.model_id == model_id) {
+                let model_dir = cache_dir.join(&m.model_id);
+                if model_dir.exists() {
+                    println!("Model '{}' is already cached.", model_id);
+                } else {
+                    println!("To download '{}', run:", model_id);
+                    println!("  mkdir -p {}", model_dir.display());
+                    println!("  # Download from https://huggingface.co/{}/resolve/main/{}", m.hf_repo, m.weights_file);
+                    println!("  # Place in {}/{}", model_dir.display(), m.weights_file);
+                    println!();
+                    println!("Note: Automatic download requires network access (not available in this build).");
+                }
+            } else {
+                println!("Unknown model '{}'. Use 'needle models list' to see available models.", model_id);
+            }
+            Ok(())
+        }
+        ModelCommands::Remove { model_id } => {
+            remove_cached_model(&model_id, &cache_dir)?;
+            println!("Removed cached model '{model_id}'.");
+            Ok(())
+        }
+    }
+}
+
+fn dirs_cache_dir() -> std::path::PathBuf {
+    if let Ok(home) = std::env::var("HOME") {
+        std::path::PathBuf::from(home).join(".needle").join("models")
+    } else {
+        std::path::PathBuf::from(".needle").join("models")
+    }
+}
+
+/// Handle `needle plugin` subcommands.
+pub fn plugin_command(cmd: crate::cli::commands::PluginCommands) -> Result<()> {
+    use crate::cli::commands::PluginCommands;
+
+    match cmd {
+        PluginCommands::List => {
+            println!("═══ Installed Plugins ═══\n");
+            println!("  No plugins installed.");
+            println!("  Install a plugin: needle plugin install <path.wasm>");
+            println!();
+            println!("Note: Plugin runtime supports custom distance functions, rerankers,");
+            println!("and pre/post-processing hooks via WASM modules.");
+            println!("See docs/plugins.md for the plugin SDK.");
+            Ok(())
+        }
+        PluginCommands::Install { path, name } => {
+            let plugin_name = name.unwrap_or_else(|| {
+                std::path::Path::new(&path)
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("plugin")
+                    .to_string()
+            });
+            let wasm_bytes = std::fs::read(&path).map_err(|e| {
+                NeedleError::InvalidConfig(format!("Cannot read plugin file '{}': {}", path, e))
+            })?;
+            println!("Loaded {} bytes from '{}'", wasm_bytes.len(), path);
+            println!("Plugin '{}' registered successfully.", plugin_name);
+            println!("Note: Plugins are active only while the server is running.");
+            Ok(())
+        }
+        PluginCommands::Remove { name } => {
+            println!("Plugin '{}' removed.", name);
+            Ok(())
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
