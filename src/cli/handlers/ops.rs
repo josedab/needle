@@ -563,7 +563,8 @@ pub fn advise_command(
     sample_queries: usize,
 ) -> Result<()> {
     use needle::tuning::{
-        IndexSelectionConstraints, recommend_index, auto_tune, TuningConstraints, PerformanceProfile,
+        IndexSelectionConstraints, recommend_index, auto_tune, TuningConstraints,
+        PerformanceProfile, what_if_analysis,
     };
 
     let db = Database::open(path)?;
@@ -608,8 +609,9 @@ pub fn advise_command(
     }
 
     // What-if analysis with sample queries
+    let mut measured_avg_latency_us = None;
     if sample_queries > 0 && num_vectors >= 10 {
-        println!("── What-If Analysis ({} sample queries) ──", sample_queries);
+        println!("── Live Workload Profiling ({} sample queries) ──", sample_queries);
         use std::time::Instant;
         let mut total_time_us = 0u64;
         let mut total_visited = 0usize;
@@ -626,11 +628,35 @@ pub fn advise_command(
         }
 
         if actual_queries > 0 {
-            println!("  Avg query time: {}μs", total_time_us / actual_queries as u64);
+            let avg_us = total_time_us / actual_queries as u64;
+            measured_avg_latency_us = Some(avg_us as f64);
+            println!("  Avg query time: {}μs", avg_us);
             println!("  Avg nodes visited: {}", total_visited / actual_queries);
             println!("  Estimated QPS: {:.0}", if total_time_us > 0 {
                 actual_queries as f64 / (total_time_us as f64 / 1_000_000.0)
             } else { 0.0 });
+        }
+        println!();
+    }
+
+    // What-If cost/benefit comparison across index types
+    println!("── What-If Index Comparison ──");
+    let analysis = what_if_analysis(num_vectors, dimensions, None, measured_avg_latency_us);
+    for preview in &analysis.previews {
+        println!("  {}: memory={:.1}MB, latency={:.0}μs, recall={:.1}%, QPS={:.0}, score={:.2}",
+            preview.index_type,
+            preview.estimated_memory_bytes as f64 / 1_048_576.0,
+            preview.estimated_query_latency_us,
+            preview.estimated_recall * 100.0,
+            preview.estimated_qps,
+            preview.suitability_score,
+        );
+    }
+    println!();
+    println!("Best index for this workload: {}", analysis.recommended);
+    for reason in &analysis.explanation {
+        if reason.contains("Switching") || reason.contains("Analyzing") {
+            println!("  {}", reason);
         }
     }
 
