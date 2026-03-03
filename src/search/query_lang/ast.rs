@@ -16,6 +16,8 @@ pub struct Query {
     pub using_clause: Option<UsingClause>,
     /// Optional WHERE clause
     pub where_clause: Option<WhereClause>,
+    /// Optional RERANK BY clause
+    pub rerank_clause: Option<RerankClause>,
     /// Optional ORDER BY clause
     pub order_by: Option<OrderByClause>,
     /// Optional LIMIT
@@ -200,9 +202,85 @@ pub enum SortOrder {
     Desc,
 }
 
+/// RERANK BY clause for post-retrieval re-ranking
+#[derive(Debug, Clone, PartialEq)]
+pub struct RerankClause {
+    /// Re-ranking strategy
+    pub strategy: RerankStrategy,
+    /// Optional fetch multiplier (how many candidates to fetch before re-ranking)
+    pub fetch_k: Option<usize>,
+}
+
+/// Re-ranking strategies
+#[derive(Debug, Clone, PartialEq)]
+pub enum RerankStrategy {
+    /// Re-rank by a metadata field (e.g., RERANK BY score DESC)
+    Field { column: String, order: SortOrder },
+    /// Re-rank using MMR (Maximal Marginal Relevance)
+    Mmr { lambda: f32 },
+    /// Re-rank using cross-encoder (model-based)
+    CrossEncoder { model: String },
+    /// Re-rank by reciprocal rank fusion of multiple signals
+    Rrf { k: usize },
+}
+
+/// SEARCH NEAR expression — alternative syntax for vector similarity
+#[derive(Debug, Clone, PartialEq)]
+pub struct SearchNearExpr {
+    /// Collection name
+    pub collection: String,
+    /// Parameter name for the query vector
+    pub query_param: String,
+    /// Number of results
+    pub k: Option<usize>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    // Tests needed: see docs/TODO-test-coverage.md
+    #[test]
+    fn test_rerank_clause() {
+        let rerank = RerankClause {
+            strategy: RerankStrategy::Mmr { lambda: 0.5 },
+            fetch_k: Some(50),
+        };
+        assert_eq!(rerank.fetch_k, Some(50));
+    }
+
+    #[test]
+    fn test_query_with_rerank() {
+        let query = Query {
+            explain: false,
+            select: SelectClause::All,
+            from: FromClause {
+                collection: "docs".to_string(),
+                alias: None,
+            },
+            with_clause: None,
+            using_clause: None,
+            where_clause: None,
+            rerank_clause: Some(RerankClause {
+                strategy: RerankStrategy::Field {
+                    column: "score".to_string(),
+                    order: SortOrder::Desc,
+                },
+                fetch_k: None,
+            }),
+            order_by: None,
+            limit: Some(10),
+            offset: None,
+        };
+        assert!(query.rerank_clause.is_some());
+    }
+
+    #[test]
+    fn test_search_near_expr() {
+        let search = SearchNearExpr {
+            collection: "docs".to_string(),
+            query_param: "$query".to_string(),
+            k: Some(10),
+        };
+        assert_eq!(search.collection, "docs");
+    }
 }

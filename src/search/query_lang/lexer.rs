@@ -28,6 +28,9 @@ pub enum Token {
     Using,
     Rag,
     TimeDecay,
+    Rerank,
+    Search,
+    Near,
 
     // Operators
     Eq, // =
@@ -353,6 +356,9 @@ impl Lexer {
                     "USING" => Ok(Token::Using),
                     "RAG" => Ok(Token::Rag),
                     "TIME_DECAY" | "TIMEDECAY" => Ok(Token::TimeDecay),
+                    "RERANK" => Ok(Token::Rerank),
+                    "SEARCH" => Ok(Token::Search),
+                    "NEAR" => Ok(Token::Near),
                     "TRUE" => Ok(Token::BoolLit(true)),
                     "FALSE" => Ok(Token::BoolLit(false)),
                     _ => Ok(Token::Identifier(ident)),
