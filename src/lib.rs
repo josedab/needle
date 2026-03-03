@@ -566,7 +566,7 @@ pub use metadata::{Filter, MetadataStore};
 /// Multi-vector (ColBERT-style) types: vectors, config, index, and search results.
 pub use multivec::{MultiVector, MultiVectorConfig, MultiVectorIndex, MultiVectorSearchResult};
 /// Quantization types: scalar, product, and binary quantizers for memory-efficient storage.
-pub use quantization::{BinaryQuantizer, ProductQuantizer, ScalarQuantizer};
+pub use quantization::{BinaryQuantizer, MatryoshkaTruncation, ProductQuantizer, ScalarQuantizer, AdaptiveSearchResult, adaptive_search};
 /// Sparse vector types: distance functions, inverted index, and sparse vector representation.
 pub use sparse::{SparseDistance, SparseIndex, SparseVector};
 /// Auto-tuning types: parameter tuning, index recommendation, workload profiling, and online migration.
