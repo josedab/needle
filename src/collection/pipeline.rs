@@ -384,6 +384,16 @@ impl<'a> SearchBuilder<'a> {
         self
     }
 
+    /// Set a maximum age filter: only return vectors inserted within the last
+    /// `max_age_seconds` seconds. This is applied as a pre-filter before scoring,
+    /// providing efficient temporal filtering with minimal latency overhead.
+    #[must_use]
+    pub fn max_age(self, max_age_seconds: u64) -> Self {
+        self.with_time_decay(TimeDecay::Step {
+            window_seconds: max_age_seconds,
+        })
+    }
+
     /// Execute the search and return results
     pub fn execute(self) -> Result<Vec<SearchResult>> {
         self.validate_query()?;

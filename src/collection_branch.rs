@@ -70,7 +70,7 @@ pub struct BranchInfo {
 }
 
 /// A change to a vector in a branch.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 enum VectorChange {
     /// Vector was inserted or updated.
     Upsert(Vec<f32>),
@@ -79,6 +79,7 @@ enum VectorChange {
 }
 
 /// A branch's local changes (copy-on-write layer).
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct BranchLayer {
     info: BranchInfo,
     changes: HashMap<String, VectorChange>,
@@ -141,6 +142,7 @@ pub enum DiffEntry {
 // ============================================================================
 
 /// Manages a tree of branches with copy-on-write vector storage.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BranchTree {
     branches: HashMap<String, BranchLayer>,
 }
@@ -710,5 +712,18 @@ mod tests {
         tree.create_branch("feature", "dev")
             .expect("failed to create 'feature' branch from 'dev'");
         assert!(tree.delete_branch("dev").is_err());
+    }
+
+    #[test]
+    fn test_branch_tree_serde_roundtrip() {
+        let mut tree = BranchTree::new();
+        tree.create_branch("dev", "main").expect("create dev");
+        tree.insert("dev", "v1", vec![1.0, 2.0]).expect("insert");
+
+        let json = serde_json::to_string(&tree).expect("serialize");
+        let restored: BranchTree = serde_json::from_str(&json).expect("deserialize");
+
+        assert_eq!(restored.list_branches().len(), 2);
+        assert_eq!(restored.get("dev", "v1").expect("get"), &[1.0, 2.0]);
     }
 }

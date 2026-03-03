@@ -55,6 +55,20 @@ impl Collection {
         self.metadata.contains(id)
     }
 
+    /// Get the raw vector data by external ID.
+    /// Returns `None` if the vector doesn't exist.
+    pub fn get_vector(&self, id: &str) -> Option<Vec<f32>> {
+        let internal_id = self.metadata.get_internal_id(id)?;
+        self.vectors.get(internal_id).map(|v| v.to_vec())
+    }
+
+    /// Get the insertion timestamp for a vector by external ID.
+    /// Returns `None` if no timestamp is recorded.
+    pub fn insertion_timestamp_by_id(&self, id: &str) -> Option<u64> {
+        let internal_id = self.metadata.get_internal_id(id)?;
+        self.insertion_timestamps.get(&internal_id).copied()
+    }
+
     /// Get collection statistics
     pub fn stats(&self) -> CollectionStats {
         let vector_count = self.vectors.len();
