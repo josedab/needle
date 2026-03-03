@@ -169,6 +169,10 @@ pub fn run(cli: Cli) -> Result<()> {
             explain_search_command(&database, &collection, &query, k, &format),
         Commands::Advise { database, collection, sample_queries } =>
             advise_command(&database, &collection, sample_queries),
+        Commands::Watch { database, collection, from_sequence, batch_size, consumer_id } =>
+            watch_command(&database, &collection, from_sequence, batch_size, &consumer_id),
+        Commands::Sync { database, replica_id, status } =>
+            sync_command(&database, &replica_id, status),
         Commands::Dedup { database, collection, threshold, strategy, dry_run } =>
             dedup_command(&database, &collection, threshold, &strategy, dry_run),
         Commands::Health { database, collection, format } =>

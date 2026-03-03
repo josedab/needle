@@ -549,6 +549,42 @@ pub enum Commands {
         sample_queries: usize,
     },
 
+    /// Watch collection for real-time change events (CDC)
+    Watch {
+        /// Path to the database file
+        database: String,
+
+        /// Collection name
+        #[arg(short, long)]
+        collection: String,
+
+        /// Resume from a specific sequence number (0 = from beginning)
+        #[arg(long, default_value = "0")]
+        from_sequence: u64,
+
+        /// Maximum events per poll batch
+        #[arg(long, default_value = "100")]
+        batch_size: usize,
+
+        /// Consumer ID for offset tracking
+        #[arg(long, default_value = "cli-watcher")]
+        consumer_id: String,
+    },
+
+    /// Show incremental sync status and manage replication
+    Sync {
+        /// Path to the database file
+        database: String,
+
+        /// Replica ID for this node
+        #[arg(long, default_value = "replica-0")]
+        replica_id: String,
+
+        /// Show sync status (latest LSN, buffer size, replicas)
+        #[arg(long)]
+        status: bool,
+    },
+
     /// Deduplicate near-duplicate vectors in a collection
     Dedup {
         /// Path to the database file

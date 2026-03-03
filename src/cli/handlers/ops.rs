@@ -1178,6 +1178,49 @@ pub fn partition_command(
     Ok(())
 }
 
+/// Watch collection for CDC events, printing them as they appear.
+pub fn watch_command(
+    path: &str,
+    collection_name: &str,
+    from_sequence: u64,
+    batch_size: usize,
+    consumer_id: &str,
+) -> Result<()> {
+    let db = Database::open(path)?;
+    let coll = db.collection(collection_name)?;
+
+    println!("═══ Watching '{}' for changes (from seq {}) ═══", collection_name, from_sequence);
+    println!("Consumer: {consumer_id}");
+    println!("Press Ctrl+C to stop.\n");
+
+    let events = coll.cdc_events_since(from_sequence, batch_size);
+    if events.is_empty() {
+        println!("No new events since sequence {}.", from_sequence);
+        println!("Current head sequence: {}", coll.cdc_head_sequence());
+    } else {
+        for event in &events {
+            println!(
+                "[seq={}] {} {} @ {}ms{}",
+                event.sequence,
+                match event.event_type {
+                    needle::collection::CdcEventType::Insert => "INSERT",
+                    needle::collection::CdcEventType::Update => "UPDATE",
+                    needle::collection::CdcEventType::Delete => "DELETE",
+                },
+                event.vector_id,
+                event.timestamp_ms,
+                event.metadata.as_ref().map(|m| format!(" meta={m}")).unwrap_or_default(),
+            );
+        }
+        println!("\n--- {} event(s) returned ---", events.len());
+        if let Some(last) = events.last() {
+            println!("Resume with: --from-sequence {}", last.sequence);
+        }
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
