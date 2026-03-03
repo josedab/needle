@@ -143,6 +143,12 @@ pub struct Database {
     replica_manager: Option<Arc<crate::persistence::replica_manager::ReplicaManager>>,
     /// Versioned stores per collection for MVCC time-travel queries
     versioned_stores: Arc<RwLock<HashMap<String, crate::persistence::vector_versioning::VersionedStore>>>,
+    /// MVCC transaction manager for snapshot isolation
+    transaction_manager: crate::persistence::transaction::TransactionManager,
+    /// Maps transaction IDs to their collection-aware operations.
+    /// This bridges the gap between the generic TransactionManager (which doesn't
+    /// know about collections) and the Database (which does).
+    tx_collection_ops: Arc<RwLock<HashMap<crate::persistence::transaction::TransactionId, Vec<(String, crate::persistence::transaction::WriteOperation)>>>>,
 }
 
 impl Database {
@@ -269,6 +275,8 @@ impl Database {
             saved_gen: AtomicU64::new(0),
             adaptive_tuner: None, adaptive_index_manager: None, replica_manager: None,
             versioned_stores: Arc::new(RwLock::new(HashMap::new())),
+            transaction_manager: crate::persistence::transaction::TransactionManager::new(),
+            tx_collection_ops: Arc::new(RwLock::new(HashMap::new())),
             #[cfg(feature = "observability")]
             dashboard_metrics: None,
         })
@@ -302,6 +310,8 @@ impl Database {
             saved_gen: AtomicU64::new(0),
             adaptive_tuner: None, adaptive_index_manager: None, replica_manager: None,
             versioned_stores: Arc::new(RwLock::new(HashMap::new())),
+            transaction_manager: crate::persistence::transaction::TransactionManager::new(),
+            tx_collection_ops: Arc::new(RwLock::new(HashMap::new())),
             #[cfg(feature = "observability")]
             dashboard_metrics: None,
         }
@@ -323,6 +333,8 @@ impl Database {
             adaptive_index_manager: self.adaptive_index_manager.clone(),
             replica_manager: self.replica_manager.clone(),
             versioned_stores: Arc::clone(&self.versioned_stores),
+            transaction_manager: crate::persistence::transaction::TransactionManager::new(),
+            tx_collection_ops: Arc::new(RwLock::new(HashMap::new())),
             #[cfg(feature = "observability")]
             dashboard_metrics: self.dashboard_metrics.clone(),
         }
@@ -991,6 +1003,183 @@ impl Database {
             .sum()
     }
 
+    // ── MVCC Transaction API ────────────────────────────────────────────
+
+    /// Begin a new MVCC transaction with snapshot isolation.
+    ///
+    /// Returns a `TransactionId` that must be passed to subsequent operations.
+    /// The transaction sees a consistent snapshot of data committed before this call.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use needle::Database;
+    ///
+    /// let db = Database::in_memory();
+    /// db.create_collection("docs", 4).unwrap();
+    ///
+    /// let tx = db.begin_transaction().unwrap();
+    /// // ... perform operations within the transaction ...
+    /// db.commit_transaction(tx).unwrap();
+    /// ```
+    pub fn begin_transaction(
+        &self,
+    ) -> Result<crate::persistence::transaction::TransactionId> {
+        self.transaction_manager.begin()
+    }
+
+    /// Buffer an insert operation within an active transaction.
+    ///
+    /// The insert is not visible to other readers until the transaction is committed.
+    pub fn transaction_insert(
+        &self,
+        tx_id: crate::persistence::transaction::TransactionId,
+        collection: &str,
+        id: impl Into<String>,
+        vector: Vec<f32>,
+        metadata: Option<serde_json::Value>,
+    ) -> Result<()> {
+        let id_str = id.into();
+        // Validate collection exists and dimensions match
+        let state = self.state.read();
+        let coll = state
+            .collections
+            .get(collection)
+            .ok_or_else(|| NeedleError::CollectionNotFound(collection.to_string()))?;
+        let expected_dims = coll.config().dimensions;
+        if vector.len() != expected_dims {
+            return Err(NeedleError::DimensionMismatch {
+                expected: expected_dims,
+                got: vector.len(),
+            });
+        }
+        drop(state);
+
+        // Record the collection name in our local mapping
+        {
+            let mut tx_ops = self.tx_collection_ops.write();
+            tx_ops
+                .entry(tx_id)
+                .or_insert_with(Vec::new)
+                .push((collection.to_string(), crate::persistence::transaction::WriteOperation::Insert {
+                    id: id_str.clone(),
+                    vector: vector.clone(),
+                    metadata: metadata.clone(),
+                }));
+        }
+
+        self.transaction_manager.with_transaction_mut(tx_id, |txn| {
+            txn.insert(id_str, vector, metadata)
+        })
+    }
+
+    /// Buffer a delete operation within an active transaction.
+    pub fn transaction_delete(
+        &self,
+        tx_id: crate::persistence::transaction::TransactionId,
+        collection: &str,
+        id: impl Into<String>,
+    ) -> Result<()> {
+        let id_str = id.into();
+
+        {
+            let mut tx_ops = self.tx_collection_ops.write();
+            tx_ops
+                .entry(tx_id)
+                .or_insert_with(Vec::new)
+                .push((collection.to_string(), crate::persistence::transaction::WriteOperation::Delete {
+                    id: id_str.clone(),
+                }));
+        }
+
+        self.transaction_manager.with_transaction_mut(tx_id, |txn| {
+            txn.delete(id_str)
+        })
+    }
+
+    /// Commit a transaction, applying all buffered operations atomically.
+    ///
+    /// The commit protocol:
+    /// 1. Acquire the database write lock (prevents concurrent modifications)
+    /// 2. Run conflict detection via `TransactionManager::commit()`
+    /// 3. Apply all buffered operations to collections
+    /// 4. Release locks
+    ///
+    /// If conflict detection fails, no operations are applied.
+    /// If an individual operation fails (e.g., duplicate ID), the transaction
+    /// is still considered committed but the failing operation is logged.
+    pub fn commit_transaction(
+        &self,
+        tx_id: crate::persistence::transaction::TransactionId,
+    ) -> Result<()> {
+        // Extract the collection-aware operations
+        let collection_ops = {
+            let mut tx_ops = self.tx_collection_ops.write();
+            tx_ops.remove(&tx_id).unwrap_or_default()
+        };
+
+        // Hold the write lock BEFORE conflict detection to ensure atomicity:
+        // no other transaction can commit between our check and our apply.
+        let mut state = self.state.write();
+
+        // Conflict detection (may fail with Conflict error)
+        self.transaction_manager.commit(tx_id)?;
+
+        // Apply operations — the transaction is now committed in the manager,
+        // so we must apply all operations. Failures are logged but not fatal.
+        for (collection_name, op) in &collection_ops {
+            let coll = match state.collections.get_mut(collection_name) {
+                Some(c) => c,
+                None => continue,
+            };
+            match op {
+                crate::persistence::transaction::WriteOperation::Insert { id, vector, metadata } => {
+                    if let Err(e) = coll.insert(id, vector, metadata.clone()) {
+                        tracing::warn!("Transaction {tx_id}: insert '{}' failed: {}", id, e);
+                    }
+                }
+                crate::persistence::transaction::WriteOperation::Delete { id } => {
+                    if let Err(e) = coll.delete(id) {
+                        tracing::warn!("Transaction {tx_id}: delete '{}' failed: {}", id, e);
+                    }
+                }
+                crate::persistence::transaction::WriteOperation::Update { id, vector, metadata } => {
+                    if vector.is_some() || metadata.is_some() {
+                        let _ = coll.delete(id);
+                        if let Some(vec) = vector {
+                            if let Err(e) = coll.insert(id, vec, metadata.clone()) {
+                                tracing::warn!("Transaction {tx_id}: update '{}' failed: {}", id, e);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        drop(state);
+
+        self.mark_modified();
+        Ok(())
+    }
+
+    /// Roll back a transaction, discarding all buffered operations.
+    pub fn rollback_transaction(
+        &self,
+        tx_id: crate::persistence::transaction::TransactionId,
+    ) -> Result<()> {
+        // Clean up our collection mapping
+        {
+            let mut tx_ops = self.tx_collection_ops.write();
+            tx_ops.remove(&tx_id);
+        }
+        self.transaction_manager.rollback(tx_id)
+    }
+
+    /// Get transaction statistics (active count, total committed/aborted/conflicts).
+    pub fn transaction_stats(
+        &self,
+    ) -> crate::persistence::transaction::TransactionStats {
+        self.transaction_manager.stats()
+    }
 }
 
 impl Drop for Database {
@@ -1986,6 +2175,89 @@ mod tests {
         // History should have 2 entries
         let history = store.history("v1").unwrap();
         assert_eq!(history.len(), 2);
+        Ok(())
+    }
+
+    #[test]
+    fn test_mvcc_transaction_commit_applies() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let db = Database::in_memory();
+        db.create_collection("docs", 4)?;
+
+        // Begin a transaction and insert
+        let tx = db.begin_transaction()?;
+        db.transaction_insert(tx, "docs", "v1", vec![1.0, 0.0, 0.0, 0.0], None)?;
+        db.transaction_insert(tx, "docs", "v2", vec![0.0, 1.0, 0.0, 0.0], Some(json!({"key": "val"})))?;
+
+        // Before commit: collection should be empty (snapshot isolation)
+        let coll = db.collection("docs")?;
+        assert_eq!(coll.len(), 0);
+
+        // Commit applies the operations
+        db.commit_transaction(tx)?;
+        assert_eq!(coll.len(), 2);
+
+        // Verify vectors are searchable
+        let results = coll.search(&[1.0, 0.0, 0.0, 0.0], 2)?;
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].id, "v1");
+        Ok(())
+    }
+
+    #[test]
+    fn test_mvcc_transaction_rollback_discards() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let db = Database::in_memory();
+        db.create_collection("docs", 4)?;
+
+        let tx = db.begin_transaction()?;
+        db.transaction_insert(tx, "docs", "v1", vec![1.0, 0.0, 0.0, 0.0], None)?;
+        db.rollback_transaction(tx)?;
+
+        let coll = db.collection("docs")?;
+        assert_eq!(coll.len(), 0);
+        Ok(())
+    }
+
+    #[test]
+    fn test_mvcc_transaction_delete() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let db = Database::in_memory();
+        db.create_collection("docs", 4)?;
+
+        // Pre-populate
+        let coll = db.collection("docs")?;
+        coll.insert("v1", &[1.0, 0.0, 0.0, 0.0], None)?;
+        assert_eq!(coll.len(), 1);
+
+        // Delete in a transaction
+        let tx = db.begin_transaction()?;
+        db.transaction_delete(tx, "docs", "v1")?;
+
+        // Before commit, vector still visible
+        assert_eq!(coll.len(), 1);
+
+        db.commit_transaction(tx)?;
+        assert_eq!(coll.len(), 0);
+        Ok(())
+    }
+
+    #[test]
+    fn test_mvcc_conflict_detection() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let db = Database::in_memory();
+        db.create_collection("docs", 4)?;
+
+        let tx1 = db.begin_transaction()?;
+        let tx2 = db.begin_transaction()?;
+
+        // Both write to the same ID
+        db.transaction_insert(tx1, "docs", "v1", vec![1.0, 0.0, 0.0, 0.0], None)?;
+        db.transaction_insert(tx2, "docs", "v1", vec![0.0, 1.0, 0.0, 0.0], None)?;
+
+        // First commit succeeds
+        db.commit_transaction(tx1)?;
+
+        // Second commit should fail with conflict
+        let result = db.commit_transaction(tx2);
+        assert!(result.is_err());
+        assert!(format!("{:?}", result).contains("Conflict"));
         Ok(())
     }
 }
