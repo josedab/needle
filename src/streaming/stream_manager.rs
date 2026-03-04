@@ -429,6 +429,306 @@ pub struct StreamStats {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::super::core::OperationType;
 
-    // Tests needed: see docs/TODO-test-coverage.md
+    fn insert_event(collection: &str) -> ChangeEvent {
+        ChangeEvent::insert(collection, "key1", vec![1, 2, 3], 0)
+    }
+
+    // ====================================================================
+    // Record change
+    // ====================================================================
+
+    #[tokio::test]
+    async fn test_record_change() {
+        let mgr = StreamManager::new();
+        let pos = mgr.record_change(insert_event("docs")).await.unwrap();
+        assert_eq!(pos, 0);
+
+        let stats = mgr.stats().await;
+        assert_eq!(stats.event_log_size, 1);
+        assert_eq!(stats.current_position, 1);
+    }
+
+    #[tokio::test]
+    async fn test_record_changes_batch() {
+        let mgr = StreamManager::new();
+        let events = vec![
+            insert_event("docs"),
+            insert_event("docs"),
+            insert_event("docs"),
+        ];
+
+        let positions = mgr.record_changes(events).await.unwrap();
+        assert_eq!(positions.len(), 3);
+        assert_eq!(mgr.stats().await.event_log_size, 3);
+    }
+
+    // ====================================================================
+    // Multi-destination publishing
+    // ====================================================================
+
+    #[tokio::test]
+    async fn test_record_publishes_to_pubsub() {
+        let mgr = StreamManager::new();
+        let mut sub = mgr.subscribe("docs").await;
+
+        mgr.record_change(insert_event("docs")).await.unwrap();
+
+        let received = sub.try_recv();
+        assert!(received.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_record_publishes_to_stream() {
+        let mgr = StreamManager::new();
+        let mut stream = mgr.create_stream().await;
+
+        mgr.record_change(insert_event("docs")).await.unwrap();
+
+        let event = stream.try_next();
+        assert!(event.is_some());
+    }
+
+    // ====================================================================
+    // Stream creation
+    // ====================================================================
+
+    #[tokio::test]
+    async fn test_create_stream() {
+        let mgr = StreamManager::new();
+        let stream = mgr.create_stream().await;
+        assert!(stream.collection().is_none());
+        assert!(!stream.is_closed());
+    }
+
+    #[tokio::test]
+    async fn test_create_stream_for_collection() {
+        let mgr = StreamManager::new();
+        let stream = mgr.create_stream_for_collection("docs").await;
+        assert_eq!(stream.collection(), Some("docs"));
+    }
+
+    #[tokio::test]
+    async fn test_stream_position_and_resume_token() {
+        let mgr = StreamManager::new();
+        let mut stream = mgr.create_stream().await;
+
+        mgr.record_change(insert_event("docs")).await.unwrap();
+
+        if let Some(event) = stream.try_next() {
+            assert_eq!(stream.position(), event.id);
+        }
+
+        let token = stream.resume_token();
+        assert!(token.position <= mgr.event_log().current_position());
+    }
+
+    #[tokio::test]
+    async fn test_stream_close() {
+        let mgr = StreamManager::new();
+        let stream = mgr.create_stream().await;
+        stream.close();
+        assert!(stream.is_closed());
+    }
+
+    // ====================================================================
+    // Resume token recovery
+    // ====================================================================
+
+    #[tokio::test]
+    async fn test_create_stream_with_resume() {
+        let mgr = StreamManager::new();
+
+        // Record some events
+        for _ in 0..5 {
+            mgr.record_change(insert_event("docs")).await.unwrap();
+        }
+
+        // Resume from position 2 → should get events 3,4
+        let token = ResumeToken::new(2, 0);
+        let mut stream = mgr.create_stream_with_resume(&token).await.unwrap();
+
+        let mut count = 0;
+        while stream.try_next().is_some() {
+            count += 1;
+        }
+        assert_eq!(count, 2);
+    }
+
+    // ====================================================================
+    // Subscribe helpers
+    // ====================================================================
+
+    #[tokio::test]
+    async fn test_subscribe_via_manager() {
+        let mgr = StreamManager::new();
+        let sub = mgr.subscribe("docs").await;
+        assert!(sub.is_active());
+    }
+
+    #[tokio::test]
+    async fn test_subscribe_with_filter_via_manager() {
+        let mgr = StreamManager::new();
+        let filter = ChangeEventFilter::operations(&[OperationType::Insert]);
+        let sub = mgr.subscribe_with_filter("docs", filter).await;
+        assert!(sub.is_active());
+    }
+
+    #[tokio::test]
+    async fn test_subscribe_all_via_manager() {
+        let mgr = StreamManager::new();
+        let sub = mgr.subscribe_all().await;
+        assert!(sub.is_active());
+    }
+
+    // ====================================================================
+    // Cleanup
+    // ====================================================================
+
+    #[tokio::test]
+    async fn test_cleanup() {
+        let mgr = StreamManager::new();
+        let sub = mgr.subscribe("docs").await;
+        sub.unsubscribe();
+
+        mgr.cleanup().await;
+        let stats = mgr.stats().await;
+        assert_eq!(stats.total_subscribers, 0);
+    }
+
+    // ====================================================================
+    // Compaction
+    // ====================================================================
+
+    #[tokio::test]
+    async fn test_maybe_compact_not_needed() {
+        let mgr = StreamManager::new();
+        let result = mgr.maybe_compact(0).await.unwrap();
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_maybe_compact_needed() {
+        let config = StreamManagerConfig {
+            compaction_threshold: 5,
+            ..Default::default()
+        };
+        let mgr = StreamManager::with_config(config);
+
+        for _ in 0..6 {
+            mgr.record_change(insert_event("docs")).await.unwrap();
+        }
+
+        let result = mgr.maybe_compact(3).await.unwrap();
+        assert!(result.is_some());
+        assert_eq!(result.unwrap(), 3);
+    }
+
+    // ====================================================================
+    // Stats
+    // ====================================================================
+
+    #[tokio::test]
+    async fn test_stats_initial() {
+        let mgr = StreamManager::new();
+        let stats = mgr.stats().await;
+
+        assert_eq!(stats.event_log_size, 0);
+        assert_eq!(stats.current_position, 0);
+        assert_eq!(stats.last_compacted_position, 0);
+        assert_eq!(stats.total_subscribers, 0);
+        assert_eq!(stats.buffered_events, 0);
+        assert_eq!(stats.active_streams, 0);
+    }
+
+    #[tokio::test]
+    async fn test_stats_with_activity() {
+        let mgr = StreamManager::new();
+        let _sub = mgr.subscribe("docs").await;
+        let _stream = mgr.create_stream().await;
+        mgr.record_change(insert_event("docs")).await.unwrap();
+
+        let stats = mgr.stats().await;
+        assert_eq!(stats.event_log_size, 1);
+        assert_eq!(stats.total_subscribers, 1);
+        assert_eq!(stats.active_streams, 1);
+    }
+
+    // ====================================================================
+    // With config / components
+    // ====================================================================
+
+    #[tokio::test]
+    async fn test_with_config() {
+        let config = StreamManagerConfig {
+            max_buffer_size: 512,
+            channel_capacity: 128,
+            compaction_threshold: 500,
+            cleanup_interval_secs: 30,
+        };
+        let mgr = StreamManager::with_config(config);
+        assert_eq!(mgr.config.max_buffer_size, 512);
+    }
+
+    #[tokio::test]
+    async fn test_with_components() {
+        let log = EventLog::new();
+        let pubsub = PubSub::new();
+        let mgr = StreamManager::with_components(log, pubsub);
+        let stats = mgr.stats().await;
+        assert_eq!(stats.event_log_size, 0);
+    }
+
+    #[tokio::test]
+    async fn test_default() {
+        let mgr = StreamManager::default();
+        assert_eq!(mgr.stats().await.event_log_size, 0);
+    }
+
+    // ====================================================================
+    // ChangeStream buffer
+    // ====================================================================
+
+    #[tokio::test]
+    async fn test_stream_buffer_size() {
+        let mgr = StreamManager::new();
+        let stream = mgr.create_stream().await;
+        assert_eq!(stream.buffer_size(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_stream_with_filter() {
+        let (_, rx) = mpsc::channel(16);
+        let filter = ChangeEventFilter::collections(&["docs"]);
+        let stream = ChangeStream::new(rx).with_filter(filter);
+        assert!(stream.collection().is_none()); // collection is set separately from filter
+    }
+
+    #[tokio::test]
+    async fn test_stream_try_next_when_closed() {
+        let mgr = StreamManager::new();
+        let mut stream = mgr.create_stream().await;
+        stream.close();
+        assert!(stream.try_next().is_none());
+    }
+
+    #[tokio::test]
+    async fn test_stream_next_timeout() {
+        let mgr = StreamManager::new();
+        let mut stream = mgr.create_stream().await;
+
+        let result = stream.next_timeout(Duration::from_millis(10)).await;
+        assert!(result.is_err()); // Timeout
+    }
+
+    #[tokio::test]
+    async fn test_stream_next_timeout_when_closed() {
+        let mgr = StreamManager::new();
+        let mut stream = mgr.create_stream().await;
+        stream.close();
+
+        let result = stream.next_timeout(Duration::from_millis(10)).await;
+        assert!(result.unwrap().is_none());
+    }
 }
