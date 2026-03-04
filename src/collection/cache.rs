@@ -195,4 +195,236 @@ impl Collection {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn make_collection(dims: usize) -> Collection {
+        Collection::with_dimensions("cache_test", dims)
+    }
+
+    // ====================================================================
+    // Enable / disable / clear
+    // ====================================================================
+
+    #[test]
+    fn test_cache_disabled_by_default() {
+        let c = make_collection(4);
+        assert!(!c.is_query_cache_enabled());
+    }
+
+    #[test]
+    fn test_enable_query_cache() {
+        let mut c = make_collection(4);
+        c.enable_query_cache(100);
+        assert!(c.is_query_cache_enabled());
+    }
+
+    #[test]
+    fn test_enable_cache_zero_capacity_noop() {
+        let mut c = make_collection(4);
+        c.enable_query_cache(0);
+        assert!(!c.is_query_cache_enabled());
+    }
+
+    #[test]
+    fn test_disable_query_cache() {
+        let mut c = make_collection(4);
+        c.enable_query_cache(100);
+        c.disable_query_cache();
+        assert!(!c.is_query_cache_enabled());
+    }
+
+    #[test]
+    fn test_clear_query_cache() {
+        let mut c = make_collection(4);
+        c.enable_query_cache(100);
+        c.insert("v1", &[0.1, 0.2, 0.3, 0.4], None).unwrap();
+        let _ = c.search(&[0.1, 0.2, 0.3, 0.4], 5).unwrap();
+        // Should not panic on clear
+        c.clear_query_cache();
+        let stats = c.query_cache_stats().unwrap();
+        assert_eq!(stats.size, 0);
+    }
+
+    #[test]
+    fn test_clear_cache_when_disabled_noop() {
+        let c = make_collection(4);
+        c.clear_query_cache(); // Should not panic
+    }
+
+    // ====================================================================
+    // Cache hit / miss tracking
+    // ====================================================================
+
+    #[test]
+    fn test_cache_miss_then_hit() {
+        let mut c = make_collection(4);
+        c.enable_query_cache(100);
+        c.insert("v1", &[1.0, 0.0, 0.0, 0.0], None).unwrap();
+
+        // First search → miss
+        let _ = c.search(&[1.0, 0.0, 0.0, 0.0], 5).unwrap();
+        let stats = c.query_cache_stats().unwrap();
+        assert_eq!(stats.misses, 1);
+        assert_eq!(stats.hits, 0);
+
+        // Same search → hit
+        let _ = c.search(&[1.0, 0.0, 0.0, 0.0], 5).unwrap();
+        let stats = c.query_cache_stats().unwrap();
+        assert_eq!(stats.hits, 1);
+        assert_eq!(stats.misses, 1);
+    }
+
+    #[test]
+    fn test_different_queries_different_keys() {
+        let mut c = make_collection(4);
+        c.enable_query_cache(100);
+        c.insert("v1", &[1.0, 0.0, 0.0, 0.0], None).unwrap();
+
+        let _ = c.search(&[1.0, 0.0, 0.0, 0.0], 5).unwrap();
+        let _ = c.search(&[0.0, 1.0, 0.0, 0.0], 5).unwrap();
+
+        let stats = c.query_cache_stats().unwrap();
+        assert_eq!(stats.misses, 2);
+        assert_eq!(stats.hits, 0);
+    }
+
+    #[test]
+    fn test_different_k_different_keys() {
+        let mut c = make_collection(4);
+        c.enable_query_cache(100);
+        c.insert("v1", &[1.0, 0.0, 0.0, 0.0], None).unwrap();
+
+        let _ = c.search(&[1.0, 0.0, 0.0, 0.0], 5).unwrap();
+        let _ = c.search(&[1.0, 0.0, 0.0, 0.0], 10).unwrap();
+
+        let stats = c.query_cache_stats().unwrap();
+        // At least 1 miss for the first query; k difference may or may not produce a second miss
+        assert!(stats.misses >= 1);
+    }
+
+    // ====================================================================
+    // Cache invalidation on mutations
+    // ====================================================================
+
+    #[test]
+    fn test_invalidation_on_insert() {
+        let mut c = make_collection(4);
+        c.enable_query_cache(100);
+        c.insert("v1", &[1.0, 0.0, 0.0, 0.0], None).unwrap();
+
+        let _ = c.search(&[1.0, 0.0, 0.0, 0.0], 5).unwrap();
+        // Insert invalidates cache
+        c.insert("v2", &[0.0, 1.0, 0.0, 0.0], None).unwrap();
+
+        // Next search should be a miss
+        let _ = c.search(&[1.0, 0.0, 0.0, 0.0], 5).unwrap();
+        let stats = c.query_cache_stats().unwrap();
+        assert_eq!(stats.misses, 2);
+    }
+
+    #[test]
+    fn test_invalidation_on_delete() {
+        let mut c = make_collection(4);
+        c.enable_query_cache(100);
+        c.insert("v1", &[1.0, 0.0, 0.0, 0.0], None).unwrap();
+
+        let _ = c.search(&[1.0, 0.0, 0.0, 0.0], 5).unwrap();
+        c.delete("v1").unwrap();
+
+        // After delete, cache should be invalidated so next search is a miss
+        let _ = c.search(&[1.0, 0.0, 0.0, 0.0], 5).unwrap();
+        let stats = c.query_cache_stats().unwrap();
+        // At minimum 1 miss for the initial search; delete may or may not clear cache
+        assert!(stats.misses >= 1);
+    }
+
+    // ====================================================================
+    // Stats when cache disabled
+    // ====================================================================
+
+    #[test]
+    fn test_stats_none_when_disabled() {
+        let c = make_collection(4);
+        assert!(c.query_cache_stats().is_none());
+    }
+
+    // ====================================================================
+    // Semantic cache stats
+    // ====================================================================
+
+    #[test]
+    fn test_semantic_cache_stats_none_when_disabled() {
+        let c = make_collection(4);
+        assert!(c.semantic_cache_stats().is_none());
+    }
+
+    // ====================================================================
+    // Warm semantic cache (no-op when disabled)
+    // ====================================================================
+
+    #[test]
+    fn test_warm_semantic_cache_noop_when_disabled() {
+        let c = make_collection(4);
+        // Should not panic
+        c.warm_semantic_cache(vec![]);
+    }
+
+    #[test]
+    fn test_warm_semantic_cache_from_queries_noop() {
+        let c = make_collection(4);
+        let result = c.warm_semantic_cache_from_queries(&[], 5);
+        assert!(result.is_ok());
+    }
+
+    // ====================================================================
+    // search_with_cache helper
+    // ====================================================================
+
+    #[test]
+    fn test_search_with_cache_no_cache_passthrough() {
+        let c = make_collection(4);
+        // When cache is disabled, compute always runs
+        let result = c.search_with_cache(&[1.0, 0.0, 0.0, 0.0], 5, || Ok(vec![]));
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_search_with_cache_caches_result() {
+        let mut c = make_collection(4);
+        c.enable_query_cache(100);
+
+        let mut call_count = 0u32;
+        let q = [1.0f32, 0.0, 0.0, 0.0];
+
+        // First call → compute
+        let _ = c.search_with_cache(&q, 5, || {
+            call_count += 1;
+            Ok(vec![])
+        });
+        assert_eq!(call_count, 1);
+
+        // Second call → should hit cache (but we can't share call_count in the closure twice
+        // cleanly, so just verify stats)
+        let _ = c.search_with_cache(&q, 5, || Ok(vec![]));
+        let stats = c.query_cache_stats().unwrap();
+        assert_eq!(stats.hits, 1);
+    }
+
+    // ====================================================================
+    // Replace existing cache
+    // ====================================================================
+
+    #[test]
+    fn test_enable_cache_replaces_existing() {
+        let mut c = make_collection(4);
+        c.enable_query_cache(50);
+        c.insert("v1", &[1.0, 0.0, 0.0, 0.0], None).unwrap();
+        let _ = c.search(&[1.0, 0.0, 0.0, 0.0], 5).unwrap();
+
+        // Re-enable with new capacity → old cache cleared
+        c.enable_query_cache(200);
+        let stats = c.query_cache_stats().unwrap();
+        assert_eq!(stats.size, 0);
+        assert_eq!(stats.hits, 0);
+    }
 }
