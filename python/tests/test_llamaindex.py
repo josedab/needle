@@ -63,10 +63,42 @@ def test_query_with_filter():
     assert results[0].node.metadata["category"] == "x"
 
 
+def test_mmr_query():
+    index = NeedleVectorStoreIndex(dimensions=4)
+    index.add([
+        TextNode(text="a", id_="n1", embedding=[1.0, 0.0, 0.0, 0.0]),
+        TextNode(text="a2", id_="n2", embedding=[0.95, 0.05, 0.0, 0.0]),
+        TextNode(text="b", id_="n3", embedding=[0.0, 0.0, 1.0, 0.0]),
+    ])
+    # MMR should diversify results
+    results = index.query_with_mmr(
+        [1.0, 0.0, 0.0, 0.0],
+        similarity_top_k=2,
+        mmr_threshold=0.5,
+        fetch_k=3,
+    )
+    assert len(results) == 2
+    # First result should be closest to query
+    assert results[0].node.text == "a"
+
+
+def test_from_nodes():
+    nodes = [
+        TextNode(text="hello", id_="n1", embedding=[1.0, 0.0, 0.0, 0.0]),
+        TextNode(text="world", id_="n2", embedding=[0.0, 1.0, 0.0, 0.0]),
+    ]
+    index = NeedleVectorStoreIndex.from_nodes(nodes)
+    assert index.count == 2
+    results = index.query([1.0, 0.0, 0.0, 0.0], similarity_top_k=1)
+    assert results[0].node.text == "hello"
+
+
 if __name__ == "__main__":
     test_add_and_query()
     test_delete()
     test_get_by_id()
     test_document_chunker()
     test_query_with_filter()
+    test_mmr_query()
+    test_from_nodes()
     print("All llamaindex tests passed!")

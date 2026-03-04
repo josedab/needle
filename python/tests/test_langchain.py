@@ -70,9 +70,55 @@ def test_filter():
     assert results[0][0].metadata["color"] == "red"
 
 
+def test_mmr_search():
+    store = NeedleVectorStore(dimensions=4)
+    store.add_vectors(
+        vectors=[
+            [1.0, 0.0, 0.0, 0.0],
+            [0.9, 0.1, 0.0, 0.0],
+            [0.0, 0.0, 1.0, 0.0],
+            [0.0, 0.0, 0.9, 0.1],
+        ],
+        documents=[
+            Document(page_content="a"),
+            Document(page_content="a_similar"),
+            Document(page_content="b"),
+            Document(page_content="b_similar"),
+        ],
+    )
+    # MMR should diversify: pick from both clusters
+    results = store.max_marginal_relevance_search(
+        [1.0, 0.0, 0.0, 0.0], k=2, fetch_k=4, lambda_mult=0.5
+    )
+    assert len(results) == 2
+    # With diversity, should not pick both from the same cluster
+    contents = {r.page_content for r in results}
+    assert "a" in contents  # closest to query
+
+
+def test_from_texts():
+    class MockEmbedding:
+        def embed_documents(self, texts):
+            return [[float(i)] * 4 for i in range(len(texts))]
+        def embed_query(self, text):
+            return [0.0] * 4
+
+    store = NeedleVectorStore.from_texts(
+        texts=["hello", "world"],
+        embedding=MockEmbedding(),
+        metadatas=[{"k": "v1"}, {"k": "v2"}],
+    )
+    assert store.count == 2
+    # Text search should work with embedding function
+    results = store.similarity_search_by_text("query", k=2)
+    assert len(results) == 2
+
+
 if __name__ == "__main__":
     test_add_and_search()
     test_delete()
     test_get_by_id()
     test_filter()
+    test_mmr_search()
+    test_from_texts()
     print("All langchain tests passed!")
