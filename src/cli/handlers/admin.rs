@@ -539,3 +539,133 @@ pub fn import_bundle_command(database: &str, bundle: &str, name: Option<&str>) -
     println!("  Dimensions: {}", manifest.dimensions);
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_demo_command_small() {
+        assert!(demo_command(20, 32).is_ok());
+    }
+
+    #[test]
+    fn test_tune_command_balanced() {
+        assert!(tune_command(10_000, 128, "balanced", None).is_ok());
+    }
+
+    #[test]
+    fn test_tune_command_profiles() {
+        assert!(tune_command(100_000, 384, "high-recall", Some(512)).is_ok());
+        assert!(tune_command(50_000, 256, "low-latency", None).is_ok());
+        assert!(tune_command(10_000, 64, "low-memory", Some(128)).is_ok());
+        // Unknown profile falls back to Balanced
+        assert!(tune_command(1_000, 32, "unknown", None).is_ok());
+    }
+
+    #[test]
+    fn test_init_command_new_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let sub = dir.path().join("new_project");
+        assert!(init_command(sub.to_str().unwrap(), "vectors.needle", 128).is_ok());
+        assert!(sub.join("vectors.needle").exists());
+    }
+
+    #[test]
+    fn test_init_command_existing_db() {
+        let dir = tempfile::tempdir().unwrap();
+        // First init creates the db
+        init_command(dir.path().to_str().unwrap(), "test.needle", 64).unwrap();
+        // Second init should print "already exists" and return Ok
+        assert!(init_command(dir.path().to_str().unwrap(), "test.needle", 64).is_ok());
+    }
+
+    #[test]
+    fn test_init_command_path_traversal_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let result = init_command(dir.path().to_str().unwrap(), "../escape.needle", 128);
+        assert!(result.is_err());
+
+        let result = init_command(dir.path().to_str().unwrap(), "sub/path.needle", 128);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_doctor_command() {
+        assert!(doctor_command().is_ok());
+    }
+
+    #[test]
+    fn test_optimize_dimensions_command() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.needle");
+        let path = path.to_str().unwrap();
+        let mut db = Database::open(path).unwrap();
+        db.create_collection("embeddings", 128).unwrap();
+        let coll = db.collection("embeddings").unwrap();
+        for i in 0..10 {
+            let vec: Vec<f32> = (0..128).map(|j| ((i * 128 + j) as f32).sin()).collect();
+            coll.insert(format!("v{i}"), &vec, None).unwrap();
+        }
+        db.save().unwrap();
+
+        assert!(optimize_dimensions_command(path, "embeddings", None, 10).is_ok());
+        assert!(optimize_dimensions_command(path, "embeddings", Some("64,32"), 5).is_ok());
+    }
+
+    #[test]
+    fn test_merge_command_two_way() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.needle");
+        let path = path.to_str().unwrap();
+        let mut db = Database::open(path).unwrap();
+        db.create_collection("src", 3).unwrap();
+        db.create_collection("tgt", 3).unwrap();
+        let src = db.collection("src").unwrap();
+        let tgt = db.collection("tgt").unwrap();
+        src.insert("a", &[1.0, 0.0, 0.0], None).unwrap();
+        src.insert("shared", &[0.5, 0.5, 0.0], None).unwrap();
+        tgt.insert("shared", &[0.5, 0.5, 0.1], None).unwrap();
+        tgt.insert("b", &[0.0, 1.0, 0.0], None).unwrap();
+        db.save().unwrap();
+
+        // Dry-run first
+        assert!(merge_command(path, "src", "tgt", None, "skip", true).is_ok());
+        // Actual merge
+        assert!(merge_command(path, "src", "tgt", None, "source-wins", false).is_ok());
+    }
+
+    #[test]
+    fn test_merge_command_invalid_strategy() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.needle");
+        let path = path.to_str().unwrap();
+        let mut db = Database::open(path).unwrap();
+        db.create_collection("s", 2).unwrap();
+        db.create_collection("t", 2).unwrap();
+        let s = db.collection("s").unwrap();
+        let t = db.collection("t").unwrap();
+        s.insert("x", &[1.0, 0.0], None).unwrap();
+        t.insert("x", &[0.0, 1.0], None).unwrap();
+        db.save().unwrap();
+
+        let result = merge_command(path, "s", "t", None, "bad-strategy", false);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_provenance_command() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.needle");
+        let path = path.to_str().unwrap();
+        let mut db = Database::open(path).unwrap();
+        db.create_collection("prov", 3).unwrap();
+        let coll = db.collection("prov").unwrap();
+        coll.insert("v1", &[1.0, 0.0, 0.0], None).unwrap();
+        db.save().unwrap();
+
+        // Should succeed (prints provenance or "not found")
+        assert!(provenance_command(path, "prov", "v1").is_ok());
+        assert!(provenance_command(path, "prov", "missing").is_ok());
+    }
+}
