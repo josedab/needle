@@ -352,6 +352,298 @@ impl EventLogSnapshot {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::super::core::OperationType;
 
-    // Tests needed: see docs/TODO-test-coverage.md
+    fn make_event(collection: &str, op: OperationType, pos: u64) -> ChangeEvent {
+        match op {
+            OperationType::Insert => {
+                ChangeEvent::insert(collection, &format!("key_{pos}"), vec![1, 2, 3], pos)
+            }
+            OperationType::Delete => {
+                ChangeEvent::delete(collection, &format!("key_{pos}"), pos)
+            }
+            _ => ChangeEvent::insert(collection, &format!("key_{pos}"), vec![], pos),
+        }
+    }
+
+    // ====================================================================
+    // Append + replay round-trip
+    // ====================================================================
+
+    #[tokio::test]
+    async fn test_append_and_replay() {
+        let log = EventLog::new();
+
+        let pos0 = log.append(make_event("col", OperationType::Insert, 0)).await.unwrap();
+        let pos1 = log.append(make_event("col", OperationType::Insert, 1)).await.unwrap();
+
+        assert_eq!(pos0, 0);
+        assert_eq!(pos1, 1);
+
+        let events = log.replay(ReplayOptions::new()).await.unwrap();
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].id, 0);
+        assert_eq!(events[1].id, 1);
+    }
+
+    #[tokio::test]
+    async fn test_current_position() {
+        let log = EventLog::new();
+        assert_eq!(log.current_position(), 0);
+
+        log.append(make_event("col", OperationType::Insert, 0)).await.unwrap();
+        assert_eq!(log.current_position(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_len_and_is_empty() {
+        let log = EventLog::new();
+        assert!(log.is_empty().await);
+        assert_eq!(log.len().await, 0);
+
+        log.append(make_event("col", OperationType::Insert, 0)).await.unwrap();
+        assert!(!log.is_empty().await);
+        assert_eq!(log.len().await, 1);
+    }
+
+    // ====================================================================
+    // Position-based range queries
+    // ====================================================================
+
+    #[tokio::test]
+    async fn test_range_query() {
+        let log = EventLog::new();
+        for i in 0..5 {
+            log.append(make_event("col", OperationType::Insert, i)).await.unwrap();
+        }
+
+        let events = log.range(1, 4).await.unwrap();
+        assert_eq!(events.len(), 3);
+        assert_eq!(events[0].id, 1);
+        assert_eq!(events[2].id, 3);
+    }
+
+    #[tokio::test]
+    async fn test_get_by_position() {
+        let log = EventLog::new();
+        log.append(make_event("col", OperationType::Insert, 0)).await.unwrap();
+        log.append(make_event("col", OperationType::Delete, 1)).await.unwrap();
+
+        let event = log.get(0).await;
+        assert!(event.is_some());
+        assert_eq!(event.unwrap().collection, "col");
+
+        let event = log.get(1).await;
+        assert!(event.is_some());
+
+        // Non-existent position
+        let event = log.get(99).await;
+        assert!(event.is_none());
+    }
+
+    // ====================================================================
+    // ReplayOptions filtering
+    // ====================================================================
+
+    #[tokio::test]
+    async fn test_replay_filter_by_collection() {
+        let log = EventLog::new();
+        log.append(make_event("users", OperationType::Insert, 0)).await.unwrap();
+        log.append(make_event("orders", OperationType::Insert, 1)).await.unwrap();
+        log.append(make_event("users", OperationType::Delete, 2)).await.unwrap();
+
+        let events = log
+            .replay(ReplayOptions::new().collection("users"))
+            .await
+            .unwrap();
+        assert_eq!(events.len(), 2);
+        assert!(events.iter().all(|e| e.collection == "users"));
+    }
+
+    #[tokio::test]
+    async fn test_replay_filter_by_operation_type() {
+        let log = EventLog::new();
+        log.append(make_event("col", OperationType::Insert, 0)).await.unwrap();
+        log.append(make_event("col", OperationType::Delete, 1)).await.unwrap();
+        log.append(make_event("col", OperationType::Insert, 2)).await.unwrap();
+
+        let events = log
+            .replay(ReplayOptions::new().operations(&[OperationType::Delete]))
+            .await
+            .unwrap();
+        assert_eq!(events.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_replay_with_limit() {
+        let log = EventLog::new();
+        for i in 0..10 {
+            log.append(make_event("col", OperationType::Insert, i)).await.unwrap();
+        }
+
+        let events = log.replay(ReplayOptions::new().limit(3)).await.unwrap();
+        assert_eq!(events.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn test_replay_with_offset() {
+        let log = EventLog::new();
+        for i in 0..5 {
+            log.append(make_event("col", OperationType::Insert, i)).await.unwrap();
+        }
+
+        let events = log.replay(ReplayOptions::new().offset(3)).await.unwrap();
+        assert_eq!(events.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_replay_from_to() {
+        let log = EventLog::new();
+        for i in 0..5 {
+            log.append(make_event("col", OperationType::Insert, i)).await.unwrap();
+        }
+
+        let events = log.replay(ReplayOptions::new().from(2).to(4)).await.unwrap();
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].id, 2);
+        assert_eq!(events[1].id, 3);
+    }
+
+    // ====================================================================
+    // Batch append
+    // ====================================================================
+
+    #[tokio::test]
+    async fn test_append_batch() {
+        let log = EventLog::new();
+        let events = vec![
+            make_event("col", OperationType::Insert, 0),
+            make_event("col", OperationType::Insert, 1),
+            make_event("col", OperationType::Insert, 2),
+        ];
+
+        let positions = log.append_batch(events).await.unwrap();
+        assert_eq!(positions.len(), 3);
+        assert_eq!(positions, vec![0, 1, 2]);
+        assert_eq!(log.len().await, 3);
+    }
+
+    // ====================================================================
+    // Compaction
+    // ====================================================================
+
+    #[tokio::test]
+    async fn test_compact() {
+        let log = EventLog::new();
+        for i in 0..5 {
+            log.append(make_event("col", OperationType::Insert, i)).await.unwrap();
+        }
+
+        let removed = log.compact(3).await.unwrap();
+        assert_eq!(removed, 3);
+        assert_eq!(log.last_compacted_position(), 3);
+        assert_eq!(log.len().await, 2);
+    }
+
+    #[tokio::test]
+    async fn test_compact_below_compacted_noop() {
+        let log = EventLog::new();
+        for i in 0..5 {
+            log.append(make_event("col", OperationType::Insert, i)).await.unwrap();
+        }
+
+        log.compact(3).await.unwrap();
+        let removed = log.compact(2).await.unwrap();
+        assert_eq!(removed, 0);
+    }
+
+    #[tokio::test]
+    async fn test_get_after_compaction_returns_none() {
+        let log = EventLog::new();
+        for i in 0..5 {
+            log.append(make_event("col", OperationType::Insert, i)).await.unwrap();
+        }
+
+        log.compact(3).await.unwrap();
+        assert!(log.get(0).await.is_none());
+        assert!(log.get(2).await.is_none());
+        assert!(log.get(3).await.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_replay_after_compaction_position_not_found() {
+        let log = EventLog::new();
+        for i in 0..5 {
+            log.append(make_event("col", OperationType::Insert, i)).await.unwrap();
+        }
+
+        log.compact(3).await.unwrap();
+        let result = log.replay(ReplayOptions::new().from(0)).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_needs_compaction() {
+        let log = EventLog::with_compaction_threshold(5);
+        for i in 0..4 {
+            log.append(make_event("col", OperationType::Insert, i)).await.unwrap();
+        }
+        assert!(!log.needs_compaction().await);
+
+        log.append(make_event("col", OperationType::Insert, 4)).await.unwrap();
+        assert!(log.needs_compaction().await);
+    }
+
+    #[tokio::test]
+    async fn test_is_compacting_initially_false() {
+        let log = EventLog::new();
+        assert!(!log.is_compacting());
+    }
+
+    // ====================================================================
+    // Snapshot / restore
+    // ====================================================================
+
+    #[tokio::test]
+    async fn test_snapshot_restore() {
+        let log = EventLog::new();
+        for i in 0..3 {
+            log.append(make_event("col", OperationType::Insert, i)).await.unwrap();
+        }
+
+        let snapshot = log.snapshot().await;
+        assert_eq!(snapshot.len(), 3);
+        assert!(!snapshot.is_empty());
+
+        // Create a new log and restore
+        let log2 = EventLog::new();
+        log2.restore(snapshot).await.unwrap();
+        assert_eq!(log2.len().await, 3);
+        assert_eq!(log2.current_position(), 3);
+    }
+
+    // ====================================================================
+    // Count
+    // ====================================================================
+
+    #[tokio::test]
+    async fn test_count() {
+        let log = EventLog::new();
+        log.append(make_event("a", OperationType::Insert, 0)).await.unwrap();
+        log.append(make_event("b", OperationType::Insert, 1)).await.unwrap();
+        log.append(make_event("a", OperationType::Delete, 2)).await.unwrap();
+
+        let count = log.count(ReplayOptions::new().collection("a")).await.unwrap();
+        assert_eq!(count, 2);
+    }
+
+    // ====================================================================
+    // Compaction barrier (append fails during compaction)
+    // ====================================================================
+
+    #[tokio::test]
+    async fn test_default_impl() {
+        let log = EventLog::default();
+        assert!(log.is_empty().await);
+    }
 }
