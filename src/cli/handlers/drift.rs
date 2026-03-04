@@ -334,3 +334,123 @@ fn drift_report(
 
     Ok(())
 }
+
+#[cfg(all(test, feature = "observability"))]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn setup_db_with_vectors() -> (tempfile::TempDir, String) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.needle").to_str().unwrap().to_string();
+        let mut db = Database::open(&path).unwrap();
+        db.create_collection("embeddings", 4).unwrap();
+        let coll = db.collection("embeddings").unwrap();
+        for i in 0..20 {
+            let vec = vec![
+                (i as f32 * 0.1).sin(),
+                (i as f32 * 0.2).cos(),
+                (i as f32 * 0.3).sin(),
+                (i as f32 * 0.4).cos(),
+            ];
+            coll.insert(format!("v{i}"), &vec, None).unwrap();
+        }
+        db.save().unwrap();
+        (dir, path)
+    }
+
+    fn create_baseline_file(dir: &tempfile::TempDir, dims: usize) -> String {
+        let centroid: Vec<f32> = (0..dims).map(|i| (i as f32 * 0.1).sin()).collect();
+        let variance: Vec<f32> = vec![0.1; dims];
+        let baseline = json!({
+            "collection": "embeddings",
+            "sample_size": 20,
+            "dimensions": dims,
+            "created_at": "2024-01-01T00:00:00Z",
+            "centroid": centroid,
+            "variance": variance
+        });
+        let path = dir.path().join("baseline.json");
+        std::fs::write(&path, serde_json::to_string_pretty(&baseline).unwrap()).unwrap();
+        path.to_str().unwrap().to_string()
+    }
+
+    #[test]
+    fn test_drift_baseline() {
+        let (_dir, db_path) = setup_db_with_vectors();
+        let output_dir = tempfile::tempdir().unwrap();
+        let output = output_dir.path().join("baseline.json");
+        let output = output.to_str().unwrap();
+
+        assert!(drift_baseline(&db_path, "embeddings", output, 10).is_ok());
+
+        let content = std::fs::read_to_string(output).unwrap();
+        let data: serde_json::Value = serde_json::from_str(&content).unwrap();
+        assert_eq!(data["dimensions"], 4);
+        assert!(data["centroid"].as_array().is_some());
+        assert!(data["variance"].as_array().is_some());
+    }
+
+    #[test]
+    fn test_drift_baseline_full_sample() {
+        let (_dir, db_path) = setup_db_with_vectors();
+        let output_dir = tempfile::tempdir().unwrap();
+        let output = output_dir.path().join("baseline.json");
+        let output = output.to_str().unwrap();
+
+        assert!(drift_baseline(&db_path, "embeddings", output, 0).is_ok());
+    }
+
+    #[test]
+    fn test_drift_detect() {
+        let (dir, db_path) = setup_db_with_vectors();
+        let baseline_path = create_baseline_file(&dir, 4);
+
+        let result = drift_detect(&db_path, "embeddings", &baseline_path, 0.5);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_drift_report_text() {
+        let (dir, db_path) = setup_db_with_vectors();
+        let baseline_path = create_baseline_file(&dir, 4);
+
+        let result = drift_report(&db_path, "embeddings", &baseline_path, "text");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_drift_report_json() {
+        let (dir, db_path) = setup_db_with_vectors();
+        let baseline_path = create_baseline_file(&dir, 4);
+
+        let result = drift_report(&db_path, "embeddings", &baseline_path, "json");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_drift_detect_nonexistent_collection() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("test.needle");
+        let db_path = db_path.to_str().unwrap();
+        let _db = Database::open(db_path).unwrap();
+        let baseline_path = create_baseline_file(&dir, 4);
+
+        let result = drift_detect(db_path, "nonexistent", &baseline_path, 0.1);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_drift_baseline_empty_collection() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("test.needle");
+        let db_path_str = db_path.to_str().unwrap();
+        let mut db = Database::open(db_path_str).unwrap();
+        db.create_collection("empty", 4).unwrap();
+        db.save().unwrap();
+
+        let output = dir.path().join("baseline.json");
+        let result = drift_baseline(db_path_str, "empty", output.to_str().unwrap(), 10);
+        let _ = result;
+    }
+}
