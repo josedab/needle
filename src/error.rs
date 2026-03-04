@@ -1031,4 +1031,650 @@ mod tests {
         let help = error.help();
         assert!(!help.is_empty());
     }
+
+    #[test]
+    fn test_all_error_variants_have_error_codes() {
+        let variants: Vec<NeedleError> = vec![
+            NeedleError::Io(std::io::Error::new(std::io::ErrorKind::Other, "test")),
+            NeedleError::Serialization(
+                serde_json::from_str::<serde_json::Value>("invalid").unwrap_err(),
+            ),
+            NeedleError::DimensionMismatch {
+                expected: 128,
+                got: 256,
+            },
+            NeedleError::CollectionNotFound("c".into()),
+            NeedleError::CollectionAlreadyExists("c".into()),
+            NeedleError::AliasNotFound("a".into()),
+            NeedleError::AliasAlreadyExists("a".into()),
+            NeedleError::CollectionHasAliases("c".into()),
+            NeedleError::VectorNotFound("v".into()),
+            NeedleError::VectorAlreadyExists("v".into()),
+            NeedleError::DuplicateId("d".into()),
+            NeedleError::OperationInProgress("op".into()),
+            NeedleError::InvalidDatabase("bad".into()),
+            NeedleError::Corruption("corrupt".into()),
+            NeedleError::Index("idx".into()),
+            NeedleError::InvalidConfig("cfg".into()),
+            NeedleError::CapacityExceeded("cap".into()),
+            NeedleError::InvalidVector("vec".into()),
+            NeedleError::InvalidInput("inp".into()),
+            NeedleError::QuotaExceeded("quota".into()),
+            NeedleError::BackupError("bak".into()),
+            NeedleError::NotFound("nf".into()),
+            NeedleError::Conflict("conflict".into()),
+            NeedleError::EncryptionError("enc".into()),
+            NeedleError::ConsensusError("raft".into()),
+            NeedleError::LockError,
+            NeedleError::Timeout(std::time::Duration::from_secs(5)),
+            NeedleError::LockTimeout(std::time::Duration::from_millis(100)),
+            NeedleError::InvalidOperation("op".into()),
+            NeedleError::InvalidState("state".into()),
+            NeedleError::Unauthorized("unauth".into()),
+            NeedleError::InvalidArgument("arg".into()),
+        ];
+
+        for error in &variants {
+            let code = error.error_code();
+            assert!(code.code() > 0, "Error {:?} has zero error code", error);
+            assert!(
+                !code.category().is_empty(),
+                "Error {:?} has empty category",
+                error
+            );
+        }
+    }
+
+    #[test]
+    fn test_all_error_variants_have_recovery_hints() {
+        let variants: Vec<NeedleError> = vec![
+            NeedleError::Serialization(
+                serde_json::from_str::<serde_json::Value>("bad").unwrap_err(),
+            ),
+            NeedleError::AliasNotFound("a".into()),
+            NeedleError::AliasAlreadyExists("a".into()),
+            NeedleError::CollectionHasAliases("c".into()),
+            NeedleError::VectorAlreadyExists("v".into()),
+            NeedleError::DuplicateId("d".into()),
+            NeedleError::OperationInProgress("op".into()),
+            NeedleError::InvalidDatabase("bad".into()),
+            NeedleError::Corruption("corrupt".into()),
+            NeedleError::Index("idx".into()),
+            NeedleError::InvalidConfig("cfg".into()),
+            NeedleError::CapacityExceeded("cap".into()),
+            NeedleError::InvalidVector("vec".into()),
+            NeedleError::InvalidInput("inp".into()),
+            NeedleError::QuotaExceeded("quota".into()),
+            NeedleError::BackupError("bak".into()),
+            NeedleError::NotFound("nf".into()),
+            NeedleError::Conflict("conflict".into()),
+            NeedleError::EncryptionError("enc".into()),
+            NeedleError::ConsensusError("raft".into()),
+            NeedleError::LockTimeout(std::time::Duration::from_millis(100)),
+            NeedleError::InvalidOperation("op".into()),
+            NeedleError::InvalidState("state".into()),
+            NeedleError::Unauthorized("unauth".into()),
+            NeedleError::InvalidArgument("arg".into()),
+        ];
+
+        for error in &variants {
+            let hints = error.recovery_hints();
+            assert!(
+                !hints.is_empty(),
+                "Error {:?} has no recovery hints",
+                error
+            );
+        }
+    }
+
+    #[test]
+    fn test_all_error_variants_display() {
+        assert_eq!(
+            NeedleError::AliasNotFound("test".into()).to_string(),
+            "Alias 'test' not found"
+        );
+        assert_eq!(
+            NeedleError::AliasAlreadyExists("test".into()).to_string(),
+            "Alias 'test' already exists"
+        );
+        assert_eq!(
+            NeedleError::CollectionHasAliases("col".into()).to_string(),
+            "Cannot drop collection 'col': aliases still reference it"
+        );
+        assert_eq!(
+            NeedleError::VectorAlreadyExists("v1".into()).to_string(),
+            "Vector 'v1' already exists"
+        );
+        assert_eq!(
+            NeedleError::DuplicateId("dup".into()).to_string(),
+            "Duplicate ID: 'dup'"
+        );
+        assert_eq!(
+            NeedleError::InvalidDatabase("bad".into()).to_string(),
+            "Invalid database file: bad"
+        );
+        assert_eq!(
+            NeedleError::Corruption("crc".into()).to_string(),
+            "Database corruption detected: crc"
+        );
+        assert_eq!(
+            NeedleError::InvalidConfig("m=0".into()).to_string(),
+            "Invalid configuration: m=0"
+        );
+        assert_eq!(
+            NeedleError::CapacityExceeded("max".into()).to_string(),
+            "Capacity exceeded: max"
+        );
+        assert_eq!(
+            NeedleError::QuotaExceeded("limit".into()).to_string(),
+            "Quota exceeded: limit"
+        );
+        assert_eq!(
+            NeedleError::BackupError("fail".into()).to_string(),
+            "Backup error: fail"
+        );
+        assert_eq!(
+            NeedleError::EncryptionError("key".into()).to_string(),
+            "Encryption error: key"
+        );
+        assert_eq!(
+            NeedleError::ConsensusError("raft".into()).to_string(),
+            "Consensus error: raft"
+        );
+        assert_eq!(
+            NeedleError::Unauthorized("no token".into()).to_string(),
+            "Unauthorized: no token"
+        );
+        assert_eq!(
+            NeedleError::InvalidArgument("k<0".into()).to_string(),
+            "Invalid argument: k<0"
+        );
+    }
+
+    #[test]
+    fn test_error_code_mapping_specific() {
+        assert_eq!(
+            NeedleError::AliasNotFound("a".into()).error_code(),
+            ErrorCode::AliasNotFound
+        );
+        assert_eq!(
+            NeedleError::AliasAlreadyExists("a".into()).error_code(),
+            ErrorCode::AliasAlreadyExists
+        );
+        assert_eq!(
+            NeedleError::CollectionHasAliases("c".into()).error_code(),
+            ErrorCode::AliasTargetHasAliases
+        );
+        assert_eq!(
+            NeedleError::VectorAlreadyExists("v".into()).error_code(),
+            ErrorCode::VectorAlreadyExists
+        );
+        assert_eq!(
+            NeedleError::DuplicateId("d".into()).error_code(),
+            ErrorCode::VectorAlreadyExists
+        );
+        assert_eq!(
+            NeedleError::OperationInProgress("op".into()).error_code(),
+            ErrorCode::Conflict
+        );
+        assert_eq!(
+            NeedleError::InvalidDatabase("bad".into()).error_code(),
+            ErrorCode::InvalidDatabase
+        );
+        assert_eq!(
+            NeedleError::Corruption("c".into()).error_code(),
+            ErrorCode::DatabaseCorrupted
+        );
+        assert_eq!(
+            NeedleError::Index("i".into()).error_code(),
+            ErrorCode::IndexError
+        );
+        assert_eq!(
+            NeedleError::InvalidConfig("c".into()).error_code(),
+            ErrorCode::InvalidConfig
+        );
+        assert_eq!(
+            NeedleError::CapacityExceeded("c".into()).error_code(),
+            ErrorCode::CapacityExceeded
+        );
+        assert_eq!(
+            NeedleError::InvalidVector("v".into()).error_code(),
+            ErrorCode::InvalidVector
+        );
+        assert_eq!(
+            NeedleError::QuotaExceeded("q".into()).error_code(),
+            ErrorCode::QuotaExceeded
+        );
+        assert_eq!(
+            NeedleError::BackupError("b".into()).error_code(),
+            ErrorCode::BackupFailed
+        );
+        assert_eq!(
+            NeedleError::NotFound("n".into()).error_code(),
+            ErrorCode::NotFound
+        );
+        assert_eq!(
+            NeedleError::Conflict("c".into()).error_code(),
+            ErrorCode::Conflict
+        );
+        assert_eq!(
+            NeedleError::EncryptionError("e".into()).error_code(),
+            ErrorCode::EncryptionError
+        );
+        assert_eq!(
+            NeedleError::ConsensusError("r".into()).error_code(),
+            ErrorCode::ConsensusError
+        );
+        assert_eq!(
+            NeedleError::LockError.error_code(),
+            ErrorCode::DatabaseLocked
+        );
+        assert_eq!(
+            NeedleError::LockTimeout(std::time::Duration::from_millis(50)).error_code(),
+            ErrorCode::LockTimeout
+        );
+        assert_eq!(
+            NeedleError::InvalidOperation("o".into()).error_code(),
+            ErrorCode::InvalidOperation
+        );
+        assert_eq!(
+            NeedleError::InvalidState("s".into()).error_code(),
+            ErrorCode::InvalidState
+        );
+        assert_eq!(
+            NeedleError::Unauthorized("u".into()).error_code(),
+            ErrorCode::Unauthorized
+        );
+        assert_eq!(
+            NeedleError::InvalidArgument("a".into()).error_code(),
+            ErrorCode::InvalidConfig
+        );
+    }
+
+    #[test]
+    fn test_retryable_variants_comprehensive() {
+        // All retryable errors
+        assert!(NeedleError::Timeout(std::time::Duration::from_secs(1)).is_retryable());
+        assert!(NeedleError::LockTimeout(std::time::Duration::from_millis(50)).is_retryable());
+        assert!(NeedleError::LockError.is_retryable());
+        assert!(NeedleError::Conflict("c".into()).is_retryable());
+        assert!(NeedleError::ConsensusError("r".into()).is_retryable());
+
+        // Non-retryable errors
+        assert!(!NeedleError::InvalidConfig("c".into()).is_retryable());
+        assert!(!NeedleError::Corruption("c".into()).is_retryable());
+        assert!(!NeedleError::Unauthorized("u".into()).is_retryable());
+        assert!(!NeedleError::InvalidArgument("a".into()).is_retryable());
+    }
+
+    #[test]
+    fn test_suggested_retry_delays() {
+        assert_eq!(
+            NeedleError::Timeout(std::time::Duration::from_secs(1)).suggested_retry_delay_ms(),
+            Some(1000)
+        );
+        assert_eq!(
+            NeedleError::LockTimeout(std::time::Duration::from_millis(50))
+                .suggested_retry_delay_ms(),
+            Some(100)
+        );
+        assert_eq!(
+            NeedleError::LockError.suggested_retry_delay_ms(),
+            Some(50)
+        );
+        assert_eq!(
+            NeedleError::Conflict("c".into()).suggested_retry_delay_ms(),
+            Some(100)
+        );
+        assert_eq!(
+            NeedleError::ConsensusError("r".into()).suggested_retry_delay_ms(),
+            Some(500)
+        );
+        assert_eq!(
+            NeedleError::CollectionNotFound("c".into()).suggested_retry_delay_ms(),
+            None
+        );
+    }
+
+    #[test]
+    fn test_from_io_error() {
+        let io_err = std::io::Error::new(std::io::ErrorKind::NotFound, "file missing");
+        let needle_err: NeedleError = io_err.into();
+        assert!(matches!(needle_err, NeedleError::Io(_)));
+        assert_eq!(needle_err.error_code(), ErrorCode::IoRead);
+    }
+
+    #[test]
+    fn test_from_serde_error() {
+        let json_err = serde_json::from_str::<serde_json::Value>("not json").unwrap_err();
+        let needle_err: NeedleError = json_err.into();
+        assert!(matches!(needle_err, NeedleError::Serialization(_)));
+        assert_eq!(needle_err.error_code(), ErrorCode::SerializationFailed);
+    }
+
+    #[test]
+    fn test_error_code_categories() {
+        assert_eq!(ErrorCode::IoRead.category(), "I/O");
+        assert_eq!(ErrorCode::IoPermission.category(), "I/O");
+        assert_eq!(ErrorCode::SerializationFailed.category(), "Serialization");
+        assert_eq!(ErrorCode::CollectionNotFound.category(), "Collection");
+        assert_eq!(ErrorCode::AliasNotFound.category(), "Collection");
+        assert_eq!(ErrorCode::VectorNotFound.category(), "Vector");
+        assert_eq!(ErrorCode::DimensionMismatch.category(), "Vector");
+        assert_eq!(ErrorCode::InvalidDatabase.category(), "Database");
+        assert_eq!(ErrorCode::IndexError.category(), "Index");
+        assert_eq!(ErrorCode::InvalidConfig.category(), "Configuration");
+        assert_eq!(ErrorCode::CapacityExceeded.category(), "Resource");
+        assert_eq!(ErrorCode::Timeout.category(), "Operational");
+        assert_eq!(ErrorCode::EncryptionError.category(), "Security");
+        assert_eq!(ErrorCode::ConsensusError.category(), "Distributed");
+        assert_eq!(ErrorCode::BackupFailed.category(), "Backup");
+        assert_eq!(ErrorCode::InvalidOperation.category(), "State");
+        assert_eq!(ErrorCode::Unauthorized.category(), "State");
+    }
+
+    #[test]
+    fn test_help_for_untested_variants() {
+        // Alias errors
+        let err = NeedleError::AliasNotFound("my_alias".into());
+        let help = err.help();
+        assert!(!help.is_empty());
+
+        // Invalid input
+        let err = NeedleError::InvalidInput("bad filter".into());
+        let help = err.help();
+        assert!(help.contains("bad filter"));
+
+        // Serialization
+        let err = NeedleError::Serialization(
+            serde_json::from_str::<serde_json::Value>("x").unwrap_err(),
+        );
+        let help = err.help();
+        assert!(help.contains("JSON"));
+    }
+
+    // ── Additional comprehensive tests ──────────────────────────────────
+
+    #[test]
+    fn test_display_remaining_variants() {
+        assert_eq!(
+            NeedleError::LockError.to_string(),
+            "Lock error: failed to acquire lock"
+        );
+        let timeout = NeedleError::Timeout(std::time::Duration::from_secs(5));
+        assert!(timeout.to_string().contains("5s"));
+
+        let lock_timeout = NeedleError::LockTimeout(std::time::Duration::from_millis(200));
+        assert!(lock_timeout.to_string().contains("200ms"));
+
+        assert_eq!(
+            NeedleError::OperationInProgress("compaction".into()).to_string(),
+            "Operation in progress: compaction"
+        );
+        assert_eq!(
+            NeedleError::NotFound("snapshot_1".into()).to_string(),
+            "Not found: snapshot_1"
+        );
+        assert_eq!(
+            NeedleError::Conflict("write conflict".into()).to_string(),
+            "Conflict: write conflict"
+        );
+        assert_eq!(
+            NeedleError::Index("rebuild needed".into()).to_string(),
+            "Index error: rebuild needed"
+        );
+        assert_eq!(
+            NeedleError::InvalidVector("NaN detected".into()).to_string(),
+            "Invalid vector: NaN detected"
+        );
+        assert_eq!(
+            NeedleError::InvalidInput("bad filter".into()).to_string(),
+            "Invalid input: bad filter"
+        );
+        assert_eq!(
+            NeedleError::InvalidOperation("read-only".into()).to_string(),
+            "Invalid operation: read-only"
+        );
+        assert_eq!(
+            NeedleError::InvalidState("uninitialized".into()).to_string(),
+            "Invalid state: uninitialized"
+        );
+    }
+
+    #[test]
+    fn test_error_code_numeric_values() {
+        assert_eq!(ErrorCode::IoRead.code(), 1001);
+        assert_eq!(ErrorCode::IoWrite.code(), 1002);
+        assert_eq!(ErrorCode::IoPermission.code(), 1003);
+        assert_eq!(ErrorCode::IoDiskFull.code(), 1004);
+        assert_eq!(ErrorCode::SerializationFailed.code(), 2001);
+        assert_eq!(ErrorCode::DeserializationFailed.code(), 2002);
+        assert_eq!(ErrorCode::InvalidFormat.code(), 2003);
+        assert_eq!(ErrorCode::CollectionNotFound.code(), 3001);
+        assert_eq!(ErrorCode::CollectionAlreadyExists.code(), 3002);
+        assert_eq!(ErrorCode::CollectionCorrupted.code(), 3003);
+        assert_eq!(ErrorCode::AliasNotFound.code(), 3004);
+        assert_eq!(ErrorCode::AliasAlreadyExists.code(), 3005);
+        assert_eq!(ErrorCode::AliasTargetHasAliases.code(), 3006);
+        assert_eq!(ErrorCode::VectorNotFound.code(), 4001);
+        assert_eq!(ErrorCode::VectorAlreadyExists.code(), 4002);
+        assert_eq!(ErrorCode::DimensionMismatch.code(), 4003);
+        assert_eq!(ErrorCode::InvalidVector.code(), 4004);
+        assert_eq!(ErrorCode::InvalidDatabase.code(), 5001);
+        assert_eq!(ErrorCode::DatabaseCorrupted.code(), 5002);
+        assert_eq!(ErrorCode::DatabaseLocked.code(), 5003);
+        assert_eq!(ErrorCode::IndexError.code(), 6001);
+        assert_eq!(ErrorCode::IndexCorrupted.code(), 6002);
+        assert_eq!(ErrorCode::IndexBuildFailed.code(), 6003);
+        assert_eq!(ErrorCode::InvalidConfig.code(), 7001);
+        assert_eq!(ErrorCode::MissingConfig.code(), 7002);
+        assert_eq!(ErrorCode::CapacityExceeded.code(), 8001);
+        assert_eq!(ErrorCode::QuotaExceeded.code(), 8002);
+        assert_eq!(ErrorCode::MemoryExhausted.code(), 8003);
+        assert_eq!(ErrorCode::Timeout.code(), 9001);
+        assert_eq!(ErrorCode::LockTimeout.code(), 9002);
+        assert_eq!(ErrorCode::Conflict.code(), 9003);
+        assert_eq!(ErrorCode::NotFound.code(), 9004);
+        assert_eq!(ErrorCode::EncryptionError.code(), 10001);
+        assert_eq!(ErrorCode::DecryptionError.code(), 10002);
+        assert_eq!(ErrorCode::AuthenticationFailed.code(), 10003);
+        assert_eq!(ErrorCode::ConsensusError.code(), 11001);
+        assert_eq!(ErrorCode::ReplicationError.code(), 11002);
+        assert_eq!(ErrorCode::NetworkError.code(), 11003);
+        assert_eq!(ErrorCode::BackupFailed.code(), 12001);
+        assert_eq!(ErrorCode::RestoreFailed.code(), 12002);
+        assert_eq!(ErrorCode::BackupCorrupted.code(), 12003);
+        assert_eq!(ErrorCode::InvalidOperation.code(), 13001);
+        assert_eq!(ErrorCode::InvalidState.code(), 13002);
+        assert_eq!(ErrorCode::Unauthorized.code(), 13003);
+    }
+
+    #[test]
+    fn test_recovery_hint_builder_and_display() {
+        let hint = RecoveryHint::new("Check permissions")
+            .with_details("Run chmod 644 on the file")
+            .with_doc("https://docs.needle.dev/troubleshooting");
+
+        assert_eq!(hint.summary, "Check permissions");
+        assert_eq!(hint.details.as_deref(), Some("Run chmod 644 on the file"));
+        assert_eq!(
+            hint.doc_ref.as_deref(),
+            Some("https://docs.needle.dev/troubleshooting")
+        );
+
+        let display = format!("{}", hint);
+        assert!(display.contains("Check permissions"));
+        assert!(display.contains("Details:"));
+        assert!(display.contains("See:"));
+
+        // Hint without details or doc
+        let simple = RecoveryHint::new("Retry the operation");
+        let simple_display = format!("{}", simple);
+        assert_eq!(simple_display, "Retry the operation");
+        assert!(!simple_display.contains("Details:"));
+        assert!(!simple_display.contains("See:"));
+    }
+
+    #[test]
+    fn test_io_error_kind_disk_full_mapping() {
+        let err = NeedleError::Io(std::io::Error::new(
+            std::io::ErrorKind::WriteZero,
+            "disk full",
+        ));
+        assert_eq!(err.error_code(), ErrorCode::IoDiskFull);
+        let hints = err.recovery_hints();
+        assert!(hints.iter().any(|h| h.summary.contains("disk") || h.summary.contains("space")));
+
+        // Generic IO error maps to IoWrite
+        let err = NeedleError::Io(std::io::Error::new(
+            std::io::ErrorKind::BrokenPipe,
+            "pipe broken",
+        ));
+        assert_eq!(err.error_code(), ErrorCode::IoWrite);
+    }
+
+    #[test]
+    fn test_format_with_hints_various_errors() {
+        let err = NeedleError::DimensionMismatch {
+            expected: 384,
+            got: 768,
+        };
+        let formatted = err.format_with_hints();
+        assert!(formatted.contains("Error [4003]"));
+        assert!(formatted.contains("384"));
+        assert!(formatted.contains("768"));
+
+        let err = NeedleError::Unauthorized("missing token".into());
+        let formatted = err.format_with_hints();
+        assert!(formatted.contains("Error [13003]"));
+        assert!(formatted.contains("missing token"));
+
+        // LockError has no inner message but should still format
+        let err = NeedleError::LockError;
+        let formatted = err.format_with_hints();
+        assert!(formatted.contains("Error [5003]"));
+    }
+
+    #[test]
+    fn test_error_source_from_io() {
+        use std::error::Error;
+        let io_err = std::io::Error::new(std::io::ErrorKind::NotFound, "file missing");
+        let needle_err: NeedleError = io_err.into();
+        // std::error::Error::source() should return the inner io::Error
+        assert!(needle_err.source().is_some());
+    }
+
+    #[test]
+    fn test_error_source_from_serde() {
+        use std::error::Error;
+        let json_err = serde_json::from_str::<serde_json::Value>("{bad}").unwrap_err();
+        let needle_err: NeedleError = json_err.into();
+        assert!(needle_err.source().is_some());
+
+        // Non-From variants should have no source
+        let err = NeedleError::CollectionNotFound("test".into());
+        assert!(err.source().is_none());
+    }
+
+    #[test]
+    fn test_all_error_code_categories_exhaustive() {
+        // Verify all categories map correctly
+        assert_eq!(ErrorCode::IoWrite.category(), "I/O");
+        assert_eq!(ErrorCode::IoDiskFull.category(), "I/O");
+        assert_eq!(ErrorCode::DeserializationFailed.category(), "Serialization");
+        assert_eq!(ErrorCode::InvalidFormat.category(), "Serialization");
+        assert_eq!(ErrorCode::CollectionAlreadyExists.category(), "Collection");
+        assert_eq!(ErrorCode::CollectionCorrupted.category(), "Collection");
+        assert_eq!(ErrorCode::AliasAlreadyExists.category(), "Collection");
+        assert_eq!(ErrorCode::AliasTargetHasAliases.category(), "Collection");
+        assert_eq!(ErrorCode::VectorAlreadyExists.category(), "Vector");
+        assert_eq!(ErrorCode::InvalidVector.category(), "Vector");
+        assert_eq!(ErrorCode::DatabaseCorrupted.category(), "Database");
+        assert_eq!(ErrorCode::DatabaseLocked.category(), "Database");
+        assert_eq!(ErrorCode::IndexCorrupted.category(), "Index");
+        assert_eq!(ErrorCode::IndexBuildFailed.category(), "Index");
+        assert_eq!(ErrorCode::MissingConfig.category(), "Configuration");
+        assert_eq!(ErrorCode::QuotaExceeded.category(), "Resource");
+        assert_eq!(ErrorCode::MemoryExhausted.category(), "Resource");
+        assert_eq!(ErrorCode::LockTimeout.category(), "Operational");
+        assert_eq!(ErrorCode::NotFound.category(), "Operational");
+        assert_eq!(ErrorCode::DecryptionError.category(), "Security");
+        assert_eq!(ErrorCode::AuthenticationFailed.category(), "Security");
+        assert_eq!(ErrorCode::ReplicationError.category(), "Distributed");
+        assert_eq!(ErrorCode::NetworkError.category(), "Distributed");
+        assert_eq!(ErrorCode::RestoreFailed.category(), "Backup");
+        assert_eq!(ErrorCode::BackupCorrupted.category(), "Backup");
+        assert_eq!(ErrorCode::InvalidState.category(), "State");
+    }
+
+    #[test]
+    fn test_non_retryable_errors_comprehensive() {
+        let non_retryable = vec![
+            NeedleError::DimensionMismatch { expected: 128, got: 256 },
+            NeedleError::CollectionNotFound("c".into()),
+            NeedleError::CollectionAlreadyExists("c".into()),
+            NeedleError::AliasNotFound("a".into()),
+            NeedleError::AliasAlreadyExists("a".into()),
+            NeedleError::CollectionHasAliases("c".into()),
+            NeedleError::VectorNotFound("v".into()),
+            NeedleError::VectorAlreadyExists("v".into()),
+            NeedleError::DuplicateId("d".into()),
+            NeedleError::InvalidDatabase("bad".into()),
+            NeedleError::Corruption("corrupt".into()),
+            NeedleError::Index("idx".into()),
+            NeedleError::InvalidConfig("cfg".into()),
+            NeedleError::CapacityExceeded("cap".into()),
+            NeedleError::InvalidVector("vec".into()),
+            NeedleError::InvalidInput("inp".into()),
+            NeedleError::QuotaExceeded("quota".into()),
+            NeedleError::BackupError("bak".into()),
+            NeedleError::NotFound("nf".into()),
+            NeedleError::EncryptionError("enc".into()),
+            NeedleError::OperationInProgress("op".into()),
+            NeedleError::InvalidOperation("op".into()),
+            NeedleError::InvalidState("state".into()),
+            NeedleError::Unauthorized("unauth".into()),
+            NeedleError::InvalidArgument("arg".into()),
+        ];
+
+        for error in &non_retryable {
+            assert!(
+                !error.is_retryable(),
+                "Error {:?} should NOT be retryable",
+                error
+            );
+            assert!(
+                error.suggested_retry_delay_ms().is_none(),
+                "Non-retryable error {:?} should have no retry delay",
+                error
+            );
+        }
+    }
+
+    #[test]
+    fn test_recovery_hints_content_for_key_errors() {
+        // Collection not found hints should mention create_collection
+        let err = NeedleError::CollectionNotFound("embeddings".into());
+        let hints = err.recovery_hints();
+        assert!(hints.iter().any(|h| h.summary.contains("create_collection")));
+        assert!(hints.iter().any(|h| h.summary.contains("list_collections")));
+
+        // Corruption hints should mention backup
+        let err = NeedleError::Corruption("checksum mismatch".into());
+        let hints = err.recovery_hints();
+        assert!(hints.iter().any(|h| h.summary.contains("backup")));
+
+        // Encryption error hints should mention key
+        let err = NeedleError::EncryptionError("invalid key".into());
+        let hints = err.recovery_hints();
+        assert!(!hints.is_empty());
+
+        // Timeout hints should mention retrying
+        let err = NeedleError::Timeout(std::time::Duration::from_secs(30));
+        let hints = err.recovery_hints();
+        assert!(hints.iter().any(|h| {
+            let lower = h.summary.to_lowercase();
+            lower.contains("timeout") || lower.contains("retry") || lower.contains("increase")
+        }));
+    }
 }
