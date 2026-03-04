@@ -169,3 +169,63 @@ fn backup_cleanup(path: &str, keep: usize) -> Result<()> {
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_backup_create_and_list() {
+        let db_dir = tempfile::tempdir().unwrap();
+        let db_path = db_dir.path().join("test.needle");
+        let db_path = db_path.to_str().unwrap();
+        let mut db = Database::open(db_path).unwrap();
+        db.create_collection("test", 64).unwrap();
+        db.save().unwrap();
+
+        let backup_dir = tempfile::tempdir().unwrap();
+        let backup_path = backup_dir.path().to_str().unwrap();
+
+        assert!(backup_create(db_path, backup_path, "full", false).is_ok());
+        assert!(backup_list(backup_path).is_ok());
+    }
+
+    #[test]
+    fn test_backup_list_empty() {
+        let tmp_dir = tempfile::tempdir().unwrap();
+        let path = tmp_dir.path().to_str().unwrap();
+        assert!(backup_list(path).is_ok());
+    }
+
+    #[test]
+    fn test_backup_restore_destination_exists_no_force() {
+        let existing = tempfile::NamedTempFile::new().unwrap();
+        let output = existing.path().to_str().unwrap();
+
+        let result = backup_restore("nonexistent_backup.bak", output, false);
+        assert!(result.is_ok()); // Returns Ok but prints error
+    }
+
+    #[test]
+    fn test_backup_cleanup_below_keep() {
+        let tmp_dir = tempfile::tempdir().unwrap();
+        let path = tmp_dir.path().to_str().unwrap();
+        assert!(backup_cleanup(path, 5).is_ok());
+    }
+
+    #[test]
+    fn test_backup_type_parsing() {
+        let db_dir = tempfile::tempdir().unwrap();
+        let db_path = db_dir.path().join("test.needle");
+        let db_path = db_path.to_str().unwrap();
+        let mut db = Database::open(db_path).unwrap();
+        db.create_collection("t", 32).unwrap();
+        db.save().unwrap();
+
+        let backup_dir = tempfile::tempdir().unwrap();
+        let backup_path = backup_dir.path().to_str().unwrap();
+
+        // "unknown" should fall back to Full
+        assert!(backup_create(db_path, backup_path, "unknown", false).is_ok());
+    }
+}
