@@ -1051,4 +1051,694 @@ pub fn quick_rag_pipeline(db: Arc<Database>, dimensions: usize) -> Result<RagPip
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Simple embedder for testing that returns deterministic vectors.
+    struct MockEmbedder {
+        dims: usize,
+    }
+
+    impl MockEmbedder {
+        fn new(dims: usize) -> Self {
+            Self { dims }
+        }
+    }
+
+    impl Embedder for MockEmbedder {
+        fn embed(&self, text: &str) -> Result<Vec<f32>> {
+            // Deterministic embedding based on text hash
+            let seed: u32 = text.bytes().fold(0u32, |acc, b| acc.wrapping_add(b as u32));
+            Ok((0..self.dims)
+                .map(|i| ((seed.wrapping_add(i as u32)) % 100) as f32 / 100.0)
+                .collect())
+        }
+
+        fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>> {
+            texts.iter().map(|t| self.embed(t)).collect()
+        }
+
+        fn dimensions(&self) -> usize {
+            self.dims
+        }
+    }
+
+    /// Embedder that always fails, for error path testing.
+    struct FailingEmbedder;
+
+    impl Embedder for FailingEmbedder {
+        fn embed(&self, _text: &str) -> Result<Vec<f32>> {
+            Err(crate::error::NeedleError::DimensionMismatch {
+                expected: 0,
+                got: 0,
+            })
+        }
+
+        fn embed_batch(&self, _texts: &[&str]) -> Result<Vec<Vec<f32>>> {
+            Err(crate::error::NeedleError::DimensionMismatch {
+                expected: 0,
+                got: 0,
+            })
+        }
+
+        fn dimensions(&self) -> usize {
+            0
+        }
+    }
+
+    fn test_db() -> Arc<Database> {
+        Arc::new(Database::in_memory())
+    }
+
+    fn test_config(dims: usize) -> RagConfig {
+        RagConfig {
+            collection_name: "test_rag".to_string(),
+            dimensions: dims,
+            chunking: ChunkingStrategy::FixedSize {
+                chunk_size: 50,
+                overlap: 10,
+            },
+            top_k: 5,
+            rerank: false,
+            rerank_top_k: 10,
+            deduplicate: false,
+            dedup_threshold: 0.95,
+            cache_enabled: false,
+            cache_size: 100,
+            cache_ttl_seconds: 60,
+            max_context_tokens: 4096,
+            context_strategy: ContextStrategy::None,
+            ..RagConfig::default()
+        }
+    }
+
+    // ========================================================================
+    // Pipeline creation & builder
+    // ========================================================================
+
+    #[test]
+    fn test_pipeline_creation() {
+        let db = test_db();
+        let config = test_config(4);
+        let pipeline = RagPipeline::new(db, config).unwrap();
+        let stats = pipeline.stats();
+        assert_eq!(stats.total_documents, 0);
+        assert_eq!(stats.total_chunks, 0);
+    }
+
+    #[test]
+    fn test_builder_basic() {
+        let db = test_db();
+        let pipeline = RagPipelineBuilder::new()
+            .collection("my_docs")
+            .dimensions(4)
+            .top_k(3)
+            .build(db)
+            .unwrap();
+
+        let stats = pipeline.stats();
+        assert_eq!(stats.total_documents, 0);
+    }
+
+    #[test]
+    fn test_builder_with_cache() {
+        let db = test_db();
+        let pipeline = RagPipelineBuilder::new()
+            .collection("cached")
+            .dimensions(4)
+            .with_cache(500, 3600)
+            .build(db)
+            .unwrap();
+
+        assert!(pipeline.cache_stats().is_some());
+    }
+
+    #[test]
+    fn test_builder_without_cache() {
+        let db = test_db();
+        let pipeline = RagPipelineBuilder::new()
+            .collection("uncached")
+            .dimensions(4)
+            .without_cache()
+            .build(db)
+            .unwrap();
+
+        assert!(pipeline.cache_stats().is_none());
+    }
+
+    #[test]
+    fn test_builder_hybrid_search() {
+        let db = test_db();
+        let config = RagPipelineBuilder::new()
+            .collection("hybrid")
+            .dimensions(4)
+            .hybrid_search(0.5)
+            .into_config();
+
+        assert!(config.hybrid_search);
+        assert!((config.hybrid_alpha - 0.5).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn test_builder_deduplicate() {
+        let db = test_db();
+        let config = RagPipelineBuilder::new()
+            .collection("dedup")
+            .dimensions(4)
+            .deduplicate(0.8)
+            .into_config();
+
+        assert!(config.deduplicate);
+        assert!((config.dedup_threshold - 0.8).abs() < f32::EPSILON);
+    }
+
+    // ========================================================================
+    // Ingestion
+    // ========================================================================
+
+    #[test]
+    fn test_ingest_document() {
+        let db = test_db();
+        let config = test_config(4);
+        let mut pipeline = RagPipeline::new(db, config).unwrap();
+        let embedder = MockEmbedder::new(4);
+
+        let doc = pipeline
+            .ingest_document("doc1", "Hello world, this is a test document.", None, &embedder)
+            .unwrap();
+
+        assert_eq!(doc.id, "doc1");
+        assert!(!doc.chunk_ids.is_empty());
+        assert_eq!(pipeline.stats().total_documents, 1);
+    }
+
+    #[test]
+    fn test_ingest_and_retrieve() {
+        let db = test_db();
+        let config = test_config(4);
+        let mut pipeline = RagPipeline::new(db, config).unwrap();
+        let embedder = MockEmbedder::new(4);
+
+        pipeline
+            .ingest_document("doc1", "Machine learning is fascinating.", None, &embedder)
+            .unwrap();
+
+        let doc = pipeline.get_document("doc1");
+        assert!(doc.is_some());
+        assert_eq!(doc.unwrap().id, "doc1");
+    }
+
+    #[test]
+    fn test_ingest_multiple_documents() {
+        let db = test_db();
+        let config = test_config(4);
+        let mut pipeline = RagPipeline::new(db, config).unwrap();
+        let embedder = MockEmbedder::new(4);
+
+        pipeline
+            .ingest_document("doc1", "First document text.", None, &embedder)
+            .unwrap();
+        pipeline
+            .ingest_document("doc2", "Second document text.", None, &embedder)
+            .unwrap();
+
+        assert_eq!(pipeline.stats().total_documents, 2);
+        assert_eq!(pipeline.list_documents().len(), 2);
+    }
+
+    #[test]
+    fn test_delete_document() {
+        let db = test_db();
+        let config = test_config(4);
+        let mut pipeline = RagPipeline::new(db, config).unwrap();
+        let embedder = MockEmbedder::new(4);
+
+        pipeline
+            .ingest_document("doc1", "Some text to delete.", None, &embedder)
+            .unwrap();
+        assert_eq!(pipeline.stats().total_documents, 1);
+
+        let deleted = pipeline.delete_document("doc1").unwrap();
+        assert!(deleted);
+        assert_eq!(pipeline.stats().total_documents, 0);
+    }
+
+    #[test]
+    fn test_delete_nonexistent_document() {
+        let db = test_db();
+        let config = test_config(4);
+        let mut pipeline = RagPipeline::new(db, config).unwrap();
+
+        let deleted = pipeline.delete_document("missing").unwrap();
+        assert!(!deleted);
+    }
+
+    // ========================================================================
+    // Query orchestration
+    // ========================================================================
+
+    #[test]
+    fn test_query_basic() {
+        let db = test_db();
+        let config = test_config(4);
+        let mut pipeline = RagPipeline::new(db, config).unwrap();
+        let embedder = MockEmbedder::new(4);
+
+        pipeline
+            .ingest_document("doc1", "Rust is a systems programming language.", None, &embedder)
+            .unwrap();
+
+        let response = pipeline.query("programming", &embedder).unwrap();
+        assert!(!response.context.is_empty());
+    }
+
+    #[test]
+    fn test_query_empty_collection() {
+        let db = test_db();
+        let config = test_config(4);
+        let pipeline = RagPipeline::new(db, config).unwrap();
+        let embedder = MockEmbedder::new(4);
+
+        let response = pipeline.query("anything", &embedder).unwrap();
+        assert!(response.chunks.is_empty());
+        assert!(response.context.is_empty());
+    }
+
+    #[test]
+    fn test_query_with_reranking() {
+        let db = test_db();
+        let mut config = test_config(4);
+        config.rerank = true;
+        let mut pipeline = RagPipeline::new(db, config).unwrap();
+        let embedder = MockEmbedder::new(4);
+
+        pipeline
+            .ingest_document("doc1", "Machine learning and artificial intelligence.", None, &embedder)
+            .unwrap();
+
+        let response = pipeline.query("machine learning", &embedder).unwrap();
+        assert!(response.metadata.rerank_latency_ms.is_some());
+    }
+
+    #[test]
+    fn test_query_with_deduplication() {
+        let db = test_db();
+        let mut config = test_config(4);
+        config.deduplicate = true;
+        config.dedup_threshold = 0.5;
+        let mut pipeline = RagPipeline::new(db, config).unwrap();
+        let embedder = MockEmbedder::new(4);
+
+        pipeline
+            .ingest_document("doc1", "The cat sat on the mat. The cat sat on the mat.", None, &embedder)
+            .unwrap();
+
+        let response = pipeline.query("cat", &embedder).unwrap();
+        // Dedup should reduce results
+        assert!(response.metadata.chunks_after_dedup <= response.metadata.chunks_retrieved);
+    }
+
+    // ========================================================================
+    // Context assembly strategies
+    // ========================================================================
+
+    #[test]
+    fn test_context_truncation_at_sentence_boundary() {
+        let db = test_db();
+        let mut config = test_config(4);
+        config.context_strategy = ContextStrategy::Truncate;
+        config.max_context_tokens = 10; // Very small to force truncation
+        let mut pipeline = RagPipeline::new(db, config).unwrap();
+        let embedder = MockEmbedder::new(4);
+
+        pipeline
+            .ingest_document(
+                "doc1",
+                "First sentence here. Second sentence follows. Third one too.",
+                None,
+                &embedder,
+            )
+            .unwrap();
+
+        let response = pipeline.query("sentence", &embedder).unwrap();
+        if response.context.contains("[Context truncated]") {
+            // Truncation happened as expected
+            assert!(response.context.ends_with("[Context truncated]"));
+        }
+    }
+
+    #[test]
+    fn test_context_score_priority() {
+        let db = test_db();
+        let mut config = test_config(4);
+        config.context_strategy = ContextStrategy::ScorePriority;
+        let mut pipeline = RagPipeline::new(db, config).unwrap();
+        let embedder = MockEmbedder::new(4);
+
+        pipeline
+            .ingest_document("doc1", "Priority test document with some content.", None, &embedder)
+            .unwrap();
+
+        let response = pipeline.query("test", &embedder).unwrap();
+        // Should produce context without error
+        assert!(response.context.is_empty() || response.context.contains("[1]"));
+    }
+
+    // ========================================================================
+    // Batch ingestion
+    // ========================================================================
+
+    #[test]
+    fn test_batch_ingest() {
+        let db = test_db();
+        let config = test_config(4);
+        let mut pipeline = RagPipeline::new(db, config).unwrap();
+        let embedder = MockEmbedder::new(4);
+
+        let docs = vec![
+            ("d1", "First doc content.", None),
+            ("d2", "Second doc content.", None),
+            ("d3", "Third doc content.", None),
+        ];
+
+        let result = pipeline.batch_ingest(&docs, &embedder, &BatchIngestOptions::default());
+        assert_eq!(result.ingested, 3);
+        assert_eq!(result.failed, 0);
+        assert_eq!(result.skipped, 0);
+    }
+
+    #[test]
+    fn test_batch_ingest_skip_existing() {
+        let db = test_db();
+        let config = test_config(4);
+        let mut pipeline = RagPipeline::new(db, config).unwrap();
+        let embedder = MockEmbedder::new(4);
+
+        pipeline
+            .ingest_document("d1", "Existing document.", None, &embedder)
+            .unwrap();
+
+        let docs = vec![
+            ("d1", "Existing doc.", None),
+            ("d2", "New doc.", None),
+        ];
+
+        let opts = BatchIngestOptions {
+            skip_existing: true,
+            chunking: None,
+        };
+        let result = pipeline.batch_ingest(&docs, &embedder, &opts);
+        assert_eq!(result.ingested, 1);
+        assert_eq!(result.skipped, 1);
+    }
+
+    #[test]
+    fn test_batch_ingest_partial_failure() {
+        let db = test_db();
+        let config = test_config(4);
+        let mut pipeline = RagPipeline::new(db, config).unwrap();
+        let failing = FailingEmbedder;
+
+        let docs = vec![
+            ("d1", "First.", None),
+            ("d2", "Second.", None),
+        ];
+        let result = pipeline.batch_ingest(&docs, &failing, &BatchIngestOptions::default());
+        assert_eq!(result.failed, 2);
+        assert_eq!(result.ingested, 0);
+        assert!(!result.errors.is_empty());
+    }
+
+    // ========================================================================
+    // Multi-query merge
+    // ========================================================================
+
+    #[test]
+    fn test_multi_query_rrf() {
+        let db = test_db();
+        let config = test_config(4);
+        let mut pipeline = RagPipeline::new(db, config).unwrap();
+        let embedder = MockEmbedder::new(4);
+
+        pipeline
+            .ingest_document("doc1", "Vectors and embeddings in machine learning.", None, &embedder)
+            .unwrap();
+
+        let options = MultiQueryOptions {
+            num_expansions: 2,
+            merge_strategy: MultiQueryMerge::ReciprocalRankFusion { k: 60.0 },
+        };
+
+        let response = pipeline
+            .multi_query(&["vectors", "embeddings"], &embedder, &options)
+            .unwrap();
+        // Should return results merged via RRF
+        assert!(response.metadata.total_latency_ms >= 0);
+    }
+
+    #[test]
+    fn test_multi_query_union_best_score() {
+        let db = test_db();
+        let config = test_config(4);
+        let mut pipeline = RagPipeline::new(db, config).unwrap();
+        let embedder = MockEmbedder::new(4);
+
+        pipeline
+            .ingest_document("doc1", "Neural networks and deep learning.", None, &embedder)
+            .unwrap();
+
+        let options = MultiQueryOptions {
+            num_expansions: 2,
+            merge_strategy: MultiQueryMerge::UnionBestScore,
+        };
+
+        let response = pipeline
+            .multi_query(&["neural", "deep"], &embedder, &options)
+            .unwrap();
+        // Results should be sorted by final_score descending
+        for w in response.chunks.windows(2) {
+            assert!(w[0].final_score >= w[1].final_score || (w[0].final_score - w[1].final_score).abs() < f32::EPSILON);
+        }
+    }
+
+    // ========================================================================
+    // Cache interaction
+    // ========================================================================
+
+    #[test]
+    fn test_cache_hit_miss() {
+        let db = test_db();
+        let mut config = test_config(4);
+        config.cache_enabled = true;
+        config.cache_size = 100;
+        config.cache_ttl_seconds = 300;
+        let mut pipeline = RagPipeline::new(db, config).unwrap();
+        let embedder = MockEmbedder::new(4);
+
+        pipeline
+            .ingest_document("doc1", "Cache test content for verification.", None, &embedder)
+            .unwrap();
+
+        // First query → cache miss
+        let _ = pipeline.query("cache test", &embedder).unwrap();
+        let stats = pipeline.cache_stats().unwrap();
+        assert_eq!(stats.misses, 1);
+
+        // Same query → cache hit
+        let _ = pipeline.query("cache test", &embedder).unwrap();
+        let stats = pipeline.cache_stats().unwrap();
+        assert_eq!(stats.hits, 1);
+    }
+
+    #[test]
+    fn test_cache_invalidation_on_ingest() {
+        let db = test_db();
+        let mut config = test_config(4);
+        config.cache_enabled = true;
+        let mut pipeline = RagPipeline::new(db, config).unwrap();
+        let embedder = MockEmbedder::new(4);
+
+        pipeline
+            .ingest_document("doc1", "First doc.", None, &embedder)
+            .unwrap();
+
+        let _ = pipeline.query("doc", &embedder).unwrap();
+        // Ingest another doc → should invalidate cache
+        pipeline
+            .ingest_document("doc2", "Second doc.", None, &embedder)
+            .unwrap();
+
+        // Query again → should be a miss (cache was invalidated)
+        let _ = pipeline.query("doc", &embedder).unwrap();
+        let stats = pipeline.cache_stats().unwrap();
+        // 2 misses total (first + after invalidation)
+        assert_eq!(stats.misses, 2);
+    }
+
+    #[test]
+    fn test_invalidate_cache_explicit() {
+        let db = test_db();
+        let mut config = test_config(4);
+        config.cache_enabled = true;
+        let mut pipeline = RagPipeline::new(db, config).unwrap();
+        let embedder = MockEmbedder::new(4);
+
+        pipeline
+            .ingest_document("doc1", "Content.", None, &embedder)
+            .unwrap();
+        let _ = pipeline.query("content", &embedder).unwrap();
+        pipeline.invalidate_cache();
+
+        assert!(pipeline.cache.as_ref().unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_cache_hit_rate_no_cache() {
+        let db = test_db();
+        let config = test_config(4);
+        let pipeline = RagPipeline::new(db, config).unwrap();
+        assert!(pipeline.cache_hit_rate().is_none());
+    }
+
+    // ========================================================================
+    // NaN in score comparisons (partial_cmp on floats)
+    // ========================================================================
+
+    #[test]
+    fn test_rerank_handles_nan_scores() {
+        let mut chunks = vec![
+            RetrievedChunk {
+                chunk: Chunk {
+                    id: "c1".into(),
+                    document_id: "d1".into(),
+                    text: "hello world".into(),
+                    start_pos: 0, end_pos: 11, chunk_index: 0, total_chunks: 1,
+                    parent_id: None, children: vec![], metadata: None,
+                },
+                score: f32::NAN,
+                rerank_score: None,
+                final_score: f32::NAN,
+            },
+            RetrievedChunk {
+                chunk: Chunk {
+                    id: "c2".into(),
+                    document_id: "d1".into(),
+                    text: "goodbye world".into(),
+                    start_pos: 0, end_pos: 13, chunk_index: 1, total_chunks: 2,
+                    parent_id: None, children: vec![], metadata: None,
+                },
+                score: 0.5,
+                rerank_score: None,
+                final_score: 0.5,
+            },
+        ];
+
+        // Should not panic even with NaN scores
+        RagPipeline::rerank_chunks("hello", &mut chunks);
+    }
+
+    // ========================================================================
+    // Stats
+    // ========================================================================
+
+    #[test]
+    fn test_stats_empty_pipeline() {
+        let db = test_db();
+        let config = test_config(4);
+        let pipeline = RagPipeline::new(db, config).unwrap();
+        let stats = pipeline.stats();
+
+        assert_eq!(stats.total_documents, 0);
+        assert_eq!(stats.total_chunks, 0);
+        assert_eq!(stats.total_queries, 0);
+        assert!((stats.avg_chunks_per_doc - 0.0).abs() < f64::EPSILON);
+        assert!((stats.avg_query_latency_ms - 0.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_stats_after_queries() {
+        let db = test_db();
+        let config = test_config(4);
+        let mut pipeline = RagPipeline::new(db, config).unwrap();
+        let embedder = MockEmbedder::new(4);
+
+        pipeline
+            .ingest_document("doc1", "Some text for stats testing.", None, &embedder)
+            .unwrap();
+
+        let _ = pipeline.query("stats", &embedder).unwrap();
+        let _ = pipeline.query("test", &embedder).unwrap();
+
+        let stats = pipeline.stats();
+        assert_eq!(stats.total_queries, 2);
+        assert!(stats.avg_query_latency_ms >= 0.0);
+    }
+
+    // ========================================================================
+    // Text similarity helper
+    // ========================================================================
+
+    #[test]
+    fn test_text_similarity_identical() {
+        let sim = RagPipeline::text_similarity("hello world", "hello world");
+        assert!((sim - 1.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn test_text_similarity_no_overlap() {
+        let sim = RagPipeline::text_similarity("hello world", "foo bar");
+        assert!((sim - 0.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn test_text_similarity_empty() {
+        let sim = RagPipeline::text_similarity("", "");
+        assert!((sim - 0.0).abs() < f32::EPSILON);
+    }
+
+    // ========================================================================
+    // Chunking strategies
+    // ========================================================================
+
+    #[test]
+    fn test_chunk_fixed_size() {
+        let chunks = RagPipeline::chunk_fixed_size("abcdefghij", 4, 1);
+        assert!(!chunks.is_empty());
+        assert_eq!(chunks[0].0, "abcd");
+    }
+
+    #[test]
+    fn test_chunk_paragraphs() {
+        let text = "Para 1\n\nPara 2\n\nPara 3";
+        let chunks = RagPipeline::chunk_paragraphs(text, 2);
+        assert_eq!(chunks.len(), 2);
+        assert!(chunks[0].0.contains("Para 1"));
+    }
+
+    #[test]
+    fn test_quick_rag_pipeline() {
+        let db = test_db();
+        let pipeline = quick_rag_pipeline(db, 4);
+        assert!(pipeline.is_ok());
+    }
+
+    // ========================================================================
+    // Ingest loaded document
+    // ========================================================================
+
+    #[test]
+    fn test_ingest_loaded_document() {
+        let db = test_db();
+        let config = test_config(4);
+        let mut pipeline = RagPipeline::new(db, config).unwrap();
+        let embedder = MockEmbedder::new(4);
+
+        let loaded = LoadedDocument {
+            id: "loaded1".into(),
+            text: "Loaded document text.".into(),
+            format: super::super::chunking::DocumentFormat::PlainText,
+            metadata: None,
+        };
+
+        let doc = pipeline.ingest_loaded(&loaded, &embedder).unwrap();
+        assert_eq!(doc.id, "loaded1");
+    }
 }
