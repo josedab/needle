@@ -272,5 +272,408 @@ impl CostBasedOptimizer {
 mod tests {
     use super::*;
 
-    // Tests needed: see docs/TODO-test-coverage.md
+    fn minimal_query() -> Query {
+        Query {
+            explain: false,
+            select: SelectClause::All,
+            from: FromClause {
+                collection: "test".into(),
+                alias: None,
+            },
+            with_clause: None,
+            using_clause: None,
+            where_clause: None,
+            rerank_clause: None,
+            order_by: None,
+            limit: Some(10),
+            offset: None,
+        }
+    }
+
+    fn query_with_where(expr: Expression) -> Query {
+        let mut q = minimal_query();
+        q.where_clause = Some(WhereClause { expression: expr });
+        q
+    }
+
+    fn eq_expr(col: &str) -> Expression {
+        Expression::Comparison(ComparisonExpr {
+            column: col.into(),
+            operator: CompareOp::Eq,
+            value: LiteralValue::String("v".into()),
+        })
+    }
+
+    // ====================================================================
+    // Strategy selection: BruteForceScan for small collections
+    // ====================================================================
+
+    #[test]
+    fn test_small_collection_brute_force() {
+        let q = minimal_query();
+        let stats = CollectionStatistics {
+            vector_count: 500,
+            ..Default::default()
+        };
+        let plan = CostBasedOptimizer::optimize(&q, &stats);
+        assert_eq!(plan.strategy, SearchStrategy::BruteForceScan);
+    }
+
+    #[test]
+    fn test_boundary_999_brute_force() {
+        let q = minimal_query();
+        let stats = CollectionStatistics {
+            vector_count: 999,
+            ..Default::default()
+        };
+        let plan = CostBasedOptimizer::optimize(&q, &stats);
+        assert_eq!(plan.strategy, SearchStrategy::BruteForceScan);
+    }
+
+    #[test]
+    fn test_boundary_1000_not_brute_force() {
+        let q = minimal_query();
+        let stats = CollectionStatistics {
+            vector_count: 1000,
+            ..Default::default()
+        };
+        let plan = CostBasedOptimizer::optimize(&q, &stats);
+        assert_ne!(plan.strategy, SearchStrategy::BruteForceScan);
+    }
+
+    // ====================================================================
+    // Strategy: FilterThenIndex for highly selective filters
+    // ====================================================================
+
+    #[test]
+    fn test_highly_selective_filter_then_index() {
+        let q = query_with_where(eq_expr("category"));
+        let mut stats = CollectionStatistics {
+            vector_count: 100_000,
+            ..Default::default()
+        };
+        // category has 1% selectivity → highly selective
+        stats.selectivity.insert("category".into(), 0.01);
+
+        let plan = CostBasedOptimizer::optimize(&q, &stats);
+        assert_eq!(plan.strategy, SearchStrategy::FilterThenIndex);
+    }
+
+    // ====================================================================
+    // Strategy: IndexThenFilter (default for large collections)
+    // ====================================================================
+
+    #[test]
+    fn test_large_collection_index_then_filter() {
+        let q = minimal_query();
+        let stats = CollectionStatistics {
+            vector_count: 50_000,
+            ..Default::default()
+        };
+        let plan = CostBasedOptimizer::optimize(&q, &stats);
+        assert_eq!(plan.strategy, SearchStrategy::IndexThenFilter);
+    }
+
+    #[test]
+    fn test_no_where_clause_index_then_filter() {
+        let q = minimal_query();
+        let stats = CollectionStatistics {
+            vector_count: 10_000,
+            ..Default::default()
+        };
+        let plan = CostBasedOptimizer::optimize(&q, &stats);
+        // selectivity=1.0 when no where → index then filter
+        assert_eq!(plan.strategy, SearchStrategy::IndexThenFilter);
+    }
+
+    // ====================================================================
+    // Strategy: HybridSearch with WITH clause
+    // ====================================================================
+
+    #[test]
+    fn test_with_clause_triggers_hybrid() {
+        let mut q = minimal_query();
+        q.with_clause = Some(WithClause::TimeDecay(TimeDecayConfig {
+            function: TimeDecayFunction::Exponential,
+            params: HashMap::new(),
+        }));
+
+        let stats = CollectionStatistics {
+            vector_count: 10_000,
+            ..Default::default()
+        };
+        let plan = CostBasedOptimizer::optimize(&q, &stats);
+        assert_eq!(plan.strategy, SearchStrategy::HybridSearch);
+        assert!(plan.notes.iter().any(|n| n.contains("WITH clause")));
+    }
+
+    // ====================================================================
+    // Selectivity estimation per expression type
+    // ====================================================================
+
+    #[test]
+    fn test_selectivity_eq() {
+        let expr = Expression::Comparison(ComparisonExpr {
+            column: "x".into(),
+            operator: CompareOp::Eq,
+            value: LiteralValue::Number(1.0),
+        });
+        let stats = CollectionStatistics::default();
+        let sel = CostBasedOptimizer::estimate_expr_selectivity(&expr, &stats);
+        assert!((sel - 0.1).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_selectivity_ne() {
+        let expr = Expression::Comparison(ComparisonExpr {
+            column: "x".into(),
+            operator: CompareOp::Ne,
+            value: LiteralValue::Number(1.0),
+        });
+        let stats = CollectionStatistics::default();
+        let sel = CostBasedOptimizer::estimate_expr_selectivity(&expr, &stats);
+        assert!((sel - 0.9).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_selectivity_range_ops() {
+        for op in [CompareOp::Lt, CompareOp::Le, CompareOp::Gt, CompareOp::Ge] {
+            let expr = Expression::Comparison(ComparisonExpr {
+                column: "x".into(),
+                operator: op,
+                value: LiteralValue::Number(1.0),
+            });
+            let stats = CollectionStatistics::default();
+            let sel = CostBasedOptimizer::estimate_expr_selectivity(&expr, &stats);
+            assert!((sel - 0.3).abs() < f64::EPSILON);
+        }
+    }
+
+    #[test]
+    fn test_selectivity_known_column() {
+        let expr = eq_expr("status");
+        let mut stats = CollectionStatistics::default();
+        stats.selectivity.insert("status".into(), 0.05);
+
+        let sel = CostBasedOptimizer::estimate_expr_selectivity(&expr, &stats);
+        assert!((sel - 0.05).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_selectivity_in_list() {
+        let expr = Expression::InList(InListExpr {
+            column: "x".into(),
+            values: vec![
+                LiteralValue::String("a".into()),
+                LiteralValue::String("b".into()),
+                LiteralValue::String("c".into()),
+            ],
+            negated: false,
+        });
+        let stats = CollectionStatistics::default();
+        let sel = CostBasedOptimizer::estimate_expr_selectivity(&expr, &stats);
+        assert!((sel - 0.3).abs() < f64::EPSILON); // 3 * 0.1
+    }
+
+    #[test]
+    fn test_selectivity_in_list_capped() {
+        let values: Vec<LiteralValue> = (0..20).map(|i| LiteralValue::Number(i as f64)).collect();
+        let expr = Expression::InList(InListExpr {
+            column: "x".into(),
+            values,
+            negated: false,
+        });
+        let stats = CollectionStatistics::default();
+        let sel = CostBasedOptimizer::estimate_expr_selectivity(&expr, &stats);
+        assert!(sel <= 0.9 + f64::EPSILON);
+    }
+
+    #[test]
+    fn test_selectivity_between() {
+        let expr = Expression::Between(BetweenExpr {
+            column: "x".into(),
+            low: LiteralValue::Number(0.0),
+            high: LiteralValue::Number(100.0),
+            negated: false,
+        });
+        let stats = CollectionStatistics::default();
+        let sel = CostBasedOptimizer::estimate_expr_selectivity(&expr, &stats);
+        assert!((sel - 0.2).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_selectivity_like() {
+        let expr = Expression::Like(LikeExpr {
+            column: "x".into(),
+            pattern: "%test%".into(),
+            negated: false,
+        });
+        let stats = CollectionStatistics::default();
+        let sel = CostBasedOptimizer::estimate_expr_selectivity(&expr, &stats);
+        assert!((sel - 0.15).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_selectivity_is_null() {
+        let expr = Expression::IsNull(IsNullExpr {
+            column: "x".into(),
+            negated: false,
+        });
+        let stats = CollectionStatistics::default();
+        let sel = CostBasedOptimizer::estimate_expr_selectivity(&expr, &stats);
+        assert!((sel - 0.05).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_selectivity_similar_to() {
+        let expr = Expression::SimilarTo(SimilarToExpr {
+            column: "vec".into(),
+            query_param: "$q".into(),
+        });
+        let stats = CollectionStatistics::default();
+        let sel = CostBasedOptimizer::estimate_expr_selectivity(&expr, &stats);
+        assert!((sel - 1.0).abs() < f64::EPSILON);
+    }
+
+    // ====================================================================
+    // Compound expressions
+    // ====================================================================
+
+    #[test]
+    fn test_selectivity_and() {
+        let expr = Expression::And(Box::new(eq_expr("a")), Box::new(eq_expr("b")));
+        let stats = CollectionStatistics::default();
+        let sel = CostBasedOptimizer::estimate_expr_selectivity(&expr, &stats);
+        assert!((sel - 0.01).abs() < f64::EPSILON); // 0.1 * 0.1
+    }
+
+    #[test]
+    fn test_selectivity_or() {
+        let expr = Expression::Or(Box::new(eq_expr("a")), Box::new(eq_expr("b")));
+        let stats = CollectionStatistics::default();
+        let sel = CostBasedOptimizer::estimate_expr_selectivity(&expr, &stats);
+        // P(A∪B) = P(A) + P(B) - P(A)*P(B) = 0.1 + 0.1 - 0.01 = 0.19
+        assert!((sel - 0.19).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_selectivity_not() {
+        let expr = Expression::Not(Box::new(eq_expr("a")));
+        let stats = CollectionStatistics::default();
+        let sel = CostBasedOptimizer::estimate_expr_selectivity(&expr, &stats);
+        assert!((sel - 0.9).abs() < f64::EPSILON); // 1.0 - 0.1
+    }
+
+    #[test]
+    fn test_selectivity_grouped() {
+        let inner = eq_expr("a");
+        let expr = Expression::Grouped(Box::new(inner));
+        let stats = CollectionStatistics::default();
+        let sel = CostBasedOptimizer::estimate_expr_selectivity(&expr, &stats);
+        assert!((sel - 0.1).abs() < f64::EPSILON);
+    }
+
+    // ====================================================================
+    // Edge cases: selectivity 0 and 1
+    // ====================================================================
+
+    #[test]
+    fn test_selectivity_zero() {
+        let mut stats = CollectionStatistics::default();
+        stats.selectivity.insert("zero".into(), 0.0);
+
+        let expr = eq_expr("zero");
+        let sel = CostBasedOptimizer::estimate_expr_selectivity(&expr, &stats);
+        assert!((sel - 0.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_selectivity_one() {
+        let mut stats = CollectionStatistics::default();
+        stats.selectivity.insert("all".into(), 1.0);
+
+        let expr = eq_expr("all");
+        let sel = CostBasedOptimizer::estimate_expr_selectivity(&expr, &stats);
+        assert!((sel - 1.0).abs() < f64::EPSILON);
+    }
+
+    // ====================================================================
+    // Cost varies with collection size
+    // ====================================================================
+
+    #[test]
+    fn test_cost_increases_with_size() {
+        let q = minimal_query();
+        let small = CollectionStatistics {
+            vector_count: 5_000,
+            ..Default::default()
+        };
+        let large = CollectionStatistics {
+            vector_count: 1_000_000,
+            ..Default::default()
+        };
+
+        let plan_small = CostBasedOptimizer::optimize(&q, &small);
+        let plan_large = CostBasedOptimizer::optimize(&q, &large);
+
+        assert!(plan_large.total_cost.total_cost > plan_small.total_cost.total_cost);
+    }
+
+    // ====================================================================
+    // Plan structure
+    // ====================================================================
+
+    #[test]
+    fn test_plan_has_steps() {
+        let q = minimal_query();
+        let stats = CollectionStatistics {
+            vector_count: 50_000,
+            ..Default::default()
+        };
+
+        let plan = CostBasedOptimizer::optimize(&q, &stats);
+        assert!(!plan.steps.is_empty());
+        assert!(!plan.notes.is_empty());
+    }
+
+    #[test]
+    fn test_filter_then_index_has_two_steps() {
+        let q = query_with_where(eq_expr("status"));
+        let mut stats = CollectionStatistics {
+            vector_count: 100_000,
+            ..Default::default()
+        };
+        stats.selectivity.insert("status".into(), 0.01);
+
+        let plan = CostBasedOptimizer::optimize(&q, &stats);
+        if plan.strategy == SearchStrategy::FilterThenIndex {
+            assert_eq!(plan.steps.len(), 2);
+            assert_eq!(plan.steps[0].step_type, "MetadataFilter");
+            assert_eq!(plan.steps[1].step_type, "HnswSearch");
+        }
+    }
+
+    #[test]
+    fn test_index_then_filter_with_where_has_post_filter() {
+        let q = query_with_where(eq_expr("category"));
+        let stats = CollectionStatistics {
+            vector_count: 10_000,
+            ..Default::default()
+        };
+
+        let plan = CostBasedOptimizer::optimize(&q, &stats);
+        if plan.strategy == SearchStrategy::IndexThenFilter {
+            assert!(plan.steps.len() >= 2);
+            assert!(plan.steps.iter().any(|s| s.step_type == "PostFilter"));
+        }
+    }
+
+    #[test]
+    fn test_collection_statistics_default() {
+        let stats = CollectionStatistics::default();
+        assert_eq!(stats.vector_count, 1000);
+        assert_eq!(stats.dimensions, 384);
+        assert_eq!(stats.hnsw_m, 16);
+        assert_eq!(stats.hnsw_ef_search, 50);
+    }
 }
