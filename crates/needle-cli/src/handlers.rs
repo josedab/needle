@@ -684,3 +684,115 @@ pub(crate) fn query_command(
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_distance_all_variants() {
+        assert!(matches!(parse_distance("cosine"), Some(DistanceFunction::Cosine)));
+        assert!(matches!(parse_distance("COSINE"), Some(DistanceFunction::Cosine)));
+        assert!(matches!(parse_distance("euclidean"), Some(DistanceFunction::Euclidean)));
+        assert!(matches!(parse_distance("l2"), Some(DistanceFunction::Euclidean)));
+        assert!(matches!(parse_distance("dot"), Some(DistanceFunction::DotProduct)));
+        assert!(matches!(parse_distance("dotproduct"), Some(DistanceFunction::DotProduct)));
+        assert!(matches!(parse_distance("manhattan"), Some(DistanceFunction::Manhattan)));
+        assert!(matches!(parse_distance("l1"), Some(DistanceFunction::Manhattan)));
+        assert!(parse_distance("unknown").is_none());
+        assert!(parse_distance("").is_none());
+    }
+
+    #[test]
+    fn test_parse_query_vector_valid() {
+        assert_eq!(parse_query_vector("1.0,2.0,3.0").unwrap(), vec![1.0, 2.0, 3.0]);
+        assert_eq!(parse_query_vector(" 1.0 , 2.0 ").unwrap(), vec![1.0, 2.0]);
+        assert_eq!(parse_query_vector("42.5").unwrap(), vec![42.5]);
+        assert_eq!(parse_query_vector("-1.0,0.0,1.0").unwrap(), vec![-1.0, 0.0, 1.0]);
+    }
+
+    #[test]
+    fn test_parse_query_vector_empty() {
+        assert!(parse_query_vector("").is_err());
+    }
+
+    #[test]
+    fn test_parse_query_vector_invalid() {
+        assert!(parse_query_vector("1.0,abc,3.0").is_err());
+    }
+
+    #[test]
+    fn test_parse_query_vector_trailing_comma() {
+        assert_eq!(parse_query_vector("1.0,2.0,").unwrap(), vec![1.0, 2.0]);
+    }
+
+    #[test]
+    fn test_create_collection_zero_dims() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.needle");
+        let path_str = path.to_str().unwrap();
+        let result = create_collection_command(path_str, "test", 0, "cosine");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_create_collection_valid() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.needle");
+        let path_str = path.to_str().unwrap();
+        assert!(create_collection_command(path_str, "docs", 128, "cosine").is_ok());
+    }
+
+    #[test]
+    fn test_info_command() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.needle");
+        let path_str = path.to_str().unwrap();
+        let mut db = Database::open(path_str).unwrap();
+        db.create_collection("test", 64).unwrap();
+        db.save().unwrap();
+        assert!(info_command(path_str).is_ok());
+    }
+
+    #[test]
+    fn test_count_and_get_commands() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.needle");
+        let path_str = path.to_str().unwrap();
+        let mut db = Database::open(path_str).unwrap();
+        db.create_collection("test", 3).unwrap();
+        let coll = db.collection("test").unwrap();
+        coll.insert("v1", &[1.0, 0.0, 0.0], None).unwrap();
+        db.save().unwrap();
+
+        assert!(count_command(path_str, "test").is_ok());
+        assert!(get_command(path_str, "test", "v1").is_ok());
+        assert!(get_command(path_str, "test", "missing").is_ok());
+    }
+
+    #[test]
+    fn test_delete_command() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.needle");
+        let path_str = path.to_str().unwrap();
+        let mut db = Database::open(path_str).unwrap();
+        db.create_collection("test", 3).unwrap();
+        let coll = db.collection("test").unwrap();
+        coll.insert("v1", &[1.0, 0.0, 0.0], None).unwrap();
+        db.save().unwrap();
+
+        assert!(delete_command(path_str, "test", "v1").is_ok());
+        assert!(delete_command(path_str, "test", "nonexistent").is_ok());
+    }
+
+    #[test]
+    fn test_compact_command() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.needle");
+        let path_str = path.to_str().unwrap();
+        let mut db = Database::open(path_str).unwrap();
+        db.create_collection("test", 3).unwrap();
+        db.save().unwrap();
+        assert!(compact_command(path_str).is_ok());
+    }
+}
