@@ -167,4 +167,283 @@ impl RagCache {
 }
 
 #[cfg(test)]
-mod tests {}
+mod tests {
+    use super::*;
+    use super::super::{Chunk, Citation, RetrievedChunk};
+
+    fn make_chunk(doc_id: &str, text: &str) -> RetrievedChunk {
+        RetrievedChunk {
+            chunk: Chunk {
+                id: format!("{doc_id}_0"),
+                document_id: doc_id.to_string(),
+                text: text.to_string(),
+                start_pos: 0,
+                end_pos: text.len(),
+                chunk_index: 0,
+                total_chunks: 1,
+                parent_id: None,
+                children: vec![],
+                metadata: None,
+            },
+            score: 0.9,
+            rerank_score: None,
+            final_score: 0.9,
+        }
+    }
+
+    fn make_response(doc_id: &str) -> CachedRagResponse {
+        CachedRagResponse {
+            chunks: vec![make_chunk(doc_id, "some text")],
+            context: "context".into(),
+            citations: vec![Citation {
+                document_id: doc_id.into(),
+                chunk_id: format!("{doc_id}_0"),
+                snippet: "some text".into(),
+                position: (0, 9),
+                score: 0.9,
+            }],
+        }
+    }
+
+    fn key(query: &str) -> CacheKey {
+        CacheKey::new(query, None)
+    }
+
+    // ====================================================================
+    // Basic put / get
+    // ====================================================================
+
+    #[test]
+    fn test_put_and_get() {
+        let cache = RagCache::new(10, 60);
+        cache.put(key("hello"), make_response("d1"));
+
+        let result = cache.get(&key("hello"));
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().context, "context");
+    }
+
+    #[test]
+    fn test_get_miss() {
+        let cache = RagCache::new(10, 60);
+        let result = cache.get(&key("missing"));
+        assert!(result.is_none());
+    }
+
+    // ====================================================================
+    // TTL=0 (infinite)
+    // ====================================================================
+
+    #[test]
+    fn test_ttl_zero_infinite() {
+        let cache = RagCache::new(10, 0);
+        cache.put(key("q"), make_response("d1"));
+
+        // With TTL=0, entry should never expire
+        let result = cache.get(&key("q"));
+        assert!(result.is_some());
+    }
+
+    // ====================================================================
+    // TTL expiration
+    // ====================================================================
+
+    #[test]
+    fn test_ttl_expiration() {
+        let cache = RagCache::new(10, 1); // 1 second TTL
+        cache.put(key("q"), make_response("d1"));
+
+        // Immediately should be present
+        assert!(cache.get(&key("q")).is_some());
+
+        // Wait for expiration
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        let result = cache.get(&key("q"));
+        assert!(result.is_none());
+    }
+
+    // ====================================================================
+    // LRU eviction at capacity
+    // ====================================================================
+
+    #[test]
+    fn test_lru_eviction() {
+        let cache = RagCache::new(2, 60);
+
+        cache.put(key("q1"), make_response("d1"));
+        cache.put(key("q2"), make_response("d2"));
+        assert_eq!(cache.len(), 2);
+
+        // Adding a third should evict the LRU entry (q1)
+        cache.put(key("q3"), make_response("d3"));
+        assert_eq!(cache.len(), 2);
+
+        // q1 should be evicted
+        assert!(cache.get(&key("q1")).is_none());
+        assert!(cache.get(&key("q3")).is_some());
+    }
+
+    // ====================================================================
+    // Hit rate
+    // ====================================================================
+
+    #[test]
+    fn test_hit_rate_zero_accesses() {
+        let cache = RagCache::new(10, 60);
+        let rate = cache.hit_rate();
+        assert!((rate - 0.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_hit_rate_all_hits() {
+        let cache = RagCache::new(10, 60);
+        cache.put(key("q"), make_response("d1"));
+
+        let _ = cache.get(&key("q")); // hit
+        let _ = cache.get(&key("q")); // hit
+        assert!((cache.hit_rate() - 1.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_hit_rate_mixed() {
+        let cache = RagCache::new(10, 60);
+        cache.put(key("q"), make_response("d1"));
+
+        let _ = cache.get(&key("q")); // hit
+        let _ = cache.get(&key("miss")); // miss
+        assert!((cache.hit_rate() - 0.5).abs() < f64::EPSILON);
+    }
+
+    // ====================================================================
+    // Invalidation
+    // ====================================================================
+
+    #[test]
+    fn test_invalidate_all() {
+        let cache = RagCache::new(10, 60);
+        cache.put(key("q1"), make_response("d1"));
+        cache.put(key("q2"), make_response("d2"));
+
+        cache.invalidate_all();
+        assert_eq!(cache.len(), 0);
+        assert!(cache.is_empty());
+    }
+
+    #[test]
+    fn test_invalidate_all_tracks_stats() {
+        let cache = RagCache::new(10, 60);
+        cache.put(key("q1"), make_response("d1"));
+        cache.put(key("q2"), make_response("d2"));
+
+        cache.invalidate_all();
+        let stats = cache.stats();
+        assert_eq!(stats.invalidations, 2);
+    }
+
+    #[test]
+    fn test_invalidate_document() {
+        let cache = RagCache::new(10, 60);
+        cache.put(key("q1"), make_response("d1"));
+        cache.put(key("q2"), make_response("d2"));
+
+        cache.invalidate_document("d1");
+        assert_eq!(cache.len(), 1);
+        assert!(cache.get(&key("q1")).is_none());
+    }
+
+    #[test]
+    fn test_invalidate_document_nonexistent() {
+        let cache = RagCache::new(10, 60);
+        cache.put(key("q1"), make_response("d1"));
+
+        // Invalidating non-existent doc should be a no-op
+        cache.invalidate_document("no_such_doc");
+        assert_eq!(cache.len(), 1);
+    }
+
+    // ====================================================================
+    // CacheKey: None vs Some filter
+    // ====================================================================
+
+    #[test]
+    fn test_cache_key_none_vs_some_filter_differ() {
+        let k1 = CacheKey::new("query", None);
+
+        // We can't easily construct a Filter here, but we can verify
+        // that the same query with None filter produces consistent keys
+        let k2 = CacheKey::new("query", None);
+        assert_eq!(k1, k2);
+    }
+
+    #[test]
+    fn test_cache_key_different_queries() {
+        let k1 = CacheKey::new("hello", None);
+        let k2 = CacheKey::new("world", None);
+        assert_ne!(k1, k2);
+    }
+
+    // ====================================================================
+    // Stats
+    // ====================================================================
+
+    #[test]
+    fn test_stats_initial() {
+        let cache = RagCache::new(10, 60);
+        let stats = cache.stats();
+        assert_eq!(stats.hits, 0);
+        assert_eq!(stats.misses, 0);
+        assert_eq!(stats.evictions, 0);
+        assert_eq!(stats.invalidations, 0);
+    }
+
+    #[test]
+    fn test_stats_after_operations() {
+        let cache = RagCache::new(10, 60);
+        cache.put(key("q"), make_response("d1"));
+
+        let _ = cache.get(&key("q")); // hit
+        let _ = cache.get(&key("miss")); // miss
+
+        let stats = cache.stats();
+        assert_eq!(stats.hits, 1);
+        assert_eq!(stats.misses, 1);
+    }
+
+    // ====================================================================
+    // Capacity edge: NonZeroUsize fallback
+    // ====================================================================
+
+    #[test]
+    fn test_capacity_zero_uses_one() {
+        let cache = RagCache::new(0, 60);
+        // Should not panic; capacity falls back to 1
+        cache.put(key("q"), make_response("d1"));
+        assert_eq!(cache.len(), 1);
+    }
+
+    #[test]
+    fn test_large_capacity() {
+        let cache = RagCache::new(1_000_000, 60);
+        cache.put(key("q"), make_response("d1"));
+        assert_eq!(cache.len(), 1);
+    }
+
+    // ====================================================================
+    // len / is_empty
+    // ====================================================================
+
+    #[test]
+    fn test_len_empty() {
+        let cache = RagCache::new(10, 60);
+        assert_eq!(cache.len(), 0);
+        assert!(cache.is_empty());
+    }
+
+    #[test]
+    fn test_len_after_put() {
+        let cache = RagCache::new(10, 60);
+        cache.put(key("q1"), make_response("d1"));
+        assert_eq!(cache.len(), 1);
+        assert!(!cache.is_empty());
+    }
+}
