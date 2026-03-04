@@ -376,3 +376,173 @@ pub fn clear_command(path: &str, collection_name: &str, force: bool) -> Result<(
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use needle::Database;
+
+    fn setup_db_with_vectors() -> (tempfile::TempDir, String) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.needle").to_str().unwrap().to_string();
+        let mut db = Database::open(&path).unwrap();
+        db.create_collection("test", 4).unwrap();
+        let coll = db.collection("test").unwrap();
+        coll.insert("v1", &[1.0, 0.0, 0.0, 0.0], None).unwrap();
+        coll.insert("v2", &[0.0, 1.0, 0.0, 0.0], Some(serde_json::json!({"tag": "a"}))).unwrap();
+        db.save().unwrap();
+        (dir, path)
+    }
+
+    #[test]
+    fn test_get_command_found() {
+        let (_dir, path) = setup_db_with_vectors();
+        assert!(get_command(&path, "test", "v1").is_ok());
+    }
+
+    #[test]
+    fn test_get_command_not_found() {
+        let (_dir, path) = setup_db_with_vectors();
+        assert!(get_command(&path, "test", "nonexistent").is_ok());
+    }
+
+    #[test]
+    fn test_get_command_nonexistent_collection() {
+        let (_dir, path) = setup_db_with_vectors();
+        let result = get_command(&path, "no_coll", "v1");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_delete_command() {
+        let (_dir, path) = setup_db_with_vectors();
+        assert!(delete_command(&path, "test", "v1").is_ok());
+    }
+
+    #[test]
+    fn test_delete_command_not_found() {
+        let (_dir, path) = setup_db_with_vectors();
+        assert!(delete_command(&path, "test", "nonexistent").is_ok());
+    }
+
+    #[test]
+    fn test_count_command() {
+        let (_dir, path) = setup_db_with_vectors();
+        assert!(count_command(&path, "test").is_ok());
+    }
+
+    #[test]
+    fn test_compact_command() {
+        let (_dir, path) = setup_db_with_vectors();
+        assert!(compact_command(&path).is_ok());
+    }
+
+    #[test]
+    fn test_export_command() {
+        let (_dir, path) = setup_db_with_vectors();
+        assert!(export_command(&path, "test").is_ok());
+    }
+
+    #[test]
+    fn test_clear_command_with_force() {
+        let (_dir, path) = setup_db_with_vectors();
+        assert!(clear_command(&path, "test", true).is_ok());
+
+        let db = Database::open(&path).unwrap();
+        let coll = db.collection("test").unwrap();
+        assert_eq!(coll.len(), 0);
+    }
+
+    #[test]
+    fn test_import_command_valid_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("test.needle");
+        let db_path = db_path.to_str().unwrap();
+        let mut db = Database::open(db_path).unwrap();
+        db.create_collection("import_test", 3).unwrap();
+        db.save().unwrap();
+
+        let import_file = tempfile::NamedTempFile::new().unwrap();
+        let import_data = serde_json::json!({
+            "vectors": [
+                {"id": "d1", "vector": [1.0, 0.0, 0.0]},
+                {"id": "d2", "vector": [0.0, 1.0, 0.0], "metadata": {"key": "val"}}
+            ]
+        });
+        std::fs::write(import_file.path(), import_data.to_string()).unwrap();
+
+        let result = import_command(db_path, "import_test", import_file.path().to_str().unwrap());
+        assert!(result.is_ok());
+
+        let db = Database::open(db_path).unwrap();
+        let coll = db.collection("import_test").unwrap();
+        assert_eq!(coll.len(), 2);
+    }
+
+    #[test]
+    fn test_import_command_missing_vectors_array() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("test.needle");
+        let db_path = db_path.to_str().unwrap();
+        let mut db = Database::open(db_path).unwrap();
+        db.create_collection("import_err", 3).unwrap();
+        db.save().unwrap();
+
+        let import_file = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(import_file.path(), r#"{"data": []}"#).unwrap();
+
+        let result = import_command(db_path, "import_err", import_file.path().to_str().unwrap());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_import_command_entry_without_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("test.needle");
+        let db_path = db_path.to_str().unwrap();
+        let mut db = Database::open(db_path).unwrap();
+        db.create_collection("import_skip", 2).unwrap();
+        db.save().unwrap();
+
+        let import_file = tempfile::NamedTempFile::new().unwrap();
+        let import_data = serde_json::json!({
+            "vectors": [
+                {"vector": [1.0, 0.0]},
+                {"id": "good", "vector": [0.0, 1.0]}
+            ]
+        });
+        std::fs::write(import_file.path(), import_data.to_string()).unwrap();
+
+        let result = import_command(db_path, "import_skip", import_file.path().to_str().unwrap());
+        assert!(result.is_ok());
+
+        let db = Database::open(db_path).unwrap();
+        let coll = db.collection("import_skip").unwrap();
+        assert_eq!(coll.len(), 1);
+    }
+
+    #[test]
+    fn test_search_command_basic() {
+        let (_dir, path) = setup_db_with_vectors();
+        assert!(search_command(
+            &path, "test", "1.0,0.0,0.0,0.0", 2, false, None, None, None
+        ).is_ok());
+    }
+
+    #[test]
+    fn test_search_command_with_distance_override() {
+        let (_dir, path) = setup_db_with_vectors();
+        assert!(search_command(
+            &path, "test", "1.0,0.0,0.0,0.0", 2, false, Some("euclidean"), None, None
+        ).is_ok());
+    }
+
+    #[test]
+    fn test_search_command_invalid_distance() {
+        let (_dir, path) = setup_db_with_vectors();
+        // Invalid distance should print warning and continue with default
+        assert!(search_command(
+            &path, "test", "1.0,0.0,0.0,0.0", 2, false, Some("invalid_dist"), None, None
+        ).is_ok());
+    }
+}
