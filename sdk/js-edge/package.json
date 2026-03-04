@@ -1,0 +1,55 @@
+{
+  "name": "@anthropic/needle-edge",
+  "version": "0.1.0",
+  "description": "Needle vector database for edge runtimes — Cloudflare Workers, Deno Deploy, Bun",
+  "main": "dist/index.js",
+  "module": "dist/index.mjs",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    },
+    "./cloudflare": {
+      "import": "./dist/cloudflare.mjs",
+      "require": "./dist/cloudflare.js",
+      "types": "./dist/cloudflare.d.ts"
+    },
+    "./deno": {
+      "import": "./dist/deno.mjs",
+      "types": "./dist/deno.d.ts"
+    },
+    "./bun": {
+      "import": "./dist/bun.mjs",
+      "require": "./dist/bun.js",
+      "types": "./dist/bun.d.ts"
+    }
+  },
+  "files": ["dist/", "README.md"],
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist/"
+  },
+  "keywords": [
+    "vector", "database", "search", "embeddings", "wasm",
+    "edge", "cloudflare-workers", "deno", "bun", "serverless"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/anthropics/needle",
+    "directory": "sdk/js-edge"
+  },
+  "homepage": "https://needle.dev",
+  "peerDependencies": {
+    "@anthropic/needle": ">=0.1.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.0.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
