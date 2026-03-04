@@ -203,4 +203,211 @@ impl RecursiveTextSplitter {
 }
 
 #[cfg(test)]
-mod tests {}
+mod tests {
+    use super::*;
+
+    // ====================================================================
+    // DocumentLoader: plaintext
+    // ====================================================================
+
+    #[test]
+    fn test_load_plaintext() {
+        let doc = DocumentLoader::load_plaintext("p1", "Hello world");
+        assert_eq!(doc.id, "p1");
+        assert_eq!(doc.text, "Hello world");
+        assert_eq!(doc.format, DocumentFormat::PlainText);
+        assert!(doc.metadata.is_none());
+    }
+
+    #[test]
+    fn test_load_plaintext_empty() {
+        let doc = DocumentLoader::load_plaintext("p2", "");
+        assert_eq!(doc.text, "");
+    }
+
+    // ====================================================================
+    // DocumentLoader: markdown
+    // ====================================================================
+
+    #[test]
+    fn test_load_markdown_with_h1() {
+        let md = "# Title\n\nSome body text.\n\n## Section\n\nMore text.";
+        let doc = DocumentLoader::load_markdown("m1", md);
+        assert_eq!(doc.format, DocumentFormat::Markdown);
+
+        let meta = doc.metadata.unwrap();
+        assert_eq!(meta["title"], "Title");
+        let headings = meta["headings"].as_array().unwrap();
+        assert!(headings.len() >= 2);
+    }
+
+    #[test]
+    fn test_load_markdown_no_h1() {
+        let md = "## Section Only\n\nBody text here.";
+        let doc = DocumentLoader::load_markdown("m2", md);
+        let meta = doc.metadata.unwrap();
+        assert!(meta["title"].is_null());
+        let headings = meta["headings"].as_array().unwrap();
+        assert_eq!(headings.len(), 1);
+    }
+
+    #[test]
+    fn test_load_markdown_multiple_h1() {
+        let md = "# First\n\nContent\n\n# Second\n\nMore content";
+        let doc = DocumentLoader::load_markdown("m3", md);
+        let meta = doc.metadata.unwrap();
+        // Title should be the first H1
+        assert_eq!(meta["title"], "First");
+        let headings = meta["headings"].as_array().unwrap();
+        assert_eq!(headings.len(), 2);
+    }
+
+    #[test]
+    fn test_load_markdown_h3_h4() {
+        let md = "### Deep heading\n\n#### Deeper heading";
+        let doc = DocumentLoader::load_markdown("m4", md);
+        let meta = doc.metadata.unwrap();
+        let headings = meta["headings"].as_array().unwrap();
+        assert_eq!(headings.len(), 2);
+    }
+
+    #[test]
+    fn test_load_markdown_empty() {
+        let doc = DocumentLoader::load_markdown("m5", "");
+        assert_eq!(doc.text, "");
+    }
+
+    // ====================================================================
+    // DocumentLoader: JSON
+    // ====================================================================
+
+    #[test]
+    fn test_load_json_with_text_fields() {
+        let json = r#"{"title": "Test", "body": "Content", "num": 42}"#;
+        let doc = DocumentLoader::load_json("j1", json, &["title", "body"]).unwrap();
+
+        assert_eq!(doc.format, DocumentFormat::Json);
+        assert!(doc.text.contains("Test"));
+        assert!(doc.text.contains("Content"));
+        // num is not a requested text field
+        assert!(!doc.text.contains("42"));
+    }
+
+    #[test]
+    fn test_load_json_all_strings() {
+        let json = r#"{"a": "alpha", "b": "beta", "n": 123}"#;
+        let doc = DocumentLoader::load_json("j2", json, &[]).unwrap();
+        // Should extract all string values
+        assert!(doc.text.contains("alpha"));
+        assert!(doc.text.contains("beta"));
+    }
+
+    #[test]
+    fn test_load_json_missing_text_fields() {
+        let json = r#"{"title": "Test"}"#;
+        let doc = DocumentLoader::load_json("j3", json, &["nonexistent"]).unwrap();
+        assert_eq!(doc.text, "");
+    }
+
+    #[test]
+    fn test_load_json_non_string_values() {
+        let json = r#"{"count": 42, "flag": true}"#;
+        let doc = DocumentLoader::load_json("j4", json, &["count", "flag"]).unwrap();
+        // Non-string values are skipped
+        assert_eq!(doc.text, "");
+    }
+
+    #[test]
+    fn test_load_json_invalid() {
+        let result = DocumentLoader::load_json("j5", "not json", &[]);
+        assert!(result.is_err());
+    }
+
+    // ====================================================================
+    // RecursiveTextSplitter
+    // ====================================================================
+
+    #[test]
+    fn test_split_short_text() {
+        let splitter = RecursiveTextSplitter::new(1000, 0);
+        let result = splitter.split("Short text.");
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].0, "Short text.");
+    }
+
+    #[test]
+    fn test_split_by_paragraphs() {
+        let text = "Para one content here.\n\nPara two content here.\n\nPara three content here.";
+        let splitter = RecursiveTextSplitter::new(30, 0);
+        let result = splitter.split(text);
+        assert!(result.len() >= 2);
+    }
+
+    #[test]
+    fn test_split_by_sentences() {
+        let text = "First sentence here. Second sentence here. Third sentence here.";
+        let splitter = RecursiveTextSplitter::new(30, 0);
+        let result = splitter.split(text);
+        assert!(result.len() >= 2);
+    }
+
+    #[test]
+    fn test_split_byte_positions() {
+        let splitter = RecursiveTextSplitter::new(1000, 0);
+        let text = "Hello world.";
+        let result = splitter.split(text);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].1, 0);
+        assert_eq!(result[0].2, text.len());
+    }
+
+    #[test]
+    fn test_split_with_overlap() {
+        let text = "Word1 Word2 Word3 Word4 Word5 Word6 Word7 Word8";
+        let splitter = RecursiveTextSplitter::new(20, 5);
+        let result = splitter.split(text);
+        assert!(result.len() >= 2);
+    }
+
+    #[test]
+    fn test_split_empty_text() {
+        let splitter = RecursiveTextSplitter::new(100, 0);
+        let result = splitter.split("");
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_split_whitespace_only() {
+        let splitter = RecursiveTextSplitter::new(100, 0);
+        let result = splitter.split("   \n\n  ");
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_overlap_greater_than_chunk_size() {
+        // Edge case: overlap > chunk_size should still work
+        let splitter = RecursiveTextSplitter::new(10, 20);
+        let text = "Hello world this is a longer text for testing.";
+        let result = splitter.split(text);
+        assert!(!result.is_empty());
+    }
+
+    #[test]
+    fn test_utf8_multibyte() {
+        let text = "Héllo wörld. Ünïcödé text.";
+        let splitter = RecursiveTextSplitter::new(1000, 0);
+        let result = splitter.split(text);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].0, text);
+    }
+
+    #[test]
+    fn test_separator_exhaustion() {
+        // Text with no separators at all → returned as single chunk even if > chunk_size
+        let text = "abcdefghijklmnopqrstuvwxyz";
+        let splitter = RecursiveTextSplitter::new(10, 0);
+        let result = splitter.split(text);
+        // All separators exhausted, so it's returned as-is
+        assert_eq!(result.len(), 1);
+    }
+}
