@@ -197,7 +197,7 @@ pub use observe::{anomaly, audit, dashboard, drift, observability, otel_service,
 pub mod integrations;
 pub(crate) use integrations::framework_common;
 /// Re-exported integration submodules: Haystack and Semantic Kernel adapters.
-pub use integrations::{haystack, semantic_kernel};
+pub use integrations::{crewai, haystack, semantic_kernel, vercel_ai};
 /// LangChain and LlamaIndex integration adapters. Requires the `integrations` feature.
 #[cfg(feature = "integrations")]
 pub use integrations::{langchain, llamaindex};
@@ -280,7 +280,7 @@ pub use indexing::{graph_vector_fusion, multimodal_fusion};
 #[doc(hidden)]
 #[cfg(feature = "experimental")]
 pub use services::{
-    cdc_framework, pipeline_manager, realtime_streaming, streaming_ingest, streaming_protocol,
+    cdc_framework, pipeline_manager, streaming_ingest, streaming_protocol,
     vector_pipeline,
 };
 
@@ -311,8 +311,8 @@ pub use services::{
 #[doc(hidden)]
 #[cfg(feature = "experimental")]
 pub use services::{
-    cloud_deploy, cloud_service, cluster_bootstrap, edge_runtime, edge_serverless, managed_cloud,
-    pricing, readiness_probe, tenant_router,
+    cloud_deploy, cloud_service, managed_cloud,
+    readiness_probe, tenant_router,
 };
 
 // Plugin & WASM
@@ -326,15 +326,15 @@ pub use services::{
 #[doc(hidden)]
 #[cfg(feature = "experimental")]
 pub use services::{
-    client_sdk, grpc_schema, notebook, python_sdk, vscode_extension, webhook_delivery, ws_protocol,
+    client_sdk, grpc_schema, notebook, vscode_extension, webhook_delivery,
 };
 
 // Observability & benchmarking
 #[doc(hidden)]
 #[cfg(feature = "experimental")]
 pub use services::{
-    ann_benchmark, benchmark_runner, benchmark_suite, drift_monitor, evidence_collector,
-    otel_tracing, triage_report, vector_lineage, visual_explorer,
+    ann_benchmark, benchmark_runner, benchmark_suite, drift_monitor,
+    otel_tracing, vector_lineage, visual_explorer,
 };
 
 // Governance & compliance
@@ -408,8 +408,9 @@ pub use experimental::plugin;
 /// Temporal indexing with time-decay functions. **Experimental**: API may change without notice.
 #[cfg(feature = "experimental")]
 pub use experimental::temporal;
-// NOTE: experimental::edge_runtime is accessed via crate::experimental::edge_runtime
-// to avoid conflict with the services::edge_runtime re-export above.
+/// Serverless edge runtime for WASM-based deployments. **Experimental**: API may change without notice.
+#[cfg(feature = "experimental")]
+pub use experimental::edge_runtime;
 /// GraphRAG index for knowledge-graph-augmented retrieval. **Experimental**: API may change without notice.
 #[cfg(feature = "experimental")]
 pub use experimental::graphrag_index;
@@ -548,11 +549,13 @@ uniffi::setup_scaffolding!();
 
 /// Core collection types: config, stats, search results, dedup, query cache, and evaluation.
 pub use collection::{
+    AutoEmbedInsertConfig,
     BundleManifest, CdcConfig, CdcEvent, CdcEventType, CdcLog,
-    Collection, CollectionConfig, CollectionIter, CollectionStats,
+    Collection, CollectionConfig, CollectionIter, CollectionStats, MemoryStats,
     DedupGroup, DedupInsertResult, DedupPolicy, DedupScanResult,
     EvaluationReport, GroundTruthEntry, QueryCacheConfig, QueryCacheStats, QueryMetrics,
-    SearchExplain, SearchResult, SemanticDedupConfig, SemanticQueryCacheConfig, TimeDecay,
+    SearchExplain, SearchResult, ScoreNormalization, normalize_scores,
+    SemanticDedupConfig, SemanticQueryCacheConfig, TimeDecay,
 };
 /// Search parameters for configuring `CollectionRef` queries.
 pub use database::collection_ref::SearchParams;
@@ -565,7 +568,7 @@ pub use error::{ErrorCode, NeedleError, Recoverable, RecoveryHint, Result};
 /// HNSW index types: configuration, index, statistics, and search tracing.
 pub use hnsw::{HnswConfig, HnswIndex, HnswStats, SearchStats, SearchTrace, TraceHop};
 /// Metadata filter and store types for MongoDB-style query filtering.
-pub use metadata::{Filter, MetadataStore};
+pub use metadata::{FieldStats, Filter, MetadataStore};
 /// Multi-vector (ColBERT-style) types: vectors, config, index, and search results.
 pub use multivec::{MultiVector, MultiVectorConfig, MultiVectorIndex, MultiVectorSearchResult};
 /// Quantization types: scalar, product, and binary quantizers for memory-efficient storage.

@@ -35,12 +35,12 @@ pub use crate::autoscaling::{
 };
 #[cfg(feature = "experimental")]
 pub use crate::cloud_control::{
-    ApiKey, AutoRecoveryConfig, BillingInfo, ConnectionState, ControlPlane, ControlPlaneConfig,
-    InstanceHealth, InstanceRecoveryManager, InstanceStatus, LimitCheckResult, LimitViolation,
-    ManagedInstance, NeedleCloudClient, OrchestratorConfig, OverageCharge, PaymentStatus,
-    Permission as CloudPermission, RecoveryAction, RecoveryStatus, Region, RegionHealth,
+    ApiKey, BillingInfo, ControlPlane, ControlPlaneConfig,
+    InstanceStatus, LimitCheckResult, LimitViolation,
+    ManagedInstance, OrchestratorConfig, OverageCharge, PaymentStatus,
+    Permission as CloudPermission, Region, RegionHealth,
     RegionRouter, RegionalEndpoint, ResourceTier, RoutingStrategy as CloudRoutingStrategy,
-    SdkConfig, SdkStats, ServiceOrchestrator, SlaBreach, SlaBreachType, SlaMonitor, SlaPolicy,
+    ServiceOrchestrator, SlaBreach, SlaBreachType, SlaMonitor, SlaPolicy,
     SlaReport, SupportLevel, Tenant as CloudTenant, TenantConfig as CloudTenantConfig,
     TenantStatus as CloudTenantStatus, TenantUsage, TierLimits, UsageEvent as CloudUsageEvent,
     UsageEventType, UsageSummary, UsageUtilization,
