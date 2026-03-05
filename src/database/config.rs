@@ -15,6 +15,13 @@ pub struct DatabaseConfig {
     /// auto-save are logged via `eprintln!` since `Drop` cannot return errors.
     #[serde(default)]
     pub auto_save: bool,
+    /// Interval in seconds for automatic background flush of dirty data to disk.
+    /// When set, a background thread/task will periodically call `save()` if
+    /// there are unsaved changes. Set to `0` to disable.
+    /// Defaults to `0` (disabled) for the sync API. The async/server API
+    /// defaults to `30` seconds.
+    #[serde(default)]
+    pub auto_flush_interval_secs: u64,
 }
 
 impl Default for DatabaseConfig {
@@ -24,6 +31,7 @@ impl Default for DatabaseConfig {
             create_if_missing: true,
             read_only: false,
             auto_save: false,
+            auto_flush_interval_secs: 0,
         }
     }
 }
@@ -45,6 +53,16 @@ impl DatabaseConfig {
     #[must_use]
     pub fn with_auto_save(mut self, auto_save: bool) -> Self {
         self.auto_save = auto_save;
+        self
+    }
+
+    /// Set the auto-flush interval in seconds.
+    ///
+    /// When > 0, a background task will periodically save dirty data to disk.
+    /// Set to `0` to disable. Only effective with the async API or server mode.
+    #[must_use]
+    pub fn with_auto_flush_interval_secs(mut self, secs: u64) -> Self {
+        self.auto_flush_interval_secs = secs;
         self
     }
 }
