@@ -237,10 +237,11 @@ pub(in crate::server) async fn delete_vector(
     }
 }
 
-/// Update the metadata of an existing vector (delete + re-insert).
+/// Update the metadata of an existing vector.
 ///
-/// `PATCH /collections/:name/vectors/:id/metadata` — replaces metadata while
-/// preserving the vector. Rolls back on failure.
+/// `POST /collections/:name/vectors/:id/metadata` — by default performs a
+/// JSON merge patch (new keys added, null keys removed). Pass `"replace": true`
+/// to fully replace metadata.
 pub(in crate::server) async fn update_metadata(
     State(state): State<Arc<AppState>>,
     Path((collection, id)): Path<(String, String)>,
@@ -262,10 +263,33 @@ pub(in crate::server) async fn update_metadata(
         )
     })?;
 
+    let new_metadata = if req.replace {
+        // Full replace mode
+        req.metadata
+    } else if let Some(ref patch) = req.metadata {
+        // Merge patch mode: merge new fields into existing metadata
+        match (&original_metadata, patch) {
+            (Some(Value::Object(existing)), Value::Object(patch_map)) => {
+                let mut merged = existing.clone();
+                for (key, value) in patch_map {
+                    if value.is_null() {
+                        merged.remove(key);
+                    } else {
+                        merged.insert(key.clone(), value.clone());
+                    }
+                }
+                Some(Value::Object(merged))
+            }
+            _ => req.metadata,
+        }
+    } else {
+        original_metadata.clone()
+    };
+
     // Delete and re-insert with new metadata; rollback on insert failure
     coll.delete(&id)
         .map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
-    if let Err(e) = coll.insert(&id, &vector, req.metadata) {
+    if let Err(e) = coll.insert(&id, &vector, new_metadata) {
         // Rollback: re-insert with original data
         warn!(id = %id, error = %e, "Metadata update insert failed, rolling back");
         if let Err(rollback_err) = coll.insert(&id, &vector, original_metadata) {

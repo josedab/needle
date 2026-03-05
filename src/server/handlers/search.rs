@@ -41,6 +41,7 @@ pub(in crate::server) async fn search(
     Json(req): Json<SearchRequest>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<ApiError>)> {
     use crate::DistanceFunction;
+    let search_start = std::time::Instant::now();
 
     if req.k == 0 || req.k > MAX_SEARCH_K {
         return Err((
@@ -180,7 +181,7 @@ pub(in crate::server) async fn search(
     };
 
     // Convert to response format with optional vectors
-    let results: Vec<SearchResultResponse> = raw_results
+    let mut results: Vec<SearchResultResponse> = raw_results
         .into_iter()
         .map(|r| {
             let vector = if req.include_vectors {
@@ -198,6 +199,28 @@ pub(in crate::server) async fn search(
             }
         })
         .collect();
+
+    // Apply cursor-based pagination: skip results at or before the cursor position
+    if let Some(ref cursor) = req.search_after {
+        results.retain(|r| {
+            r.distance > cursor.distance
+                || (r.distance == cursor.distance && r.id > cursor.id)
+        });
+        results.truncate(req.k);
+    }
+
+    // Build pagination cursor from the last result
+    let (next_cursor, has_more) = if let Some(last) = results.last() {
+        let cursor = SearchCursor {
+            distance: last.distance,
+            id: last.id.clone(),
+        };
+        // If we got a full page, there might be more results
+        let has_more = results.len() >= req.k;
+        (Some(cursor), Some(has_more))
+    } else {
+        (None, Some(false))
+    };
 
     // Generate explanation if requested
     let explanation = if req.explain {
@@ -259,9 +282,28 @@ pub(in crate::server) async fn search(
         None
     };
 
+    // Log slow queries (threshold from NEEDLE_SLOW_QUERY_MS, default 500ms)
+    let elapsed = search_start.elapsed();
+    let slow_threshold_ms: u64 = std::env::var("NEEDLE_SLOW_QUERY_MS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(500); // allow-expect: env var parse with fallback
+    if elapsed.as_millis() as u64 > slow_threshold_ms {
+        warn!(
+            collection = %collection,
+            k = req.k,
+            latency_ms = elapsed.as_millis() as u64,
+            has_filter = req.filter.is_some(),
+            has_post_filter = req.post_filter.is_some(),
+            "Slow query detected"
+        );
+    }
+
     Ok(Json(SearchResponse {
         results,
         explanation,
+        next_cursor,
+        has_more,
     }))
 }
 
@@ -894,6 +936,211 @@ pub(in crate::server) async fn multimodal_search_handler(
         "fusion_strategy": fusion_strategy,
         "k": k,
     })))
+}
+
+/// Query metadata without vector similarity.
+///
+/// `POST /collections/:name/query` — filter documents by metadata only,
+/// without requiring a query vector. Returns matching IDs and metadata.
+pub(in crate::server) async fn metadata_query(
+    State(state): State<Arc<AppState>>,
+    Path(collection): Path<String>,
+    Json(body): Json<Value>,
+) -> Result<impl IntoResponse, (StatusCode, Json<ApiError>)> {
+    let limit = body.get("limit").and_then(|v| v.as_u64()).unwrap_or(100) as usize;
+    let offset = body.get("offset").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+
+    let filter = body.get("filter").ok_or_else(|| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(ApiError::new("filter is required", "MISSING_FILTER")),
+        )
+    })?;
+
+    let parsed_filter = Filter::parse(filter).map_err(|e| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(ApiError::new(format!("Invalid filter: {e}"), "INVALID_FILTER")),
+        )
+    })?;
+
+    let db = state.db.read().await;
+    let coll = db
+        .collection(&collection)
+        .map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
+
+    let all_ids = coll.ids()
+        .map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
+    let mut results = Vec::new();
+    let mut total = 0usize;
+    for id in &all_ids {
+        if let Some((_, meta)) = coll.get(id) {
+            if parsed_filter.matches(meta.as_ref()) {
+                total += 1;
+                if total > offset && results.len() < limit {
+                    results.push(json!({"id": id, "metadata": meta}));
+                }
+            }
+        }
+    }
+
+    Ok(Json(json!({
+        "data": results,
+        "pagination": {
+            "count": results.len(),
+            "offset": offset,
+            "total": total,
+            "has_more": total > offset + limit,
+        }
+    })))
+}
+
+/// Count vectors matching a metadata filter.
+///
+/// `POST /collections/:name/count` — returns the count of vectors
+/// matching the given filter, without fetching vector data.
+pub(in crate::server) async fn filtered_count(
+    State(state): State<Arc<AppState>>,
+    Path(collection): Path<String>,
+    Json(body): Json<Value>,
+) -> Result<impl IntoResponse, (StatusCode, Json<ApiError>)> {
+    let db = state.db.read().await;
+    let coll = db
+        .collection(&collection)
+        .map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
+
+    if let Some(filter_val) = body.get("filter") {
+        let parsed_filter = Filter::parse(filter_val).map_err(|e| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(ApiError::new(format!("Invalid filter: {e}"), "INVALID_FILTER")),
+            )
+        })?;
+        let all_ids = coll.ids()
+            .map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
+        let count = all_ids
+            .iter()
+            .filter(|id| {
+                coll.get(id)
+                    .map_or(false, |(_, meta)| parsed_filter.matches(meta.as_ref()))
+            })
+            .count();
+        Ok(Json(json!({"count": count})))
+    } else {
+        Ok(Json(json!({"count": coll.len()})))
+    }
+}
+
+/// Recommendation API: find vectors similar to given positive IDs, unlike negative IDs.
+///
+/// `POST /collections/:name/recommend` — averages positive vectors, subtracts
+/// negative vectors, and searches for the most similar results.
+pub(in crate::server) async fn recommend(
+    State(state): State<Arc<AppState>>,
+    Path(collection): Path<String>,
+    Json(body): Json<Value>,
+) -> Result<impl IntoResponse, (StatusCode, Json<ApiError>)> {
+    let positive_ids: Vec<String> = body
+        .get("positive_ids")
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(ApiError::new("positive_ids array is required", "MISSING_POSITIVE_IDS")),
+            )
+        })?
+        .iter()
+        .filter_map(|v| v.as_str().map(String::from))
+        .collect();
+
+    if positive_ids.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ApiError::new("positive_ids must not be empty", "EMPTY_POSITIVE_IDS")),
+        ));
+    }
+
+    let negative_ids: Vec<String> = body
+        .get("negative_ids")
+        .and_then(|v| v.as_array())
+        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+        .unwrap_or_default();
+
+    let limit = body.get("limit").and_then(|v| v.as_u64()).unwrap_or(10) as usize;
+
+    let db = state.db.read().await;
+    let coll = db
+        .collection(&collection)
+        .map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
+
+    // Collect positive vectors
+    let mut query_vector: Option<Vec<f32>> = None;
+    let mut pos_count = 0usize;
+    let exclude_ids: std::collections::HashSet<&str> = positive_ids.iter().chain(negative_ids.iter()).map(|s| s.as_str()).collect();
+
+    for id in &positive_ids {
+        if let Some((vec, _)) = coll.get(id) {
+            match &mut query_vector {
+                None => { query_vector = Some(vec); pos_count = 1; }
+                Some(q) => {
+                    for (i, v) in vec.iter().enumerate() {
+                        if i < q.len() { q[i] += v; }
+                    }
+                    pos_count += 1;
+                }
+            }
+        }
+    }
+
+    let Some(ref mut query) = query_vector else {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(ApiError::new("None of the positive_ids were found", "VECTORS_NOT_FOUND")),
+        ));
+    };
+
+    // Average positive vectors
+    if pos_count > 1 {
+        for v in query.iter_mut() { *v /= pos_count as f32; }
+    }
+
+    // Subtract negative vectors
+    let mut neg_count = 0usize;
+    for id in &negative_ids {
+        if let Some((vec, _)) = coll.get(id) {
+            for (i, v) in vec.iter().enumerate() {
+                if i < query.len() { query[i] -= v; }
+            }
+            neg_count += 1;
+        }
+    }
+    if neg_count > 0 {
+        // Re-normalize after subtraction
+        let norm: f32 = query.iter().map(|x| x * x).sum::<f32>().sqrt();
+        if norm > 0.0 {
+            for v in query.iter_mut() { *v /= norm; }
+        }
+    }
+
+    // Search and exclude input IDs
+    let raw_results = coll
+        .search(query, limit + exclude_ids.len())
+        .map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
+
+    let results: Vec<SearchResultResponse> = raw_results
+        .into_iter()
+        .filter(|r| !exclude_ids.contains(r.id.as_str()))
+        .take(limit)
+        .map(|r| SearchResultResponse {
+            id: r.id,
+            distance: r.distance,
+            score: 1.0 / (1.0 + r.distance),
+            metadata: r.metadata,
+            vector: None,
+        })
+        .collect();
+
+    Ok(Json(json!({"results": results})))
 }
 
 #[cfg(test)]

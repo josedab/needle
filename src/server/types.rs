@@ -121,6 +121,18 @@ pub struct UpsertRequest {
     pub ttl_seconds: Option<u64>,
 }
 
+/// Cursor for paginating through search results.
+///
+/// Use the `next_cursor` from a previous search response to continue from
+/// where the last page left off. Results after this (distance, id) pair are returned.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SearchCursor {
+    /// Distance value of the last result in the previous page.
+    pub distance: f32,
+    /// ID of the last result in the previous page.
+    pub id: String,
+}
+
 /// Request body for approximate nearest neighbor search.
 #[derive(Debug, Deserialize)]
 pub struct SearchRequest {
@@ -145,6 +157,10 @@ pub struct SearchRequest {
     /// When different from the collection's index, uses brute-force search
     #[serde(default)]
     pub distance: Option<String>,
+    /// Cursor for pagination. Pass the `next_cursor` from a previous search response
+    /// to get the next page of results.
+    #[serde(default)]
+    pub search_after: Option<SearchCursor>,
 }
 
 fn default_k() -> usize {
@@ -161,6 +177,13 @@ pub struct SearchResponse {
     pub results: Vec<SearchResultResponse>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub explanation: Option<SearchExplanation>,
+    /// Cursor to pass as `search_after` in the next request to get the next page.
+    /// `None` when there are no more results.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<SearchCursor>,
+    /// Whether more results are available beyond this page.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub has_more: Option<bool>,
 }
 
 /// A single search result with distance, score, and optional metadata/vector.
@@ -282,6 +305,11 @@ pub struct VectorResponse {
 #[derive(Debug, Deserialize)]
 pub struct UpdateMetadataRequest {
     pub metadata: Option<Value>,
+    /// When true, performs a full replacement of metadata.
+    /// When false (default), performs a JSON merge patch: new keys are added,
+    /// existing keys are overwritten, keys set to null are removed.
+    #[serde(default)]
+    pub replace: bool,
 }
 
 /// Query string parameters for paginated list endpoints.
@@ -291,6 +319,49 @@ pub struct QueryParams {
     pub offset: Option<usize>,
     #[serde(default)]
     pub limit: Option<usize>,
+}
+
+/// Generic paginated response envelope for list endpoints.
+///
+/// Wraps any list response with pagination metadata. Used by endpoints that
+/// return collections of items (vectors, collections, etc.).
+#[derive(Debug, Serialize)]
+pub struct PaginatedResponse<T: Serialize> {
+    /// The list of items in this page.
+    pub data: T,
+    /// Pagination metadata.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pagination: Option<PaginationMeta>,
+}
+
+/// Pagination metadata for list responses.
+#[derive(Debug, Serialize)]
+pub struct PaginationMeta {
+    /// Number of items in this page.
+    pub count: usize,
+    /// Offset of the first item in this page (for offset-based pagination).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub offset: Option<usize>,
+    /// Total number of items (if known).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total: Option<usize>,
+    /// Whether there are more items after this page.
+    pub has_more: bool,
+}
+
+impl<T: Serialize> PaginatedResponse<T> {
+    /// Create a paginated response with metadata.
+    pub fn new(data: T, count: usize, offset: Option<usize>, total: Option<usize>, has_more: bool) -> Self {
+        Self {
+            data,
+            pagination: Some(PaginationMeta { count, offset, total, has_more }),
+        }
+    }
+
+    /// Create a simple response without pagination metadata.
+    pub fn unpaginated(data: T) -> Self {
+        Self { data, pagination: None }
+    }
 }
 
 // ============ Alias Request/Response Types ============
@@ -902,11 +973,16 @@ mod tests {
                 vector: None,
             }],
             explanation: None,
+            next_cursor: None,
+            has_more: None,
         };
         let json = serde_json::to_value(&resp).expect("should serialize");
         assert_eq!(json["results"][0]["id"], "v1");
         assert_eq!(json["results"][0]["distance"], 0.5);
         assert!(json.get("explanation").is_none());
+        // next_cursor and has_more should be omitted when None
+        assert!(json.get("next_cursor").is_none());
+        assert!(json.get("has_more").is_none());
     }
 
     #[test]
@@ -919,6 +995,8 @@ mod tests {
                 top_dimensions: vec![],
                 profiling: None,
             }),
+            next_cursor: None,
+            has_more: Some(false),
         };
         let json = serde_json::to_value(&resp).expect("should serialize");
         assert!(json.get("explanation").is_some());

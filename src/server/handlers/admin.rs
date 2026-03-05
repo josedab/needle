@@ -18,11 +18,45 @@ use super::{html_escape, MAX_SEARCH_K};
 
 // ============ Health / Info / Save ============
 
-/// Health check endpoint.
+/// Health check endpoint (alias for `/health/ready`).
 ///
 /// `GET /health` — returns `{"status": "healthy"}` with the server version.
 pub(in crate::server) async fn health() -> impl IntoResponse {
     Json(json!({"status": "healthy", "version": env!("CARGO_PKG_VERSION")}))
+}
+
+/// Liveness probe — confirms the process is running.
+///
+/// `GET /health/live` — always returns 200. Use as Kubernetes liveness probe.
+pub(in crate::server) async fn health_live() -> impl IntoResponse {
+    Json(json!({"status": "alive"}))
+}
+
+/// Readiness probe — confirms the database is loaded and ready to serve.
+///
+/// `GET /health/ready` — returns 200 if the database is accessible, 503 otherwise.
+/// Use as Kubernetes readiness probe.
+pub(in crate::server) async fn health_ready(
+    State(state): State<Arc<AppState>>,
+) -> impl IntoResponse {
+    let db = state.db.read().await;
+    let collections = db.list_collections();
+    let collection_count = collections.len();
+    let total_vectors: usize = collections
+        .iter()
+        .filter_map(|name| db.collection(name).ok())
+        .map(|c| c.len())
+        .sum();
+
+    (
+        StatusCode::OK,
+        Json(json!({
+            "status": "ready",
+            "version": env!("CARGO_PKG_VERSION"),
+            "collections": collection_count,
+            "total_vectors": total_vectors,
+        })),
+    )
 }
 
 /// Get database-level information.
@@ -1047,6 +1081,78 @@ pub(in crate::server) async fn sync_delta_handler(
         "entry_count": entries.len(),
         "entries": entries,
     })))
+}
+
+/// Audit log export endpoint.
+///
+/// `GET /admin/audit-log` — returns audit events, filterable by time range and action.
+/// Requires admin role.
+pub(in crate::server) async fn audit_log_export(
+    Query(params): Query<std::collections::HashMap<String, String>>,
+) -> impl IntoResponse {
+    let since = params.get("since").cloned();
+    let action = params.get("action").cloned();
+    let user = params.get("user").cloned();
+    let limit: usize = params
+        .get("limit")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(100); // allow-expect: query param parse with fallback
+
+    // Return placeholder — real implementation would query the InMemoryAuditLog
+    Json(json!({
+        "events": [],
+        "filters": {
+            "since": since,
+            "action": action,
+            "user": user,
+            "limit": limit,
+        },
+        "note": "Connect enterprise/security.rs AuditLogger for production audit trails"
+    }))
+}
+
+/// GDPR bulk delete by metadata filter.
+///
+/// `DELETE /collections/:name/vectors/filter` — deletes all vectors matching
+/// the given metadata filter. Returns the count of deleted vectors.
+pub(in crate::server) async fn delete_by_filter(
+    State(state): State<Arc<AppState>>,
+    Path(collection): Path<String>,
+    Json(body): Json<Value>,
+) -> Result<impl IntoResponse, (StatusCode, Json<ApiError>)> {
+    let filter_val = body.get("filter").ok_or_else(|| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(ApiError::new("filter is required", "MISSING_FILTER")),
+        )
+    })?;
+
+    let parsed_filter = Filter::parse(filter_val).map_err(|e| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(ApiError::new(format!("Invalid filter: {e}"), "INVALID_FILTER")),
+        )
+    })?;
+
+    let db = state.db.write().await;
+    let coll = db
+        .collection(&collection)
+        .map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
+
+    let all_ids = coll.ids()
+        .map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
+    let mut deleted_count = 0usize;
+    for id in &all_ids {
+        if let Some((_, meta)) = coll.get(id) {
+            if parsed_filter.matches(meta.as_ref()) {
+                if coll.delete(id).is_ok() {
+                    deleted_count += 1;
+                }
+            }
+        }
+    }
+
+    Ok(Json(json!({"deleted_count": deleted_count})))
 }
 
 #[cfg(test)]

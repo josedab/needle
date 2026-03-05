@@ -465,6 +465,7 @@ mod tests {
                 include_vectors: false,
                 distance: None,
                 explain: false,
+                search_after: None,
             }),
         ).await;
         match result {
@@ -498,6 +499,7 @@ mod tests {
                 include_vectors: false,
                 distance: None,
                 explain: false,
+                search_after: None,
             }),
         ).await;
         match result {
@@ -521,6 +523,7 @@ mod tests {
             axum::extract::Path(("test".to_string(), "nonexistent".to_string())),
             Json(UpdateMetadataRequest {
                 metadata: Some(serde_json::json!({"key": "val"})),
+                replace: false,
             }),
         ).await;
         match result {
@@ -792,6 +795,7 @@ mod tests {
                 include_vectors: false,
                 distance: None,
                 explain: false,
+                search_after: None,
             }),
         ).await;
         assert!(result.is_ok(), "Search on empty collection should succeed");
@@ -822,6 +826,7 @@ mod tests {
                 include_vectors: false,
                 distance: None,
                 explain: false,
+                search_after: None,
             }),
         ).await;
         assert!(result.is_ok(), "Search with filter should succeed");
@@ -961,6 +966,7 @@ mod tests {
                 include_vectors: false,
                 distance: None,
                 explain: true,
+                search_after: None,
             }),
         ).await;
         assert!(result.is_ok(), "Search with explain should succeed");
@@ -1039,6 +1045,7 @@ mod tests {
                 include_vectors: true,
                 distance: None,
                 explain: false,
+                search_after: None,
             }),
         ).await;
         assert!(result.is_ok(), "Search with include_vectors should succeed");
@@ -1519,6 +1526,7 @@ mod tests {
             axum::extract::Path(("test".to_string(), "v1".to_string())),
             Json(UpdateMetadataRequest {
                 metadata: Some(serde_json::json!({"new_key": "new_val"})),
+                replace: false,
             }),
         ).await;
         assert!(result.is_ok());
@@ -1542,6 +1550,7 @@ mod tests {
                 include_vectors: false,
                 distance: None,
                 explain: false,
+                search_after: None,
             }),
         ).await;
         // k=0 should either be rejected or return empty
@@ -1566,6 +1575,7 @@ mod tests {
                 include_vectors: false,
                 distance: None,
                 explain: false,
+                search_after: None,
             }),
         ).await;
         match result {
@@ -1741,6 +1751,7 @@ mod tests {
                 include_vectors: false,
                 distance: None,
                 explain: false,
+                search_after: None,
             }),
         ).await;
         match result {

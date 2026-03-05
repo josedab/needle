@@ -113,6 +113,11 @@ pub struct ServerConfig {
     /// Trusted proxies for honoring X-Forwarded-For/X-Real-IP headers.
     /// Only requests from these IPs may override the client IP.
     pub trusted_proxies: Vec<IpAddr>,
+    /// TLS certificate file path (PEM format). When set with `tls_key_path`,
+    /// the server will use HTTPS. Otherwise, use a reverse proxy for TLS.
+    pub tls_cert_path: Option<String>,
+    /// TLS private key file path (PEM format).
+    pub tls_key_path: Option<String>,
 }
 
 /// CORS configuration
@@ -289,6 +294,8 @@ impl Default for ServerConfig {
             max_batch_size: DEFAULT_MAX_BATCH_SIZE,
             request_timeout_secs: DEFAULT_REQUEST_TIMEOUT_SECS,
             trusted_proxies: default_trusted_proxies(),
+            tls_cert_path: None,
+            tls_key_path: None,
         }
     }
 }
@@ -435,11 +442,7 @@ pub fn create_router_with_config(state: Arc<AppState>, config: &ServerConfig) ->
     let timeout_layer = TimeoutLayer::new(Duration::from_secs(config.request_timeout_secs));
 
     #[allow(unused_mut)]
-    let mut router = Router::new()
-        // Health & Info
-        .route("/health", get(health))
-        .route("/", get(get_info))
-        .route("/info", get(get_info))
+    let mut api_routes = Router::new()
         // Collections
         .route("/collections", get(list_collections))
         .route("/collections", post(create_collection))
@@ -494,6 +497,12 @@ pub fn create_router_with_config(state: Arc<AppState>, config: &ServerConfig) ->
         .route("/collections/:collection/advise", get(advise_collection_handler))
         // Dedup scan
         .route("/collections/:collection/dedup/scan", post(dedup_scan_handler))
+        // Metadata-only query (no vector required)
+        .route("/collections/:collection/query", post(metadata_query))
+        // Filtered count
+        .route("/collections/:collection/count", post(filtered_count))
+        // Recommendation (find similar to IDs)
+        .route("/collections/:collection/recommend", post(recommend))
         // Incremental sync delta
         .route("/sync/delta", get(sync_delta_handler))
         // Index status (incremental index / WAL)
@@ -512,6 +521,10 @@ pub fn create_router_with_config(state: Arc<AppState>, config: &ServerConfig) ->
         .route("/embeddings/router/status", get(embedding_router_status_handler))
         // Database operations
         .route("/save", post(save_database))
+        // Audit log export
+        .route("/admin/audit-log", get(audit_log_export))
+        // GDPR bulk delete by filter
+        .route("/collections/:collection/vectors/filter", delete(delete_by_filter))
         // Aliases
         .route("/aliases", post(create_alias_handler))
         .route("/aliases", get(list_aliases_handler))
@@ -521,19 +534,30 @@ pub fn create_router_with_config(state: Arc<AppState>, config: &ServerConfig) ->
         // TTL endpoints
         .route("/collections/:name/expire", post(expire_vectors_handler))
         .route("/collections/:name/ttl-stats", get(ttl_stats_handler))
-        // OpenAPI spec
-        .route("/openapi.json", get(serve_openapi_spec))
-        // Dashboard
-        .route("/dashboard", get(serve_dashboard))
         // Snapshot endpoints
         .route("/collections/:name/snapshots", get(list_snapshots_handler))
         .route("/collections/:name/snapshots", post(create_snapshot_handler))
         .route("/collections/:name/snapshots/:snapshot/restore", post(restore_snapshot_handler))
         // MCP over HTTP
         .route("/mcp", post(mcp_http_handler))
-        .route("/mcp/config", get(mcp_config_handler))
-        // Interactive playground
-        .route("/playground", get(serve_playground));
+        .route("/mcp/config", get(mcp_config_handler));
+
+    // Serve API routes at both root (backward compat) and /v1 (versioned)
+    #[allow(unused_mut)]
+    let mut router = Router::new()
+        // Infrastructure endpoints (not versioned)
+        .route("/health", get(health))
+        .route("/health/live", get(health_live))
+        .route("/health/ready", get(health_ready))
+        .route("/", get(get_info))
+        .route("/info", get(get_info))
+        .route("/openapi.json", get(serve_openapi_spec))
+        .route("/dashboard", get(serve_dashboard))
+        .route("/playground", get(serve_playground))
+        // Versioned API routes under /v1
+        .nest("/v1", api_routes.clone())
+        // Backward-compatible root routes (will be deprecated in v2)
+        .merge(api_routes);
 
     // Add metrics endpoint when metrics feature is enabled
     #[cfg(feature = "metrics")]
@@ -558,11 +582,18 @@ pub fn create_router_with_config(state: Arc<AppState>, config: &ServerConfig) ->
     #[cfg(feature = "metrics")]
     let router = router.layer(axum::middleware::from_fn(metrics_middleware));
 
+    // Apply concurrency limit for backpressure (returns 503 when overloaded)
+    let max_concurrent: usize = std::env::var("NEEDLE_MAX_CONCURRENT")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1000); // allow-expect: env var parse with fallback
+
     Ok(router
         .layer(axum::middleware::from_fn(api_stability_middleware))
         .layer(axum::middleware::from_fn(security_headers_middleware))
         .layer(TraceLayer::new_for_http())
         .layer(timeout_layer)
+        .layer(tower::limit::ConcurrencyLimitLayer::new(max_concurrent))
         .layer(RequestBodyLimitLayer::new(config.max_body_size))
         .layer(cors_layer))
 }
@@ -615,6 +646,33 @@ pub async fn serve(config: ServerConfig) -> Result<(), Box<dyn std::error::Error
 
     let state = Arc::new(AppState::with_config(db, &config));
     let app = create_router_with_config(state.clone(), &config)?;
+
+    // Spawn background auto-flush task for file-backed databases
+    let auto_flush_secs = std::env::var("NEEDLE_AUTO_FLUSH_SECS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(30); // allow-expect: env var parsing with fallback
+    if config.db_path.is_some() && auto_flush_secs > 0 {
+        let flush_state = state.clone();
+        info!(interval_secs = auto_flush_secs, "Starting background auto-flush task");
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(
+                std::time::Duration::from_secs(auto_flush_secs),
+            );
+            interval.tick().await; // skip the immediate first tick
+            loop {
+                interval.tick().await;
+                let mut db = flush_state.db.write().await;
+                if db.is_dirty() {
+                    if let Err(e) = db.save() {
+                        tracing::error!(error = %e, "Auto-flush failed");
+                    } else {
+                        tracing::debug!("Auto-flush: database saved");
+                    }
+                }
+            }
+        });
+    }
 
     info!("Listening on http://{}", config.addr);
 
