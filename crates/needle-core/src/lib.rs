@@ -3,6 +3,8 @@
 //! Foundational types for the Needle vector database.
 //! This crate provides error types and distance functions used across the Needle ecosystem.
 
+#![warn(missing_docs)]
+
 pub mod distance;
 pub mod error;
 

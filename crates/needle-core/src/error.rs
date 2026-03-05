@@ -68,77 +68,124 @@
 
 use thiserror::Error;
 
-/// Error code categories for programmatic error handling
+/// Error code categories for programmatic error handling.
+///
+/// Each variant corresponds to a numeric code in a specific range
+/// (see [`ErrorCode::code()`] and [`ErrorCode::category()`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ErrorCode {
-    // IO errors (1xxx)
+    // ── I/O errors (1xxx) ────────────────────────────────────────────────
+    /// Failed to read from disk or network (1001).
     IoRead = 1001,
+    /// Failed to write to disk or network (1002).
     IoWrite = 1002,
+    /// Insufficient file-system permissions (1003).
     IoPermission = 1003,
+    /// Disk is full (1004).
     IoDiskFull = 1004,
 
-    // Serialization errors (2xxx)
+    // ── Serialization errors (2xxx) ──────────────────────────────────────
+    /// Failed to serialize data (2001).
     SerializationFailed = 2001,
+    /// Failed to deserialize data (2002).
     DeserializationFailed = 2002,
+    /// Data format is invalid or unsupported (2003).
     InvalidFormat = 2003,
 
-    // Collection errors (3xxx)
+    // ── Collection errors (3xxx) ─────────────────────────────────────────
+    /// Collection does not exist (3001).
     CollectionNotFound = 3001,
+    /// A collection with this name already exists (3002).
     CollectionAlreadyExists = 3002,
+    /// Collection data is corrupted (3003).
     CollectionCorrupted = 3003,
+    /// Alias does not exist (3004).
     AliasNotFound = 3004,
+    /// An alias with this name already exists (3005).
     AliasAlreadyExists = 3005,
+    /// Target collection has existing aliases preventing the operation (3006).
     AliasTargetHasAliases = 3006,
 
-    // Vector errors (4xxx)
+    // ── Vector errors (4xxx) ─────────────────────────────────────────────
+    /// Vector ID not found in the collection (4001).
     VectorNotFound = 4001,
+    /// A vector with this ID already exists (4002).
     VectorAlreadyExists = 4002,
+    /// Vector dimensions do not match the collection (4003).
     DimensionMismatch = 4003,
+    /// Vector data is invalid (e.g., contains NaN) (4004).
     InvalidVector = 4004,
 
-    // Database errors (5xxx)
+    // ── Database errors (5xxx) ───────────────────────────────────────────
+    /// Database file is invalid or unrecognizable (5001).
     InvalidDatabase = 5001,
+    /// Database data is corrupted (5002).
     DatabaseCorrupted = 5002,
+    /// Database is locked by another process (5003).
     DatabaseLocked = 5003,
 
-    // Index errors (6xxx)
+    // ── Index errors (6xxx) ──────────────────────────────────────────────
+    /// General index operation error (6001).
     IndexError = 6001,
+    /// Index data is corrupted (6002).
     IndexCorrupted = 6002,
+    /// Index build failed (6003).
     IndexBuildFailed = 6003,
 
-    // Configuration errors (7xxx)
+    // ── Configuration errors (7xxx) ──────────────────────────────────────
+    /// Configuration value is invalid (7001).
     InvalidConfig = 7001,
+    /// Required configuration is missing (7002).
     MissingConfig = 7002,
 
-    // Resource errors (8xxx)
+    // ── Resource errors (8xxx) ───────────────────────────────────────────
+    /// Collection capacity limit exceeded (8001).
     CapacityExceeded = 8001,
+    /// Quota limit exceeded (8002).
     QuotaExceeded = 8002,
+    /// Out of memory (8003).
     MemoryExhausted = 8003,
 
-    // Operational errors (9xxx)
+    // ── Operational errors (9xxx) ────────────────────────────────────────
+    /// Operation timed out (9001).
     Timeout = 9001,
+    /// Lock acquisition timed out (9002).
     LockTimeout = 9002,
+    /// Write conflict (9003).
     Conflict = 9003,
+    /// Generic resource not found (9004).
     NotFound = 9004,
 
-    // Security errors (10xxx)
+    // ── Security errors (10xxx) ──────────────────────────────────────────
+    /// Encryption failed (10001).
     EncryptionError = 10001,
+    /// Decryption failed (10002).
     DecryptionError = 10002,
+    /// Authentication failed (10003).
     AuthenticationFailed = 10003,
 
-    // Distributed errors (11xxx)
+    // ── Distributed errors (11xxx) ───────────────────────────────────────
+    /// Raft/consensus protocol error (11001).
     ConsensusError = 11001,
+    /// Replication error (11002).
     ReplicationError = 11002,
+    /// Network communication error (11003).
     NetworkError = 11003,
 
-    // Backup errors (12xxx)
+    // ── Backup errors (12xxx) ────────────────────────────────────────────
+    /// Backup operation failed (12001).
     BackupFailed = 12001,
+    /// Restore operation failed (12002).
     RestoreFailed = 12002,
+    /// Backup data is corrupted (12003).
     BackupCorrupted = 12003,
 
-    // State/Operation errors (13xxx)
+    // ── State/Operation errors (13xxx) ───────────────────────────────────
+    /// Operation is not valid in the current state (13001).
     InvalidOperation = 13001,
+    /// Object is in an invalid state (13002).
     InvalidState = 13002,
+    /// Caller is not authorized for this operation (13003).
     Unauthorized = 13003,
 }
 
@@ -260,103 +307,140 @@ pub trait Recoverable {
     fn suggested_retry_delay_ms(&self) -> Option<u64>;
 }
 
-/// Error types for Needle database operations
+/// Error types for Needle database operations.
 #[must_use]
 #[derive(Error, Debug)]
 pub enum NeedleError {
+    /// I/O error from the underlying file system or network.
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 
+    /// JSON serialization or deserialization failed.
     #[error("Serialization error: {0}")]
     Serialization(#[from] serde_json::Error),
 
+    /// Vector dimensions do not match the collection's configured dimensionality.
     #[error("Dimension mismatch: expected {expected}, got {got}")]
-    DimensionMismatch { expected: usize, got: usize },
+    DimensionMismatch {
+        /// Expected number of dimensions.
+        expected: usize,
+        /// Actual number of dimensions provided.
+        got: usize,
+    },
 
+    /// The requested collection does not exist.
     #[error("Collection '{0}' not found")]
     CollectionNotFound(String),
 
+    /// A collection with this name already exists.
     #[error("Collection '{0}' already exists")]
     CollectionAlreadyExists(String),
 
+    /// The requested alias does not exist.
     #[error("Alias '{0}' not found")]
     AliasNotFound(String),
 
+    /// An alias with this name already exists.
     #[error("Alias '{0}' already exists")]
     AliasAlreadyExists(String),
 
+    /// Cannot drop a collection that still has aliases pointing to it.
     #[error("Cannot drop collection '{0}': aliases still reference it")]
     CollectionHasAliases(String),
 
+    /// The requested vector ID was not found in the collection.
     #[error("Vector '{0}' not found")]
     VectorNotFound(String),
 
+    /// A vector with this ID already exists in the collection.
     #[error("Vector '{0}' already exists")]
     VectorAlreadyExists(String),
 
+    /// Attempted to insert a vector with a duplicate ID.
     #[error("Duplicate ID: '{0}'")]
     DuplicateId(String),
 
+    /// A conflicting operation is already in progress.
     #[error("Operation in progress: {0}")]
     OperationInProgress(String),
 
+    /// The database file is invalid or unrecognizable.
     #[error("Invalid database file: {0}")]
     InvalidDatabase(String),
 
+    /// Database data corruption was detected.
     #[error("Database corruption detected: {0}")]
     Corruption(String),
 
+    /// An error occurred in the vector index (HNSW, IVF, etc.).
     #[error("Index error: {0}")]
     Index(String),
 
+    /// A configuration value is invalid.
     #[error("Invalid configuration: {0}")]
     InvalidConfig(String),
 
+    /// The collection's capacity limit has been exceeded.
     #[error("Capacity exceeded: {0}")]
     CapacityExceeded(String),
 
+    /// Vector data is invalid (e.g., contains NaN or Inf).
     #[error("Invalid vector: {0}")]
     InvalidVector(String),
 
+    /// Input validation failed.
     #[error("Invalid input: {0}")]
     InvalidInput(String),
 
+    /// A quota limit has been exceeded.
     #[error("Quota exceeded: {0}")]
     QuotaExceeded(String),
 
+    /// A backup or restore operation failed.
     #[error("Backup error: {0}")]
     BackupError(String),
 
+    /// A generic "not found" error for non-collection/vector lookups.
     #[error("Not found: {0}")]
     NotFound(String),
 
+    /// A write conflict occurred (e.g., concurrent modification).
     #[error("Conflict: {0}")]
     Conflict(String),
 
+    /// Encryption or decryption failed.
     #[error("Encryption error: {0}")]
     EncryptionError(String),
 
+    /// Raft or distributed consensus protocol error.
     #[error("Consensus error: {0}")]
     ConsensusError(String),
 
+    /// Failed to acquire an internal lock.
     #[error("Lock error: failed to acquire lock")]
     LockError,
 
+    /// An operation exceeded its time limit.
     #[error("Operation timed out after {0:?}")]
     Timeout(std::time::Duration),
 
+    /// Lock acquisition exceeded its time limit.
     #[error("Lock acquisition timed out after {0:?}")]
     LockTimeout(std::time::Duration),
 
+    /// The operation is not valid in the current state.
     #[error("Invalid operation: {0}")]
     InvalidOperation(String),
 
+    /// The object is in an invalid or unexpected state.
     #[error("Invalid state: {0}")]
     InvalidState(String),
 
+    /// The caller is not authorized for this operation.
     #[error("Unauthorized: {0}")]
     Unauthorized(String),
 
+    /// A function argument is invalid.
     #[error("Invalid argument: {0}")]
     InvalidArgument(String),
 }
@@ -378,20 +462,21 @@ impl Recoverable for NeedleError {
             NeedleError::AliasAlreadyExists(_) => ErrorCode::AliasAlreadyExists,
             NeedleError::CollectionHasAliases(_) => ErrorCode::AliasTargetHasAliases,
             NeedleError::VectorNotFound(_) => ErrorCode::VectorNotFound,
-            NeedleError::VectorAlreadyExists(_) => ErrorCode::VectorAlreadyExists,
-            NeedleError::DuplicateId(_) => ErrorCode::VectorAlreadyExists,
-            NeedleError::OperationInProgress(_) => ErrorCode::Conflict,
+            NeedleError::VectorAlreadyExists(_) | NeedleError::DuplicateId(_) => {
+                ErrorCode::VectorAlreadyExists
+            }
+            NeedleError::OperationInProgress(_) | NeedleError::Conflict(_) => ErrorCode::Conflict,
             NeedleError::InvalidDatabase(_) => ErrorCode::InvalidDatabase,
             NeedleError::Corruption(_) => ErrorCode::DatabaseCorrupted,
             NeedleError::Index(_) => ErrorCode::IndexError,
-            NeedleError::InvalidConfig(_) => ErrorCode::InvalidConfig,
+            NeedleError::InvalidConfig(_) | NeedleError::InvalidInput(_) => {
+                ErrorCode::InvalidConfig
+            }
             NeedleError::CapacityExceeded(_) => ErrorCode::CapacityExceeded,
             NeedleError::InvalidVector(_) => ErrorCode::InvalidVector,
-            NeedleError::InvalidInput(_) => ErrorCode::InvalidConfig,
             NeedleError::QuotaExceeded(_) => ErrorCode::QuotaExceeded,
             NeedleError::BackupError(_) => ErrorCode::BackupFailed,
             NeedleError::NotFound(_) => ErrorCode::NotFound,
-            NeedleError::Conflict(_) => ErrorCode::Conflict,
             NeedleError::EncryptionError(_) => ErrorCode::EncryptionError,
             NeedleError::ConsensusError(_) => ErrorCode::ConsensusError,
             NeedleError::LockError => ErrorCode::DatabaseLocked,
@@ -400,7 +485,7 @@ impl Recoverable for NeedleError {
             NeedleError::InvalidOperation(_) => ErrorCode::InvalidOperation,
             NeedleError::InvalidState(_) => ErrorCode::InvalidState,
             NeedleError::Unauthorized(_) => ErrorCode::Unauthorized,
-            NeedleError::InvalidArgument(_) => ErrorCode::InvalidConfig,
+            NeedleError::InvalidArgument(_) => ErrorCode::InvalidConfig, // same as InvalidConfig/InvalidInput
         }
     }
 
@@ -644,9 +729,8 @@ impl Recoverable for NeedleError {
     fn suggested_retry_delay_ms(&self) -> Option<u64> {
         match self {
             NeedleError::Timeout(_) => Some(1000),
-            NeedleError::LockTimeout(_) => Some(100),
+            NeedleError::LockTimeout(_) | NeedleError::Conflict(_) => Some(100),
             NeedleError::LockError => Some(50),
-            NeedleError::Conflict(_) => Some(100),
             NeedleError::ConsensusError(_) => Some(500),
             _ => None,
         }
