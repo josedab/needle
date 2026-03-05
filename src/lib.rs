@@ -226,6 +226,9 @@ pub use integrations::{langchain, llamaindex};
 /// `infrastructure/`, `observability/`, `pipeline/`, `plugin/`, `search/`,
 /// `storage/`, `sync/`. All modules are re-exported at the `services::` level
 /// for backward compatibility.
+///
+/// **Note:** This module is `#[doc(hidden)]` and not part of the stable public API.
+/// A future release may gate it behind a feature flag to reduce default compile times.
 #[doc(hidden)]
 pub mod services;
 #[doc(hidden)]
