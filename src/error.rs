@@ -595,21 +595,25 @@ impl Recoverable for NeedleError {
                 match source.kind() {
                     std::io::ErrorKind::NotFound => vec![
                         RecoveryHint::new("Verify the file or directory exists")
-                            .with_details("Check file path spelling and ensure parent directories exist"),
+                            .with_details("Check file path spelling and ensure parent directories exist")
+                            .with_doc("docs/how-to-guides.md#persistence"),
                         RecoveryHint::new("Create the database file using Database::open() or Database::in_memory()"),
                     ],
                     std::io::ErrorKind::PermissionDenied => vec![
                         RecoveryHint::new("Check file permissions")
-                            .with_details("Ensure the process has read/write access to the file and directory"),
+                            .with_details("Ensure the process has read/write access to the file and directory")
+                            .with_doc("docs/production-checklist.md"),
                         RecoveryHint::new("Try running with elevated permissions or change file ownership"),
                     ],
                     std::io::ErrorKind::WriteZero | std::io::ErrorKind::StorageFull => vec![
                         RecoveryHint::new("Free up disk space")
-                            .with_details("The disk is full; delete unnecessary files or expand storage"),
+                            .with_details("The disk is full; delete unnecessary files or expand storage")
+                            .with_doc("docs/OPERATIONS.md"),
                         RecoveryHint::new("Run database compact() to reclaim space from deleted vectors"),
                     ],
                     _ => vec![
-                        RecoveryHint::new("Check disk health and file system integrity"),
+                        RecoveryHint::new("Check disk health and file system integrity")
+                            .with_doc("docs/OPERATIONS.md"),
                         RecoveryHint::new("Ensure no other process has exclusive access to the file"),
                     ],
                 }
@@ -617,63 +621,74 @@ impl Recoverable for NeedleError {
 
             NeedleError::Serialization(_) => vec![
                 RecoveryHint::new("Check data format compatibility")
-                    .with_details("Ensure data matches expected JSON schema"),
-                RecoveryHint::new("Verify metadata values are valid JSON types"),
-                RecoveryHint::new("If upgrading, check for breaking changes in data format"),
+                    .with_details("Ensure data matches expected JSON schema. Common causes: invalid UTF-8 strings, unsupported value types (NaN, Infinity), or circular references.")
+                    .with_doc("docs/api-reference.md"),
+                RecoveryHint::new("Verify metadata values are valid JSON types (string, number, boolean, array, object, null)"),
+                RecoveryHint::new("If upgrading, check CHANGELOG.md for breaking changes in data format"),
+                RecoveryHint::new("Try re-exporting data with `needle export` and re-importing into a fresh database"),
             ],
 
             NeedleError::DimensionMismatch { expected, got } => vec![
                 RecoveryHint::new(format!("Resize vector to {} dimensions (currently {})", expected, got))
-                    .with_details("All vectors in a collection must have the same dimensionality"),
+                    .with_details("All vectors in a collection must have the same dimensionality")
+                    .with_doc("docs/how-to-guides.md#creating-collections"),
                 RecoveryHint::new("Verify your embedding model produces the expected dimensions"),
                 RecoveryHint::new("If using a different model, create a new collection with the correct dimensions"),
             ],
 
             NeedleError::CollectionNotFound(name) => vec![
-                RecoveryHint::new(format!("Create collection '{}' first using db.create_collection()", name)),
+                RecoveryHint::new(format!("Create collection '{}' first using db.create_collection()", name))
+                    .with_doc("docs/api-reference.md#collections"),
                 RecoveryHint::new("Check collection name spelling (case-sensitive)"),
                 RecoveryHint::new("Use db.list_collections() to see available collections"),
             ],
 
             NeedleError::CollectionAlreadyExists(name) => vec![
-                RecoveryHint::new(format!("Use db.collection(\"{}\") to access the existing collection", name)),
+                RecoveryHint::new(format!("Use db.collection(\"{}\") to access the existing collection", name))
+                    .with_doc("docs/api-reference.md#collections"),
                 RecoveryHint::new("Delete the existing collection first if you need to recreate it"),
                 RecoveryHint::new("Choose a different collection name"),
             ],
 
             NeedleError::AliasNotFound(name) => vec![
-                RecoveryHint::new(format!("Create alias '{}' first using db.create_alias()", name)),
+                RecoveryHint::new(format!("Create alias '{}' first using db.create_alias()", name))
+                    .with_doc("docs/api-reference.md#aliases"),
                 RecoveryHint::new("Check alias name spelling (case-sensitive)"),
                 RecoveryHint::new("Use db.list_aliases() to see available aliases"),
             ],
 
             NeedleError::AliasAlreadyExists(name) => vec![
-                RecoveryHint::new(format!("Alias '{}' already exists", name)),
+                RecoveryHint::new(format!("Alias '{}' already exists", name))
+                    .with_doc("docs/api-reference.md#aliases"),
                 RecoveryHint::new("Delete the existing alias first if you need to recreate it"),
                 RecoveryHint::new("Choose a different alias name"),
             ],
 
             NeedleError::CollectionHasAliases(name) => vec![
-                RecoveryHint::new(format!("Collection '{}' has aliases pointing to it", name)),
+                RecoveryHint::new(format!("Collection '{}' has aliases pointing to it", name))
+                    .with_doc("docs/api-reference.md#aliases"),
                 RecoveryHint::new("Delete all aliases first using db.delete_alias()"),
                 RecoveryHint::new("Use db.aliases_for_collection() to see which aliases reference this collection"),
             ],
 
             NeedleError::VectorNotFound(id) => vec![
-                RecoveryHint::new(format!("Insert vector '{}' before accessing it", id)),
+                RecoveryHint::new(format!("Insert vector '{}' before accessing it", id))
+                    .with_doc("docs/api-reference.md#vectors"),
                 RecoveryHint::new("Verify the vector ID is correct"),
                 RecoveryHint::new("Check if the vector was previously deleted"),
             ],
 
             NeedleError::VectorAlreadyExists(id) => vec![
-                RecoveryHint::new(format!("Use a unique ID instead of '{}'", id)),
+                RecoveryHint::new(format!("Use a unique ID instead of '{}'", id))
+                    .with_doc("docs/api-reference.md#vectors"),
                 RecoveryHint::new(format!("Delete the existing vector first: collection.delete(\"{}\")", id)),
                 RecoveryHint::new("Use upsert semantics if you want to replace existing vectors"),
             ],
 
             NeedleError::InvalidDatabase(reason) => vec![
                 RecoveryHint::new("The database file appears corrupted or incompatible")
-                    .with_details(reason.clone()),
+                    .with_details(reason.clone())
+                    .with_doc("docs/MIGRATION.md"),
                 RecoveryHint::new("Restore from a recent backup if available"),
                 RecoveryHint::new("Create a new database if no backup exists"),
                 RecoveryHint::new("Check if the file was created by a different version of Needle"),
@@ -681,128 +696,151 @@ impl Recoverable for NeedleError {
 
             NeedleError::Corruption(reason) => vec![
                 RecoveryHint::new("Restore from the most recent backup")
-                    .with_details(format!("Corruption detected: {}", reason)),
+                    .with_details(format!("Corruption detected: {}", reason))
+                    .with_doc("docs/OPERATIONS.md#backup-and-recovery"),
                 RecoveryHint::new("Run database repair utility if available"),
                 RecoveryHint::new("Consider enabling write-ahead logging (WAL) for crash recovery"),
             ],
 
             NeedleError::Index(reason) => vec![
-                RecoveryHint::new("Rebuild the index")
-                    .with_details(reason.clone()),
-                RecoveryHint::new("Check HNSW parameters (M, ef_construction) are within valid ranges"),
-                RecoveryHint::new("Ensure sufficient memory for index construction"),
+                RecoveryHint::new("Rebuild the index by re-inserting all vectors")
+                    .with_details(format!("Index error: {}. Rebuilding re-creates the HNSW graph from scratch.", reason))
+                    .with_doc("docs/index-selection-guide.md"),
+                RecoveryHint::new("Check HNSW parameters (M, ef_construction) are within valid ranges: M ∈ [4, 128], ef_construction ∈ [50, 2000]"),
+                RecoveryHint::new("Ensure sufficient memory for index construction (approx. 1.5x final index size during build)"),
+                RecoveryHint::new("For large collections, consider using compact() before rebuild to remove deleted entries"),
             ],
 
             NeedleError::InvalidConfig(reason) => vec![
-                RecoveryHint::new(format!("Fix configuration: {}", reason)),
-                RecoveryHint::new("Use default configuration as a starting point")
-                    .with_doc("See CLAUDE.md for configuration guidelines"),
+                RecoveryHint::new(format!("Fix configuration: {}", reason))
+                    .with_doc("docs/feature-flags.md"),
+                RecoveryHint::new("Use default configuration as a starting point: CollectionConfig::new(name, dimensions)")
+                    .with_doc("CLAUDE.md"),
+                RecoveryHint::new("Validate numeric ranges: similarity thresholds ∈ [0.0, 1.0], dimensions > 0, M ∈ [4, 128]"),
             ],
 
             NeedleError::CapacityExceeded(reason) => vec![
-                RecoveryHint::new(reason.clone()),
+                RecoveryHint::new(format!("Capacity limit reached: {}", reason))
+                    .with_doc("docs/OPERATIONS.md#capacity-planning"),
+                RecoveryHint::new("Run compact() to reclaim space from soft-deleted vectors"),
                 RecoveryHint::new("Delete unused vectors to free capacity"),
-                RecoveryHint::new("Use quantization to reduce memory per vector"),
-                RecoveryHint::new("Consider sharding data across multiple collections"),
+                RecoveryHint::new("Use quantization (scalar or product) to reduce memory per vector by 4-16x"),
+                RecoveryHint::new("Consider sharding data across multiple collections for horizontal scaling"),
             ],
 
             NeedleError::InvalidVector(reason) => vec![
-                RecoveryHint::new(format!("Fix vector data: {}", reason)),
+                RecoveryHint::new(format!("Fix vector data: {}", reason))
+                    .with_doc("docs/how-to-guides.md#inserting-vectors"),
                 RecoveryHint::new("Ensure vector contains no NaN or Infinity values"),
                 RecoveryHint::new("Verify vector dimensions match collection configuration"),
                 RecoveryHint::new("Normalize vectors if using cosine distance"),
             ],
 
             NeedleError::InvalidInput(reason) => vec![
-                RecoveryHint::new(format!("Check input value: {}", reason)),
+                RecoveryHint::new(format!("Check input value: {}", reason))
+                    .with_doc("docs/api-reference.md"),
                 RecoveryHint::new("Verify input types match expected signatures"),
             ],
 
             NeedleError::QuotaExceeded(reason) => vec![
-                RecoveryHint::new(reason.clone()),
+                RecoveryHint::new(reason.clone())
+                    .with_doc("docs/OPERATIONS.md#quotas"),
                 RecoveryHint::new("Request a quota increase if needed"),
                 RecoveryHint::new("Delete unused resources to stay within limits"),
             ],
 
             NeedleError::BackupError(reason) => vec![
-                RecoveryHint::new(format!("Backup operation failed: {}", reason)),
+                RecoveryHint::new(format!("Backup operation failed: {}", reason))
+                    .with_doc("docs/OPERATIONS.md#backup-and-recovery"),
                 RecoveryHint::new("Verify backup directory has sufficient space and permissions"),
                 RecoveryHint::new("Check backup integrity with verify_backup()"),
                 RecoveryHint::new("Retry the backup operation"),
             ],
 
             NeedleError::NotFound(resource) => vec![
-                RecoveryHint::new(format!("Resource '{}' not found", resource)),
+                RecoveryHint::new(format!("Resource '{}' not found", resource))
+                    .with_doc("docs/api-reference.md"),
                 RecoveryHint::new("Verify the resource identifier is correct"),
                 RecoveryHint::new("Create the resource before accessing it"),
             ],
 
             NeedleError::Conflict(reason) => vec![
-                RecoveryHint::new(format!("Resolve conflict: {}", reason)),
+                RecoveryHint::new(format!("Resolve conflict: {}", reason))
+                    .with_doc("docs/distributed-operations.md"),
                 RecoveryHint::new("Retry the operation after a short delay"),
                 RecoveryHint::new("Use optimistic locking for concurrent operations"),
             ],
 
             NeedleError::EncryptionError(reason) => vec![
-                RecoveryHint::new(format!("Encryption operation failed: {}", reason)),
+                RecoveryHint::new(format!("Encryption operation failed: {}", reason))
+                    .with_doc("docs/how-to-guides.md#encryption"),
                 RecoveryHint::new("Verify the encryption key is correct"),
                 RecoveryHint::new("Ensure the key was generated with KeyManager::new()"),
                 RecoveryHint::new("Check that encrypted data hasn't been corrupted"),
             ],
 
             NeedleError::ConsensusError(reason) => vec![
-                RecoveryHint::new(format!("Consensus failed: {}", reason)),
+                RecoveryHint::new(format!("Consensus failed: {}", reason))
+                    .with_doc("docs/distributed-operations.md"),
                 RecoveryHint::new("Check network connectivity between cluster nodes"),
                 RecoveryHint::new("Verify quorum requirements are met"),
                 RecoveryHint::new("Wait for cluster to stabilize and retry"),
             ],
 
             NeedleError::LockError => vec![
-                RecoveryHint::new("Failed to acquire lock"),
+                RecoveryHint::new("Failed to acquire lock")
+                    .with_doc("docs/OPERATIONS.md#concurrency"),
                 RecoveryHint::new("Another operation may be holding the lock"),
                 RecoveryHint::new("Wait for the other operation to complete and retry"),
                 RecoveryHint::new("Check for deadlock conditions in concurrent code"),
             ],
 
             NeedleError::Timeout(duration) => vec![
-                RecoveryHint::new(format!("Operation timed out after {:?}", duration)),
+                RecoveryHint::new(format!("Operation timed out after {:?}", duration))
+                    .with_doc("docs/OPERATIONS.md#timeouts"),
                 RecoveryHint::new("Increase the timeout value for long-running operations"),
                 RecoveryHint::new("Check for performance bottlenecks or resource contention"),
                 RecoveryHint::new("Consider breaking large operations into smaller batches"),
             ],
 
             NeedleError::LockTimeout(duration) => vec![
-                RecoveryHint::new(format!("Lock acquisition timed out after {:?}", duration)),
+                RecoveryHint::new(format!("Lock acquisition timed out after {:?}", duration))
+                    .with_doc("docs/OPERATIONS.md#concurrency"),
                 RecoveryHint::new("Another process may be holding the lock"),
                 RecoveryHint::new("Retry after a short delay"),
                 RecoveryHint::new("Consider using shorter lock hold times"),
             ],
 
             NeedleError::InvalidOperation(msg) => vec![
-                RecoveryHint::new(format!("Invalid operation: {}", msg)),
+                RecoveryHint::new(format!("Invalid operation: {}", msg))
+                    .with_doc("docs/api-reference.md"),
                 RecoveryHint::new("Check the operation preconditions"),
                 RecoveryHint::new("Ensure the current state allows this operation"),
             ],
 
             NeedleError::InvalidState(msg) => vec![
-                RecoveryHint::new(format!("Invalid state: {}", msg)),
+                RecoveryHint::new(format!("Invalid state: {}", msg))
+                    .with_doc("docs/OPERATIONS.md"),
                 RecoveryHint::new("The system is in an unexpected state"),
                 RecoveryHint::new("Try reinitializing the component"),
             ],
 
             NeedleError::Unauthorized(msg) => vec![
-                RecoveryHint::new(format!("Unauthorized: {}", msg)),
+                RecoveryHint::new(format!("Unauthorized: {}", msg))
+                    .with_doc("docs/http-quickstart.md#authentication"),
                 RecoveryHint::new("Check your credentials and permissions"),
                 RecoveryHint::new("Ensure you have access to the requested resource"),
             ],
 
             NeedleError::InvalidArgument(msg) => vec![
-                RecoveryHint::new(format!("Invalid argument: {}", msg)),
+                RecoveryHint::new(format!("Invalid argument: {}", msg))
+                    .with_doc("docs/api-reference.md"),
                 RecoveryHint::new("Check the argument values and try again"),
             ],
 
             NeedleError::DuplicateId(id) => vec![
-                RecoveryHint::new(format!("ID '{}' already exists", id)),
+                RecoveryHint::new(format!("ID '{}' already exists", id))
+                    .with_doc("docs/api-reference.md#vectors"),
                 RecoveryHint::new("Use a different ID or update the existing vector"),
             ],
 
