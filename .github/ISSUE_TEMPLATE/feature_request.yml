@@ -1,0 +1,101 @@
+name: Feature Request
+description: Suggest a new feature or enhancement for Needle
+title: "[FEATURE] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for suggesting a feature! Please describe your idea below.
+
+  - type: input
+    id: summary
+    attributes:
+      label: Summary
+      description: A brief, one-line description of the feature.
+      placeholder: "Add support for custom distance functions"
+    validations:
+      required: true
+
+  - type: textarea
+    id: motivation
+    attributes:
+      label: Motivation
+      description: What problem does this solve? Why is this important?
+      placeholder: |
+        Describe the use case or problem that this feature would address.
+        Include any relevant context about your workflow or application.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposed_solution
+    attributes:
+      label: Proposed Solution
+      description: Describe your ideal solution. How would you like this feature to work?
+    validations:
+      required: true
+
+  - type: textarea
+    id: api_design
+    attributes:
+      label: API Design (if applicable)
+      description: Suggest how the API might look.
+      render: rust
+      placeholder: |
+        use needle::Database;
+
+        fn example() -> needle::Result<()> {
+            // Your proposed API usage
+            Ok(())
+        }
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives Considered
+      description: Describe any alternative solutions or features you've considered.
+
+  - type: dropdown
+    id: breaking_changes
+    attributes:
+      label: Would this require breaking changes?
+      options:
+        - "No"
+        - "Yes"
+        - "Unsure"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: feature_flag
+    attributes:
+      label: Should this be behind a feature flag?
+      options:
+        - "Yes"
+        - "No"
+        - "Unsure"
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional Context
+      description: Related issues, external references, benchmarks, etc.
+
+  - type: checkboxes
+    id: contribution
+    attributes:
+      label: Willingness to Contribute
+      options:
+        - label: I am willing to submit a PR for this feature
+        - label: I can help with testing
+        - label: I can help with documentation
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Checklist
+      options:
+        - label: I have searched existing issues to ensure this hasn't been requested
+          required: true
+        - label: I have read the [CONTRIBUTING.md](../CONTRIBUTING.md) guidelines
