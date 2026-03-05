@@ -1,0 +1,24 @@
+{
+  "name": "@anthropic/needle-client",
+  "version": "0.1.0",
+  "description": "TypeScript client for the Needle vector database REST API",
+  "main": "dist/index.js",
+  "module": "dist/index.mjs",
+  "types": "dist/index.d.ts",
+  "files": ["dist/", "README.md"],
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist/"
+  },
+  "keywords": ["vector", "database", "search", "embeddings", "ai", "needle", "rest-client"],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/anthropics/needle",
+    "directory": "sdk/typescript"
+  },
+  "devDependencies": {
+    "typescript": "^5.4"
+  }
+}
