@@ -375,6 +375,37 @@ impl MetadataStore {
         Ok(())
     }
 
+    /// Merge partial metadata into existing metadata (JSON Merge Patch, RFC 7386).
+    ///
+    /// - New keys are added
+    /// - Existing keys are overwritten
+    /// - Keys set to `null` are removed
+    /// - Non-object existing metadata is fully replaced
+    pub fn merge_data(&mut self, internal_id: usize, patch: &Value) -> Result<()> {
+        let entry = self
+            .entries
+            .get(&internal_id)
+            .ok_or_else(|| NeedleError::VectorNotFound(internal_id.to_string()))?;
+
+        let merged = match (&entry.data, patch) {
+            (Some(Value::Object(existing)), Value::Object(patch_map)) => {
+                let mut merged = existing.clone();
+                for (key, value) in patch_map {
+                    if value.is_null() {
+                        merged.remove(key);
+                    } else {
+                        merged.insert(key.clone(), value.clone());
+                    }
+                }
+                Some(Value::Object(merged))
+            }
+            // If existing isn't an object or patch isn't an object, replace entirely
+            (_, patch_val) => Some(patch_val.clone()),
+        };
+
+        self.update_data(internal_id, merged)
+    }
+
     /// Estimate memory usage in bytes
     pub fn estimated_memory(&self) -> usize {
         // HashMap overhead + entries
@@ -439,6 +470,10 @@ pub enum FilterOperator {
     NotIn,
     /// Contains (for strings/arrays)
     Contains,
+    /// String starts with prefix
+    StartsWith,
+    /// String ends with suffix
+    EndsWith,
 }
 
 /// A single filter condition
@@ -715,6 +750,16 @@ impl Filter {
                             operator: FilterOperator::Contains,
                             value: op_value.clone(),
                         }),
+                        "$startsWith" => Filter::Condition(FilterCondition {
+                            field: field.to_string(),
+                            operator: FilterOperator::StartsWith,
+                            value: op_value.clone(),
+                        }),
+                        "$endsWith" => Filter::Condition(FilterCondition {
+                            field: field.to_string(),
+                            operator: FilterOperator::EndsWith,
+                            value: op_value.clone(),
+                        }),
                         _ => return Err(format!("Unknown operator: {}", op)),
                     };
                     conditions.push(filter);
@@ -793,6 +838,14 @@ fn compare_values(operator: &FilterOperator, field_value: &Value, filter_value: 
         FilterOperator::Contains => match (field_value, filter_value) {
             (Value::String(s), Value::String(substr)) => s.contains(substr.as_str()),
             (Value::Array(arr), v) => arr.contains(v),
+            _ => false,
+        },
+        FilterOperator::StartsWith => match (field_value, filter_value) {
+            (Value::String(s), Value::String(prefix)) => s.starts_with(prefix.as_str()),
+            _ => false,
+        },
+        FilterOperator::EndsWith => match (field_value, filter_value) {
+            (Value::String(s), Value::String(suffix)) => s.ends_with(suffix.as_str()),
             _ => false,
         },
     }
