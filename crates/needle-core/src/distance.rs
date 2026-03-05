@@ -55,6 +55,8 @@ pub enum DistanceFunction {
     DotProduct,
     /// Manhattan (L1) distance
     Manhattan,
+    /// Chebyshev (L∞) distance — maximum absolute difference across dimensions
+    Chebyshev,
 }
 
 impl DistanceFunction {
@@ -67,6 +69,7 @@ impl DistanceFunction {
             Self::Euclidean => euclidean_distance(a, b),
             Self::DotProduct => dot_product_distance(a, b),
             Self::Manhattan => manhattan_distance(a, b),
+            Self::Chebyshev => chebyshev_distance(a, b),
         }
     }
 }
@@ -259,6 +262,23 @@ pub fn manhattan_distance(a: &[f32], b: &[f32]) -> f32 {
 #[allow(dead_code)]
 fn manhattan_scalar(a: &[f32], b: &[f32]) -> f32 {
     a.iter().zip(b.iter()).map(|(x, y)| (x - y).abs()).sum()
+}
+
+/// Compute Chebyshev (L∞) distance — the maximum absolute difference.
+///
+/// # Panics
+/// Panics if `a` and `b` have different lengths.
+#[inline]
+pub fn chebyshev_distance(a: &[f32], b: &[f32]) -> f32 {
+    assert_eq!(
+        a.len(),
+        b.len(),
+        "vectors must have equal length for chebyshev distance"
+    );
+    a.iter()
+        .zip(b.iter())
+        .map(|(x, y)| (x - y).abs())
+        .fold(0.0_f32, f32::max)
 }
 
 /// Normalize a vector in-place

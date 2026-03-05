@@ -103,7 +103,7 @@ impl FrameworkCollection {
 pub(crate) fn distance_to_score(distance: f32, distance_fn: DistanceFunction) -> f32 {
     match distance_fn {
         DistanceFunction::Cosine | DistanceFunction::CosineNormalized => 1.0 - distance,
-        DistanceFunction::Euclidean | DistanceFunction::Manhattan => 1.0 / (1.0 + distance),
+        DistanceFunction::Euclidean | DistanceFunction::Manhattan | DistanceFunction::Hamming | DistanceFunction::Chebyshev => 1.0 / (1.0 + distance),
         DistanceFunction::DotProduct => (distance + 1.0) / 2.0,
     }
 }

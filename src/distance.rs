@@ -59,6 +59,17 @@ pub enum DistanceFunction {
     DotProduct,
     /// Manhattan (L1) distance
     Manhattan,
+    /// Hamming distance for binary vectors
+    ///
+    /// Treats each f32 element as binary: zero (0.0) or non-zero (1.0).
+    /// Returns the count of positions where the two vectors differ.
+    /// Ideal for binary hash codes, locality-sensitive hashing, and binary embeddings.
+    Hamming,
+    /// Chebyshev (L∞) distance — maximum absolute difference across dimensions.
+    ///
+    /// Useful in robotics (grid-world distance), game AI, and when the
+    /// worst-case dimension deviation matters more than the aggregate.
+    Chebyshev,
 }
 
 /// Check that two vectors have the same dimensions.
@@ -86,6 +97,50 @@ impl DistanceFunction {
             Self::Euclidean => euclidean_distance(a, b),
             Self::DotProduct => dot_product_distance(a, b),
             Self::Manhattan => manhattan_distance(a, b),
+            Self::Hamming => hamming_distance(a, b),
+            Self::Chebyshev => chebyshev_distance(a, b),
+        }
+    }
+}
+
+impl std::fmt::Display for DistanceFunction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Cosine => write!(f, "Cosine"),
+            Self::CosineNormalized => write!(f, "CosineNormalized"),
+            Self::Euclidean => write!(f, "Euclidean"),
+            Self::DotProduct => write!(f, "DotProduct"),
+            Self::Manhattan => write!(f, "Manhattan"),
+            Self::Hamming => write!(f, "Hamming"),
+            Self::Chebyshev => write!(f, "Chebyshev"),
+        }
+    }
+}
+
+impl std::str::FromStr for DistanceFunction {
+    type Err = String;
+
+    /// Parse a distance function from a string (case-insensitive).
+    ///
+    /// Accepted aliases:
+    /// - `"cosine"` → [`Cosine`](Self::Cosine)
+    /// - `"cosine_normalized"` → [`CosineNormalized`](Self::CosineNormalized)
+    /// - `"euclidean"`, `"l2"` → [`Euclidean`](Self::Euclidean)
+    /// - `"dot"`, `"dotproduct"`, `"inner_product"` → [`DotProduct`](Self::DotProduct)
+    /// - `"manhattan"`, `"l1"` → [`Manhattan`](Self::Manhattan)
+    /// - `"hamming"` → [`Hamming`](Self::Hamming)
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "cosine" => Ok(Self::Cosine),
+            "cosine_normalized" | "cosinenormalized" => Ok(Self::CosineNormalized),
+            "euclidean" | "l2" => Ok(Self::Euclidean),
+            "dot" | "dotproduct" | "dot_product" | "inner_product" => Ok(Self::DotProduct),
+            "manhattan" | "l1" => Ok(Self::Manhattan),
+            "hamming" => Ok(Self::Hamming),
+            "chebyshev" | "linf" | "l_inf" | "l_infinity" => Ok(Self::Chebyshev),
+            _ => Err(format!(
+                "Unknown distance function: '{s}'. Use: cosine, euclidean, dot, manhattan, hamming, chebyshev"
+            )),
         }
     }
 }
@@ -156,6 +211,13 @@ pub fn euclidean_distance(a: &[f32], b: &[f32]) -> Result<f32> {
 #[inline]
 pub fn euclidean_distance_squared(a: &[f32], b: &[f32]) -> Result<f32> {
     check_dimensions(a, b)?;
+    #[cfg(all(target_arch = "x86_64", target_feature = "avx512f"))]
+    {
+        if is_x86_feature_detected!("avx512f") {
+            // SAFETY: AVX-512 feature detection is checked above. a and b have equal lengths.
+            return Ok(unsafe { simd_x86::euclidean_squared_avx512(a, b) });
+        }
+    }
     #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
     {
         if is_x86_feature_detected!("avx2") {
@@ -226,6 +288,13 @@ fn dot_product_scalar(a: &[f32], b: &[f32]) -> f32 {
 /// Internal dot product without dimension check (caller must guarantee equal lengths).
 #[inline(always)]
 fn dot_product_inner(a: &[f32], b: &[f32]) -> f32 {
+    #[cfg(all(target_arch = "x86_64", target_feature = "avx512f"))]
+    {
+        if is_x86_feature_detected!("avx512f") {
+            // SAFETY: AVX-512 feature detection is checked above. Caller guarantees equal-length slices.
+            return unsafe { simd_x86::dot_product_avx512(a, b) };
+        }
+    }
     #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
     {
         if is_x86_feature_detected!("avx2") {
@@ -253,6 +322,13 @@ fn dot_product_inner(a: &[f32], b: &[f32]) -> f32 {
 #[inline]
 pub fn manhattan_distance(a: &[f32], b: &[f32]) -> Result<f32> {
     check_dimensions(a, b)?;
+    #[cfg(all(target_arch = "x86_64", target_feature = "avx512f"))]
+    {
+        if is_x86_feature_detected!("avx512f") {
+            // SAFETY: AVX-512 feature detection is checked above. a and b have equal lengths.
+            return Ok(unsafe { simd_x86::manhattan_avx512(a, b) });
+        }
+    }
     #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
     {
         if is_x86_feature_detected!("avx2") {
@@ -285,6 +361,67 @@ fn manhattan_scalar(a: &[f32], b: &[f32]) -> f32 {
     a.iter().zip(b.iter()).map(|(x, y)| (x - y).abs()).sum()
 }
 
+/// Compute Hamming distance between two binary vectors.
+///
+/// Treats each f32 element as binary: zero (`0.0`) is 0, any non-zero value is 1.
+/// Returns the number of positions where the two vectors differ.
+///
+/// # Use Cases
+/// - Binary hash codes from locality-sensitive hashing (LSH)
+/// - Binary embeddings from quantization
+/// - Jaccard-like distance on bit sets
+///
+/// # Errors
+/// Returns `NeedleError::DimensionMismatch` if `a` and `b` have different lengths.
+///
+/// # Example
+/// ```
+/// use needle::distance::hamming_distance;
+///
+/// let a = vec![1.0, 0.0, 1.0, 0.0];
+/// let b = vec![1.0, 1.0, 0.0, 0.0];
+/// let dist = hamming_distance(&a, &b).unwrap();
+/// assert!((dist - 2.0).abs() < 1e-6); // 2 positions differ
+/// ```
+#[inline]
+pub fn hamming_distance(a: &[f32], b: &[f32]) -> Result<f32> {
+    check_dimensions(a, b)?;
+    let count = a
+        .iter()
+        .zip(b.iter())
+        .filter(|(&x, &y)| (x != 0.0) != (y != 0.0))
+        .count();
+    Ok(count as f32)
+}
+
+/// Compute Chebyshev (L∞) distance — the maximum absolute difference.
+///
+/// Also known as the chessboard distance: in a grid, this equals the minimum
+/// number of king moves between two positions.
+///
+/// # Errors
+/// Returns `NeedleError::DimensionMismatch` if `a` and `b` have different lengths.
+///
+/// # Example
+/// ```
+/// use needle::distance::chebyshev_distance;
+///
+/// let a = vec![1.0, 5.0, 3.0];
+/// let b = vec![4.0, 2.0, 3.0];
+/// let dist = chebyshev_distance(&a, &b).unwrap();
+/// assert!((dist - 3.0).abs() < 1e-6); // max(|1-4|, |5-2|, |3-3|) = 3
+/// ```
+#[inline]
+pub fn chebyshev_distance(a: &[f32], b: &[f32]) -> Result<f32> {
+    check_dimensions(a, b)?;
+    let max_diff = a
+        .iter()
+        .zip(b.iter())
+        .map(|(x, y)| (x - y).abs())
+        .fold(0.0_f32, f32::max);
+    Ok(max_diff)
+}
+
 /// Normalize a vector in-place
 pub fn normalize(vector: &mut [f32]) {
     // Same-vector dot product — dimensions always match
@@ -299,6 +436,14 @@ pub fn normalize(vector: &mut [f32]) {
 /// Scale a vector by a constant (SIMD-optimized)
 #[inline]
 fn normalize_scale(vector: &mut [f32], scale: f32) {
+    #[cfg(all(target_arch = "x86_64", target_feature = "avx512f"))]
+    {
+        if is_x86_feature_detected!("avx512f") {
+            // SAFETY: AVX-512 feature detection is checked above. vector is a valid mutable slice.
+            unsafe { simd_x86::scale_avx512(vector, scale) };
+            return;
+        }
+    }
     #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
     {
         if is_x86_feature_detected!("avx2") {
@@ -461,6 +606,132 @@ mod simd_x86 {
 
         // Handle remainder
         for i in (chunks * 8)..vector.len() {
+            vector[i] *= scale;
+        }
+    }
+
+    // ── AVX-512 functions (16-wide, ~2× throughput over AVX2) ────────────
+
+    /// Horizontal sum of all 16 floats in a __m512 register.
+    #[inline(always)]
+    #[target_feature(enable = "avx512f")]
+    #[cfg(target_feature = "avx512f")]
+    unsafe fn hsum_avx512(v: __m512) -> f32 {
+        // Reduce 512 → 256 → use existing AVX path
+        let lo = _mm512_castps512_ps256(v);
+        let hi = _mm256_castpd_ps(_mm256_castsi256_pd(
+            _mm256_castps_si256(_mm512_extractf32x8_ps(v, 1)),
+        ));
+        let sum256 = _mm256_add_ps(lo, hi);
+        hsum_avx(sum256)
+    }
+
+    /// Compute dot product using AVX-512 SIMD instructions (16 floats per iteration).
+    ///
+    /// # Safety
+    /// - Caller must ensure `a` and `b` have the same length.
+    /// - This function uses unaligned loads, so no alignment requirements.
+    #[target_feature(enable = "avx512f")]
+    #[cfg(target_feature = "avx512f")]
+    pub unsafe fn dot_product_avx512(a: &[f32], b: &[f32]) -> f32 {
+        debug_assert_eq!(a.len(), b.len(), "vectors must have equal length");
+        debug_assert!(!a.is_empty(), "SIMD operation on empty slices");
+        let mut sum = _mm512_setzero_ps();
+        let chunks = a.len() / 16;
+
+        for i in 0..chunks {
+            let va = _mm512_loadu_ps(a.as_ptr().add(i * 16));
+            let vb = _mm512_loadu_ps(b.as_ptr().add(i * 16));
+            sum = _mm512_fmadd_ps(va, vb, sum);
+        }
+
+        let mut result = hsum_avx512(sum);
+
+        for i in (chunks * 16)..a.len() {
+            result += a[i] * b[i];
+        }
+
+        result
+    }
+
+    /// Compute squared Euclidean distance using AVX-512 SIMD instructions.
+    ///
+    /// # Safety
+    /// - Caller must ensure `a` and `b` have the same length.
+    /// - This function uses unaligned loads, so no alignment requirements.
+    #[target_feature(enable = "avx512f")]
+    #[cfg(target_feature = "avx512f")]
+    pub unsafe fn euclidean_squared_avx512(a: &[f32], b: &[f32]) -> f32 {
+        debug_assert_eq!(a.len(), b.len(), "vectors must have equal length");
+        debug_assert!(!a.is_empty(), "SIMD operation on empty slices");
+        let mut sum = _mm512_setzero_ps();
+        let chunks = a.len() / 16;
+
+        for i in 0..chunks {
+            let va = _mm512_loadu_ps(a.as_ptr().add(i * 16));
+            let vb = _mm512_loadu_ps(b.as_ptr().add(i * 16));
+            let diff = _mm512_sub_ps(va, vb);
+            sum = _mm512_fmadd_ps(diff, diff, sum);
+        }
+
+        let mut result = hsum_avx512(sum);
+
+        for i in (chunks * 16)..a.len() {
+            let diff = a[i] - b[i];
+            result += diff * diff;
+        }
+
+        result
+    }
+
+    /// Compute Manhattan (L1) distance using AVX-512 SIMD instructions.
+    ///
+    /// # Safety
+    /// - Caller must ensure `a` and `b` have the same length.
+    /// - This function uses unaligned loads, so no alignment requirements.
+    #[target_feature(enable = "avx512f")]
+    #[cfg(target_feature = "avx512f")]
+    pub unsafe fn manhattan_avx512(a: &[f32], b: &[f32]) -> f32 {
+        debug_assert_eq!(a.len(), b.len(), "vectors must have equal length");
+        debug_assert!(!a.is_empty(), "SIMD operation on empty slices");
+        let mut sum = _mm512_setzero_ps();
+        let chunks = a.len() / 16;
+
+        for i in 0..chunks {
+            let va = _mm512_loadu_ps(a.as_ptr().add(i * 16));
+            let vb = _mm512_loadu_ps(b.as_ptr().add(i * 16));
+            let diff = _mm512_sub_ps(va, vb);
+            let abs_diff = _mm512_abs_ps(diff);
+            sum = _mm512_add_ps(sum, abs_diff);
+        }
+
+        let mut result = hsum_avx512(sum);
+
+        for i in (chunks * 16)..a.len() {
+            result += (a[i] - b[i]).abs();
+        }
+
+        result
+    }
+
+    /// Scale a vector by a constant using AVX-512 SIMD instructions.
+    ///
+    /// # Safety
+    /// - This function uses unaligned loads/stores, so no alignment requirements.
+    #[target_feature(enable = "avx512f")]
+    #[cfg(target_feature = "avx512f")]
+    pub unsafe fn scale_avx512(vector: &mut [f32], scale: f32) {
+        let scale_vec = _mm512_set1_ps(scale);
+        let chunks = vector.len() / 16;
+
+        for i in 0..chunks {
+            let ptr = vector.as_mut_ptr().add(i * 16);
+            let v = _mm512_loadu_ps(ptr);
+            let scaled = _mm512_mul_ps(v, scale_vec);
+            _mm512_storeu_ps(ptr, scaled);
+        }
+
+        for i in (chunks * 16)..vector.len() {
             vector[i] *= scale;
         }
     }
@@ -850,5 +1121,229 @@ mod tests {
 
         let euc = euclidean_distance(&a, &b).unwrap();
         assert!(euc >= 0.0);
+    }
+
+    // ── Hamming distance tests ───────────────────────────────────────
+
+    #[test]
+    fn test_hamming_distance_basic() {
+        let a = vec![1.0, 0.0, 1.0, 0.0];
+        let b = vec![1.0, 1.0, 0.0, 0.0];
+        let dist = hamming_distance(&a, &b).unwrap();
+        assert!((dist - 2.0).abs() < 1e-6); // positions 1 and 2 differ
+    }
+
+    #[test]
+    fn test_hamming_distance_identical() {
+        let a = vec![1.0, 0.0, 1.0];
+        let b = vec![1.0, 0.0, 1.0];
+        let dist = hamming_distance(&a, &b).unwrap();
+        assert!((dist - 0.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_hamming_distance_all_different() {
+        let a = vec![1.0, 0.0, 1.0, 0.0];
+        let b = vec![0.0, 1.0, 0.0, 1.0];
+        let dist = hamming_distance(&a, &b).unwrap();
+        assert!((dist - 4.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_hamming_distance_nonzero_values() {
+        // Any non-zero value is treated as "1"
+        let a = vec![5.0, 0.0, -3.0, 0.0];
+        let b = vec![0.0, 0.0, 2.0, 0.1];
+        let dist = hamming_distance(&a, &b).unwrap();
+        assert!((dist - 2.0).abs() < 1e-6); // positions 0 and 3 differ
+    }
+
+    #[test]
+    fn test_hamming_distance_dimension_mismatch() {
+        let a = vec![1.0, 0.0];
+        let b = vec![1.0, 0.0, 1.0];
+        assert!(hamming_distance(&a, &b).is_err());
+    }
+
+    #[test]
+    fn test_hamming_via_compute() {
+        let a = vec![1.0, 0.0, 1.0];
+        let b = vec![0.0, 0.0, 1.0];
+        let dist = DistanceFunction::Hamming.compute(&a, &b).unwrap();
+        assert!((dist - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_hamming_dimension_mismatch_via_compute() {
+        let a = vec![1.0, 0.0];
+        let b = vec![1.0, 0.0, 1.0];
+        assert!(DistanceFunction::Hamming.compute(&a, &b).is_err());
+    }
+
+    // ── Display impl tests ───────────────────────────────────────────
+
+    #[test]
+    fn test_distance_function_display() {
+        assert_eq!(DistanceFunction::Cosine.to_string(), "Cosine");
+        assert_eq!(DistanceFunction::CosineNormalized.to_string(), "CosineNormalized");
+        assert_eq!(DistanceFunction::Euclidean.to_string(), "Euclidean");
+        assert_eq!(DistanceFunction::DotProduct.to_string(), "DotProduct");
+        assert_eq!(DistanceFunction::Manhattan.to_string(), "Manhattan");
+        assert_eq!(DistanceFunction::Hamming.to_string(), "Hamming");
+        assert_eq!(DistanceFunction::Chebyshev.to_string(), "Chebyshev");
+    }
+
+    // ── FromStr impl tests ───────────────────────────────────────────
+
+    #[test]
+    fn test_from_str_canonical_names() {
+        assert_eq!("cosine".parse::<DistanceFunction>().unwrap(), DistanceFunction::Cosine);
+        assert_eq!("euclidean".parse::<DistanceFunction>().unwrap(), DistanceFunction::Euclidean);
+        assert_eq!("manhattan".parse::<DistanceFunction>().unwrap(), DistanceFunction::Manhattan);
+        assert_eq!("hamming".parse::<DistanceFunction>().unwrap(), DistanceFunction::Hamming);
+    }
+
+    #[test]
+    fn test_from_str_aliases() {
+        assert_eq!("l2".parse::<DistanceFunction>().unwrap(), DistanceFunction::Euclidean);
+        assert_eq!("l1".parse::<DistanceFunction>().unwrap(), DistanceFunction::Manhattan);
+        assert_eq!("dot".parse::<DistanceFunction>().unwrap(), DistanceFunction::DotProduct);
+        assert_eq!("dotproduct".parse::<DistanceFunction>().unwrap(), DistanceFunction::DotProduct);
+        assert_eq!("dot_product".parse::<DistanceFunction>().unwrap(), DistanceFunction::DotProduct);
+        assert_eq!("inner_product".parse::<DistanceFunction>().unwrap(), DistanceFunction::DotProduct);
+        assert_eq!("cosine_normalized".parse::<DistanceFunction>().unwrap(), DistanceFunction::CosineNormalized);
+    }
+
+    #[test]
+    fn test_from_str_case_insensitive() {
+        assert_eq!("COSINE".parse::<DistanceFunction>().unwrap(), DistanceFunction::Cosine);
+        assert_eq!("Euclidean".parse::<DistanceFunction>().unwrap(), DistanceFunction::Euclidean);
+        assert_eq!("HAMMING".parse::<DistanceFunction>().unwrap(), DistanceFunction::Hamming);
+    }
+
+    #[test]
+    fn test_from_str_invalid() {
+        assert!("invalid".parse::<DistanceFunction>().is_err());
+        assert!("".parse::<DistanceFunction>().is_err());
+    }
+
+    // ── Edge case: zero-magnitude vectors ────────────────────────────────
+
+    #[test]
+    fn test_cosine_zero_vector() {
+        let zero = [0.0_f32, 0.0, 0.0];
+        let nonzero = [1.0_f32, 0.0, 0.0];
+        let d = cosine_distance(&zero, &nonzero).unwrap();
+        assert!(!d.is_infinite(), "cosine_distance with zero vector should not be infinite");
+    }
+
+    #[test]
+    fn test_cosine_both_zero_vectors() {
+        let zero = [0.0_f32, 0.0, 0.0];
+        let d = cosine_distance(&zero, &zero).unwrap();
+        assert!(!d.is_infinite());
+    }
+
+    #[test]
+    fn test_euclidean_zero_vectors() {
+        let zero = [0.0_f32, 0.0, 0.0];
+        let d = euclidean_distance(&zero, &zero).unwrap();
+        assert_eq!(d, 0.0);
+    }
+
+    #[test]
+    fn test_dot_product_zero_vector() {
+        let zero = [0.0_f32, 0.0, 0.0];
+        let nonzero = [1.0_f32, 2.0, 3.0];
+        let d = dot_product_distance(&zero, &nonzero).unwrap();
+        assert_eq!(d, 0.0);
+    }
+
+    // ── Edge case: single-element vectors ────────────────────────────────
+
+    #[test]
+    fn test_cosine_single_element() {
+        let a = [3.0_f32];
+        let b = [5.0_f32];
+        let d = cosine_distance(&a, &b).unwrap();
+        assert!(d < 0.01, "parallel single-dim vectors should have near-zero cosine distance");
+    }
+
+    #[test]
+    fn test_euclidean_single_element() {
+        let d = euclidean_distance(&[3.0_f32], &[7.0]).unwrap();
+        assert!((d - 4.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_manhattan_single_element() {
+        let d = manhattan_distance(&[3.0_f32], &[7.0]).unwrap();
+        assert!((d - 4.0).abs() < 0.01);
+    }
+
+    // ── Edge case: very large vectors ────────────────────────────────────
+
+    #[test]
+    fn test_euclidean_large_magnitude() {
+        let large = [f32::MAX / 2.0, f32::MAX / 2.0];
+        let zero = [0.0_f32, 0.0];
+        let d = euclidean_distance(&large, &zero).unwrap();
+        assert!(d > 0.0);
+    }
+
+    // ── Chebyshev distance tests ─────────────────────────────────────────
+
+    #[test]
+    fn test_chebyshev_distance_basic() {
+        let a = vec![1.0, 5.0, 3.0];
+        let b = vec![4.0, 2.0, 3.0];
+        let dist = chebyshev_distance(&a, &b).unwrap();
+        assert!((dist - 3.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_chebyshev_distance_identical() {
+        let a = vec![1.0, 2.0, 3.0];
+        let dist = chebyshev_distance(&a, &a).unwrap();
+        assert!((dist - 0.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_chebyshev_distance_single_dim() {
+        let a = vec![10.0];
+        let b = vec![3.0];
+        let dist = chebyshev_distance(&a, &b).unwrap();
+        assert!((dist - 7.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_chebyshev_distance_negative() {
+        let a = vec![-1.0, -5.0];
+        let b = vec![2.0, 3.0];
+        let dist = chebyshev_distance(&a, &b).unwrap();
+        assert!((dist - 8.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_chebyshev_dimension_mismatch() {
+        let a = vec![1.0, 2.0];
+        let b = vec![1.0];
+        assert!(chebyshev_distance(&a, &b).is_err());
+    }
+
+    #[test]
+    fn test_chebyshev_via_compute() {
+        let a = vec![1.0, 5.0, 3.0];
+        let b = vec![4.0, 2.0, 3.0];
+        let dist = DistanceFunction::Chebyshev.compute(&a, &b).unwrap();
+        assert!((dist - 3.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_chebyshev_from_str() {
+        assert_eq!("chebyshev".parse::<DistanceFunction>().unwrap(), DistanceFunction::Chebyshev);
+        assert_eq!("linf".parse::<DistanceFunction>().unwrap(), DistanceFunction::Chebyshev);
+        assert_eq!("l_inf".parse::<DistanceFunction>().unwrap(), DistanceFunction::Chebyshev);
+        assert_eq!("l_infinity".parse::<DistanceFunction>().unwrap(), DistanceFunction::Chebyshev);
     }
 }
