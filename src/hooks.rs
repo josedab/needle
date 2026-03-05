@@ -45,6 +45,7 @@ use std::collections::HashMap;
 // ============================================================================
 
 /// Context passed to insert hooks (mutable).
+#[derive(Debug, Clone)]
 pub struct InsertHookContext {
     /// Vector ID.
     pub id: String,
@@ -66,6 +67,7 @@ pub struct SearchResultEntry {
 }
 
 /// Context passed to search hooks (mutable).
+#[derive(Debug, Clone)]
 pub struct SearchHookContext {
     /// Query vector used for the search.
     pub query: Vec<f32>,

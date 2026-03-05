@@ -1367,11 +1367,13 @@ mod tests {
             4, DistanceFunction::Cosine, AdaptiveIndexConfig::default(), CostModel::default(),
         );
         {
-            let mut idx = mgr.active().write();
+            let active = mgr.active();
+            let mut idx = active.write();
             idx.insert("a", &[1.0, 0.0, 0.0, 0.0]).unwrap();
         }
         {
-            let idx = mgr.active().read();
+            let active = mgr.active();
+            let idx = active.read();
             let r = idx.search(&[1.0, 0.0, 0.0, 0.0], 1).unwrap();
             assert!(!r.is_empty());
         }

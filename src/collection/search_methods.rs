@@ -62,7 +62,7 @@ impl Collection {
 
         // Check semantic cache BEFORE exact-match LRU cache
         if let Some(ref sem_cache) = self.semantic_cache {
-            let mut cache = sem_cache.lock();
+            let mut cache = sem_cache.write();
             if let Some(results) = cache.lookup(query, k) {
                 return Ok(results);
             }
@@ -87,7 +87,7 @@ impl Collection {
 
         // Store in semantic cache
         if let Some(ref sem_cache) = self.semantic_cache {
-            let mut cache = sem_cache.lock();
+            let mut cache = sem_cache.write();
             cache.insert(query, k, &results);
         }
 

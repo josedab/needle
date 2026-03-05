@@ -1269,6 +1269,8 @@ mod tests {
                 qps: 2000.0,
                 total_queries: 10_000,
                 total_time_us: 5_000_000,
+                avg_memory_bytes: 0.0,
+                peak_memory_bytes: 0,
             },
             version: "1.8.0".into(),
         };

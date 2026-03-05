@@ -4,7 +4,6 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use super::config::RoutingStrategy;
 
 /// Configuration for a remote instance
 #[derive(Debug, Clone, Serialize, Deserialize)]

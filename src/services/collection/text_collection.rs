@@ -33,7 +33,7 @@ use serde_json::{json, Value};
 
 use crate::collection::SearchResult;
 use crate::database::Database;
-use crate::error::{NeedleError, Result};
+use crate::error::Result;
 use crate::local_inference::{InferenceConfig, InferenceEngine};
 use crate::metadata::Filter;
 

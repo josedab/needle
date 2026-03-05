@@ -92,7 +92,7 @@ impl Collection {
                 let mut stats = cache.stats(self.config.query_cache.capacity);
                 // Merge semantic cache stats if present
                 if let Some(ref sem_cache) = self.semantic_cache {
-                    let (sem_hits, sem_misses) = sem_cache.lock().stats();
+                    let (sem_hits, sem_misses) = sem_cache.read().stats();
                     stats.semantic_hits = sem_hits;
                     stats.semantic_misses = sem_misses;
                 }
@@ -105,7 +105,7 @@ impl Collection {
     /// Returns `None` if semantic caching is disabled.
     pub fn semantic_cache_stats(&self) -> Option<QueryCacheStats> {
         self.semantic_cache.as_ref().map(|sem_cache| {
-            let cache = sem_cache.lock();
+            let cache = sem_cache.read();
             let (sem_hits, sem_misses) = cache.stats();
             QueryCacheStats {
                 hits: 0,
@@ -126,7 +126,7 @@ impl Collection {
     /// No-op if semantic caching is disabled.
     pub fn warm_semantic_cache(&self, entries: Vec<(&[f32], usize, Vec<SearchResult>)>) {
         if let Some(ref sem_cache) = self.semantic_cache {
-            let mut cache = sem_cache.lock();
+            let mut cache = sem_cache.write();
             cache.warm(entries);
         }
     }
@@ -155,7 +155,7 @@ impl Collection {
             cache.clear();
         }
         if let Some(ref sem_cache) = self.semantic_cache {
-            sem_cache.lock().clear();
+            sem_cache.write().clear();
         }
     }
 

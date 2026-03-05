@@ -32,7 +32,7 @@ use crate::error::{NeedleError, Result};
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Configuration for the replication manager.
 #[derive(Debug, Clone, Serialize, Deserialize)]

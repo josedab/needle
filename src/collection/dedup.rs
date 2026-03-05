@@ -7,7 +7,7 @@
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use super::config::{DedupPolicy, SemanticDedupConfig};
+use super::config::DedupPolicy;
 use super::Collection;
 use crate::error::{NeedleError, Result};
 use serde_json::Value;
@@ -242,6 +242,7 @@ fn merge_json_values(existing: Value, new: Value) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::collection::config::SemanticDedupConfig;
 
     #[test]
     fn test_dedup_scan_no_duplicates() {

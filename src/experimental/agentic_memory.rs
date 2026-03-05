@@ -694,7 +694,7 @@ impl AgentMemory {
             DistanceFunction::Cosine | DistanceFunction::CosineNormalized => 1.0 - distance,
             DistanceFunction::Euclidean => 1.0 / (1.0 + distance),
             DistanceFunction::DotProduct => (1.0 + distance) / 2.0,
-            DistanceFunction::Manhattan => 1.0 / (1.0 + distance),
+            DistanceFunction::Manhattan | DistanceFunction::Hamming => 1.0 / (1.0 + distance),
         }
     }
 

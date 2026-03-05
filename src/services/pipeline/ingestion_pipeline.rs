@@ -954,13 +954,13 @@ mod tests {
         let t = TextToVectorTransform::new(64);
         let record = make_record("r1", "some text");
 
-        let result = t.apply(record)??;
+        let result = t.apply(record)?.ok_or("expected Some")?;
         match &result.data {
             RecordData::Vector(v) => {
                 assert_eq!(v.len(), 64);
                 // Deterministic: same input → same output
                 let record2 = make_record("r2", "some text");
-                let result2 = t.apply(record2)??;
+                let result2 = t.apply(record2)?.ok_or("expected Some")?;
                 if let RecordData::Vector(v2) = &result2.data {
                     assert_eq!(v, v2);
                 } else {

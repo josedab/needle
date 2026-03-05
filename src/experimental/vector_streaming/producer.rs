@@ -5,9 +5,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
-use tracing::debug;
 
-use crate::error::Result;
+use crate::error::{NeedleError, Result};
 
 use super::consumer::{MessageSource, VectorFormat, VectorMessage};
 use super::current_timestamp;
@@ -162,14 +161,17 @@ impl VectorProducer {
                 self.mock_output.write().push_back(msg);
             }
             MessageSource::Kafka => {
-                // Would use rdkafka producer
-                debug!("Kafka send (stub)");
+                Self::send_kafka(&msg)?;
             }
             MessageSource::Pulsar => {
-                // Would use pulsar producer
-                debug!("Pulsar send (stub)");
+                Self::send_pulsar(&msg)?;
             }
-            _ => {}
+            MessageSource::Postgres => {
+                Self::send_postgres(&msg)?;
+            }
+            MessageSource::MongoDB => {
+                Self::send_mongodb(&msg)?;
+            }
         }
 
         // Update stats
@@ -177,6 +179,38 @@ impl VectorProducer {
         stats.messages_sent += 1;
 
         Ok(())
+    }
+
+    /// Send via Kafka (requires `cdc-kafka` feature)
+    #[cfg(not(feature = "cdc-kafka"))]
+    fn send_kafka(_msg: &VectorMessage) -> Result<()> {
+        Err(NeedleError::InvalidConfig(
+            "Kafka support requires --features cdc-kafka".into(),
+        ))
+    }
+
+    /// Send via Pulsar (requires `cdc-pulsar` feature)
+    #[cfg(not(feature = "cdc-pulsar"))]
+    fn send_pulsar(_msg: &VectorMessage) -> Result<()> {
+        Err(NeedleError::InvalidConfig(
+            "Pulsar support requires --features cdc-pulsar".into(),
+        ))
+    }
+
+    /// Send via PostgreSQL CDC (requires `cdc-postgres` feature)
+    #[cfg(not(feature = "cdc-postgres"))]
+    fn send_postgres(_msg: &VectorMessage) -> Result<()> {
+        Err(NeedleError::InvalidConfig(
+            "PostgreSQL CDC support requires --features cdc-postgres".into(),
+        ))
+    }
+
+    /// Send via MongoDB change streams (requires `cdc-mongodb` feature)
+    #[cfg(not(feature = "cdc-mongodb"))]
+    fn send_mongodb(_msg: &VectorMessage) -> Result<()> {
+        Err(NeedleError::InvalidConfig(
+            "MongoDB CDC support requires --features cdc-mongodb".into(),
+        ))
     }
 
     /// Get mock output (for testing)

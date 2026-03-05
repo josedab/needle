@@ -1062,9 +1062,7 @@ impl<'a> StreamingIngestPipeline<'a> {
         }
 
         // Persist the database
-        // self.db.save()?; // FIXME(#streaming-save): `save()` requires `&mut Database` but we only
-        // hold a shared `&Database` reference. Tracked issue: needs refactoring to either accept
-        // `&self` (interior mutability) or restructure the pipeline to obtain a mutable reference.
+        self.db.save()?;
 
         tracing::info!(
             "Streaming pipeline shutdown: {} flushed, {} dead-lettered, {} pending",

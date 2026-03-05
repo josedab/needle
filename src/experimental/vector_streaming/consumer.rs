@@ -388,29 +388,33 @@ impl VectorConsumer {
     /// Poll from Kafka
     #[cfg(not(feature = "cdc-kafka"))]
     fn poll_kafka() -> Result<Vec<VectorMessage>> {
-        debug!("Kafka poll (stub - enable cdc-kafka feature for real implementation)");
-        Ok(Vec::new())
+        Err(NeedleError::InvalidConfig(
+            "Kafka support requires --features cdc-kafka".into(),
+        ))
     }
 
     /// Poll from Pulsar
     #[cfg(not(feature = "cdc-pulsar"))]
     fn poll_pulsar() -> Result<Vec<VectorMessage>> {
-        debug!("Pulsar poll (stub - enable cdc-pulsar feature for real implementation)");
-        Ok(Vec::new())
+        Err(NeedleError::InvalidConfig(
+            "Pulsar support requires --features cdc-pulsar".into(),
+        ))
     }
 
     /// Poll from PostgreSQL CDC
     #[cfg(not(feature = "cdc-postgres"))]
     fn poll_postgres() -> Result<Vec<VectorMessage>> {
-        debug!("PostgreSQL CDC poll (stub - enable cdc-postgres feature for real implementation)");
-        Ok(Vec::new())
+        Err(NeedleError::InvalidConfig(
+            "PostgreSQL CDC support requires --features cdc-postgres".into(),
+        ))
     }
 
     /// Poll from MongoDB change streams
     #[cfg(not(feature = "cdc-mongodb"))]
     fn poll_mongodb() -> Result<Vec<VectorMessage>> {
-        debug!("MongoDB CDC poll (stub - enable cdc-mongodb feature for real implementation)");
-        Ok(Vec::new())
+        Err(NeedleError::InvalidConfig(
+            "MongoDB CDC support requires --features cdc-mongodb".into(),
+        ))
     }
 
     /// Deduplicate messages

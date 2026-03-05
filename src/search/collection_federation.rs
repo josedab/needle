@@ -27,7 +27,7 @@
 //! ```
 
 use crate::database::Database;
-use crate::error::{NeedleError, Result};
+use crate::error::Result;
 use crate::metadata::Filter;
 use crate::SearchResult;
 use serde::{Deserialize, Serialize};

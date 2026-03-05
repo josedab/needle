@@ -744,13 +744,7 @@ impl EdgeRuntime {
         let manifest = EdgeManifest::from_json(&manifest_str)?;
 
         // Parse distance function
-        let distance = match manifest.distance.as_str() {
-            "Cosine" => DistanceFunction::Cosine,
-            "Euclidean" => DistanceFunction::Euclidean,
-            "DotProduct" => DistanceFunction::DotProduct,
-            "Manhattan" => DistanceFunction::Manhattan,
-            _ => DistanceFunction::Cosine,
-        };
+        let distance: DistanceFunction = manifest.distance.parse().unwrap_or(DistanceFunction::Cosine);
 
         // Create collection config
         let collection_config = CollectionConfig::new(&manifest.name, manifest.dimensions)

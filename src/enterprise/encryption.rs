@@ -173,7 +173,7 @@ impl KeyManager {
                 // Deterministic random based on master key via HMAC-SHA256
                 let msg = format!("projection:{}:{}", i, j);
                 let mut mac = <HmacSha256 as Mac>::new_from_slice(&self.master_key.bytes)
-                    .map_err(|_| NeedleError::Encryption("Invalid HMAC key length".into()))?;
+                    .map_err(|_| NeedleError::EncryptionError("Invalid HMAC key length".into()))?;
                 mac.update(msg.as_bytes());
                 let result = mac.finalize().into_bytes();
 

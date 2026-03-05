@@ -14,10 +14,9 @@
 //! let output = repl.execute("search [0.1, 0.2, ...] k=5")?;
 //! ```
 
-use crate::error::{NeedleError, Result};
+use crate::error::Result;
 use crate::Database;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 
 // ── Sample Datasets ─────────────────────────────────────────────────────────
 

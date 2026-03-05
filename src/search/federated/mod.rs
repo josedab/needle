@@ -44,8 +44,6 @@
 //! let results = federation.search("my_collection", &query_vector, 10).await?;
 //! ```
 
-use std::collections::HashMap;
-use std::sync::Arc;
 use std::time::Duration;
 use thiserror::Error;
 
@@ -115,6 +113,8 @@ pub type FederationResult<T> = std::result::Result<T, FederationError>;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
+    use std::sync::Arc;
 
     fn create_test_federation() -> Federation {
         let config = FederationConfig::default();

@@ -583,6 +583,7 @@ impl QueryOptimizer {
                     }
                 }
                 FilterOperator::Contains => 0.3,
+                FilterOperator::StartsWith | FilterOperator::EndsWith => 0.2,
             },
             Filter::And(filters) => filters
                 .iter()

@@ -37,7 +37,7 @@
 use crate::error::{NeedleError, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 /// Log Sequence Number.
 pub type Lsn = u64;
