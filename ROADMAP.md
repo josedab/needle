@@ -50,6 +50,10 @@ Needle is currently in **v0.1.x** (pre-1.0), focusing on API stabilization and c
 - [x] RAG pipeline support
 
 ### Enterprise (Beta)
+
+> **Note:** Enterprise features are functional but have not been hardened for production use.
+> They carry `#[allow(clippy::unwrap_used)]` in test code and should be considered beta-quality.
+
 - [x] Encryption at rest (ChaCha20-Poly1305)
 - [x] RBAC with audit logging
 - [x] Write-Ahead Log (WAL)
@@ -105,7 +109,7 @@ Needle is currently in **v0.1.x** (pre-1.0), focusing on API stabilization and c
 - [ ] Production deployment guides
 
 ### Enterprise Readiness
-- [x] SOC 2 compliance toolkit (`src/services/governance/compliance.rs`)
+- [x] SOC 2 compliance toolkit (scaffolding in `src/services/governance/compliance.rs` — not audited)
 - [ ] High availability deployment patterns
 - [ ] Disaster recovery documentation
 - [ ] Performance SLA guidelines
@@ -114,8 +118,8 @@ Needle is currently in **v0.1.x** (pre-1.0), focusing on API stabilization and c
 
 These items are under consideration but not yet planned:
 
-- **Vector Streaming**: ~~Real-time vector ingestion from message queues~~ Implemented (`src/experimental/vector_streaming/`)
-- **Federated Search**: ~~Cross-instance search coordination~~ Implemented (`src/search/federated/`)
+- **Vector Streaming**: Experimental scaffolding in `src/experimental/vector_streaming/` — not production-ready
+- **Federated Search**: Experimental scaffolding in `src/search/federated/` — not production-ready
 - **Vector Compression Research**: New quantization techniques
 - **Hardware Acceleration**: TPU/specialized hardware support
 - **Managed Service**: Cloud-hosted Needle offering
