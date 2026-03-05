@@ -106,7 +106,7 @@ jobs:
           toolchain: stable
 
       - name: Dry-run publish
-        run: cargo publish --dry-run
+        run: cargo publish --dry-run --features full
 
       - name: Publish to crates.io
         run: cargo publish

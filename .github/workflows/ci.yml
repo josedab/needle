@@ -33,7 +33,7 @@ jobs:
       - name: Clippy
         run: cargo clippy --all-targets --features full -- -D warnings
       - name: Unit tests
-        run: cargo test --lib
+        run: cargo test --workspace --exclude needle-python --lib
 
   openapi-sync:
     needs: quick-check
@@ -89,13 +89,13 @@ jobs:
             ${{ runner.os }}-cargo-${{ matrix.rust }}-
 
       - name: Build
-        run: cargo build --verbose
+        run: cargo build --workspace --exclude needle-python --verbose
 
       - name: Run tests
-        run: cargo test --verbose
+        run: cargo test --workspace --exclude needle-python --verbose
 
       - name: Run tests (all features)
-        run: cargo test --features full --verbose
+        run: cargo test --workspace --exclude needle-python --features full --verbose
 
   lint:
     needs: quick-check
@@ -154,12 +154,22 @@ jobs:
 
       - name: Audit blanket allow(dead_code) attributes
         run: |
-          # Count files with #![allow(dead_code)] inner attributes (blanket suppression)
+          # Ratchet: fail if new files add blanket #![allow(dead_code)].
+          # Current baseline: 21 files. Decrease MAX_ALLOWED as files are cleaned up.
+          MAX_ALLOWED=21
           DEAD_CODE_FILES=$(grep -rl '#!\[allow(dead_code)\]' src/ --include='*.rs' || true)
-          DEAD_CODE_COUNT=$(echo "$DEAD_CODE_FILES" | grep -c '.' || true)
+          if [ -z "$DEAD_CODE_FILES" ]; then
+            DEAD_CODE_COUNT=0
+          else
+            DEAD_CODE_COUNT=$(echo "$DEAD_CODE_FILES" | grep -c '.' || echo 0)
+          fi
+          echo "Found $DEAD_CODE_COUNT files with blanket #![allow(dead_code)] (max: $MAX_ALLOWED)"
           if [ "$DEAD_CODE_COUNT" -gt 0 ]; then
-            echo "::warning::Found $DEAD_CODE_COUNT files with blanket #![allow(dead_code)]. Consider removing unused code or narrowing the allow to specific items."
             echo "$DEAD_CODE_FILES"
+          fi
+          if [ "$DEAD_CODE_COUNT" -gt "$MAX_ALLOWED" ]; then
+            echo "::error::Dead code allow count ($DEAD_CODE_COUNT) exceeds maximum ($MAX_ALLOWED). Remove #![allow(dead_code)] from new files or narrow the allow to specific items."
+            exit 1
           fi
 
   docs:
