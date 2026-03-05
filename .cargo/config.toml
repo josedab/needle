@@ -13,6 +13,8 @@ test-all     = "test --features full"
 test-quick   = "test --lib"
 lint         = "clippy --features full"
 t            = "test --features full"
+c            = "clippy --all-targets --features full -- -D warnings"
+ta           = "test --workspace --exclude needle-python --features full"
 
 [env]
 # Use "full" for detailed debugging with complete stack frames
