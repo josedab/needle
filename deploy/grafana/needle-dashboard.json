@@ -1,0 +1,71 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "id": null,
+  "links": [],
+  "liveNow": false,
+  "panels": [
+    {
+      "title": "Request Rate",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "targets": [{ "expr": "sum(rate(needle_http_requests_total[5m])) by (method)", "legendFormat": "{{method}}" }]
+    },
+    {
+      "title": "Request Latency (p50 / p99)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "targets": [
+        { "expr": "histogram_quantile(0.5, sum(rate(needle_http_request_duration_seconds_bucket[5m])) by (le))", "legendFormat": "p50" },
+        { "expr": "histogram_quantile(0.99, sum(rate(needle_http_request_duration_seconds_bucket[5m])) by (le))", "legendFormat": "p99" }
+      ]
+    },
+    {
+      "title": "Error Rate",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "targets": [{ "expr": "sum(rate(needle_http_requests_total{status=~\"5..\"}[5m]))", "legendFormat": "5xx errors/s" }]
+    },
+    {
+      "title": "In-Flight Requests",
+      "type": "gauge",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "targets": [{ "expr": "sum(needle_http_requests_in_flight)", "legendFormat": "in-flight" }]
+    },
+    {
+      "title": "Collection Vector Counts",
+      "type": "bargauge",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "targets": [{ "expr": "needle_collection_vectors", "legendFormat": "{{collection}}" }]
+    },
+    {
+      "title": "HNSW Nodes Visited (p99)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+      "targets": [{ "expr": "histogram_quantile(0.99, sum(rate(needle_hnsw_visited_nodes_bucket[5m])) by (le, collection))", "legendFormat": "{{collection}}" }]
+    },
+    {
+      "title": "Memory Usage",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 24 },
+      "targets": [{ "expr": "needle_memory_bytes", "legendFormat": "{{collection}} ({{component}})" }]
+    },
+    {
+      "title": "Ingestion Throughput",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 24 },
+      "targets": [
+        { "expr": "sum(rate(needle_ingestion_vectors_total[5m]))", "legendFormat": "vectors/s" },
+        { "expr": "sum(rate(needle_ingestion_errors_total[5m]))", "legendFormat": "errors/s" }
+      ]
+    }
+  ],
+  "schemaVersion": 39,
+  "tags": ["needle", "vector-database"],
+  "templating": { "list": [] },
+  "time": { "from": "now-1h", "to": "now" },
+  "title": "Needle Vector Database",
+  "uid": "needle-overview"
+}
