@@ -905,6 +905,29 @@ impl NeedleError {
                 "Failed to parse JSON input. Verify the request body is valid JSON \
                  and matches the expected schema.",
             ),
+            NeedleError::AliasNotFound(name) => format!(
+                "Alias '{}' does not exist. Use GET /aliases to see available aliases.",
+                name
+            ),
+            NeedleError::AliasAlreadyExists(name) => format!(
+                "Alias '{}' already exists. Delete it first with DELETE /aliases/{}, \
+                 or use PUT /aliases/{} to update the target.",
+                name, name, name
+            ),
+            NeedleError::CollectionHasAliases(name) => format!(
+                "Cannot delete collection '{}' because aliases still reference it. \
+                 Delete the aliases first with DELETE /aliases/:name.",
+                name
+            ),
+            NeedleError::CapacityExceeded(msg) => format!(
+                "Capacity limit reached: {}. Consider compacting the collection \
+                 with POST /collections/:name/compact, or increase the capacity.",
+                msg
+            ),
+            NeedleError::InvalidConfig(msg) => format!(
+                "Invalid configuration: {}. Check the API reference for valid parameter values.",
+                msg
+            ),
             _ => {
                 let hints = self.recovery_hints();
                 hints.first().map(|h| h.to_string()).unwrap_or_default()
