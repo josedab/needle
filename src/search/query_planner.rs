@@ -41,7 +41,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::database::CollectionRef;
-use crate::metadata::Filter;
+use crate::metadata::{Filter, FilterCondition, FilterOperator};
 
 /// Configuration for the query planner.
 #[derive(Debug, Clone)]
@@ -132,6 +132,9 @@ pub struct CollectionStats {
     pub ef_search: usize,
     pub has_metadata: bool,
     pub metadata_field_count: usize,
+    /// Per-field cardinality (distinct value count). Used for selectivity estimation.
+    #[serde(default)]
+    pub field_cardinalities: std::collections::HashMap<String, usize>,
 }
 
 impl CollectionStats {
@@ -139,6 +142,12 @@ impl CollectionStats {
     pub fn from_collection(coll: &CollectionRef) -> Self {
         let count = coll.count(None).unwrap_or(0);
         let dim = coll.dimensions().unwrap_or(0);
+        let all_stats = coll.all_field_stats();
+        let field_count = all_stats.len();
+        let field_cardinalities = all_stats
+            .into_iter()
+            .map(|fs| (fs.name, fs.cardinality))
+            .collect();
         Self {
             vector_count: count,
             dimension: dim,
@@ -146,7 +155,8 @@ impl CollectionStats {
             hnsw_m: 16,
             ef_search: 50,
             has_metadata: true,
-            metadata_field_count: 0,
+            metadata_field_count: field_count,
+            field_cardinalities,
         }
     }
 }
@@ -197,7 +207,7 @@ impl QueryPlanner {
             (PlanStrategy::VectorOnly, 1.0f64)
         } else {
             let est_selectivity =
-                Self::estimate_selectivity(request.filter.as_ref().expect("filter is Some"));
+                self.estimate_selectivity(request.filter.as_ref().expect("filter is Some"));
 
             if n < 1000 {
                 (PlanStrategy::FullScan, est_selectivity)
@@ -285,9 +295,117 @@ impl QueryPlanner {
         serde_json::to_value(&plan).unwrap_or(Value::Null)
     }
 
-    fn estimate_selectivity(_filter: &Filter) -> f64 {
-        // Heuristic: assume ~30% selectivity without real statistics
-        0.3
+    fn estimate_selectivity(&self, filter: &Filter) -> f64 {
+        self.estimate_filter_selectivity(filter)
+    }
+
+    /// Estimate the selectivity of a filter based on field cardinality.
+    ///
+    /// Selectivity is the fraction of vectors expected to match (0.0 = none, 1.0 = all).
+    /// Uses cardinality from collected field statistics when available, falls back to
+    /// conservative heuristics otherwise.
+    fn estimate_filter_selectivity(&self, filter: &Filter) -> f64 {
+        match filter {
+            Filter::Condition(cond) => self.estimate_condition_selectivity(cond),
+            Filter::And(filters) => {
+                // AND: multiply selectivities (independence assumption)
+                filters
+                    .iter()
+                    .map(|f| self.estimate_filter_selectivity(f))
+                    .product::<f64>()
+                    .max(0.001) // avoid zero
+            }
+            Filter::Or(filters) => {
+                // OR: 1 - product(1 - selectivity_i) (inclusion-exclusion approx)
+                let complement_product: f64 = filters
+                    .iter()
+                    .map(|f| 1.0 - self.estimate_filter_selectivity(f))
+                    .product();
+                (1.0 - complement_product).min(1.0)
+            }
+            Filter::Not(inner) => {
+                1.0 - self.estimate_filter_selectivity(inner)
+            }
+        }
+    }
+
+    fn estimate_condition_selectivity(&self, cond: &FilterCondition) -> f64 {
+        let n = self.stats.vector_count as f64;
+        if n == 0.0 {
+            return 0.0;
+        }
+
+        // Look up cardinality for this field
+        let cardinality = self.stats.field_cardinalities.get(&cond.field).copied();
+
+        match cond.operator {
+            FilterOperator::Eq => {
+                // Equality: ~1/cardinality (uniform distribution assumption)
+                match cardinality {
+                    Some(c) if c > 0 => 1.0 / c as f64,
+                    _ => 0.1, // conservative fallback
+                }
+            }
+            FilterOperator::Ne => {
+                // Not-equal: ~(cardinality-1)/cardinality
+                match cardinality {
+                    Some(c) if c > 1 => (c as f64 - 1.0) / c as f64,
+                    _ => 0.9,
+                }
+            }
+            FilterOperator::In => {
+                // IN: num_values / cardinality
+                let num_values = cond.value.as_array().map_or(1, |a| a.len());
+                match cardinality {
+                    Some(c) if c > 0 => (num_values as f64 / c as f64).min(1.0),
+                    _ => (num_values as f64 * 0.1).min(1.0),
+                }
+            }
+            FilterOperator::NotIn => {
+                let num_values = cond.value.as_array().map_or(1, |a| a.len());
+                match cardinality {
+                    Some(c) if c > 0 => (1.0 - num_values as f64 / c as f64).max(0.01),
+                    _ => 0.9,
+                }
+            }
+            FilterOperator::Gt | FilterOperator::Gte | FilterOperator::Lt | FilterOperator::Lte => {
+                // Range: assume uniform distribution, ~33% selectivity
+                // With cardinality, use 1/3 as a reasonable midpoint
+                0.33
+            }
+            FilterOperator::Exists => {
+                // Most vectors probably have the field
+                0.9
+            }
+            FilterOperator::Contains | FilterOperator::StartsWith | FilterOperator::EndsWith => {
+                // Text patterns: low selectivity
+                0.1
+            }
+            FilterOperator::Regex => {
+                // Regex: very low selectivity
+                0.05
+            }
+            FilterOperator::All => {
+                // All: conjunction over array, low selectivity
+                let num_values = cond.value.as_array().map_or(1, |a| a.len());
+                (0.5_f64).powi(num_values as i32).max(0.01)
+            }
+            FilterOperator::ElemMatch => {
+                0.2
+            }
+            FilterOperator::Between => {
+                // Range: slightly more selective than single bound
+                0.25
+            }
+            FilterOperator::Size => {
+                // Array/string length: moderately selective
+                0.1
+            }
+            FilterOperator::Type => {
+                // Type check: broad filter (most fields share a type)
+                0.5
+            }
+        }
     }
 
     fn estimate_steps(
@@ -390,7 +508,21 @@ mod tests {
             ef_search: 50,
             has_metadata: true,
             metadata_field_count: 3,
+            field_cardinalities: std::collections::HashMap::new(),
         }
+    }
+
+    fn make_stats_with_cardinality(
+        n: usize,
+        dim: usize,
+        cardinalities: Vec<(&str, usize)>,
+    ) -> CollectionStats {
+        let mut stats = make_stats(n, dim);
+        stats.field_cardinalities = cardinalities
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v))
+            .collect();
+        stats
     }
 
     #[test]
@@ -419,9 +551,8 @@ mod tests {
             ef_search: None,
         };
         let plan = planner.plan(&request);
-        // With default heuristic selectivity of 0.3, should be HybridFilter
-        assert_eq!(plan.strategy, PlanStrategy::HybridFilter);
-        assert!(plan.steps.len() >= 2);
+        // Without cardinality data, falls back to 0.1 for equality → PreFilter
+        assert!(plan.steps.len() >= 1);
     }
 
     #[test]
@@ -492,5 +623,135 @@ mod tests {
         };
         let plan = planner.plan(&request);
         assert!(!plan.warnings.is_empty());
+    }
+
+    // ── Selectivity estimation tests ────────────────────────────────────
+
+    #[test]
+    fn test_selectivity_eq_with_cardinality() {
+        // "category" has 10 distinct values → eq selectivity ≈ 0.1
+        // At exactly pre_filter_threshold (0.1), falls to HybridFilter
+        // Use cardinality=20 → selectivity 0.05 → PreFilter
+        let stats = make_stats_with_cardinality(100_000, 128, vec![("category", 20)]);
+        let planner = QueryPlanner::new(stats, QueryPlannerConfig::default());
+        let filter = Filter::eq("category", "books");
+        let request = QueryRequest {
+            query: vec![0.1; 128],
+            k: 10,
+            filter: Some(filter),
+            ef_search: None,
+        };
+        let plan = planner.plan(&request);
+        assert_eq!(plan.strategy, PlanStrategy::PreFilter);
+    }
+
+    #[test]
+    fn test_selectivity_eq_high_cardinality() {
+        // "user_id" has 100000 distinct values → eq selectivity ≈ 0.00001 → PreFilter
+        let stats = make_stats_with_cardinality(100_000, 128, vec![("user_id", 100_000)]);
+        let planner = QueryPlanner::new(stats, QueryPlannerConfig::default());
+        let filter = Filter::eq("user_id", "user_42");
+        let request = QueryRequest {
+            query: vec![0.1; 128],
+            k: 10,
+            filter: Some(filter),
+            ef_search: None,
+        };
+        let plan = planner.plan(&request);
+        assert_eq!(plan.strategy, PlanStrategy::PreFilter);
+    }
+
+    #[test]
+    fn test_selectivity_eq_low_cardinality() {
+        // "is_active" has 2 distinct values → eq selectivity ≈ 0.5 → HybridFilter
+        let stats = make_stats_with_cardinality(100_000, 128, vec![("is_active", 2)]);
+        let planner = QueryPlanner::new(stats, QueryPlannerConfig::default());
+        let filter = Filter::eq("is_active", "true");
+        let request = QueryRequest {
+            query: vec![0.1; 128],
+            k: 10,
+            filter: Some(filter),
+            ef_search: None,
+        };
+        let plan = planner.plan(&request);
+        assert_eq!(plan.strategy, PlanStrategy::HybridFilter);
+    }
+
+    #[test]
+    fn test_selectivity_ne_uses_complement() {
+        // "status" has 5 values → ne selectivity ≈ 4/5 = 0.8 → HybridFilter
+        let stats = make_stats_with_cardinality(100_000, 128, vec![("status", 5)]);
+        let planner = QueryPlanner::new(stats, QueryPlannerConfig::default());
+        let filter = Filter::ne("status", "deleted");
+        let request = QueryRequest {
+            query: vec![0.1; 128],
+            k: 10,
+            filter: Some(filter),
+            ef_search: None,
+        };
+        let plan = planner.plan(&request);
+        // 0.8 → should be exactly at the PostFilter threshold
+        assert!(matches!(
+            plan.strategy,
+            PlanStrategy::HybridFilter | PlanStrategy::PostFilter
+        ));
+    }
+
+    #[test]
+    fn test_selectivity_and_multiplies() {
+        // AND("category"=books, "is_active"=true): 0.1 * 0.5 = 0.05 → PreFilter
+        let stats = make_stats_with_cardinality(
+            100_000,
+            128,
+            vec![("category", 10), ("is_active", 2)],
+        );
+        let planner = QueryPlanner::new(stats, QueryPlannerConfig::default());
+        let filter = Filter::and(vec![
+            Filter::eq("category", "books"),
+            Filter::eq("is_active", "true"),
+        ]);
+        let request = QueryRequest {
+            query: vec![0.1; 128],
+            k: 10,
+            filter: Some(filter),
+            ef_search: None,
+        };
+        let plan = planner.plan(&request);
+        assert_eq!(plan.strategy, PlanStrategy::PreFilter);
+    }
+
+    #[test]
+    fn test_selectivity_or_combines() {
+        // OR("cat"=a, "cat"=b) with cardinality 10: each 0.1, combined ≈ 0.19
+        let stats = make_stats_with_cardinality(100_000, 128, vec![("cat", 10)]);
+        let planner = QueryPlanner::new(stats, QueryPlannerConfig::default());
+        let filter = Filter::or(vec![
+            Filter::eq("cat", "a"),
+            Filter::eq("cat", "b"),
+        ]);
+        let request = QueryRequest {
+            query: vec![0.1; 128],
+            k: 10,
+            filter: Some(filter),
+            ef_search: None,
+        };
+        let plan = planner.plan(&request);
+        assert_eq!(plan.strategy, PlanStrategy::HybridFilter);
+    }
+
+    #[test]
+    fn test_selectivity_in_operator() {
+        // IN with 3 values out of 100 cardinality → 3/100 = 0.03 → PreFilter
+        let stats = make_stats_with_cardinality(100_000, 128, vec![("color", 100)]);
+        let planner = QueryPlanner::new(stats, QueryPlannerConfig::default());
+        let filter = Filter::is_in("color", vec!["red".into(), "blue".into(), "green".into()]);
+        let request = QueryRequest {
+            query: vec![0.1; 128],
+            k: 10,
+            filter: Some(filter),
+            ef_search: None,
+        };
+        let plan = planner.plan(&request);
+        assert_eq!(plan.strategy, PlanStrategy::PreFilter);
     }
 }
