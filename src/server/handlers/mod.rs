@@ -2,12 +2,16 @@
 
 mod admin;
 mod collections;
+#[cfg(feature = "experimental")]
+mod plugins;
 mod search;
 mod vectors;
 
 // Re-export all handlers for use by the server router
 pub(super) use admin::*;
 pub(super) use collections::*;
+#[cfg(feature = "experimental")]
+pub(super) use plugins::*;
 pub(super) use search::*;
 pub(super) use vectors::*;
 
@@ -227,7 +231,7 @@ pub(super) fn check_collection_access(
 mod tests {
     use super::*;
     use crate::database::Database;
-    use axum::extract::State;
+    use axum::extract::{Query, State};
 
     fn make_state() -> std::sync::Arc<super::super::AppState> {
         let db = Database::in_memory();
@@ -988,7 +992,7 @@ mod tests {
     #[tokio::test]
     async fn test_list_collections() -> Result<(), Box<dyn std::error::Error>> {
         let state = make_state_with_collection("test", 4).await;
-        let _response = list_collections(State(state)).await;
+        let _response = list_collections(State(state), Query(QueryParams { offset: None, limit: None })).await;
         // Returns impl IntoResponse, verify no panic
         Ok(())
     }

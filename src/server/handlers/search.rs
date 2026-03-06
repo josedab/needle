@@ -119,21 +119,12 @@ pub(in crate::server) async fn search(
 
     // Parse distance override if provided
     let distance_override = if let Some(ref dist_str) = req.distance {
-        match dist_str.to_lowercase().as_str() {
-            "cosine" => Some(DistanceFunction::Cosine),
-            "euclidean" => Some(DistanceFunction::Euclidean),
-            "dot" | "dotproduct" => Some(DistanceFunction::DotProduct),
-            "manhattan" => Some(DistanceFunction::Manhattan),
-            _ => {
+        match dist_str.parse::<DistanceFunction>() {
+            Ok(df) => Some(df),
+            Err(msg) => {
                 return Err((
                     StatusCode::BAD_REQUEST,
-                    Json(ApiError::new(
-                        format!(
-                        "Invalid distance function: '{}'. Use: cosine, euclidean, dot, manhattan",
-                        dist_str
-                    ),
-                        "INVALID_DISTANCE",
-                    )),
+                    Json(ApiError::new(msg, "INVALID_DISTANCE")),
                 ))
             }
         }
@@ -217,9 +208,9 @@ pub(in crate::server) async fn search(
         };
         // If we got a full page, there might be more results
         let has_more = results.len() >= req.k;
-        (Some(cursor), Some(has_more))
+        (Some(cursor), has_more)
     } else {
-        (None, Some(false))
+        (None, false)
     };
 
     // Generate explanation if requested

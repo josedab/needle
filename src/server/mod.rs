@@ -39,9 +39,11 @@
 mod auth;
 mod handlers;
 mod middleware;
+pub mod oidc;
 mod types;
 
 pub use auth::*;
+pub use oidc::{OidcConfig, OidcValidator};
 pub use types::*;
 
 use handlers::*;
@@ -377,12 +379,16 @@ pub struct AppState {
     write_rate_limiter: Option<Arc<PerIpRateLimiter>>,
     /// Rate limiter for admin operations (most restrictive)
     admin_rate_limiter: Option<Arc<PerIpRateLimiter>>,
+    /// Rate limit configuration (stored for response headers)
+    rate_limit_config: RateLimitConfig,
     /// Authentication configuration
     auth: AuthConfig,
     /// Maximum items allowed in batch operations
     max_batch_size: usize,
     /// Trusted proxies for forwarded header handling
     trusted_proxies: Vec<IpAddr>,
+    /// Optional OIDC validator for external identity provider integration
+    oidc_validator: Option<Arc<oidc::OidcValidator>>,
     /// Optional embedding provider for auto-embed text endpoints
     #[cfg(feature = "embedding-providers")]
     embed_provider: Option<Arc<dyn crate::embeddings_provider::EmbeddingProvider>>,
@@ -396,9 +402,11 @@ impl AppState {
             rate_limiter: None,
             write_rate_limiter: None,
             admin_rate_limiter: None,
+            rate_limit_config: RateLimitConfig::disabled(),
             auth: AuthConfig::default(),
             max_batch_size: DEFAULT_MAX_BATCH_SIZE,
             trusted_proxies: default_trusted_proxies(),
+            oidc_validator: None,
             #[cfg(feature = "embedding-providers")]
             embed_provider: None,
         }
@@ -411,9 +419,11 @@ impl AppState {
             rate_limiter: create_rate_limiter(config),
             write_rate_limiter: create_write_rate_limiter(config),
             admin_rate_limiter: create_admin_rate_limiter(config),
+            rate_limit_config: config.clone(),
             auth: AuthConfig::default(),
             max_batch_size: DEFAULT_MAX_BATCH_SIZE,
             trusted_proxies: default_trusted_proxies(),
+            oidc_validator: None,
             #[cfg(feature = "embedding-providers")]
             embed_provider: None,
         }
@@ -421,14 +431,19 @@ impl AppState {
 
     /// Create a new AppState with full configuration
     pub fn with_config(db: Database, config: &ServerConfig) -> Self {
+        let oidc_validator = config.auth.oidc.as_ref().map(|oidc_config| {
+            Arc::new(oidc::OidcValidator::new(oidc_config.clone()))
+        });
         Self {
             db: RwLock::new(db),
             rate_limiter: create_rate_limiter(&config.rate_limit),
             write_rate_limiter: create_write_rate_limiter(&config.rate_limit),
             admin_rate_limiter: create_admin_rate_limiter(&config.rate_limit),
+            rate_limit_config: config.rate_limit.clone(),
             auth: config.auth.clone(),
             max_batch_size: config.max_batch_size,
             trusted_proxies: config.trusted_proxies.clone(),
+            oidc_validator,
             #[cfg(feature = "embedding-providers")]
             embed_provider: None,
         }
@@ -448,12 +463,14 @@ pub fn create_router_with_config(state: Arc<AppState>, config: &ServerConfig) ->
         .route("/collections", post(create_collection))
         .route("/collections/:name", get(get_collection))
         .route("/collections/:name", delete(delete_collection))
+        .route("/collections/:name/rename", post(rename_collection))
         .route("/collections/:name/compact", post(compact_collection))
         .route("/collections/:name/export", get(export_collection))
         // Vectors
         .route("/collections/:collection/vectors", get(list_vectors))
         .route("/collections/:collection/vectors", post(insert_vector))
         .route("/collections/:collection/vectors/batch", post(batch_insert))
+        .route("/collections/:collection/vectors/delete-batch", post(batch_delete))
         .route("/collections/:collection/vectors/upsert", post(upsert_vector))
         .route("/collections/:collection/vectors/:id", get(get_vector))
         .route("/collections/:collection/vectors/:id", delete(delete_vector))
@@ -462,6 +479,8 @@ pub fn create_router_with_config(state: Arc<AppState>, config: &ServerConfig) ->
         .route("/collections/:collection/texts", post(insert_text_handler))
         .route("/collections/:collection/texts/batch", post(batch_insert_text_handler))
         .route("/collections/:collection/texts/search", post(search_text_handler))
+        // Auto-text insertion (collection auto-embed provider)
+        .route("/collections/:collection/texts/auto", post(insert_auto_text))
         // Search
         .route("/collections/:collection/search", post(search))
         .route("/collections/:collection/search/batch", post(batch_search))
@@ -534,6 +553,11 @@ pub fn create_router_with_config(state: Arc<AppState>, config: &ServerConfig) ->
         // TTL endpoints
         .route("/collections/:name/expire", post(expire_vectors_handler))
         .route("/collections/:name/ttl-stats", get(ttl_stats_handler))
+        .route("/collections/:collection/vectors/:id/ttl", get(get_vector_ttl))
+        .route("/collections/:collection/vectors/:id/ttl", put(set_vector_ttl))
+        // Field stats and memory usage
+        .route("/collections/:name/stats/fields", get(collection_field_stats))
+        .route("/collections/:name/stats/memory", get(collection_memory_usage))
         // Snapshot endpoints
         .route("/collections/:name/snapshots", get(list_snapshots_handler))
         .route("/collections/:name/snapshots", post(create_snapshot_handler))
@@ -541,6 +565,12 @@ pub fn create_router_with_config(state: Arc<AppState>, config: &ServerConfig) ->
         // MCP over HTTP
         .route("/mcp", post(mcp_http_handler))
         .route("/mcp/config", get(mcp_config_handler));
+
+    // Plugin management endpoints (experimental)
+    #[cfg(feature = "experimental")]
+    let api_routes = api_routes
+        .route("/plugins", get(list_plugins))
+        .route("/plugins/:name", get(get_plugin));
 
     // Serve API routes at both root (backward compat) and /v1 (versioned)
     #[allow(unused_mut)]
@@ -589,6 +619,7 @@ pub fn create_router_with_config(state: Arc<AppState>, config: &ServerConfig) ->
         .unwrap_or(1000); // allow-expect: env var parse with fallback
 
     Ok(router
+        .layer(axum::middleware::from_fn(request_id_middleware))
         .layer(axum::middleware::from_fn(api_stability_middleware))
         .layer(axum::middleware::from_fn(security_headers_middleware))
         .layer(TraceLayer::new_for_http())
@@ -741,7 +772,10 @@ pub fn generate_openapi_spec() -> serde_json::Value {
     let mut spec = serde_json::Map::new();
     spec.insert("openapi".into(), serde_json::json!("3.1.0"));
     spec.insert("info".into(), openapi_info());
-    spec.insert("servers".into(), serde_json::json!([{ "url": "http://localhost:8080", "description": "Local development" }]));
+    spec.insert("servers".into(), serde_json::json!([
+        { "url": "/v1", "description": "Versioned API (recommended)" },
+        { "url": "/", "description": "Legacy unversioned API (will be deprecated in v2)" }
+    ]));
     spec.insert("tags".into(), openapi_tags());
     spec.insert("paths".into(), openapi_paths());
     spec.insert("components".into(), openapi_components());
@@ -752,7 +786,7 @@ pub fn generate_openapi_spec() -> serde_json::Value {
 fn openapi_info() -> serde_json::Value {
     serde_json::json!({
         "title": "Needle Vector Database API",
-        "description": "REST API for the Needle embedded vector database",
+        "description": "REST API for the Needle embedded vector database.\n\nAPI Versioning: All endpoints are available at both `/v1/...` (recommended) and `/...` (legacy). The unversioned root paths will be deprecated in a future release. New integrations should always use the `/v1` prefix.",
         "version": "0.1.0",
         "license": { "name": "MIT" },
         "contact": { "name": "Needle Team" }
@@ -798,6 +832,7 @@ fn openapi_paths() -> serde_json::Value {
     openapi_paths_webhooks(&mut paths);
     openapi_paths_aliases(&mut paths);
     openapi_paths_ttl(&mut paths);
+    openapi_paths_stats(&mut paths);
     openapi_paths_snapshots(&mut paths);
     openapi_paths_mcp(&mut paths);
     openapi_paths_ui(&mut paths);
@@ -866,6 +901,12 @@ fn openapi_paths_collections(paths: &mut serde_json::Map<String, serde_json::Val
             "operationId": "compactCollection", "tags": ["Collections"], "parameters": [name_param()],
             "responses": { "200": { "description": "Compaction complete" }, "404": { "description": "Collection not found" } } }
     }));
+    paths.insert("/collections/{name}/rename".into(), serde_json::json!({
+        "post": { "summary": "Rename a collection", "description": "Rename an existing collection and update all aliases that reference it",
+            "operationId": "renameCollection", "tags": ["Collections"], "parameters": [name_param()],
+            "requestBody": { "required": true, "content": schema_ref("RenameCollectionRequest") },
+            "responses": { "200": { "description": "Collection renamed" }, "404": { "description": "Collection not found" }, "409": { "description": "New name already exists" } } }
+    }));
     paths.insert("/collections/{name}/export".into(), serde_json::json!({
         "get": { "summary": "Export collection data", "description": "Export all vectors and metadata as JSON",
             "operationId": "exportCollection", "tags": ["Collections"], "parameters": [name_param()],
@@ -889,6 +930,12 @@ fn openapi_paths_vectors(paths: &mut serde_json::Map<String, serde_json::Value>)
             "operationId": "batchInsert", "tags": ["Vectors"], "parameters": [col_param()],
             "requestBody": { "required": true, "content": schema_ref("BatchInsertRequest") },
             "responses": { "200": { "description": "Vectors inserted", "content": schema_ref("BatchInsertResponse") }, "400": { "description": "Invalid input" } } }
+    }));
+    paths.insert("/collections/{collection}/vectors/delete-batch".into(), serde_json::json!({
+        "post": { "summary": "Batch delete vectors", "description": "Delete multiple vectors by ID in a single request",
+            "operationId": "batchDelete", "tags": ["Vectors"], "parameters": [col_param()],
+            "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "properties": { "ids": { "type": "array", "items": { "type": "string" } } }, "required": ["ids"] } } } },
+            "responses": { "200": { "description": "Vectors deleted", "content": { "application/json": { "schema": { "type": "object", "properties": { "deleted_count": { "type": "integer" } } } } } }, "400": { "description": "Invalid input" } } }
     }));
     paths.insert("/collections/{collection}/vectors/upsert".into(), serde_json::json!({
         "post": { "summary": "Upsert a vector", "description": "Insert or update a vector by ID",
@@ -931,6 +978,12 @@ fn openapi_paths_text(paths: &mut serde_json::Map<String, serde_json::Value>) {
             "operationId": "searchText", "tags": ["Text"], "parameters": [col_param()],
             "requestBody": { "required": true, "content": schema_ref("TextSearchRequest") },
             "responses": { "200": { "description": "Search results", "content": schema_ref("SearchResponse") } } }
+    }));
+    paths.insert("/collections/{collection}/texts/auto".into(), serde_json::json!({
+        "post": { "summary": "Insert text via auto-embed provider", "description": "Insert a text document using the collection's configured auto-embed provider",
+            "operationId": "insertAutoText", "tags": ["Text"], "parameters": [col_param()],
+            "requestBody": { "required": true, "content": schema_ref("AutoTextRequest") },
+            "responses": { "201": { "description": "Text inserted" }, "400": { "description": "Invalid input" }, "404": { "description": "Collection not found" } } }
     }));
 }
 
@@ -1120,6 +1173,19 @@ fn openapi_paths_ttl(paths: &mut serde_json::Map<String, serde_json::Value>) {
     }));
 }
 
+fn openapi_paths_stats(paths: &mut serde_json::Map<String, serde_json::Value>) {
+    paths.insert("/collections/{name}/stats/fields".into(), serde_json::json!({
+        "get": { "summary": "Field statistics", "description": "Get per-field metadata statistics including cardinality and indexing status",
+            "operationId": "fieldStats", "tags": ["Stats"], "parameters": [name_param()],
+            "responses": { "200": { "description": "Field statistics" }, "404": { "description": "Collection not found" } } }
+    }));
+    paths.insert("/collections/{name}/stats/memory".into(), serde_json::json!({
+        "get": { "summary": "Memory usage", "description": "Get estimated memory usage breakdown for vectors, index, metadata, and caches",
+            "operationId": "memoryUsage", "tags": ["Stats"], "parameters": [name_param()],
+            "responses": { "200": { "description": "Memory usage breakdown" }, "404": { "description": "Collection not found" } } }
+    }));
+}
+
 fn openapi_paths_snapshots(paths: &mut serde_json::Map<String, serde_json::Value>) {
     paths.insert("/collections/{name}/snapshots".into(), serde_json::json!({
         "get": { "summary": "List snapshots", "description": "List all point-in-time snapshots for a collection",
@@ -1208,14 +1274,19 @@ fn openapi_schemas_core(s: &mut serde_json::Map<String, serde_json::Value>) {
         "type": "object", "properties": {
             "name": { "type": "string" }, "dimensions": { "type": "integer" },
             "vector_count": { "type": "integer" },
-            "distance_function": { "type": "string", "enum": ["cosine", "euclidean", "dot_product", "manhattan"] }
+            "distance_function": { "type": "string", "enum": ["cosine", "euclidean", "dot_product", "manhattan", "hamming", "chebyshev"] }
         }
     }));
     s.insert("CreateCollectionRequest".into(), serde_json::json!({
         "type": "object", "required": ["name", "dimensions"], "properties": {
             "name": { "type": "string" }, "dimensions": { "type": "integer", "minimum": 1 },
-            "distance": { "type": "string", "enum": ["cosine", "euclidean", "dot_product", "manhattan"], "default": "cosine" },
+            "distance": { "type": "string", "enum": ["cosine", "euclidean", "dot_product", "manhattan", "hamming", "chebyshev"], "default": "cosine" },
             "m": { "type": "integer", "default": 16 }, "ef_construction": { "type": "integer", "default": 200 }
+        }
+    }));
+    s.insert("RenameCollectionRequest".into(), serde_json::json!({
+        "type": "object", "required": ["new_name"], "properties": {
+            "new_name": { "type": "string", "description": "The new name for the collection" }
         }
     }));
     s.insert("InsertVectorRequest".into(), serde_json::json!({
@@ -1250,7 +1321,7 @@ fn openapi_schemas_search(s: &mut serde_json::Map<String, serde_json::Value>) {
         "type": "object", "required": ["vector"], "properties": {
             "vector": { "type": "array", "items": { "type": "number", "format": "float" } },
             "k": { "type": "integer", "default": 10, "minimum": 1 },
-            "filter": { "type": "object", "description": "MongoDB-style metadata filter" },
+            "filter": { "type": "object", "description": "MongoDB-style metadata filter. Supported operators: $eq, $ne, $gt, $gte, $lt, $lte, $in, $nin, $contains, $startsWith, $endsWith, $exists, $regex, $all, $elemMatch, $between, $size, $type, $and, $or, $not" },
             "ef_search": { "type": "integer" }
         }
     }));

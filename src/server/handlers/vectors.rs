@@ -592,6 +592,67 @@ pub(in crate::server) fn text_to_deterministic_vector(text: &str, dimensions: us
     result
 }
 
+/// Insert text using the collection's auto-embed provider.
+///
+/// `POST /collections/:name/texts/auto` — embeds text via the collection's
+/// configured auto-embed provider and inserts the resulting vector.
+pub(in crate::server) async fn insert_auto_text(
+    State(state): State<Arc<AppState>>,
+    Path(collection): Path<String>,
+    Json(body): Json<AutoTextRequest>,
+) -> Result<impl IntoResponse, (StatusCode, Json<ApiError>)> {
+    let db = state.db.write().await;
+    let coll = db
+        .collection(&collection)
+        .map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
+
+    coll.insert_auto_text(&body.id, &body.text, body.metadata)
+        .map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
+
+    Ok((StatusCode::CREATED, Json(json!({"inserted": body.id}))))
+}
+
+/// Delete multiple vectors by ID.
+///
+/// `POST /collections/:name/vectors/delete-batch` — accepts a list of IDs and
+/// deletes them. Returns the count of successfully deleted vectors.
+/// IDs that don't exist are silently skipped.
+pub(in crate::server) async fn batch_delete(
+    State(state): State<Arc<AppState>>,
+    Path(collection): Path<String>,
+    Json(req): Json<BatchDeleteRequest>,
+) -> Result<impl IntoResponse, (StatusCode, Json<ApiError>)> {
+    if req.ids.len() > state.max_batch_size {
+        return Err((
+            StatusCode::PAYLOAD_TOO_LARGE,
+            Json(ApiError::new(
+                format!(
+                    "Batch size {} exceeds maximum allowed {}",
+                    req.ids.len(),
+                    state.max_batch_size
+                ),
+                "BATCH_TOO_LARGE".to_string(),
+            )),
+        ));
+    }
+
+    for id in &req.ids {
+        validate_vector_id(id)?;
+    }
+
+    let db = state.db.write().await;
+    let coll = db
+        .collection(&collection)
+        .map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
+
+    let id_refs: Vec<&str> = req.ids.iter().map(String::as_str).collect();
+    let deleted_count = coll
+        .batch_delete(&id_refs)
+        .map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
+
+    Ok(Json(json!({ "deleted_count": deleted_count })))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

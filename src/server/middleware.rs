@@ -210,10 +210,23 @@ pub(super) async fn rate_limit_middleware(
         RateLimitTier::Read => state.rate_limiter.as_ref(),
     };
 
+    let tier_limit = match tier {
+        RateLimitTier::Read => state.rate_limit_config.requests_per_second,
+        RateLimitTier::Write => state.rate_limit_config.write_requests_per_second
+            .unwrap_or((state.rate_limit_config.requests_per_second / 5).max(1)),
+        RateLimitTier::Admin => state.rate_limit_config.admin_requests_per_second
+            .unwrap_or(5),
+    };
+
     if let Some(limiter) = limiter {
         let client_ip = extract_client_ip(&request, &state.trusted_proxies);
         match limiter.check_key(&client_ip) {
-            Ok(_) => next.run(request).await,
+            Ok(_) => {
+                let mut response = next.run(request).await;
+                let headers = response.headers_mut();
+                headers.insert("x-ratelimit-limit", tier_limit.into());
+                response
+            }
             Err(_) => {
                 warn!(
                     client_ip = %client_ip,
@@ -224,7 +237,12 @@ pub(super) async fn rate_limit_middleware(
                     "Rate limit exceeded. Please slow down.".to_string(),
                     "RATE_LIMIT_EXCEEDED".to_string(),
                 );
-                (StatusCode::TOO_MANY_REQUESTS, Json(error)).into_response()
+                let mut response = (StatusCode::TOO_MANY_REQUESTS, Json(error)).into_response();
+                let headers = response.headers_mut();
+                headers.insert("x-ratelimit-limit", tier_limit.into());
+                headers.insert("x-ratelimit-remaining", 0.into());
+                headers.insert("retry-after", 1.into());
+                response
             }
         }
     } else {
@@ -249,10 +267,18 @@ pub(super) async fn auth_middleware(
     let path = request.uri().path().to_string();
     let auth_config = &state.auth;
 
+    // Refresh OIDC JWKS cache if needed (requires embedding-providers for HTTP fetching)
+    #[cfg(feature = "embedding-providers")]
+    if let Some(validator) = &state.oidc_validator {
+        if let Err(e) = validator.refresh_jwks_if_needed().await {
+            warn!("Failed to refresh OIDC JWKS: {e}");
+        }
+    }
+
     // Check if this is a public endpoint
     if auth_config.is_public_endpoint(&path) {
         // Still try to extract auth context if credentials are present
-        if let Some(context) = try_authenticate(&request, auth_config) {
+        if let Some(context) = try_authenticate(&request, auth_config, state.oidc_validator.as_deref()) {
             request.extensions_mut().insert(context);
         }
         return next.run(request).await;
@@ -261,14 +287,14 @@ pub(super) async fn auth_middleware(
     // If auth is not required, proceed without validation
     if !auth_config.require_auth {
         // Still try to extract auth context if credentials are present
-        if let Some(context) = try_authenticate(&request, auth_config) {
+        if let Some(context) = try_authenticate(&request, auth_config, state.oidc_validator.as_deref()) {
             request.extensions_mut().insert(context);
         }
         return next.run(request).await;
     }
 
     // Auth is required - try to authenticate
-    match try_authenticate(&request, auth_config) {
+    match try_authenticate(&request, auth_config, state.oidc_validator.as_deref()) {
         Some(context) => {
             if let Some(collection) = extract_collection_from_path(&path) {
                 // Collection-level RBAC
@@ -351,7 +377,11 @@ pub(super) fn infer_permission_from_request(request: &Request<Body>) -> crate::s
 }
 
 
-pub(super) fn try_authenticate(request: &Request<Body>, auth_config: &AuthConfig) -> Option<AuthContext> {
+pub(super) fn try_authenticate(
+    request: &Request<Body>,
+    auth_config: &AuthConfig,
+    oidc_validator: Option<&super::oidc::OidcValidator>,
+) -> Option<AuthContext> {
     // Try API key first (X-API-Key header)
     if let Some(api_key) = request.headers().get("x-api-key") {
         if let Ok(key_str) = api_key.to_str() {
@@ -368,7 +398,20 @@ pub(super) fn try_authenticate(request: &Request<Body>, auth_config: &AuthConfig
     if let Some(auth_header) = request.headers().get(header::AUTHORIZATION) {
         if let Ok(auth_str) = auth_header.to_str() {
             if let Some(token) = auth_str.strip_prefix("Bearer ") {
-                if let Ok(claims) = auth_config.validate_jwt(token.trim()) {
+                let token = token.trim();
+
+                // If OIDC is configured, try OIDC validation first
+                if let Some(validator) = oidc_validator {
+                    if let Ok(claims) = validator.validate_token(token) {
+                        return Some(AuthContext {
+                            user: claims.to_user(),
+                            method: AuthMethod::Oidc,
+                        });
+                    }
+                }
+
+                // Fall back to local JWT validation
+                if let Ok(claims) = auth_config.validate_jwt(token) {
                     return Some(AuthContext {
                         user: claims.to_user(),
                         method: AuthMethod::Jwt,
@@ -515,6 +558,45 @@ pub(super) async fn api_stability_middleware(
         tier.as_str().parse().expect("stability tier is a valid header value"), // allow-expect
     );
     response
+}
+
+// ── Request ID ───────────────────────────────────────────────────────────
+
+static REQUEST_ID_HEADER: header::HeaderName = header::HeaderName::from_static("x-request-id");
+
+/// Middleware that assigns a unique request ID to each request.
+///
+/// If the client sends an `x-request-id` header, it is echoed back.
+/// Otherwise, a new UUID-like ID is generated. The request ID is
+/// always included in the response headers.
+pub(super) async fn request_id_middleware(
+    request: Request<Body>,
+    next: Next,
+) -> Response {
+    let request_id = request
+        .headers()
+        .get(&REQUEST_ID_HEADER)
+        .and_then(|v| v.to_str().ok())
+        .map(String::from)
+        .unwrap_or_else(generate_request_id);
+
+    let mut response = next.run(request).await;
+    if let Ok(val) = request_id.parse() {
+        response.headers_mut().insert(REQUEST_ID_HEADER.clone(), val);
+    }
+    response
+}
+
+/// Generate a compact request ID using timestamp + random suffix.
+fn generate_request_id() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let count = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+    format!("req-{ts:x}-{count:04x}")
 }
 
 #[cfg(test)]
@@ -811,7 +893,7 @@ mod tests {
             .body(Body::empty())
             .expect("should build request");
         let auth_config = AuthConfig::default();
-        let result = try_authenticate(&req, &auth_config);
+        let result = try_authenticate(&req, &auth_config, None);
         assert!(result.is_none());
     }
 
@@ -825,7 +907,7 @@ mod tests {
             .expect("should build request");
         req.headers_mut().insert("x-api-key", "invalid-key".parse().expect("should parse"));
         let auth_config = AuthConfig::default();
-        let result = try_authenticate(&req, &auth_config);
+        let result = try_authenticate(&req, &auth_config, None);
         assert!(result.is_none());
     }
 
@@ -890,5 +972,24 @@ mod tests {
         assert!(create_rate_limiter(&config).is_some());
         assert!(create_write_rate_limiter(&config).is_some());
         assert!(create_admin_rate_limiter(&config).is_some());
+    }
+
+    // ── Request ID tests ────────────────────────────────────────────────
+
+    #[test]
+    fn test_generate_request_id_format() {
+        let id = generate_request_id();
+        assert!(id.starts_with("req-"));
+        assert!(id.contains('-'));
+        // Should be unique across calls
+        let id2 = generate_request_id();
+        assert_ne!(id, id2);
+    }
+
+    #[test]
+    fn test_generate_request_id_uniqueness() {
+        let ids: Vec<String> = (0..100).map(|_| generate_request_id()).collect();
+        let unique: std::collections::HashSet<_> = ids.iter().collect();
+        assert_eq!(ids.len(), unique.len());
     }
 }

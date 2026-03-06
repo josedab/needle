@@ -14,6 +14,8 @@ pub struct ApiError {
     pub code: String,
     #[serde(skip_serializing_if = "String::is_empty")]
     pub help: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request_id: Option<String>,
 }
 
 impl ApiError {
@@ -22,27 +24,67 @@ impl ApiError {
             error: error.into(),
             code: code.into(),
             help: String::new(),
+            request_id: None,
         }
+    }
+
+    /// Attach a request ID to this error response.
+    #[must_use]
+    pub fn with_request_id(mut self, id: impl Into<String>) -> Self {
+        self.request_id = Some(id.into());
+        self
     }
 }
 
 impl From<NeedleError> for (StatusCode, Json<ApiError>) {
     fn from(err: NeedleError) -> Self {
         let (status, code) = match &err {
+            // 404 Not Found
             NeedleError::CollectionNotFound(_) => (StatusCode::NOT_FOUND, "COLLECTION_NOT_FOUND"),
             NeedleError::VectorNotFound(_) => (StatusCode::NOT_FOUND, "VECTOR_NOT_FOUND"),
-            NeedleError::CollectionAlreadyExists(_) => (StatusCode::CONFLICT, "COLLECTION_EXISTS"),
-            NeedleError::VectorAlreadyExists(_) => (StatusCode::CONFLICT, "VECTOR_EXISTS"),
+            NeedleError::AliasNotFound(_) => (StatusCode::NOT_FOUND, "ALIAS_NOT_FOUND"),
+            NeedleError::NotFound(_) => (StatusCode::NOT_FOUND, "NOT_FOUND"),
+            // 400 Bad Request
             NeedleError::DimensionMismatch { .. } => {
                 (StatusCode::BAD_REQUEST, "DIMENSION_MISMATCH")
             }
             NeedleError::InvalidVector(_) => (StatusCode::BAD_REQUEST, "INVALID_VECTOR"),
             NeedleError::InvalidConfig(_) => (StatusCode::BAD_REQUEST, "INVALID_CONFIG"),
-            NeedleError::AliasNotFound(_) => (StatusCode::NOT_FOUND, "ALIAS_NOT_FOUND"),
+            NeedleError::InvalidInput(_) => (StatusCode::BAD_REQUEST, "INVALID_INPUT"),
+            NeedleError::InvalidArgument(_) => (StatusCode::BAD_REQUEST, "INVALID_ARGUMENT"),
+            NeedleError::Serialization(_) => (StatusCode::BAD_REQUEST, "SERIALIZATION_ERROR"),
+            // 401 Unauthorized
+            NeedleError::Unauthorized(_) => (StatusCode::UNAUTHORIZED, "UNAUTHORIZED"),
+            // 409 Conflict
+            NeedleError::CollectionAlreadyExists(_) => (StatusCode::CONFLICT, "COLLECTION_EXISTS"),
+            NeedleError::VectorAlreadyExists(_) => (StatusCode::CONFLICT, "VECTOR_EXISTS"),
             NeedleError::AliasAlreadyExists(_) => (StatusCode::CONFLICT, "ALIAS_EXISTS"),
             NeedleError::CollectionHasAliases(_) => {
                 (StatusCode::CONFLICT, "COLLECTION_HAS_ALIASES")
             }
+            NeedleError::DuplicateId(_) => (StatusCode::CONFLICT, "DUPLICATE_ID"),
+            NeedleError::OperationInProgress(_) => {
+                (StatusCode::CONFLICT, "OPERATION_IN_PROGRESS")
+            }
+            NeedleError::Conflict(_) => (StatusCode::CONFLICT, "CONFLICT"),
+            // 429 Too Many Requests
+            NeedleError::QuotaExceeded(_) => {
+                (StatusCode::TOO_MANY_REQUESTS, "QUOTA_EXCEEDED")
+            }
+            // 503 Service Unavailable
+            NeedleError::LockTimeout(_) => {
+                (StatusCode::SERVICE_UNAVAILABLE, "LOCK_TIMEOUT")
+            }
+            NeedleError::ConsensusError(_) => {
+                (StatusCode::SERVICE_UNAVAILABLE, "CONSENSUS_ERROR")
+            }
+            // 504 Gateway Timeout
+            NeedleError::Timeout(_) => (StatusCode::GATEWAY_TIMEOUT, "TIMEOUT"),
+            // 507 Insufficient Storage
+            NeedleError::CapacityExceeded(_) => {
+                (StatusCode::INSUFFICIENT_STORAGE, "CAPACITY_EXCEEDED")
+            }
+            // 500 Internal Server Error (genuine server-side failures)
             _ => (StatusCode::INTERNAL_SERVER_ERROR, "INTERNAL_ERROR"),
         };
 
@@ -62,6 +104,7 @@ impl From<NeedleError> for (StatusCode, Json<ApiError>) {
                 error: error_message,
                 code: code.to_string(),
                 help,
+                request_id: None,
             }),
         )
     }
@@ -91,6 +134,13 @@ pub struct CollectionInfo {
     pub deleted_count: usize,
 }
 
+/// Request body for renaming a collection.
+#[derive(Debug, Deserialize)]
+pub struct RenameCollectionRequest {
+    /// The new name for the collection
+    pub new_name: String,
+}
+
 /// Request body for inserting a single vector into a collection.
 #[derive(Debug, Deserialize)]
 pub struct InsertRequest {
@@ -107,6 +157,12 @@ pub struct InsertRequest {
 #[derive(Debug, Deserialize)]
 pub struct BatchInsertRequest {
     pub vectors: Vec<InsertRequest>,
+}
+
+/// Request body for deleting multiple vectors by ID.
+#[derive(Debug, Deserialize)]
+pub struct BatchDeleteRequest {
+    pub ids: Vec<String>,
 }
 
 /// Request body for upserting (insert or update) a single vector.
@@ -182,8 +238,8 @@ pub struct SearchResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next_cursor: Option<SearchCursor>,
     /// Whether more results are available beyond this page.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub has_more: Option<bool>,
+    #[serde(default)]
+    pub has_more: bool,
 }
 
 /// A single search result with distance, score, and optional metadata/vector.
@@ -412,6 +468,18 @@ pub struct InsertTextRequest {
 #[derive(Deserialize)]
 pub struct BatchInsertTextRequest {
     pub texts: Vec<InsertTextRequest>,
+}
+
+/// Auto-text insertion request — insert text using the collection's auto-embed provider.
+#[derive(Deserialize)]
+pub struct AutoTextRequest {
+    /// Unique ID for the vector
+    pub id: String,
+    /// Text content to embed via auto-embed
+    pub text: String,
+    /// Optional metadata
+    #[serde(default)]
+    pub metadata: Option<Value>,
 }
 
 /// Text search request — search using text instead of a vector.
@@ -974,15 +1042,15 @@ mod tests {
             }],
             explanation: None,
             next_cursor: None,
-            has_more: None,
+            has_more: false,
         };
         let json = serde_json::to_value(&resp).expect("should serialize");
         assert_eq!(json["results"][0]["id"], "v1");
         assert_eq!(json["results"][0]["distance"], 0.5);
         assert!(json.get("explanation").is_none());
-        // next_cursor and has_more should be omitted when None
+        // next_cursor should be omitted when None; has_more defaults to false
         assert!(json.get("next_cursor").is_none());
-        assert!(json.get("has_more").is_none());
+        assert_eq!(json["has_more"], false);
     }
 
     #[test]
@@ -996,7 +1064,7 @@ mod tests {
                 profiling: None,
             }),
             next_cursor: None,
-            has_more: Some(false),
+            has_more: false,
         };
         let json = serde_json::to_value(&resp).expect("should serialize");
         assert!(json.get("explanation").is_some());

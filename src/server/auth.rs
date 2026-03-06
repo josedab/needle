@@ -14,6 +14,17 @@ use subtle::ConstantTimeEq;
 /// Default clock skew leeway for JWT expiration checks (in seconds).
 const JWT_CLOCK_LEEWAY_SECS: u64 = 60;
 
+/// Supported JWT signing algorithms.
+#[derive(Debug, Clone)]
+pub enum JwtAlgorithm {
+    /// HMAC with SHA-256 (symmetric key, default)
+    HS256,
+    /// RSA with SHA-256 (asymmetric, uses public key for verification)
+    RS256 { public_key_pem: String },
+    /// ECDSA with SHA-256 (asymmetric, uses public key for verification)
+    ES256 { public_key_pem: String },
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 pub struct ApiKey {
     /// The API key value (should be kept secret)
@@ -183,7 +194,7 @@ impl JwtClaims {
 }
 
 /// Authentication configuration for the server.
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct AuthConfig {
     /// Whether authentication is required for all endpoints
     pub require_auth: bool,
@@ -195,8 +206,26 @@ pub struct AuthConfig {
     /// Tokens signed with these keys will be accepted but new tokens are always
     /// signed with `jwt_secret`.
     pub jwt_previous_secrets: Vec<String>,
+    /// JWT signing/verification algorithm. Defaults to HS256.
+    pub jwt_algorithm: JwtAlgorithm,
     /// Endpoints that don't require authentication (e.g., "/health")
     pub public_endpoints: Vec<String>,
+    /// Optional OIDC configuration for external identity provider integration
+    pub oidc: Option<super::oidc::OidcConfig>,
+}
+
+impl Default for AuthConfig {
+    fn default() -> Self {
+        Self {
+            require_auth: false,
+            api_keys: Vec::new(),
+            jwt_secret: None,
+            jwt_previous_secrets: Vec::new(),
+            jwt_algorithm: JwtAlgorithm::HS256,
+            public_endpoints: vec!["/health".to_string(), "/".to_string()],
+            oidc: None,
+        }
+    }
 }
 
 impl std::fmt::Debug for AuthConfig {
@@ -206,7 +235,9 @@ impl std::fmt::Debug for AuthConfig {
             .field("api_keys", &format!("[{} keys]", self.api_keys.len()))
             .field("jwt_secret", &self.jwt_secret.as_ref().map(|_| "[REDACTED]"))
             .field("jwt_previous_secrets", &format!("[{} keys]", self.jwt_previous_secrets.len()))
+            .field("jwt_algorithm", &self.jwt_algorithm)
             .field("public_endpoints", &self.public_endpoints)
+            .field("oidc", &self.oidc.as_ref().map(|c| &c.issuer_url))
             .finish()
     }
 }
@@ -214,13 +245,7 @@ impl std::fmt::Debug for AuthConfig {
 impl AuthConfig {
     /// Create a new authentication configuration.
     pub fn new() -> Self {
-        Self {
-            require_auth: false,
-            api_keys: Vec::new(),
-            jwt_secret: None,
-            jwt_previous_secrets: Vec::new(),
-            public_endpoints: vec!["/health".to_string(), "/".to_string()],
-        }
+        Self::default()
     }
 
     /// Require authentication for all endpoints except public ones.
@@ -264,22 +289,48 @@ impl AuthConfig {
         self
     }
 
+    /// Set the JWT signing/verification algorithm.
+    ///
+    /// Defaults to `JwtAlgorithm::HS256`. For asymmetric algorithms (`RS256`,
+    /// `ES256`), the PEM-encoded public key is embedded in the variant and used
+    /// for token verification. The `jwt_secret` field is ignored for asymmetric
+    /// algorithms during validation, but must still be set for token generation
+    /// when using HS256.
+    #[must_use]
+    pub fn with_jwt_algorithm(mut self, algorithm: JwtAlgorithm) -> Self {
+        self.jwt_algorithm = algorithm;
+        self
+    }
+
+    /// Set OIDC configuration for external identity provider integration.
+    ///
+    /// When configured, Bearer tokens will first be validated against the OIDC
+    /// provider's JWKS before falling back to local JWT validation.
+    #[must_use]
+    pub fn with_oidc(mut self, oidc_config: super::oidc::OidcConfig) -> Self {
+        self.oidc = Some(oidc_config);
+        self
+    }
+
     /// Validate the authentication configuration.
     ///
-    /// Returns an error if the JWT secret is configured but shorter than 32 bytes.
+    /// Returns an error if HS256 is used and the JWT secret is shorter than 32 bytes.
+    /// For asymmetric algorithms (RS256, ES256) the secret length check is skipped.
     pub fn validate(&self) -> std::result::Result<(), AuthError> {
-        if let Some(secret) = &self.jwt_secret {
-            if secret.len() < 32 {
-                return Err(AuthError::InvalidToken(
-                    "JWT secret must be at least 32 bytes to prevent brute-force attacks".into(),
-                ));
+        if matches!(self.jwt_algorithm, JwtAlgorithm::HS256) {
+            if let Some(secret) = &self.jwt_secret {
+                if secret.len() < 32 {
+                    return Err(AuthError::InvalidToken(
+                        "JWT secret must be at least 32 bytes to prevent brute-force attacks".into(),
+                    ));
+                }
             }
-        }
-        for secret in &self.jwt_previous_secrets {
-            if secret.len() < 32 {
-                return Err(AuthError::InvalidToken(
-                    "JWT previous secret must be at least 32 bytes".into(),
-                ));
+            for secret in &self.jwt_previous_secrets {
+                if secret.len() < 32 {
+                    return Err(AuthError::InvalidToken(
+                        "JWT previous secret must be at least 32 bytes".into(),
+                    ));
+                }
             }
         }
         Ok(())
@@ -329,28 +380,39 @@ impl AuthConfig {
 
     /// Validate a JWT token and return the claims.
     ///
-    /// Tries the current secret first. If validation fails with an invalid signature,
-    /// previous secrets are tried in order to support key rotation.
+    /// For HS256, tries the current secret first. If validation fails with an
+    /// invalid signature, previous secrets are tried in order to support key rotation.
+    /// For RS256/ES256, the public key embedded in the algorithm variant is used.
     pub fn validate_jwt(&self, token: &str) -> Result<JwtClaims, AuthError> {
-        let secret = self.jwt_secret.as_ref().ok_or(AuthError::NoJwtSecret)?;
-
-        // Try the current secret first
-        match self.validate_jwt_with_secret(token, secret) {
-            Ok(claims) => return Ok(claims),
-            Err(AuthError::InvalidSignature) => {
-                // Signature mismatch — try previous secrets for key rotation
+        match &self.jwt_algorithm {
+            JwtAlgorithm::RS256 { public_key_pem } => {
+                self.validate_jwt_asymmetric(token, public_key_pem, Algorithm::RS256)
             }
-            Err(e) => return Err(e), // Non-signature errors (expired, malformed) fail immediately
-        }
+            JwtAlgorithm::ES256 { public_key_pem } => {
+                self.validate_jwt_asymmetric(token, public_key_pem, Algorithm::ES256)
+            }
+            JwtAlgorithm::HS256 => {
+                let secret = self.jwt_secret.as_ref().ok_or(AuthError::NoJwtSecret)?;
 
-        // Try previous secrets in order
-        for prev_secret in &self.jwt_previous_secrets {
-            if let Ok(claims) = self.validate_jwt_with_secret(token, prev_secret) {
-                return Ok(claims);
+                // Try the current secret first
+                match self.validate_jwt_with_secret(token, secret) {
+                    Ok(claims) => return Ok(claims),
+                    Err(AuthError::InvalidSignature) => {
+                        // Signature mismatch — try previous secrets for key rotation
+                    }
+                    Err(e) => return Err(e), // Non-signature errors (expired, malformed) fail immediately
+                }
+
+                // Try previous secrets in order
+                for prev_secret in &self.jwt_previous_secrets {
+                    if let Ok(claims) = self.validate_jwt_with_secret(token, prev_secret) {
+                        return Ok(claims);
+                    }
+                }
+
+                Err(AuthError::InvalidSignature)
             }
         }
-
-        Err(AuthError::InvalidSignature)
     }
 
     /// Validate a JWT token against a specific secret.
@@ -366,7 +428,52 @@ impl AuthConfig {
                 jsonwebtoken::errors::ErrorKind::ExpiredSignature => AuthError::TokenExpired,
                 jsonwebtoken::errors::ErrorKind::InvalidSignature => AuthError::InvalidSignature,
                 jsonwebtoken::errors::ErrorKind::InvalidAlgorithm => {
-                    AuthError::InvalidToken("Unsupported algorithm. Only HS256 is supported".into())
+                    AuthError::InvalidToken("Algorithm mismatch".into())
+                }
+                _ => AuthError::InvalidToken(format!("JWT validation failed: {}", e)),
+            }
+        })?;
+
+        Ok(token_data.claims)
+    }
+
+    /// Validate a JWT token using an asymmetric public key (RS256 or ES256).
+    fn validate_jwt_asymmetric(
+        &self,
+        token: &str,
+        public_key_pem: &str,
+        algorithm: Algorithm,
+    ) -> Result<JwtClaims, AuthError> {
+        let mut validation = Validation::new(algorithm);
+        validation.leeway = JWT_CLOCK_LEEWAY_SECS;
+        validation.validate_exp = true;
+        validation.required_spec_claims = std::collections::HashSet::from(["exp".to_string()]);
+
+        let key = match algorithm {
+            Algorithm::RS256 => {
+                DecodingKey::from_rsa_pem(public_key_pem.as_bytes()).map_err(|e| {
+                    AuthError::InvalidToken(format!("Invalid RSA public key: {}", e))
+                })?
+            }
+            Algorithm::ES256 => {
+                DecodingKey::from_ec_pem(public_key_pem.as_bytes()).map_err(|e| {
+                    AuthError::InvalidToken(format!("Invalid EC public key: {}", e))
+                })?
+            }
+            _ => {
+                return Err(AuthError::InvalidToken(format!(
+                    "Unsupported asymmetric algorithm: {:?}",
+                    algorithm
+                )));
+            }
+        };
+
+        let token_data = decode::<JwtClaims>(token, &key, &validation).map_err(|e| {
+            match e.kind() {
+                jsonwebtoken::errors::ErrorKind::ExpiredSignature => AuthError::TokenExpired,
+                jsonwebtoken::errors::ErrorKind::InvalidSignature => AuthError::InvalidSignature,
+                jsonwebtoken::errors::ErrorKind::InvalidAlgorithm => {
+                    AuthError::InvalidToken("Algorithm mismatch".into())
                 }
                 _ => AuthError::InvalidToken(format!("JWT validation failed: {}", e)),
             }
@@ -376,12 +483,24 @@ impl AuthConfig {
     }
 
     /// Generate a JWT token for the given claims.
+    ///
+    /// For HS256, uses the configured `jwt_secret`. Asymmetric algorithms (RS256,
+    /// ES256) are not supported for token generation — they are verification-only.
     pub fn generate_jwt(&self, claims: &JwtClaims) -> Result<String, AuthError> {
-        let secret = self.jwt_secret.as_ref().ok_or(AuthError::NoJwtSecret)?;
-
-        let key = EncodingKey::from_secret(secret.as_bytes());
-        encode(&Header::new(Algorithm::HS256), claims, &key)
-            .map_err(|e| AuthError::InvalidToken(format!("Failed to generate JWT: {}", e)))
+        match &self.jwt_algorithm {
+            JwtAlgorithm::HS256 => {
+                let secret = self.jwt_secret.as_ref().ok_or(AuthError::NoJwtSecret)?;
+                let key = EncodingKey::from_secret(secret.as_bytes());
+                encode(&Header::new(Algorithm::HS256), claims, &key)
+                    .map_err(|e| AuthError::InvalidToken(format!("Failed to generate JWT: {}", e)))
+            }
+            JwtAlgorithm::RS256 { .. } => Err(AuthError::InvalidToken(
+                "Token generation is not supported for RS256 (asymmetric). Use HS256 or sign tokens externally.".into(),
+            )),
+            JwtAlgorithm::ES256 { .. } => Err(AuthError::InvalidToken(
+                "Token generation is not supported for ES256 (asymmetric). Use HS256 or sign tokens externally.".into(),
+            )),
+        }
     }
 }
 
@@ -434,8 +553,10 @@ pub struct AuthContext {
 pub enum AuthMethod {
     /// API key authentication
     ApiKey,
-    /// JWT bearer token
+    /// JWT bearer token (local validation)
     Jwt,
+    /// OIDC bearer token (validated via external provider JWKS)
+    Oidc,
     /// No authentication (public endpoint or auth not required)
     None,
 }
@@ -785,5 +906,190 @@ mod tests {
 
         // Old config can't validate new tokens
         assert!(old_config.validate_jwt(&new_token).is_err());
+    }
+
+    // ── RS256 / ES256 JWT validation ────────────────────────────────────
+
+    /// Generate an RSA key pair and return (private_key_pem, public_key_pem).
+    fn generate_rsa_key_pair() -> (String, String) {
+        let private_key = "\
+-----BEGIN RSA PRIVATE KEY-----
+MIIEogIBAAKCAQEAwSe3yTr3EOgFxWwOmMdBkpwCLns+sRDAL8bEg72EYisWf0dV
+Y1l8H38ddL3F8dYLcOWFwpFjZCJ766Zu4mwH33CZ9A1/ymYcu5MDxDE7e8ZjcdID
+6QaiM2fTzG9JmGmn2InHYaKD/irUXKPTUZzs0LC4QGES9GBig4kiCGEkBk/KvlBj
+SQVvkJEhppiGAWOBv8iL06NVdMCHzt0O7HnGsqCUAySrLI0T/eiaRStpRC397IJ5
+lvaPX+RR2A+wmjCVk0dx/yZi07MyAWT6Ochq4X3uGOvxBvwVGt5S6/No0YYb13/I
+fATDs5D5MvTZE9/GBIqFQF1x1pgnonQ2k0vt9wIDAQABAoIBAEjlEWIbI7S4q7zm
+29dik2eeAuDB2FYAiVc+f1lsg3J86l+cbygwVDyav2YYXIS5D9ZKeKGGNulKblPv
+mrdOp+X2W9OT6J9czAkqIWjAX7+FjnAdHyapPzuBOphTg4XGkfaRgLJjH8cjKMPR
+e+W4AFN97fs1525clbEoZrSc3HiYqn6COZAXYlaf2qbYbzF3PRXEM4sxd1k02rvU
+ZQBafXgL4vvOt3vT1OzLkX2IpHGDYMB7vOq0VELPR9HGshZWHIT7CDsNYpm4Bz2m
+LdBqnwDxbbPHCm8+NQWMI/c0x6LZ3AfjEGSt8Whg+6PXwuFMT/M8QfvBAFBybjqA
+6s49TVECgYEA4rabNPn/1hmG5DhdAZ1V83i4k/xtcwy4AzTOAnCYMUjb4xVbbCG7
+YCwCH5IKnloTfbm4zPy7ROjyrPDL9/5gTk4jBzjjYAH7Wl1a0/ciZKYLDBhSN7bN
+Mu0UqzjcRocZBh0/Mg1ozVgekzf+Ue357KCM5l5L6vsZgQ/U9jhJcO8CgYEA2htY
+ew4AFAPt+uknl4pVy/9xqehHRy7C+Smb8S6Jbg4Jwo8aOdSO7wIZAfhMpeuF/Qmo
+9l3ANoHg+85TIm6plu1Knmbv7khcIw7k8d69lpM3hrAOIl5IxyAFEn4uV2yEAzaK
+Z6ErDB7+4tc6kJ5AgcxyPOpBgt4oT07YX3JpQ3kCgYADpWgtm++vY821kep9AijF
+t6VQS/j+pq+27Xx6sZDhCgjvSAKmZIx86XhHRbQCA/TYSspcEZx5aT2t5lmBbYfi
++oK5tQKDIsUGGQZC7nCRKdJ3qVR5LOlz7jgs4Mc6IyYV4RaJGYob81TajUX7z1X7
+pkFd2xphdxRb7QNBynnz5QKBgHdSao+30xcgJzwT/lMLnXCjaX240/X/gS9rMiM6
+gHkzOOe1/nUQ8rmTfjbzros/VOhgNo3CMHwhhgJ8mELIJAOsAhyy2CSWdcHATkR8
+xV/xXnlTLAhlaI931w6M9bFibr6LQiD7rV9OPcfAVAv2Z/ga74yf5ANCou7whbOC
+FlCRAoGATY2J0sdCY5EvSbSJ0C3VRdv2stiq0wgbV7uohGYp9OZmV+1o7D8xmfqP
+RHIGr59RKxXGDmC9W4qG2BZwBSkiileECQWMZCv7Z8ISkfByid6db7v4UZKP2gdR
+4KUqYuGN46DSMpScJyQHIVgXJKO2+UvXfA3JUvFsGW/0u00M5Xs=
+-----END RSA PRIVATE KEY-----";
+        let public_key = "\
+-----BEGIN PUBLIC KEY-----
+MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAwSe3yTr3EOgFxWwOmMdB
+kpwCLns+sRDAL8bEg72EYisWf0dVY1l8H38ddL3F8dYLcOWFwpFjZCJ766Zu4mwH
+33CZ9A1/ymYcu5MDxDE7e8ZjcdID6QaiM2fTzG9JmGmn2InHYaKD/irUXKPTUZzs
+0LC4QGES9GBig4kiCGEkBk/KvlBjSQVvkJEhppiGAWOBv8iL06NVdMCHzt0O7HnG
+sqCUAySrLI0T/eiaRStpRC397IJ5lvaPX+RR2A+wmjCVk0dx/yZi07MyAWT6Ochq
+4X3uGOvxBvwVGt5S6/No0YYb13/IfATDs5D5MvTZE9/GBIqFQF1x1pgnonQ2k0vt
+9wIDAQAB
+-----END PUBLIC KEY-----";
+        (private_key.to_string(), public_key.to_string())
+    }
+
+    /// Generate an EC key pair and return (private_key_pem, public_key_pem).
+    fn generate_ec_key_pair() -> (String, String) {
+        let private_key = "\
+-----BEGIN PRIVATE KEY-----
+MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQg9UBMOZwKzDgMVqNQ
+rR5tGLFwH54mB3iSFa8gRCgx/uWhRANCAAREM/z6eVdn1BffUdCjbmQDnwPYOh3n
+9RHUOxAHw8bA2FCkX+OLuLfcr6erif6F2K8nbE/uLYud0cEe+sp+zSzX
+-----END PRIVATE KEY-----";
+        let public_key = "\
+-----BEGIN PUBLIC KEY-----
+MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAERDP8+nlXZ9QX31HQo25kA58D2Dod
+5/UR1DsQB8PGwNhQpF/ji7i33K+nq4n+hdivJ2xP7i2LndHBHvrKfs0s1w==
+-----END PUBLIC KEY-----";
+        (private_key.to_string(), public_key.to_string())
+    }
+
+    #[test]
+    fn test_jwt_rs256_roundtrip() {
+        let (private_key, public_key) = generate_rsa_key_pair();
+        let config = AuthConfig::new()
+            .require_auth(true)
+            .with_jwt_algorithm(JwtAlgorithm::RS256 {
+                public_key_pem: public_key,
+            });
+
+        // Sign token externally using the private key
+        let claims = JwtClaims::new("rs256-user", 3600)
+            .with_roles(vec!["admin".into()]);
+        let encoding_key =
+            EncodingKey::from_rsa_pem(private_key.as_bytes()).expect("valid RSA private key");
+        let token = encode(&Header::new(Algorithm::RS256), &claims, &encoding_key)
+            .expect("should encode RS256 token");
+
+        // Validate with the public key
+        let validated = config.validate_jwt(&token).expect("should validate RS256 JWT");
+        assert_eq!(validated.sub, "rs256-user");
+        assert_eq!(validated.roles, vec!["admin".to_string()]);
+    }
+
+    #[test]
+    fn test_jwt_es256_roundtrip() {
+        let (private_key, public_key) = generate_ec_key_pair();
+        let config = AuthConfig::new()
+            .require_auth(true)
+            .with_jwt_algorithm(JwtAlgorithm::ES256 {
+                public_key_pem: public_key,
+            });
+
+        // Sign token externally using the private key
+        let claims = JwtClaims::new("es256-user", 3600)
+            .with_roles(vec!["writer".into()]);
+        let encoding_key =
+            EncodingKey::from_ec_pem(private_key.as_bytes()).expect("valid EC private key");
+        let token = encode(&Header::new(Algorithm::ES256), &claims, &encoding_key)
+            .expect("should encode ES256 token");
+
+        // Validate with the public key
+        let validated = config.validate_jwt(&token).expect("should validate ES256 JWT");
+        assert_eq!(validated.sub, "es256-user");
+        assert_eq!(validated.roles, vec!["writer".to_string()]);
+    }
+
+    #[test]
+    fn test_jwt_rs256_rejects_wrong_key() {
+        let (private_key, _public_key) = generate_rsa_key_pair();
+        // Use a different public key (generate another pair)
+        let (_, other_public_key) = generate_ec_key_pair();
+
+        // This uses an EC key where RSA is expected — should fail at key parsing
+        let config = AuthConfig::new()
+            .require_auth(true)
+            .with_jwt_algorithm(JwtAlgorithm::RS256 {
+                public_key_pem: other_public_key,
+            });
+
+        let claims = JwtClaims::new("user", 3600);
+        let encoding_key =
+            EncodingKey::from_rsa_pem(private_key.as_bytes()).expect("valid RSA private key");
+        let token = encode(&Header::new(Algorithm::RS256), &claims, &encoding_key)
+            .expect("should encode");
+
+        let result = config.validate_jwt(&token);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_jwt_es256_rejects_tampered_token() {
+        let (private_key, public_key) = generate_ec_key_pair();
+        let config = AuthConfig::new()
+            .require_auth(true)
+            .with_jwt_algorithm(JwtAlgorithm::ES256 {
+                public_key_pem: public_key,
+            });
+
+        let claims = JwtClaims::new("user", 3600);
+        let encoding_key =
+            EncodingKey::from_ec_pem(private_key.as_bytes()).expect("valid EC private key");
+        let token = encode(&Header::new(Algorithm::ES256), &claims, &encoding_key)
+            .expect("should encode");
+
+        // Tamper with the payload
+        let parts: Vec<&str> = token.split('.').collect();
+        let tampered = format!("{}.{}.{}", parts[0], "dGFtcGVyZWQ", parts[2]);
+        let result = config.validate_jwt(&tampered);
+        assert!(matches!(result, Err(AuthError::InvalidSignature)));
+    }
+
+    #[test]
+    fn test_jwt_generate_rejects_asymmetric() {
+        let config = AuthConfig::new()
+            .with_jwt_algorithm(JwtAlgorithm::RS256 {
+                public_key_pem: "unused".into(),
+            });
+        let claims = JwtClaims::new("user", 3600);
+        assert!(matches!(config.generate_jwt(&claims), Err(AuthError::InvalidToken(_))));
+
+        let config = AuthConfig::new()
+            .with_jwt_algorithm(JwtAlgorithm::ES256 {
+                public_key_pem: "unused".into(),
+            });
+        assert!(matches!(config.generate_jwt(&claims), Err(AuthError::InvalidToken(_))));
+    }
+
+    #[test]
+    fn test_jwt_default_is_hs256() {
+        let config = AuthConfig::new();
+        assert!(matches!(config.jwt_algorithm, JwtAlgorithm::HS256));
+    }
+
+    #[test]
+    fn test_validate_config_skips_secret_check_for_asymmetric() {
+        // RS256 with a short "secret" should not fail validation
+        let config = AuthConfig::new()
+            .with_jwt_secret("short")
+            .with_jwt_algorithm(JwtAlgorithm::RS256 {
+                public_key_pem: "test".into(),
+            });
+        assert!(config.validate().is_ok());
     }
 }

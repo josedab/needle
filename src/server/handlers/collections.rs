@@ -17,10 +17,27 @@ use super::{validate_collection_name, MAX_DIMENSIONS, MAX_EXPORT_VECTORS};
 // ============ Collection CRUD ============
 
 /// List all collections in the database.
-pub(in crate::server) async fn list_collections(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+///
+/// Supports optional `offset` and `limit` query parameters for pagination.
+/// Without parameters, returns all collections (backward compatible).
+pub(in crate::server) async fn list_collections(
+    State(state): State<Arc<AppState>>,
+    Query(params): Query<QueryParams>,
+) -> impl IntoResponse {
     let db = state.db.read().await;
-    let collections: Vec<CollectionInfo> = db
-        .list_collections()
+    let all_names = db.list_collections();
+    let total = all_names.len();
+
+    let offset = params.offset.unwrap_or(0);
+    let limit = params.limit.unwrap_or(total);
+
+    let page_names: Vec<_> = all_names
+        .into_iter()
+        .skip(offset)
+        .take(limit)
+        .collect();
+
+    let collections: Vec<CollectionInfo> = page_names
         .into_iter()
         .filter_map(|name| {
             let coll = db.collection(&name).map_err(|e| {
@@ -36,7 +53,18 @@ pub(in crate::server) async fn list_collections(State(state): State<Arc<AppState
         })
         .collect();
 
-    Json(json!({"collections": collections}))
+    let count = collections.len();
+    let has_more = offset + count < total;
+
+    Json(json!({
+        "collections": collections,
+        "pagination": {
+            "count": count,
+            "offset": offset,
+            "total": total,
+            "has_more": has_more
+        }
+    }))
 }
 
 /// Create a new vector collection.
@@ -64,12 +92,9 @@ pub(in crate::server) async fn create_collection(
     let mut config = crate::CollectionConfig::new(&req.name, req.dimensions);
 
     if let Some(dist) = &req.distance {
-        config = config.with_distance(match dist.to_lowercase().as_str() {
-            "euclidean" | "l2" => crate::DistanceFunction::Euclidean,
-            "dot" | "dotproduct" => crate::DistanceFunction::DotProduct,
-            "manhattan" | "l1" => crate::DistanceFunction::Manhattan,
-            _ => crate::DistanceFunction::Cosine,
-        });
+        config = config.with_distance(
+            dist.parse().unwrap_or(crate::DistanceFunction::Cosine),
+        );
     }
 
     if let Some(m) = req.m {
@@ -131,6 +156,26 @@ pub(in crate::server) async fn delete_collection(
             )),
         ))
     }
+}
+
+/// Rename a collection.
+///
+/// `POST /collections/:name/rename` — renames the collection and updates aliases.
+pub(in crate::server) async fn rename_collection(
+    State(state): State<Arc<AppState>>,
+    Path(old_name): Path<String>,
+    Json(req): Json<RenameCollectionRequest>,
+) -> Result<impl IntoResponse, (StatusCode, Json<ApiError>)> {
+    validate_collection_name(&req.new_name)?;
+
+    let db = state.db.write().await;
+    db.rename_collection(&old_name, &req.new_name)
+        .map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
+
+    Ok(Json(json!({
+        "old_name": old_name,
+        "new_name": req.new_name,
+    })))
 }
 
 /// Compact a collection by removing deleted vectors and reclaiming space.
@@ -434,6 +479,55 @@ pub(in crate::server) async fn ttl_stats_handler(
     })))
 }
 
+/// Get the TTL for a specific vector.
+///
+/// `GET /collections/:name/vectors/:id/ttl` — returns the expiration timestamp
+/// for the vector, or `null` if no TTL is set.
+pub(in crate::server) async fn get_vector_ttl(
+    State(state): State<Arc<AppState>>,
+    Path((collection, id)): Path<(String, String)>,
+) -> Result<impl IntoResponse, (StatusCode, Json<ApiError>)> {
+    let db = state.db.read().await;
+    let coll = db
+        .collection(&collection)
+        .map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
+
+    let ttl = coll.get_ttl(&id);
+
+    Ok(Json(json!({
+        "id": id,
+        "collection": collection,
+        "expiration_timestamp": ttl
+    })))
+}
+
+/// Set or remove the TTL for a specific vector.
+///
+/// `PUT /collections/:name/vectors/:id/ttl` — sets the TTL in seconds.
+/// Pass `{"ttl_seconds": null}` to remove the TTL.
+pub(in crate::server) async fn set_vector_ttl(
+    State(state): State<Arc<AppState>>,
+    Path((collection, id)): Path<(String, String)>,
+    Json(body): Json<serde_json::Value>,
+) -> Result<impl IntoResponse, (StatusCode, Json<ApiError>)> {
+    let db = state.db.write().await;
+    let coll = db
+        .collection(&collection)
+        .map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
+
+    let ttl_seconds = body.get("ttl_seconds").and_then(|v| v.as_u64());
+
+    coll.set_ttl(&id, ttl_seconds)
+        .map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
+
+    Ok(Json(json!({
+        "id": id,
+        "collection": collection,
+        "ttl_seconds": ttl_seconds,
+        "status": "updated"
+    })))
+}
+
 /// Get index advisor recommendations with what-if analysis.
 ///
 /// `GET /collections/:name/advise` — returns cost/benefit preview for each index type.
@@ -484,6 +578,44 @@ pub(in crate::server) async fn dedup_scan_handler(
     let result = coll.dedup_scan(threshold)
         .map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
     Ok(Json(json!(result)))
+}
+
+// ============ Stats Handlers ============
+
+/// Get per-field metadata statistics for a collection.
+///
+/// `GET /collections/:name/stats/fields` — returns cardinality, indexing status,
+/// and high-cardinality flag for each metadata field.
+pub(in crate::server) async fn collection_field_stats(
+    State(state): State<Arc<AppState>>,
+    Path(name): Path<String>,
+) -> Result<impl IntoResponse, (StatusCode, Json<ApiError>)> {
+    let db = state.db.read().await;
+    let coll = db
+        .collection(&name)
+        .map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
+
+    let stats = coll.all_field_stats();
+    Ok(Json(json!(stats)))
+}
+
+/// Get estimated memory usage breakdown for a collection.
+///
+/// `GET /collections/:name/stats/memory` — returns bytes used by vectors,
+/// index, metadata, caches, and total.
+pub(in crate::server) async fn collection_memory_usage(
+    State(state): State<Arc<AppState>>,
+    Path(name): Path<String>,
+) -> Result<impl IntoResponse, (StatusCode, Json<ApiError>)> {
+    let db = state.db.read().await;
+    let coll = db
+        .collection(&name)
+        .map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
+
+    let stats = coll
+        .memory_usage()
+        .map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
+    Ok(Json(json!(stats)))
 }
 
 #[cfg(test)]
