@@ -33,13 +33,27 @@ pub enum Commands {
         #[arg(short, long)]
         dimensions: usize,
 
-        /// Distance function (cosine, euclidean, dot, manhattan)
+        /// Distance function (cosine, euclidean, dot, manhattan, hamming, chebyshev)
         #[arg(long, default_value = "cosine")]
         distance: String,
 
         /// Enable encryption at rest (requires --features encryption)
         #[arg(long)]
         encrypted: bool,
+    },
+
+    /// Rename an existing collection
+    RenameCollection {
+        /// Path to the database file
+        database: String,
+
+        /// Current collection name
+        #[arg(long)]
+        old_name: String,
+
+        /// New collection name
+        #[arg(long)]
+        new_name: String,
     },
 
     /// Show collection statistics
@@ -83,7 +97,7 @@ pub enum Commands {
         #[arg(short, long, default_value = "false")]
         explain: bool,
 
-        /// Override distance function (cosine, euclidean, dot, manhattan)
+        /// Override distance function (cosine, euclidean, dot, manhattan, hamming, chebyshev)
         /// When different from the collection's index, uses brute-force search
         #[arg(long)]
         distance: Option<String>,
@@ -141,7 +155,7 @@ pub enum Commands {
         collection: String,
     },
 
-    /// Import vectors from JSON file
+    /// Import vectors from JSON or JSONL file
     Import {
         /// Path to the database file
         database: String,
@@ -150,9 +164,13 @@ pub enum Commands {
         #[arg(short, long)]
         collection: String,
 
-        /// JSON file to import (use - for stdin)
+        /// File to import (use - for stdin)
         #[arg(short, long)]
         file: String,
+
+        /// Import format: json (default) or jsonl
+        #[arg(long, default_value = "json")]
+        format: String,
     },
 
     /// Count vectors in a collection
@@ -311,8 +329,11 @@ pub enum Commands {
         dimensions: usize,
     },
 
-    /// Check local environment and diagnose issues
-    Doctor,
+    /// Run database health diagnostics
+    Doctor {
+        /// Path to the database file
+        database: String,
+    },
 
     /// Snapshot management for time-travel queries
     #[command(subcommand)]
@@ -579,8 +600,18 @@ pub enum Commands {
         sample_queries: usize,
     },
 
-    /// Watch collection for real-time change events (CDC)
+    /// Watch a database file for changes
     Watch {
+        /// Path to the database file
+        database: String,
+
+        /// Poll interval in seconds (default: 2)
+        #[arg(short, long, default_value = "2")]
+        interval: u64,
+    },
+
+    /// Watch collection for real-time change events (CDC)
+    WatchEvents {
         /// Path to the database file
         database: String,
 
@@ -651,11 +682,19 @@ pub enum Commands {
         format: String,
     },
 
-    /// Interactive REPL/playground for vector exploration
+    /// Interactive playground for exploring vector operations
     Playground {
         /// Path to the database file (optional, starts in-memory)
         #[arg(short, long)]
         database: Option<String>,
+        /// Tutorial to run (e.g., "basics", "search", "filtering")
+        #[cfg(feature = "experimental")]
+        #[arg(long)]
+        tutorial: Option<String>,
+        /// Code to execute directly
+        #[cfg(feature = "experimental")]
+        #[arg(long)]
+        execute: Option<String>,
     },
 
     /// Run standardized ANN benchmarks with recall and QPS metrics
@@ -726,6 +765,12 @@ pub enum Commands {
         #[arg(long, default_value = "100000")]
         target_size: usize,
     },
+
+    /// Show quick status of a database file
+    Status {
+        /// Path to the database file
+        database: String,
+    },
 }
 
 /// Cache management subcommands
@@ -768,6 +813,11 @@ pub enum ModelCommands {
 pub enum PluginCommands {
     /// List installed plugins
     List,
+    /// Show plugin details
+    Info {
+        /// Plugin name or ID
+        name: String,
+    },
     /// Install a plugin from a WASM file
     Install {
         /// Path to the .wasm plugin file

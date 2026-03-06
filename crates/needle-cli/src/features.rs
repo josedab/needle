@@ -717,7 +717,7 @@ pub(crate) fn alias_command(cmd: AliasCommands) -> Result<()> {
 }
 
 fn alias_create(path: &str, alias: &str, collection: &str) -> Result<()> {
-    let mut db = Database::open(path)?;
+    let db = Database::open(path)?;
     db.create_alias(alias, collection)?;
     db.save()?;
 
@@ -726,7 +726,7 @@ fn alias_create(path: &str, alias: &str, collection: &str) -> Result<()> {
 }
 
 fn alias_delete(path: &str, alias: &str) -> Result<()> {
-    let mut db = Database::open(path)?;
+    let db = Database::open(path)?;
     let deleted = db.delete_alias(alias)?;
     db.save()?;
 
@@ -773,7 +773,7 @@ fn alias_resolve(path: &str, alias: &str) -> Result<()> {
 }
 
 fn alias_update(path: &str, alias: &str, collection: &str) -> Result<()> {
-    let mut db = Database::open(path)?;
+    let db = Database::open(path)?;
     db.update_alias(alias, collection)?;
     db.save()?;
 
@@ -799,7 +799,7 @@ pub(crate) fn ttl_command(cmd: TtlCommands) -> Result<()> {
 }
 
 fn ttl_sweep(path: &str, collection_name: &str) -> Result<()> {
-    let mut db = Database::open(path)?;
+    let db = Database::open(path)?;
     let collection = db.collection(collection_name)?;
     let expired = collection.expire_vectors()?;
     db.save()?;

@@ -283,45 +283,123 @@ pub fn init_command(directory: &str, database: &str, dimensions: usize) -> Resul
     Ok(())
 }
 
-pub fn doctor_command() -> Result<()> {
-    println!("Needle Doctor — Environment Check\n");
+pub fn doctor_command(path: &str) -> Result<()> {
+    println!("🔍 Running Needle database diagnostics...\n");
 
-    let rust_version = option_env!("CARGO_PKG_RUST_VERSION").unwrap_or("unknown");
-    println!("  ✓ Rust MSRV: {rust_version}");
+    let mut passed = 0u32;
+    let mut failed = 0u32;
 
-    println!("  ✓ Needle version: {}", env!("CARGO_PKG_VERSION"));
-
-    let features = [
-        ("server", cfg!(feature = "server")),
-        ("metrics", cfg!(feature = "metrics")),
-        ("hybrid", cfg!(feature = "hybrid")),
-        ("encryption", cfg!(feature = "encryption")),
-        ("experimental", cfg!(feature = "experimental")),
-        ("embeddings", cfg!(feature = "embeddings")),
-        ("embedding-providers", cfg!(feature = "embedding-providers")),
-        ("python", cfg!(feature = "python")),
-        ("wasm", cfg!(feature = "wasm")),
-    ];
-    let enabled: Vec<_> = features.iter().filter(|(_, e)| *e).map(|(n, _)| *n).collect();
-    let disabled: Vec<_> = features.iter().filter(|(_, e)| !*e).map(|(n, _)| *n).collect();
-
-    let enabled_str = if enabled.is_empty() { "none (default)".to_string() } else { enabled.join(", ") };
-    println!("  ✓ Features enabled: {enabled_str}");
-    if !disabled.is_empty() {
-        println!("  ○ Features available: {}", disabled.join(", "));
+    // Check 1: File exists and is readable
+    let file_exists = std::path::Path::new(path).exists();
+    if file_exists {
+        println!("  ✅ File exists ... passed");
+        passed += 1;
+    } else {
+        println!("  ❌ File exists ... FAILED: '{}' not found", path);
+        failed += 1;
+        println!("\n📊 Summary: {} passed, {} failed", passed, failed);
+        println!("  Cannot continue diagnostics without a valid file.");
+        return Ok(());
     }
 
-    let test_path = std::env::temp_dir().join("needle_doctor_test.needle");
-    let test_path_str = test_path.to_string_lossy().to_string();
-    match Database::open(&test_path_str) {
-        Ok(_) => {
-            println!("  ✓ Database creation: OK");
-            let _ = std::fs::remove_file(&test_path);
+    // Check 2: File has valid magic bytes (open as Database)
+    let db = match Database::open(path) {
+        Ok(db) => {
+            println!("  ✅ Database open ... passed");
+            passed += 1;
+            db
         }
-        Err(e) => println!("  ✗ Database creation: FAILED ({e})"),
+        Err(e) => {
+            println!("  ❌ Database open ... FAILED: {}", e);
+            failed += 1;
+            println!("\n📊 Summary: {} passed, {} failed", passed, failed);
+            println!("  Run 'needle info {}' for more details.", path);
+            return Ok(());
+        }
+    };
+
+    // Check 3: Collection integrity (list collections)
+    let collections = db.list_collections();
+    println!("  ✅ Collection listing ... passed ({} collections)", collections.len());
+    passed += 1;
+
+    // Check 4: Per-collection checks
+    for name in &collections {
+        let coll = match db.collection(name) {
+            Ok(c) => c,
+            Err(e) => {
+                println!("  ❌ Collection '{}' access ... FAILED: {}", name, e);
+                failed += 1;
+                continue;
+            }
+        };
+
+        // Dimensions check
+        match coll.dimensions() {
+            Some(0) => {
+                println!("  ❌ Collection '{}' dimensions ... FAILED: dimensions is 0", name);
+                failed += 1;
+            }
+            Some(d) => {
+                println!("  ✅ Collection '{}' dimensions ({}) ... passed", name, d);
+                passed += 1;
+            }
+            None => {
+                println!("  ⚠️  Collection '{}' dimensions ... FAILED: dimensions unknown", name);
+                failed += 1;
+            }
+        }
+
+        // Vector count
+        let count = coll.len();
+        if count == 0 {
+            println!("  ⚠️  Collection '{}' vectors ... empty (0 vectors)", name);
+        } else {
+            println!("  ✅ Collection '{}' vectors ({}) ... passed", name, count);
+        }
+        passed += 1;
+
+        // Memory usage sanity
+        match coll.memory_usage() {
+            Ok(mem) => {
+                const MAX_REASONABLE: usize = 1_099_511_627_776; // 1 TB
+                if mem.total_bytes <= MAX_REASONABLE {
+                    println!("  ✅ Collection '{}' memory usage ({} bytes) ... passed", name, mem.total_bytes);
+                    passed += 1;
+                } else {
+                    println!("  ❌ Collection '{}' memory usage ... FAILED: {} bytes exceeds sanity limit", name, mem.total_bytes);
+                    failed += 1;
+                }
+            }
+            Err(e) => {
+                println!("  ❌ Collection '{}' memory usage ... FAILED: {}", name, e);
+                failed += 1;
+            }
+        }
+
+        // Stats consistency
+        match coll.stats() {
+            Ok(stats) => {
+                if stats.vector_count == count {
+                    println!("  ✅ Collection '{}' stats consistency ... passed", name);
+                    passed += 1;
+                } else {
+                    println!("  ❌ Collection '{}' stats consistency ... FAILED: stats reports {} vectors but len() reports {}", name, stats.vector_count, count);
+                    failed += 1;
+                }
+            }
+            Err(e) => {
+                println!("  ❌ Collection '{}' stats ... FAILED: {}", name, e);
+                failed += 1;
+            }
+        }
     }
 
-    println!("\nAll checks passed!");
+    // Check 5: Summary
+    println!("\n📊 Summary: {} passed, {} failed", passed, failed);
+    if failed > 0 {
+        println!("  Run 'needle info {}' for more details.", path);
+    }
     Ok(())
 }
 
@@ -592,7 +670,14 @@ mod tests {
 
     #[test]
     fn test_doctor_command() {
-        assert!(doctor_command().is_ok());
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.needle");
+        let path = path.to_str().unwrap();
+        let mut db = Database::open(path).unwrap();
+        db.create_collection("test", 128).unwrap();
+        db.save().unwrap();
+        drop(db);
+        assert!(doctor_command(path).is_ok());
     }
 
     #[test]

@@ -56,6 +56,11 @@ pub fn run(cli: Cli) -> Result<()> {
             distance,
             encrypted,
         } => create_collection_command(&database, &name, dimensions, &distance, encrypted),
+        Commands::RenameCollection {
+            database,
+            old_name,
+            new_name,
+        } => rename_collection_command(&database, &old_name, &new_name),
         Commands::Stats {
             database,
             collection,
@@ -102,7 +107,8 @@ pub fn run(cli: Cli) -> Result<()> {
             database,
             collection,
             file,
-        } => import_command(&database, &collection, &file),
+            format,
+        } => import_command(&database, &collection, &file, &format),
         Commands::Count {
             database,
             collection,
@@ -148,7 +154,7 @@ pub fn run(cli: Cli) -> Result<()> {
         Commands::Dev(cmd) => dev_command(cmd),
         Commands::Mcp { database, read_only } => mcp_command(&database, read_only),
         Commands::Init { directory, database, dimensions } => init_command(&directory, &database, dimensions),
-        Commands::Doctor => doctor_command(),
+        Commands::Doctor { database } => doctor_command(&database),
         Commands::Snapshot(cmd) => snapshot_command(cmd),
         Commands::Branch(cmd) => branch_command(cmd),
         Commands::Memory(cmd) => memory_command(cmd),
@@ -180,16 +186,32 @@ pub fn run(cli: Cli) -> Result<()> {
             explain_search_command(&database, &collection, &query, k, &format),
         Commands::Advise { database, collection, sample_queries } =>
             advise_command(&database, &collection, sample_queries),
-        Commands::Watch { database, collection, from_sequence, batch_size, consumer_id } =>
-            watch_command(&database, &collection, from_sequence, batch_size, &consumer_id),
+        Commands::Watch { database, interval } =>
+            watch_file_command(&database, interval),
+        Commands::WatchEvents { database, collection, from_sequence, batch_size, consumer_id } =>
+            watch_events_command(&database, &collection, from_sequence, batch_size, &consumer_id),
         Commands::Sync { database, replica_id, status } =>
             sync_command(&database, &replica_id, status),
         Commands::Dedup { database, collection, threshold, strategy, dry_run } =>
             dedup_command(&database, &collection, threshold, &strategy, dry_run),
         Commands::Health { database, collection, format } =>
             health_command(&database, &collection, &format),
-        Commands::Playground { database } =>
-            playground_command(database.as_deref()),
+        Commands::Playground {
+            database,
+            #[cfg(feature = "experimental")]
+            tutorial,
+            #[cfg(feature = "experimental")]
+            execute,
+        } => {
+            #[cfg(feature = "experimental")]
+            {
+                playground_command(database.as_deref(), tutorial.as_deref(), execute.as_deref())
+            }
+            #[cfg(not(feature = "experimental"))]
+            {
+                playground_command(database.as_deref())
+            }
+        }
         Commands::Bench { vectors, dimensions, queries, k_values, format, output, compare, ann_dataset } => {
             if let Some(dataset_name) = ann_dataset {
                 ann_bench_command(&dataset_name, &format, output.as_deref())
@@ -203,5 +225,6 @@ pub fn run(cli: Cli) -> Result<()> {
         Commands::Plugin(cmd) => plugin_command(cmd),
         Commands::Partition { database, collection, analyze, target_size } =>
             partition_command(&database, &collection, analyze, target_size),
+        Commands::Status { database } => status_command(&database),
     }
 }

@@ -32,13 +32,7 @@ pub use vector::*;
 // ============================================================================
 
 pub fn parse_distance(distance: &str) -> Option<DistanceFunction> {
-    match distance.to_lowercase().as_str() {
-        "cosine" => Some(DistanceFunction::Cosine),
-        "euclidean" | "l2" => Some(DistanceFunction::Euclidean),
-        "dot" | "dotproduct" => Some(DistanceFunction::DotProduct),
-        "manhattan" | "l1" => Some(DistanceFunction::Manhattan),
-        _ => None,
-    }
+    distance.parse().ok()
 }
 
 pub fn parse_query_vector(query_str: &str) -> Result<Vec<f32>> {

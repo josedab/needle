@@ -7,8 +7,26 @@ use needle::server::{serve, ServerConfig};
 
 use needle::query_builder::{QueryAnalyzer, VisualQueryBuilder};
 
-pub(crate) fn info_command(path: &str) -> Result<()> {
+pub(crate) fn info_command(path: &str, json_output: bool) -> Result<()> {
     let db = Database::open(path)?;
+
+    if json_output {
+        let collections: Vec<serde_json::Value> = db.list_collections().iter().map(|name| {
+            let coll = db.collection(name).ok();
+            json!({
+                "name": name,
+                "dimensions": coll.as_ref().map(|c| c.dimensions()),
+                "vectors": coll.as_ref().map(|c| c.len()),
+            })
+        }).collect();
+        println!("{}", serde_json::to_string_pretty(&json!({
+            "database": path,
+            "collection_count": db.list_collections().len(),
+            "total_vectors": db.total_vectors(),
+            "collections": collections,
+        })).unwrap_or_default());
+        return Ok(());
+    }
 
     println!("Database: {}", path);
     println!("Collections: {}", db.list_collections().len());
@@ -31,10 +49,23 @@ pub(crate) fn create_command(path: &str) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn collections_command(path: &str) -> Result<()> {
+pub(crate) fn collections_command(path: &str, json_output: bool) -> Result<()> {
     let db = Database::open(path)?;
 
     let collections = db.list_collections();
+    if json_output {
+        let items: Vec<serde_json::Value> = collections.iter().map(|name| {
+            let coll = db.collection(name).ok();
+            json!({
+                "name": name,
+                "dimensions": coll.as_ref().map(|c| c.dimensions()),
+                "vectors": coll.as_ref().map(|c| c.len()),
+            })
+        }).collect();
+        println!("{}", serde_json::to_string_pretty(&json!({ "collections": items })).unwrap_or_default());
+        return Ok(());
+    }
+
     if collections.is_empty() {
         println!("No collections found.");
     } else {
@@ -64,7 +95,7 @@ pub(crate) fn create_collection_command(
             "Vector dimensions must be greater than 0".to_string(),
         ));
     }
-    let mut db = Database::open(path)?;
+    let db = Database::open(path)?;
 
     let dist_fn = match parse_distance(distance) {
         Some(parsed) => parsed,
@@ -85,13 +116,28 @@ pub(crate) fn create_collection_command(
     Ok(())
 }
 
-pub(crate) fn stats_command(path: &str, collection_name: &str) -> Result<()> {
+pub(crate) fn stats_command(path: &str, collection_name: &str, json_output: bool) -> Result<()> {
     let db = Database::open(path)?;
     let coll = db.collection(collection_name)?;
 
     let active_count = coll.len();
     let deleted_count = coll.deleted_count();
     let total_stored = active_count + deleted_count;
+
+    if json_output {
+        let delete_ratio = if total_stored > 0 { deleted_count as f64 / total_stored as f64 } else { 0.0 };
+        println!("{}", serde_json::to_string_pretty(&json!({
+            "collection": collection_name,
+            "dimensions": coll.dimensions(),
+            "active_vectors": active_count,
+            "deleted_vectors": deleted_count,
+            "total_stored": total_stored,
+            "empty": coll.is_empty(),
+            "deletion_ratio": delete_ratio,
+            "needs_compaction": coll.needs_compaction(0.2),
+        })).unwrap_or_default());
+        return Ok(());
+    }
 
     println!("Collection: {}", collection_name);
     println!("  Dimensions: {:?}", coll.dimensions());
@@ -112,7 +158,7 @@ pub(crate) fn stats_command(path: &str, collection_name: &str) -> Result<()> {
 }
 
 pub(crate) fn insert_command(path: &str, collection_name: &str) -> Result<()> {
-    let mut db = Database::open(path)?;
+    let db = Database::open(path)?;
     let coll = db.collection(collection_name)?;
 
     println!("Reading vectors from stdin (JSON format: {{\"id\": \"...\", \"vector\": [...], \"metadata\": {{...}}}})");
@@ -167,13 +213,13 @@ pub(crate) fn search_command(
     k: usize,
     explain: bool,
     distance_override: Option<&str>,
+    json_output: bool,
 ) -> Result<()> {
     let db = Database::open(path)?;
     let coll = db.collection(collection_name)?;
 
     let query = parse_query_vector(query_str)?;
 
-    // Parse distance override if provided
     let distance_fn = distance_override.and_then(|d| match parse_distance(d) {
         Some(parsed) => Some(parsed),
         None => {
@@ -186,11 +232,38 @@ pub(crate) fn search_command(
     });
 
     if explain {
-        // Note: explain mode doesn't support distance override (uses HNSW stats)
         if distance_override.is_some() {
             eprintln!("Warning: --explain and --distance cannot be combined; ignoring --distance");
         }
         let (results, explain_data) = coll.search_explain(&query, k)?;
+
+        if json_output {
+            let result_json: Vec<serde_json::Value> = results.iter().map(|r| {
+                json!({"id": r.id, "distance": r.distance, "metadata": r.metadata})
+            }).collect();
+            println!("{}", serde_json::to_string_pretty(&json!({
+                "results": result_json,
+                "explain": {
+                    "total_time_us": explain_data.total_time_us,
+                    "index_time_us": explain_data.index_time_us,
+                    "filter_time_us": explain_data.filter_time_us,
+                    "enrich_time_us": explain_data.enrich_time_us,
+                    "hnsw_stats": {
+                        "visited_nodes": explain_data.hnsw_stats.visited_nodes,
+                        "layers_traversed": explain_data.hnsw_stats.layers_traversed,
+                        "distance_computations": explain_data.hnsw_stats.distance_computations,
+                        "traversal_time_us": explain_data.hnsw_stats.traversal_time_us,
+                    },
+                    "dimensions": explain_data.dimensions,
+                    "collection_size": explain_data.collection_size,
+                    "requested_k": explain_data.requested_k,
+                    "effective_k": explain_data.effective_k,
+                    "ef_search": explain_data.ef_search,
+                    "distance_function": explain_data.distance_function,
+                }
+            })).unwrap_or_default());
+            return Ok(());
+        }
 
         println!("Search results (k={}):", k);
         for result in &results {
@@ -204,7 +277,6 @@ pub(crate) fn search_command(
             );
         }
 
-        // Print profiling information
         println!();
         println!("Query Profiling:");
         println!("  Total time: {}μs", explain_data.total_time_us);
@@ -240,6 +312,17 @@ pub(crate) fn search_command(
         } else {
             coll.search(&query, k)?
         };
+
+        if json_output {
+            let result_json: Vec<serde_json::Value> = results.iter().map(|r| {
+                json!({"id": r.id, "distance": r.distance, "metadata": r.metadata})
+            }).collect();
+            println!("{}", serde_json::to_string_pretty(&json!({
+                "results": result_json,
+                "k": k,
+            })).unwrap_or_default());
+            return Ok(());
+        }
 
         println!("Search results (k={}):", k);
         if let Some(dist) = distance_fn {
@@ -293,7 +376,7 @@ pub(crate) fn parse_query_vector(query_str: &str) -> Result<Vec<f32>> {
 }
 
 pub(crate) fn delete_command(path: &str, collection_name: &str, id: &str) -> Result<()> {
-    let mut db = Database::open(path)?;
+    let db = Database::open(path)?;
     let coll = db.collection(collection_name)?;
 
     let deleted = coll.delete(id)?;
@@ -308,7 +391,7 @@ pub(crate) fn delete_command(path: &str, collection_name: &str, id: &str) -> Res
     Ok(())
 }
 
-pub(crate) fn get_command(path: &str, collection_name: &str, id: &str) -> Result<()> {
+pub(crate) fn get_command(path: &str, collection_name: &str, id: &str, json_output: bool) -> Result<()> {
     let db = Database::open(path)?;
     let coll = db.collection(collection_name)?;
 
@@ -322,7 +405,11 @@ pub(crate) fn get_command(path: &str, collection_name: &str, id: &str) -> Result
             println!("{}", serde_json::to_string_pretty(&output)?);
         }
         None => {
-            println!("Vector '{}' not found", id);
+            if json_output {
+                println!("{}", serde_json::to_string_pretty(&json!({"error": "not_found", "id": id})).unwrap_or_default());
+            } else {
+                println!("Vector '{}' not found", id);
+            }
         }
     }
 
@@ -330,7 +417,7 @@ pub(crate) fn get_command(path: &str, collection_name: &str, id: &str) -> Result
 }
 
 pub(crate) fn compact_command(path: &str) -> Result<()> {
-    let mut db = Database::open(path)?;
+    let db = Database::open(path)?;
 
     let mut total_deleted = 0;
     for name in db.list_collections() {
@@ -381,7 +468,7 @@ pub(crate) fn export_command(path: &str, collection_name: &str) -> Result<()> {
 }
 
 pub(crate) fn import_command(path: &str, collection_name: &str, file_path: &str) -> Result<()> {
-    let mut db = Database::open(path)?;
+    let db = Database::open(path)?;
     let coll = db.collection(collection_name)?;
 
     // Read from file or stdin
@@ -449,11 +536,18 @@ pub(crate) fn import_command(path: &str, collection_name: &str, file_path: &str)
     Ok(())
 }
 
-pub(crate) fn count_command(path: &str, collection_name: &str) -> Result<()> {
+pub(crate) fn count_command(path: &str, collection_name: &str, json_output: bool) -> Result<()> {
     let db = Database::open(path)?;
     let coll = db.collection(collection_name)?;
 
-    println!("{}", coll.len());
+    if json_output {
+        println!("{}", serde_json::to_string_pretty(&json!({
+            "collection": collection_name,
+            "count": coll.len(),
+        })).unwrap_or_default());
+    } else {
+        println!("{}", coll.len());
+    }
 
     Ok(())
 }
@@ -472,7 +566,7 @@ pub(crate) fn clear_command(path: &str, collection_name: &str, force: bool) -> R
         }
     }
 
-    let mut db = Database::open(path)?;
+    let db = Database::open(path)?;
     let coll = db.collection(collection_name)?;
 
     let ids = coll.ids()?;
@@ -685,6 +779,142 @@ pub(crate) fn query_command(
     Ok(())
 }
 
+/// Run diagnostics on a database, checking file integrity, collection health,
+/// and metadata consistency.
+pub(crate) fn diagnose_command(path: &str, extended: bool, json_output: bool) -> Result<()> {
+    use std::time::Instant;
+
+    let start = Instant::now();
+    let mut issues: Vec<serde_json::Value> = Vec::new();
+    let mut checks_passed = 0u32;
+    let mut checks_failed = 0u32;
+
+    // Check 1: Can we open the database?
+    let db = match Database::open(path) {
+        Ok(db) => {
+            checks_passed += 1;
+            if !json_output { println!("✓ Database file opens successfully"); }
+            db
+        }
+        Err(e) => {
+            checks_failed += 1;
+            if json_output {
+                issues.push(json!({"check": "database_open", "severity": "critical", "message": format!("{}", e)}));
+                println!("{}", serde_json::to_string_pretty(&json!({
+                    "database": path,
+                    "status": "error",
+                    "checks_passed": checks_passed,
+                    "checks_failed": checks_failed,
+                    "issues": issues,
+                    "elapsed_ms": start.elapsed().as_millis(),
+                })).unwrap_or_default());
+            } else {
+                println!("✗ Failed to open database: {}", e);
+            }
+            return Err(e);
+        }
+    };
+
+    // Check 2: File metadata
+    if let Ok(meta) = std::fs::metadata(path) {
+        checks_passed += 1;
+        let size_mb = meta.len() as f64 / 1_048_576.0;
+        if !json_output { println!("✓ File size: {:.2} MB", size_mb); }
+    }
+
+    // Check 3: Collections integrity
+    let collections = db.list_collections();
+    if !json_output { println!("✓ Collections found: {}", collections.len()); }
+    checks_passed += 1;
+
+    for name in &collections {
+        match db.collection(name) {
+            Ok(coll) => {
+                let active = coll.len();
+                let deleted = coll.deleted_count();
+                let dims = coll.dimensions().unwrap_or(0);
+                checks_passed += 1;
+
+                if !json_output {
+                    println!("  ✓ '{}': {} active, {} deleted, {} dims", name, active, deleted, dims);
+                }
+
+                // Check deletion ratio
+                let total = active + deleted;
+                if total > 0 {
+                    let delete_ratio = deleted as f64 / total as f64;
+                    if delete_ratio > 0.5 {
+                        let msg = format!("Collection '{}' has {:.0}% deleted vectors — compaction recommended", name, delete_ratio * 100.0);
+                        if !json_output { println!("  ⚠ {}", msg); }
+                        issues.push(json!({"check": "deletion_ratio", "severity": "warning", "collection": name, "message": msg}));
+                    }
+                }
+
+                // Extended: verify a sample vector is retrievable
+                if extended && active > 0 {
+                    if let Ok(all_ids) = coll.ids() {
+                        if let Some(id) = all_ids.first() {
+                            match coll.get(id) {
+                                Some((vec, _)) => {
+                                    if vec.len() == dims {
+                                        checks_passed += 1;
+                                        if !json_output { println!("    ✓ Sample vector '{}' valid ({} dims)", id, vec.len()); }
+                                    } else {
+                                        checks_failed += 1;
+                                        let msg = format!("Vector '{}' has {} dims, expected {}", id, vec.len(), dims);
+                                        if !json_output { println!("    ✗ {}", msg); }
+                                        issues.push(json!({"check": "vector_dimensions", "severity": "error", "collection": name, "message": msg}));
+                                    }
+                                }
+                                None => {
+                                    checks_failed += 1;
+                                    let msg = format!("Could not retrieve vector '{}' despite being listed", id);
+                                    if !json_output { println!("    ✗ {}", msg); }
+                                    issues.push(json!({"check": "vector_retrieval", "severity": "error", "collection": name, "message": msg}));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                checks_failed += 1;
+                let msg = format!("Failed to access collection '{}': {}", name, e);
+                if !json_output { println!("  ✗ {}", msg); }
+                issues.push(json!({"check": "collection_access", "severity": "error", "collection": name, "message": msg}));
+            }
+        }
+    }
+
+    let elapsed = start.elapsed();
+    let status = if checks_failed == 0 { "healthy" } else { "issues_found" };
+
+    if json_output {
+        println!("{}", serde_json::to_string_pretty(&json!({
+            "database": path,
+            "status": status,
+            "checks_passed": checks_passed,
+            "checks_failed": checks_failed,
+            "issues": issues,
+            "collections": collections.len(),
+            "total_vectors": db.total_vectors(),
+            "elapsed_ms": elapsed.as_millis(),
+        })).unwrap_or_default());
+    } else {
+        println!();
+        println!("Diagnosis complete in {:.0}ms", elapsed.as_millis());
+        println!("  Checks passed: {}", checks_passed);
+        println!("  Checks failed: {}", checks_failed);
+        if checks_failed == 0 {
+            println!("  Status: ✓ Healthy");
+        } else {
+            println!("  Status: ⚠ Issues found ({})", issues.len());
+        }
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -751,7 +981,7 @@ mod tests {
         let mut db = Database::open(path_str).unwrap();
         db.create_collection("test", 64).unwrap();
         db.save().unwrap();
-        assert!(info_command(path_str).is_ok());
+        assert!(info_command(path_str, false).is_ok());
     }
 
     #[test]
@@ -765,9 +995,9 @@ mod tests {
         coll.insert("v1", &[1.0, 0.0, 0.0], None).unwrap();
         db.save().unwrap();
 
-        assert!(count_command(path_str, "test").is_ok());
-        assert!(get_command(path_str, "test", "v1").is_ok());
-        assert!(get_command(path_str, "test", "missing").is_ok());
+        assert!(count_command(path_str, "test", false).is_ok());
+        assert!(get_command(path_str, "test", "v1", false).is_ok());
+        assert!(get_command(path_str, "test", "missing", false).is_ok());
     }
 
     #[test]
@@ -794,5 +1024,42 @@ mod tests {
         db.create_collection("test", 3).unwrap();
         db.save().unwrap();
         assert!(compact_command(path_str).is_ok());
+    }
+
+    #[test]
+    fn test_diagnose_command_healthy() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.needle");
+        let path_str = path.to_str().unwrap();
+        let mut db = Database::open(path_str).unwrap();
+        db.create_collection("test", 3).unwrap();
+        let coll = db.collection("test").unwrap();
+        coll.insert("v1", &[1.0, 0.0, 0.0], None).unwrap();
+        db.save().unwrap();
+        assert!(diagnose_command(path_str, false, false).is_ok());
+    }
+
+    #[test]
+    fn test_diagnose_command_json() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.needle");
+        let path_str = path.to_str().unwrap();
+        let mut db = Database::open(path_str).unwrap();
+        db.create_collection("test", 3).unwrap();
+        db.save().unwrap();
+        assert!(diagnose_command(path_str, false, true).is_ok());
+    }
+
+    #[test]
+    fn test_diagnose_command_extended() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.needle");
+        let path_str = path.to_str().unwrap();
+        let mut db = Database::open(path_str).unwrap();
+        db.create_collection("test", 3).unwrap();
+        let coll = db.collection("test").unwrap();
+        coll.insert("v1", &[1.0, 0.0, 0.0], None).unwrap();
+        db.save().unwrap();
+        assert!(diagnose_command(path_str, true, false).is_ok());
     }
 }

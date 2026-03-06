@@ -1,6 +1,7 @@
 use needle::{Database, Result};
 use serde_json::json;
-use std::io::{self, BufRead};
+use std::io::{self, BufRead, BufReader};
+use std::fs::File;
 
 use super::{parse_distance, parse_query_vector};
 
@@ -260,7 +261,45 @@ pub fn export_command(path: &str, collection_name: &str) -> Result<()> {
     Ok(())
 }
 
-pub fn import_command(path: &str, collection_name: &str, file_path: &str) -> Result<()> {
+pub fn import_command(path: &str, collection_name: &str, file_path: &str, format: &str) -> Result<()> {
+    match format {
+        "jsonl" => import_jsonl_command(path, collection_name, file_path),
+        "json" => import_json_command(path, collection_name, file_path),
+        _ => Err(needle::NeedleError::InvalidInput(format!(
+            "Unknown import format '{}'. Supported formats: json, jsonl",
+            format
+        ))),
+    }
+}
+
+fn import_jsonl_command(path: &str, collection_name: &str, file_path: &str) -> Result<()> {
+    let mut db = Database::open(path)?;
+    let coll = db.collection(collection_name)?;
+
+    let reader: Box<dyn BufRead> = if file_path == "-" {
+        Box::new(io::stdin().lock())
+    } else {
+        Box::new(BufReader::new(File::open(file_path).map_err(needle::NeedleError::Io)?))
+    };
+
+    let result = coll.import_jsonl(reader)?;
+
+    println!("Imported {} vectors", result.imported);
+    if !result.errors.is_empty() {
+        eprintln!("{} errors:", result.errors.len());
+        for err in result.errors.iter().take(10) {
+            eprintln!("  Line {}: {}", err.line, err.message);
+        }
+        if result.errors.len() > 10 {
+            eprintln!("  ... and {} more", result.errors.len() - 10);
+        }
+    }
+
+    db.save()?;
+    Ok(())
+}
+
+fn import_json_command(path: &str, collection_name: &str, file_path: &str) -> Result<()> {
     let mut db = Database::open(path)?;
     let coll = db.collection(collection_name)?;
 

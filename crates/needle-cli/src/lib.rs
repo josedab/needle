@@ -14,6 +14,19 @@ use needle::Result;
 pub struct Cli {
     #[command(subcommand)]
     command: Commands,
+
+    /// Output format: "text" (default) or "json" for machine-readable output
+    #[arg(long, global = true, default_value = "text")]
+    output: OutputFormat,
+}
+
+/// Output format for CLI commands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum OutputFormat {
+    /// Human-readable text output (default)
+    Text,
+    /// JSON output for scripting and automation
+    Json,
 }
 
 #[derive(Subcommand)]
@@ -255,15 +268,26 @@ pub enum Commands {
     /// TTL (time-to-live) management for vectors
     #[command(subcommand)]
     Ttl(TtlCommands),
+
+    /// Run diagnostics on a database to check integrity and health
+    Diagnose {
+        /// Path to the database file
+        database: String,
+
+        /// Run extended checks (slower but more thorough)
+        #[arg(long)]
+        extended: bool,
+    },
 }
 
 pub fn run() -> Result<()> {
     let cli = Cli::parse();
+    let json_output = cli.output == OutputFormat::Json;
 
     match cli.command {
-        Commands::Info { database } => handlers::info_command(&database),
+        Commands::Info { database } => handlers::info_command(&database, json_output),
         Commands::Create { database } => handlers::create_command(&database),
-        Commands::Collections { database } => handlers::collections_command(&database),
+        Commands::Collections { database } => handlers::collections_command(&database, json_output),
         Commands::CreateCollection {
             database,
             name,
@@ -273,7 +297,7 @@ pub fn run() -> Result<()> {
         Commands::Stats {
             database,
             collection,
-        } => handlers::stats_command(&database, &collection),
+        } => handlers::stats_command(&database, &collection, json_output),
         Commands::Insert {
             database,
             collection,
@@ -292,6 +316,7 @@ pub fn run() -> Result<()> {
             k,
             explain,
             distance.as_deref(),
+            json_output,
         ),
         Commands::Delete {
             database,
@@ -302,7 +327,7 @@ pub fn run() -> Result<()> {
             database,
             collection,
             id,
-        } => handlers::get_command(&database, &collection, &id),
+        } => handlers::get_command(&database, &collection, &id, json_output),
         Commands::Compact { database } => handlers::compact_command(&database),
         Commands::Export {
             database,
@@ -316,7 +341,7 @@ pub fn run() -> Result<()> {
         Commands::Count {
             database,
             collection,
-        } => handlers::count_command(&database, &collection),
+        } => handlers::count_command(&database, &collection, json_output),
         Commands::Clear {
             database,
             collection,
@@ -348,5 +373,6 @@ pub fn run() -> Result<()> {
         Commands::Federate(cmd) => features::federate_command(cmd),
         Commands::Alias(cmd) => features::alias_command(cmd),
         Commands::Ttl(cmd) => features::ttl_command(cmd),
+        Commands::Diagnose { database, extended } => handlers::diagnose_command(&database, extended, json_output),
     }
 }

@@ -99,6 +99,14 @@ pub fn create_collection_command(
     Ok(())
 }
 
+pub fn rename_collection_command(path: &str, old_name: &str, new_name: &str) -> Result<()> {
+    let db = Database::open(path)?;
+    db.rename_collection(old_name, new_name)?;
+    db.save()?;
+    println!("Renamed collection '{}' to '{}'", old_name, new_name);
+    Ok(())
+}
+
 pub fn stats_command(path: &str, collection_name: &str) -> Result<()> {
     let db = Database::open(path)?;
     let coll = db.collection(collection_name)?;
@@ -123,6 +131,76 @@ pub fn stats_command(path: &str, collection_name: &str) -> Result<()> {
     }
 
     Ok(())
+}
+
+pub fn status_command(path: &str) -> Result<()> {
+    let file_meta = std::fs::metadata(path);
+    match file_meta {
+        Ok(meta) => {
+            let file_size = meta.len();
+            let modified = meta
+                .modified()
+                .map(|t| {
+                    let elapsed = t.elapsed().unwrap_or_default();
+                    format_duration(elapsed)
+                })
+                .unwrap_or_else(|_| "unknown".to_string());
+
+            match Database::open(path) {
+                Ok(db) => {
+                    let collections = db.list_collections();
+                    let total_vectors: usize = collections
+                        .iter()
+                        .filter_map(|name| db.collection(name).ok())
+                        .map(|c| c.len())
+                        .sum();
+
+                    println!("Database: {}", path);
+                    println!("  Status:      \u{2705} healthy");
+                    println!("  File size:   {}", format_bytes(file_size));
+                    println!("  Modified:    {} ago", modified);
+                    println!("  Collections: {}", collections.len());
+                    println!("  Vectors:     {}", total_vectors);
+                }
+                Err(e) => {
+                    println!("Database: {}", path);
+                    println!("  Status:      \u{274c} error");
+                    println!("  File size:   {}", format_bytes(file_size));
+                    println!("  Error:       {}", e);
+                }
+            }
+        }
+        Err(e) => {
+            println!("Database: {}", path);
+            println!("  Status: \u{274c} not found ({})", e);
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn format_bytes(bytes: u64) -> String {
+    if bytes < 1024 {
+        format!("{} B", bytes)
+    } else if bytes < 1024 * 1024 {
+        format!("{:.1} KB", bytes as f64 / 1024.0)
+    } else if bytes < 1024 * 1024 * 1024 {
+        format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
+    } else {
+        format!("{:.2} GB", bytes as f64 / (1024.0 * 1024.0 * 1024.0))
+    }
+}
+
+fn format_duration(d: std::time::Duration) -> String {
+    let secs = d.as_secs();
+    if secs < 60 {
+        format!("{}s", secs)
+    } else if secs < 3600 {
+        format!("{}m", secs / 60)
+    } else if secs < 86400 {
+        format!("{}h", secs / 3600)
+    } else {
+        format!("{}d", secs / 86400)
+    }
 }
 
 #[cfg(test)]

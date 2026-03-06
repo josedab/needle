@@ -1072,6 +1072,241 @@ pub fn health_command(
 // Feature: Embedded Vector Playground (playground)
 // ============================================================================
 
+#[cfg(feature = "experimental")]
+#[allow(clippy::too_many_lines)]
+pub fn playground_command(database: Option<&str>, tutorial: Option<&str>, execute: Option<&str>) -> Result<()> {
+    use needle::experimental::playground::{Playground, PlaygroundConfig, Tutorial};
+
+    let playground = Playground::new(PlaygroundConfig::default());
+
+    if let Some(code) = execute {
+        let result = playground.execute(code);
+        println!("{}", result.output);
+        if !result.success {
+            if let Some(err) = result.error {
+                eprintln!("Execution failed: {}", err);
+            }
+        }
+        return Ok(());
+    }
+
+    if let Some(tutorial_name) = tutorial {
+        let selected = Tutorial::all().into_iter().find(|t| {
+            let info = t.info();
+            info.title.to_lowercase().replace(' ', "-") == tutorial_name.to_lowercase()
+                || info.title.to_lowercase() == tutorial_name.to_lowercase()
+        });
+
+        if let Some(tut) = selected {
+            let info = tut.info();
+            println!("Tutorial: {}", info.title);
+            println!("  {}", info.description);
+            println!("  Steps: {}  (~{} min, {:?})", info.steps, info.estimated_minutes, info.difficulty);
+            println!();
+            for step_idx in 0..info.steps {
+                if let Some(step) = playground.get_tutorial_step(tut, step_idx) {
+                    println!("  Step {}: {}", step.number, step.title);
+                    println!("    {}", step.description);
+                    if !step.code.is_empty() {
+                        println!("    Code: {}", step.code);
+                    }
+                }
+            }
+        } else {
+            eprintln!("Unknown tutorial: '{}'. Available tutorials:", tutorial_name);
+            for info in playground.available_tutorials() {
+                let slug = info.title.to_lowercase().replace(' ', "-");
+                println!("  {:<25} - {} (~{} min)", slug, info.description, info.estimated_minutes);
+            }
+        }
+        return Ok(());
+    }
+
+    // Default: list available tutorials and datasets
+    println!("Needle Playground - Interactive vector exploration");
+    println!();
+    println!("Usage:");
+    println!("  needle playground --tutorial <name>     Run a tutorial");
+    println!("  needle playground --execute '<code>'    Execute code directly");
+    println!("  needle playground                       Start interactive REPL");
+    println!();
+    println!("Available tutorials:");
+    for info in playground.available_tutorials() {
+        let slug = info.title.to_lowercase().replace(' ', "-");
+        println!("  {:<25} - {} (~{} min)", slug, info.description, info.estimated_minutes);
+    }
+    println!();
+    println!("Available datasets:");
+    for ds in playground.available_datasets() {
+        println!("  {:<25} - {} ({} vectors, {}d)", ds.name, ds.description, ds.count, ds.dimensions);
+    }
+    println!();
+
+    // Fall through to REPL
+    let db = if let Some(path) = database {
+        Database::open(path)?
+    } else {
+        Database::in_memory()
+    };
+
+    println!("Type 'help' for available commands, 'quit' to exit.");
+    if database.is_some() {
+        println!("Connected to: {}", database.unwrap_or("in-memory"));
+    } else {
+        println!("Running in-memory mode.");
+    }
+    println!();
+
+    let stdin = io::stdin();
+    let mut line_buf = String::new();
+
+    loop {
+        eprint!("needle> ");
+        line_buf.clear();
+        if stdin.lock().read_line(&mut line_buf).unwrap_or(0) == 0 {
+            break;
+        }
+        let line = line_buf.trim();
+        if line.is_empty() {
+            continue;
+        }
+
+        match line {
+            "quit" | "exit" | "\\q" => {
+                println!("Bye!");
+                break;
+            }
+            "help" | "\\h" => {
+                println!("Available commands:");
+                println!("  collections           - List all collections");
+                println!("  info <collection>     - Show collection info");
+                println!("  count <collection>    - Count vectors");
+                println!("  create <name> <dims>  - Create collection");
+                println!("  search <coll> <k> <v1,v2,...> - Search");
+                println!("  stats <collection>    - Show statistics");
+                println!("  tutorials             - List available tutorials");
+                println!("  datasets              - List available datasets");
+                println!("  help                  - Show this help");
+                println!("  quit                  - Exit playground");
+            }
+            "tutorials" => {
+                for info in playground.available_tutorials() {
+                    let slug = info.title.to_lowercase().replace(' ', "-");
+                    println!("  {:<25} - {} (~{} min)", slug, info.description, info.estimated_minutes);
+                }
+            }
+            "datasets" => {
+                for ds in playground.available_datasets() {
+                    println!("  {:<25} - {} ({} vectors, {}d)", ds.name, ds.description, ds.count, ds.dimensions);
+                }
+            }
+            "collections" | "\\l" => {
+                let colls = db.list_collections();
+                if colls.is_empty() {
+                    println!("No collections.");
+                } else {
+                    for name in colls {
+                        if let Ok(c) = db.collection(&name) {
+                            println!("  {} (dims={:?}, count={})", name, c.dimensions(), c.len());
+                        }
+                    }
+                }
+            }
+            _ => {
+                let parts: Vec<&str> = line.split_whitespace().collect();
+                match parts.first().copied() {
+                    Some("info") | Some("stats") => {
+                        if let Some(name) = parts.get(1) {
+                            match db.collection(name) {
+                                Ok(c) => {
+                                    println!("  Collection: {}", name);
+                                    println!("  Dimensions: {:?}", c.dimensions().unwrap_or(0));
+                                    println!("  Vectors: {}", c.len());
+                                }
+                                Err(e) => println!("Error: {}", e),
+                            }
+                        } else {
+                            println!("Usage: info <collection>");
+                        }
+                    }
+                    Some("count") => {
+                        if let Some(name) = parts.get(1) {
+                            match db.collection(name) {
+                                Ok(c) => println!("{}", c.len()),
+                                Err(e) => println!("Error: {}", e),
+                            }
+                        } else {
+                            println!("Usage: count <collection>");
+                        }
+                    }
+                    Some("create") => {
+                        if parts.len() >= 3 {
+                            let name = parts[1];
+                            if let Ok(dims) = parts[2].parse::<usize>() {
+                                match db.create_collection(name, dims) {
+                                    Ok(_) => println!("Created collection '{}' (dims={})", name, dims),
+                                    Err(e) => println!("Error: {}", e),
+                                }
+                            } else {
+                                println!("Invalid dimensions: {}", parts[2]);
+                            }
+                        } else {
+                            println!("Usage: create <name> <dimensions>");
+                        }
+                    }
+                    Some("search") => {
+                        if parts.len() >= 4 {
+                            let name = parts[1];
+                            if let (Ok(k), Ok(query)) = (
+                                parts[2].parse::<usize>(),
+                                parse_query_vector(parts[3]),
+                            ) {
+                                match db.collection(name) {
+                                    Ok(c) => match c.search(&query, k) {
+                                        Ok(results) => {
+                                            for r in &results {
+                                                println!(
+                                                    "  {} dist={:.6}",
+                                                    r.id, r.distance
+                                                );
+                                            }
+                                            if results.is_empty() {
+                                                println!("  (no results)");
+                                            }
+                                        }
+                                        Err(e) => println!("Error: {}", e),
+                                    },
+                                    Err(e) => println!("Error: {}", e),
+                                }
+                            } else {
+                                println!("Usage: search <collection> <k> <v1,v2,...>");
+                            }
+                        } else {
+                            println!("Usage: search <collection> <k> <v1,v2,...>");
+                        }
+                    }
+                    Some("run") => {
+                        let code = parts[1..].join(" ");
+                        let result = playground.execute(&code);
+                        println!("{}", result.output);
+                        if !result.success {
+                            if let Some(err) = result.error {
+                                eprintln!("Error: {}", err);
+                            }
+                        }
+                    }
+                    _ => {
+                        println!("Unknown command: '{}'. Type 'help' for usage.", line);
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+#[cfg(not(feature = "experimental"))]
 #[allow(clippy::too_many_lines)]
 pub fn playground_command(database: Option<&str>) -> Result<()> {
     let db = if let Some(path) = database {
@@ -1296,7 +1531,7 @@ pub fn partition_command(
 }
 
 /// Watch collection for CDC events, printing them as they appear.
-pub fn watch_command(
+pub fn watch_events_command(
     path: &str,
     collection_name: &str,
     from_sequence: u64,
@@ -1336,6 +1571,116 @@ pub fn watch_command(
     }
 
     Ok(())
+}
+
+/// Watch a database file for filesystem changes using polling.
+pub fn watch_file_command(path: &str, interval_secs: u64) -> Result<()> {
+    use std::time::{Duration, SystemTime};
+    use super::collection::format_bytes;
+
+    fn format_bytes_signed(bytes: i64) -> String {
+        let abs = bytes.unsigned_abs();
+        if abs < 1024 {
+            format!("{abs} B")
+        } else if abs < 1024 * 1024 {
+            format!("{:.1} KB", abs as f64 / 1024.0)
+        } else if abs < 1024 * 1024 * 1024 {
+            format!("{:.1} MB", abs as f64 / (1024.0 * 1024.0))
+        } else {
+            format!("{:.2} GB", abs as f64 / (1024.0 * 1024.0 * 1024.0))
+        }
+    }
+
+    println!(
+        "\u{1f441} Watching {} (polling every {}s, Ctrl+C to stop)",
+        path, interval_secs
+    );
+    println!();
+
+    let interval = Duration::from_secs(interval_secs);
+    let mut last_modified: Option<SystemTime> = None;
+    let mut last_size: Option<u64> = None;
+
+    loop {
+        match std::fs::metadata(path) {
+            Ok(meta) => {
+                let modified = meta.modified().ok();
+                let size = meta.len();
+
+                let changed = match (last_modified, modified) {
+                    (Some(prev), Some(curr)) => prev != curr,
+                    (None, Some(_)) => true,
+                    _ => false,
+                };
+
+                let size_changed = last_size.map_or(false, |s| s != size);
+
+                if changed || size_changed {
+                    let now = chrono::Local::now().format("%H:%M:%S");
+
+                    if last_modified.is_some() {
+                        let size_diff = size as i64 - last_size.unwrap_or(size) as i64;
+                        let diff_str = if size_diff > 0 {
+                            format!("+{}", format_bytes_signed(size_diff))
+                        } else if size_diff < 0 {
+                            format!("-{}", format_bytes_signed(-size_diff))
+                        } else {
+                            "metadata only".to_string()
+                        };
+
+                        println!("[{}] Changed: {} ({})", now, format_bytes(size), diff_str);
+
+                        match Database::open(path) {
+                            Ok(db) => {
+                                let collections = db.list_collections();
+                                let total: usize = collections
+                                    .iter()
+                                    .filter_map(|n| db.collection(n).ok())
+                                    .map(|c| c.len())
+                                    .sum();
+                                println!(
+                                    "         {} collections, {} vectors",
+                                    collections.len(),
+                                    total
+                                );
+                            }
+                            Err(e) => {
+                                println!("         \u{26a0}\u{fe0f}  Could not read: {}", e);
+                            }
+                        }
+                    } else {
+                        println!("[{}] Watching: {} ({})", now, path, format_bytes(size));
+                        if let Ok(db) = Database::open(path) {
+                            let collections = db.list_collections();
+                            let total: usize = collections
+                                .iter()
+                                .filter_map(|n| db.collection(n).ok())
+                                .map(|c| c.len())
+                                .sum();
+                            println!(
+                                "         {} collections, {} vectors",
+                                collections.len(),
+                                total
+                            );
+                        }
+                    }
+                }
+
+                last_modified = modified;
+                last_size = Some(size);
+            }
+            Err(e) => {
+                if last_size.is_some() {
+                    let now = chrono::Local::now().format("%H:%M:%S");
+                    println!("[{}] \u{274c} File removed or inaccessible: {}", now, e);
+                    last_modified = None;
+                    last_size = None;
+                }
+            }
+        }
+
+        std::thread::sleep(interval);
+    }
 }
 
 /// Run a standardized ANN benchmark.
@@ -1625,14 +1970,10 @@ pub fn plugin_command(cmd: crate::cli::commands::PluginCommands) -> Result<()> {
 
     match cmd {
         PluginCommands::List => {
-            println!("═══ Installed Plugins ═══\n");
-            println!("  No plugins installed.");
-            println!("  Install a plugin: needle plugin install <path.wasm>");
-            println!();
-            println!("Note: Plugin runtime supports custom distance functions, rerankers,");
-            println!("and pre/post-processing hooks via WASM modules.");
-            println!("See docs/plugins.md for the plugin SDK.");
-            Ok(())
+            plugin_list_command()
+        }
+        PluginCommands::Info { name } => {
+            plugin_info_command(&name)
         }
         PluginCommands::Install { path, name } => {
             let plugin_name = name.unwrap_or_else(|| {
@@ -1655,6 +1996,77 @@ pub fn plugin_command(cmd: crate::cli::commands::PluginCommands) -> Result<()> {
             Ok(())
         }
     }
+}
+
+#[cfg(feature = "experimental")]
+fn plugin_list_command() -> Result<()> {
+    use needle::experimental::plugin_registry::{PluginRegistry, RegistryConfig};
+    let registry = PluginRegistry::new(RegistryConfig::default());
+    let plugins = registry.list_all();
+    if plugins.is_empty() {
+        println!("No plugins installed.");
+        println!();
+        println!("Plugin support is experimental. See docs for details.");
+    } else {
+        println!("Installed plugins:");
+        for plugin in plugins {
+            println!(
+                "  {} v{} [{}] - {}",
+                plugin.manifest.name,
+                plugin.manifest.version,
+                plugin.manifest.plugin_type,
+                plugin.manifest.description
+            );
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(feature = "experimental"))]
+fn plugin_list_command() -> Result<()> {
+    println!("No plugins installed.");
+    println!();
+    println!("Plugin support requires the 'experimental' feature.");
+    println!("Rebuild with: cargo build --features experimental");
+    Ok(())
+}
+
+#[cfg(feature = "experimental")]
+fn plugin_info_command(name: &str) -> Result<()> {
+    use needle::experimental::plugin_registry::{PluginRegistry, RegistryConfig};
+    let registry = PluginRegistry::new(RegistryConfig::default());
+    match registry.get(name) {
+        Some(plugin) => {
+            println!("Plugin: {}", plugin.manifest.name);
+            println!("ID: {}", plugin.manifest.id);
+            println!("Version: {}", plugin.manifest.version);
+            println!("Type: {}", plugin.manifest.plugin_type);
+            println!("Description: {}", plugin.manifest.description);
+            println!("Author: {}", plugin.manifest.author);
+            println!("License: {}", plugin.manifest.license);
+            println!("Size: {} bytes", plugin.manifest.size_bytes);
+            println!("Verified: {}", plugin.verified);
+            if !plugin.manifest.capabilities.is_empty() {
+                println!("Capabilities: {}", plugin.manifest.capabilities.join(", "));
+            }
+            if !plugin.manifest.dependencies.is_empty() {
+                println!("Dependencies: {}", plugin.manifest.dependencies.join(", "));
+            }
+        }
+        None => {
+            println!("Plugin '{}' not found.", name);
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(feature = "experimental"))]
+fn plugin_info_command(name: &str) -> Result<()> {
+    println!("Plugin '{}' not found.", name);
+    println!();
+    println!("Plugin support requires the 'experimental' feature.");
+    println!("Rebuild with: cargo build --features experimental");
+    Ok(())
 }
 
 #[cfg(test)]
