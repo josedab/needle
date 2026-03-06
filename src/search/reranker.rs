@@ -184,51 +184,101 @@ impl CohereReranker {
         Self { config }
     }
 
-    /// Perform the actual API call (placeholder implementation)
+    /// Call the Cohere Rerank API via HTTP.
+    ///
+    /// Requires the `embedding-providers` feature for real HTTP calls.
+    /// Without it, falls back to term-overlap scoring.
+    #[cfg(feature = "embedding-providers")]
     async fn call_api(
         &self,
         query: &str,
         documents: &[&str],
         top_k: usize,
     ) -> RerankerResult<Vec<RerankResult>> {
-        // In a real implementation, this would make an HTTP request to Cohere's API
-        // For now, we provide a mock implementation that can be replaced
-
         if documents.is_empty() {
             return Ok(vec![]);
         }
-
         if query.is_empty() {
             return Err(RerankerError::InvalidInput("Query cannot be empty".into()));
         }
 
-        // Mock scoring based on simple term overlap
-        // Real implementation would call: POST {base_url}/rerank
-        let query_lower = query.to_lowercase();
-        let query_terms: std::collections::HashSet<&str> = query_lower.split_whitespace().collect();
+        let url = format!("{}/rerank", self.config.base_url);
+        let body = serde_json::json!({
+            "model": self.config.model,
+            "query": query,
+            "documents": documents,
+            "top_n": top_k,
+            "return_documents": true,
+        });
 
-        let mut results: Vec<RerankResult> = documents
-            .iter()
-            .enumerate()
-            .map(|(idx, doc)| {
-                let doc_lower = doc.to_lowercase();
-                let doc_terms: std::collections::HashSet<_> =
-                    doc_lower.split_whitespace().collect();
-                let overlap = query_terms
-                    .iter()
-                    .filter(|t| doc_terms.contains(&t.to_string().as_str()))
-                    .count();
-                let score = overlap as f32 / query_terms.len().max(1) as f32;
-                RerankResult::with_text(idx, score, doc.to_string())
-            })
+        let client = reqwest::Client::new();
+        let resp = client
+            .post(&url)
+            .header("Authorization", format!("Bearer {}", self.config.api_key))
+            .header("Content-Type", "application/json")
+            .timeout(std::time::Duration::from_secs(self.config.timeout_secs))
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| RerankerError::NetworkError(e.to_string()))?;
+
+        if resp.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
+            return Err(RerankerError::RateLimited(
+                "Cohere API rate limit exceeded".into(),
+            ));
+        }
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body_text = resp.text().await.unwrap_or_default();
+            return Err(RerankerError::ApiError(format!(
+                "Cohere API returned {status}: {body_text}"
+            )));
+        }
+
+        #[derive(Deserialize)]
+        struct CohereResult {
+            index: usize,
+            relevance_score: f32,
+        }
+        #[derive(Deserialize)]
+        struct CohereResponse {
+            results: Vec<CohereResult>,
+        }
+
+        let cohere_resp: CohereResponse = resp
+            .json()
+            .await
+            .map_err(|e| RerankerError::ApiError(format!("Failed to parse response: {e}")))?;
+
+        let results = cohere_resp
+            .results
+            .into_iter()
+            .map(|r| RerankResult::with_text(r.index, r.relevance_score, documents[r.index].to_string()))
             .collect();
 
-        // Sort by score descending
+        Ok(results)
+    }
+
+    /// Fallback scoring when `embedding-providers` feature is not enabled.
+    /// Uses TF-IDF weighted term overlap for reasonable relevance estimation.
+    #[cfg(not(feature = "embedding-providers"))]
+    async fn call_api(
+        &self,
+        query: &str,
+        documents: &[&str],
+        top_k: usize,
+    ) -> RerankerResult<Vec<RerankResult>> {
+        if documents.is_empty() {
+            return Ok(vec![]);
+        }
+        if query.is_empty() {
+            return Err(RerankerError::InvalidInput("Query cannot be empty".into()));
+        }
+
+        let mut results = score_by_term_overlap(query, documents);
         results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(Ordering::Equal));
-
-        // Take top_k
         results.truncate(top_k);
-
         Ok(results)
     }
 }
@@ -321,29 +371,6 @@ impl HuggingFaceReranker {
     pub fn from_config(config: HuggingFaceConfig) -> Self {
         Self { config }
     }
-
-    /// Score a single query-document pair (placeholder)
-    fn score_pair(query: &str, document: &str) -> f32 {
-        // In a real implementation, this would run the cross-encoder model
-        // For now, we use simple Jaccard similarity as a placeholder
-
-        let query_lower = query.to_lowercase();
-        let doc_lower = document.to_lowercase();
-
-        let query_terms: std::collections::HashSet<String> =
-            query_lower.split_whitespace().map(String::from).collect();
-        let doc_terms: std::collections::HashSet<String> =
-            doc_lower.split_whitespace().map(String::from).collect();
-
-        let overlap = query_terms.intersection(&doc_terms).count();
-        let union = query_terms.union(&doc_terms).count();
-
-        if union == 0 {
-            0.0
-        } else {
-            overlap as f32 / union as f32
-        }
-    }
 }
 
 impl Reranker for HuggingFaceReranker {
@@ -358,21 +385,9 @@ impl Reranker for HuggingFaceReranker {
                 return Ok(vec![]);
             }
 
-            let mut results: Vec<RerankResult> = documents
-                .iter()
-                .enumerate()
-                .map(|(idx, doc)| {
-                    let score = Self::score_pair(query, doc);
-                    RerankResult::with_text(idx, score, doc.to_string())
-                })
-                .collect();
-
-            // Sort by score descending
+            let mut results = score_by_term_overlap(query, documents);
             results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(Ordering::Equal));
-
-            // Take top_k
             results.truncate(top_k);
-
             Ok(results)
         })
     }
@@ -384,6 +399,59 @@ impl Reranker for HuggingFaceReranker {
     fn max_batch_size(&self) -> usize {
         self.config.batch_size
     }
+}
+
+/// Score documents against a query using TF-IDF weighted term overlap.
+///
+/// This is a lightweight scoring function for use when a cross-encoder model
+/// is not available. It weights query term matches by their inverse document
+/// frequency across the candidate set, producing better rankings than simple
+/// Jaccard similarity.
+fn score_by_term_overlap(query: &str, documents: &[&str]) -> Vec<RerankResult> {
+    let query_lower = query.to_lowercase();
+    let query_terms: Vec<String> = query_lower.split_whitespace().map(String::from).collect();
+
+    if query_terms.is_empty() || documents.is_empty() {
+        return documents
+            .iter()
+            .enumerate()
+            .map(|(i, d)| RerankResult::with_text(i, 0.0, d.to_string()))
+            .collect();
+    }
+
+    // Compute IDF for each query term across the document set
+    let n = documents.len() as f32;
+    let doc_lowers: Vec<String> = documents.iter().map(|d| d.to_lowercase()).collect();
+    let mut idf: HashMap<&str, f32> = HashMap::new();
+    for term in &query_terms {
+        let df = doc_lowers
+            .iter()
+            .filter(|d| d.split_whitespace().any(|w| w == term.as_str()))
+            .count() as f32;
+        // Smoothed IDF: log((N + 1) / (df + 1)) + 1
+        idf.insert(term.as_str(), ((n + 1.0) / (df + 1.0)).ln() + 1.0);
+    }
+
+    documents
+        .iter()
+        .enumerate()
+        .map(|(idx, doc)| {
+            let doc_lower = doc.to_lowercase();
+            let doc_terms: std::collections::HashSet<&str> =
+                doc_lower.split_whitespace().collect();
+            let doc_len = doc_terms.len().max(1) as f32;
+
+            // Sum IDF-weighted matches, normalized by document length
+            let score: f32 = query_terms
+                .iter()
+                .filter(|t| doc_terms.contains(t.as_str()))
+                .map(|t| idf.get(t.as_str()).copied().unwrap_or(1.0))
+                .sum::<f32>()
+                / (doc_len.sqrt() * query_terms.len() as f32);
+
+            RerankResult::with_text(idx, score, doc.to_string())
+        })
+        .collect()
 }
 
 /// A reranker that combines multiple rerankers using reciprocal rank fusion
