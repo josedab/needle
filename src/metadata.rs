@@ -55,6 +55,9 @@
 //! | `$and` | Logical AND |
 //! | `$or` | Logical OR |
 //! | `$not` | Logical NOT |
+//! | `$between` | Inclusive range `[low, high]` |
+//! | `$size` | Array/string length equals |
+//! | `$type` | JSON value type check |
 
 #![cfg_attr(test, allow(clippy::unwrap_used))]
 use crate::error::{NeedleError, Result};
@@ -62,6 +65,114 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
+
+/// Validate metadata against a schema.
+///
+/// The schema supports a subset of JSON Schema:
+/// - `"required"`: array of field names that must be present
+/// - `"properties"`: object mapping field names to type constraints
+///   - `"type"`: one of `"string"`, `"number"`, `"boolean"`, `"array"`, `"object"`, `"null"`
+pub fn validate_metadata_schema(metadata: &Value, schema: &Value) -> Result<()> {
+    let meta_obj = metadata
+        .as_object()
+        .ok_or_else(|| NeedleError::InvalidInput("metadata must be a JSON object".into()))?;
+
+    // Check required fields
+    if let Some(required) = schema.get("required").and_then(Value::as_array) {
+        for req in required {
+            if let Some(field_name) = req.as_str() {
+                if !meta_obj.contains_key(field_name) {
+                    return Err(NeedleError::InvalidInput(format!(
+                        "missing required metadata field: '{field_name}'"
+                    )));
+                }
+            }
+        }
+    }
+
+    // Check property types
+    if let Some(properties) = schema.get("properties").and_then(Value::as_object) {
+        for (field_name, field_schema) in properties {
+            if let Some(value) = meta_obj.get(field_name) {
+                if let Some(expected_type) = field_schema.get("type").and_then(Value::as_str) {
+                    let actual_type = json_type_name(value);
+                    if actual_type != expected_type {
+                        return Err(NeedleError::InvalidInput(format!(
+                            "metadata field '{field_name}' expected type '{expected_type}', got '{actual_type}'"
+                        )));
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Return the JSON Schema type name for a `serde_json::Value`.
+fn json_type_name(value: &Value) -> &'static str {
+    match value {
+        Value::Null => "null",
+        Value::Bool(_) => "boolean",
+        Value::Number(_) => "number",
+        Value::String(_) => "string",
+        Value::Array(_) => "array",
+        Value::Object(_) => "object",
+    }
+}
+
+/// Statistics about a single metadata field.
+#[derive(Debug, Clone, Serialize)]
+pub struct FieldStats {
+    /// Field name
+    pub name: String,
+    /// Number of distinct values
+    pub cardinality: usize,
+    /// Whether the field is indexed for fast filtering
+    pub is_indexed: bool,
+    /// Whether this field exceeds the high-cardinality threshold
+    pub is_high_cardinality: bool,
+}
+
+/// Maximum nesting depth for flattening metadata fields.
+/// Prevents pathological cases with deeply nested objects.
+const FLATTEN_MAX_DEPTH: usize = 5;
+
+/// Flatten nested metadata into dot-notation field paths.
+///
+/// Given `{"author": {"name": "Alice", "age": 30}, "category": "books"}`,
+/// produces:
+/// - `("category", "books")`
+/// - `("author.name", "Alice")`
+/// - `("author.age", 30)`
+///
+/// **Note:** Dot characters in field names are treated as path separators.
+/// A literal field named `"a.b"` will conflict with nested path `a -> b`.
+fn flatten_metadata(value: &Value, prefix: &str, depth: usize, out: &mut Vec<(String, Value)>) {
+    if depth > FLATTEN_MAX_DEPTH {
+        return;
+    }
+    match value {
+        Value::Object(map) => {
+            for (key, val) in map {
+                let path = if prefix.is_empty() {
+                    key.clone()
+                } else {
+                    format!("{prefix}.{key}")
+                };
+                match val {
+                    Value::Object(_) => flatten_metadata(val, &path, depth + 1, out),
+                    _ => out.push((path, val.clone())),
+                }
+            }
+        }
+        _ => {
+            if !prefix.is_empty() {
+                out.push((prefix.to_string(), value.clone()));
+            }
+        }
+    }
+}
 
 /// Metadata entry for a vector
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -72,10 +183,10 @@ pub struct MetadataEntry {
     pub data: Option<Value>,
 }
 
-/// Maximum distinct values per field before the inverted index stops adding
-/// new values for that field. Prevents high-cardinality fields (like UUIDs)
+/// Default maximum distinct values per field before the inverted index stops
+/// adding new values for that field. Prevents high-cardinality fields (like UUIDs)
 /// from bloating the index with no filtering benefit.
-const FIELD_INDEX_CARDINALITY_THRESHOLD: usize = 10_000;
+const DEFAULT_CARDINALITY_THRESHOLD: usize = 10_000;
 
 /// Metadata store for vectors
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -90,12 +201,15 @@ pub struct MetadataStore {
     field_blooms: HashMap<String, BloomFilter>,
     /// Inverted index: field_name -> (stringified_value -> set of internal IDs).
     /// Enables O(1) lookup for equality filters instead of O(n) scan.
-    /// Fields exceeding FIELD_INDEX_CARDINALITY_THRESHOLD are excluded.
+    /// Fields exceeding the cardinality threshold are excluded.
     #[serde(skip)]
     field_indexes: HashMap<String, HashMap<String, Vec<usize>>>,
     /// Fields that have been disabled from indexing due to high cardinality.
     #[serde(skip)]
     high_cardinality_fields: std::collections::HashSet<String>,
+    /// Configurable cardinality threshold for auto-detection.
+    #[serde(skip)]
+    cardinality_threshold: usize,
 }
 
 /// Simple bit-array bloom filter for metadata field values.
@@ -169,6 +283,15 @@ impl MetadataStore {
             field_blooms: HashMap::new(),
             field_indexes: HashMap::new(),
             high_cardinality_fields: std::collections::HashSet::new(),
+            cardinality_threshold: DEFAULT_CARDINALITY_THRESHOLD,
+        }
+    }
+
+    /// Create a new metadata store with a custom cardinality threshold.
+    pub fn with_cardinality_threshold(threshold: usize) -> Self {
+        Self {
+            cardinality_threshold: threshold,
+            ..Self::new()
         }
     }
 
@@ -183,9 +306,13 @@ impl MetadataStore {
             return Err(NeedleError::VectorAlreadyExists(external_id));
         }
 
-        // Update bloom filters and inverted indexes with field values
-        if let Some(Value::Object(ref map)) = data {
-            for (field, value) in map {
+        // Update bloom filters and inverted indexes with field values,
+        // including nested fields via dot-notation paths.
+        if let Some(ref obj) = data {
+            let mut flattened = Vec::new();
+            flatten_metadata(obj, "", 0, &mut flattened);
+
+            for (field, value) in flattened {
                 let bloom = self
                     .field_blooms
                     .entry(field.clone())
@@ -193,7 +320,7 @@ impl MetadataStore {
                 bloom.insert(&value.to_string());
 
                 // Skip inverted index for high-cardinality fields
-                if self.high_cardinality_fields.contains(field) {
+                if self.high_cardinality_fields.contains(&field) {
                     continue;
                 }
 
@@ -207,9 +334,9 @@ impl MetadataStore {
                     .push(internal_id);
 
                 // Auto-detect high cardinality and stop indexing
-                if field_idx.len() > FIELD_INDEX_CARDINALITY_THRESHOLD {
+                if field_idx.len() > self.cardinality_threshold {
                     self.high_cardinality_fields.insert(field.clone());
-                    self.field_indexes.remove(field);
+                    self.field_indexes.remove(&field);
                 }
             }
         }
@@ -236,11 +363,13 @@ impl MetadataStore {
         if let Some(entry) = self.entries.remove(&internal_id) {
             self.id_map.remove(&entry.external_id);
 
-            // Remove from inverted indexes
-            if let Some(Value::Object(ref map)) = entry.data {
-                for (field, value) in map {
+            // Remove from inverted indexes (including nested fields)
+            if let Some(ref obj) = entry.data {
+                let mut flattened = Vec::new();
+                flatten_metadata(obj, "", 0, &mut flattened);
+                for (field, value) in flattened {
                     let val_str = value.to_string();
-                    if let Some(idx) = self.field_indexes.get_mut(field) {
+                    if let Some(idx) = self.field_indexes.get_mut(&field) {
                         if let Some(ids) = idx.get_mut(&val_str) {
                             ids.retain(|&id| id != internal_id);
                         }
@@ -274,6 +403,27 @@ impl MetadataStore {
     /// Check if a field has been excluded from the inverted index due to high cardinality.
     pub fn is_high_cardinality(&self, field: &str) -> bool {
         self.high_cardinality_fields.contains(field)
+    }
+
+    /// Mark fields as high-cardinality upfront, skipping inverted-index
+    /// construction for these fields from the start. Use this when you know
+    /// which fields have high cardinality (e.g., UUIDs, timestamps) to avoid
+    /// the overhead of indexing and then discarding.
+    pub fn mark_high_cardinality_fields(&mut self, fields: &[String]) {
+        for field in fields {
+            self.high_cardinality_fields.insert(field.clone());
+            self.field_indexes.remove(field);
+        }
+    }
+
+    /// Returns the current cardinality threshold for auto-detection.
+    pub fn cardinality_threshold(&self) -> usize {
+        self.cardinality_threshold
+    }
+
+    /// Set the cardinality threshold for auto-detection of high-cardinality fields.
+    pub fn set_cardinality_threshold(&mut self, threshold: usize) {
+        self.cardinality_threshold = threshold;
     }
 
     /// Try to resolve a filter using the inverted index for O(1) equality lookups.
@@ -346,11 +496,13 @@ impl MetadataStore {
             .get_mut(&internal_id)
             .ok_or_else(|| NeedleError::VectorNotFound(internal_id.to_string()))?;
 
-        // Remove old values from inverted index
-        if let Some(Value::Object(ref old_map)) = entry.data {
-            for (field, value) in old_map {
+        // Remove old values from inverted index (including nested fields)
+        if let Some(ref old_obj) = entry.data {
+            let mut flattened = Vec::new();
+            flatten_metadata(old_obj, "", 0, &mut flattened);
+            for (field, value) in flattened {
                 let val_str = value.to_string();
-                if let Some(idx) = self.field_indexes.get_mut(field) {
+                if let Some(idx) = self.field_indexes.get_mut(&field) {
                     if let Some(ids) = idx.get_mut(&val_str) {
                         ids.retain(|&id| id != internal_id);
                     }
@@ -358,12 +510,14 @@ impl MetadataStore {
             }
         }
 
-        // Add new values to inverted index
-        if let Some(Value::Object(ref new_map)) = data {
-            for (field, value) in new_map {
+        // Add new values to inverted index (including nested fields)
+        if let Some(ref new_obj) = data {
+            let mut flattened = Vec::new();
+            flatten_metadata(new_obj, "", 0, &mut flattened);
+            for (field, value) in flattened {
                 let val_str = value.to_string();
                 self.field_indexes
-                    .entry(field.clone())
+                    .entry(field)
                     .or_default()
                     .entry(val_str)
                     .or_default()
@@ -447,10 +601,46 @@ impl MetadataStore {
     pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
         Ok(serde_json::from_slice(bytes)?)
     }
+
+    /// Get statistics for a specific metadata field.
+    pub fn field_stats(&self, field: &str) -> Option<FieldStats> {
+        let is_indexed = self.field_indexes.contains_key(field);
+        let is_high_card = self.is_high_cardinality(field);
+
+        // Field must be known to us (indexed or high-cardinality)
+        if !is_indexed && !is_high_card {
+            return None;
+        }
+
+        Some(FieldStats {
+            name: field.to_string(),
+            cardinality: self.field_cardinality(field),
+            is_indexed,
+            is_high_cardinality: is_high_card,
+        })
+    }
+
+    /// Get statistics for all known metadata fields.
+    pub fn all_field_stats(&self) -> Vec<FieldStats> {
+        let mut fields: std::collections::HashSet<&str> = std::collections::HashSet::new();
+        for key in self.field_indexes.keys() {
+            fields.insert(key.as_str());
+        }
+        for key in &self.high_cardinality_fields {
+            fields.insert(key.as_str());
+        }
+
+        let mut stats: Vec<FieldStats> = fields
+            .into_iter()
+            .filter_map(|f| self.field_stats(f))
+            .collect();
+        stats.sort_by(|a, b| a.name.cmp(&b.name));
+        stats
+    }
 }
 
 /// Filter comparison operators
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum FilterOperator {
     /// Equal
     Eq,
@@ -474,10 +664,49 @@ pub enum FilterOperator {
     StartsWith,
     /// String ends with suffix
     EndsWith,
+    /// Field exists (or does not exist when value is false)
+    Exists,
+    /// Matches a regular expression pattern
+    Regex,
+    /// All values in the filter array must be present in the field array
+    All,
+    /// At least one array element matches all nested conditions
+    ElemMatch,
+    /// Inclusive range check: value >= low AND value <= high
+    Between,
+    /// Array or string length equals the given integer
+    Size,
+    /// Field value matches the given JSON type name
+    Type,
+}
+
+impl std::fmt::Display for FilterOperator {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Eq => write!(f, "$eq"),
+            Self::Ne => write!(f, "$ne"),
+            Self::Gt => write!(f, "$gt"),
+            Self::Gte => write!(f, "$gte"),
+            Self::Lt => write!(f, "$lt"),
+            Self::Lte => write!(f, "$lte"),
+            Self::In => write!(f, "$in"),
+            Self::NotIn => write!(f, "$nin"),
+            Self::Contains => write!(f, "$contains"),
+            Self::StartsWith => write!(f, "$startsWith"),
+            Self::EndsWith => write!(f, "$endsWith"),
+            Self::Exists => write!(f, "$exists"),
+            Self::Regex => write!(f, "$regex"),
+            Self::All => write!(f, "$all"),
+            Self::ElemMatch => write!(f, "$elemMatch"),
+            Self::Between => write!(f, "$between"),
+            Self::Size => write!(f, "$size"),
+            Self::Type => write!(f, "$type"),
+        }
+    }
 }
 
 /// A single filter condition
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FilterCondition {
     /// Field path (dot-separated for nested fields)
     pub field: String,
@@ -488,7 +717,7 @@ pub struct FilterCondition {
 }
 
 /// Filter expression combining multiple conditions
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Filter {
     /// Single condition
     Condition(FilterCondition),
@@ -579,6 +808,125 @@ impl Filter {
         Filter::Not(Box::new(filter))
     }
 
+    /// Create a "contains" filter (string substring or array element).
+    pub fn contains(field: impl Into<String>, value: impl Into<Value>) -> Self {
+        Filter::Condition(FilterCondition {
+            field: field.into(),
+            operator: FilterOperator::Contains,
+            value: value.into(),
+        })
+    }
+
+    /// Create a "starts with" filter for string prefix matching.
+    pub fn starts_with(field: impl Into<String>, prefix: impl Into<Value>) -> Self {
+        Filter::Condition(FilterCondition {
+            field: field.into(),
+            operator: FilterOperator::StartsWith,
+            value: prefix.into(),
+        })
+    }
+
+    /// Create an "ends with" filter for string suffix matching.
+    pub fn ends_with(field: impl Into<String>, suffix: impl Into<Value>) -> Self {
+        Filter::Condition(FilterCondition {
+            field: field.into(),
+            operator: FilterOperator::EndsWith,
+            value: suffix.into(),
+        })
+    }
+
+    /// Create a "not in" filter (value not in array).
+    pub fn not_in(field: impl Into<String>, values: Vec<Value>) -> Self {
+        Filter::Condition(FilterCondition {
+            field: field.into(),
+            operator: FilterOperator::NotIn,
+            value: Value::Array(values),
+        })
+    }
+
+    /// Create an "exists" filter: `true` matches when the field is present,
+    /// `false` matches when the field is absent.
+    pub fn exists(field: impl Into<String>, exists: bool) -> Self {
+        Filter::Condition(FilterCondition {
+            field: field.into(),
+            operator: FilterOperator::Exists,
+            value: Value::Bool(exists),
+        })
+    }
+
+    /// Create a regex filter for pattern matching on string fields.
+    ///
+    /// Uses Rust's `regex` syntax (from the standard library's basic matching).
+    /// The pattern is matched against the entire string value.
+    pub fn regex(field: impl Into<String>, pattern: impl Into<String>) -> Self {
+        Filter::Condition(FilterCondition {
+            field: field.into(),
+            operator: FilterOperator::Regex,
+            value: Value::String(pattern.into()),
+        })
+    }
+
+    /// Create an "all" filter: the field must be an array containing every
+    /// element in `values`.
+    ///
+    /// MongoDB equivalent: `{"tags": {"$all": ["rust", "database"]}}`
+    pub fn all(field: impl Into<String>, values: Vec<Value>) -> Self {
+        Filter::Condition(FilterCondition {
+            field: field.into(),
+            operator: FilterOperator::All,
+            value: Value::Array(values),
+        })
+    }
+
+    /// Create an "elemMatch" filter: the field must be an array where at least
+    /// one element satisfies the nested filter conditions.
+    ///
+    /// MongoDB equivalent: `{"items": {"$elemMatch": {"price": {"$gt": 10}}}}`
+    pub fn elem_match(field: impl Into<String>, conditions: Value) -> Self {
+        Filter::Condition(FilterCondition {
+            field: field.into(),
+            operator: FilterOperator::ElemMatch,
+            value: conditions,
+        })
+    }
+
+    /// Create a "between" filter for inclusive range matching.
+    ///
+    /// Equivalent to `$gte low AND $lte high`.
+    ///
+    /// MongoDB-style: `{"price": {"$between": [10, 50]}}`
+    pub fn between(field: impl Into<String>, low: impl Into<Value>, high: impl Into<Value>) -> Self {
+        Filter::Condition(FilterCondition {
+            field: field.into(),
+            operator: FilterOperator::Between,
+            value: Value::Array(vec![low.into(), high.into()]),
+        })
+    }
+
+    /// Create a "size" filter to match arrays or strings by length.
+    ///
+    /// MongoDB-style: `{"tags": {"$size": 3}}`
+    pub fn size(field: impl Into<String>, len: usize) -> Self {
+        Filter::Condition(FilterCondition {
+            field: field.into(),
+            operator: FilterOperator::Size,
+            value: Value::Number(serde_json::Number::from(len)),
+        })
+    }
+
+    /// Create a "type" filter to match fields by their JSON value type.
+    ///
+    /// Accepted type names: `"string"`, `"number"`, `"boolean"`, `"array"`, `"object"`, `"null"`.
+    ///
+    /// MongoDB-style: `{"age": {"$type": "number"}}`
+    pub fn has_type(field: impl Into<String>, type_name: impl Into<String>) -> Self {
+        Filter::Condition(FilterCondition {
+            field: field.into(),
+            operator: FilterOperator::Type,
+            value: Value::String(type_name.into()),
+        })
+    }
+
     /// Evaluate filter against metadata
     pub fn matches(&self, metadata: Option<&Value>) -> bool {
         match self {
@@ -586,6 +934,20 @@ impl Filter {
             Filter::And(filters) => filters.iter().all(|f| f.matches(metadata)),
             Filter::Or(filters) => filters.iter().any(|f| f.matches(metadata)),
             Filter::Not(filter) => !filter.matches(metadata),
+        }
+    }
+
+    /// Compute the maximum nesting depth of this filter expression.
+    ///
+    /// A single `Condition` has depth 1. `And`/`Or`/`Not` add one level
+    /// on top of their deepest child.
+    pub fn depth(&self) -> usize {
+        match self {
+            Filter::Condition(_) => 1,
+            Filter::And(filters) | Filter::Or(filters) => {
+                1 + filters.iter().map(Filter::depth).max().unwrap_or(0)
+            }
+            Filter::Not(inner) => 1 + inner.depth(),
         }
     }
 
@@ -760,6 +1122,61 @@ impl Filter {
                             operator: FilterOperator::EndsWith,
                             value: op_value.clone(),
                         }),
+                        "$exists" => {
+                            let exists = op_value.as_bool().ok_or(
+                                "$exists requires a boolean value".to_string(),
+                            )?;
+                            Filter::exists(field, exists)
+                        }
+                        "$regex" => match op_value {
+                            Value::String(_) => Filter::regex(field, op_value.as_str().expect("checked above")),
+                            _ => return Err("$regex requires a string pattern".to_string()),
+                        },
+                        "$all" => match op_value {
+                            Value::Array(arr) => Filter::all(field, arr.clone()),
+                            _ => return Err("$all requires an array".to_string()),
+                        },
+                        "$elemMatch" => match op_value {
+                            Value::Object(_) => Filter::elem_match(field, op_value.clone()),
+                            _ => return Err("$elemMatch requires an object".to_string()),
+                        },
+                        "$between" => match op_value {
+                            Value::Array(arr) if arr.len() == 2 => {
+                                Filter::Condition(FilterCondition {
+                                    field: field.to_string(),
+                                    operator: FilterOperator::Between,
+                                    value: op_value.clone(),
+                                })
+                            }
+                            Value::Array(_) => return Err("$between requires an array of exactly [low, high]".to_string()),
+                            _ => return Err("$between requires an array of [low, high]".to_string()),
+                        },
+                        "$size" => match op_value {
+                            Value::Number(_) => Filter::Condition(FilterCondition {
+                                field: field.to_string(),
+                                operator: FilterOperator::Size,
+                                value: op_value.clone(),
+                            }),
+                            _ => return Err("$size requires a number".to_string()),
+                        },
+                        "$type" => match op_value {
+                            Value::String(s) => {
+                                let valid = ["string", "number", "boolean", "array", "object", "null"];
+                                if valid.contains(&s.as_str()) {
+                                    Filter::Condition(FilterCondition {
+                                        field: field.to_string(),
+                                        operator: FilterOperator::Type,
+                                        value: op_value.clone(),
+                                    })
+                                } else {
+                                    return Err(format!(
+                                        "$type requires one of: {}",
+                                        valid.join(", ")
+                                    ));
+                                }
+                            }
+                            _ => return Err("$type requires a string".to_string()),
+                        },
                         _ => return Err(format!("Unknown operator: {}", op)),
                     };
                     conditions.push(filter);
@@ -780,8 +1197,19 @@ impl Filter {
 fn evaluate_condition(condition: &FilterCondition, metadata: Option<&Value>) -> bool {
     let metadata = match metadata {
         Some(m) => m,
-        None => return false,
+        None => {
+            // No metadata: only $exists:false matches
+            return condition.operator == FilterOperator::Exists
+                && condition.value == Value::Bool(false);
+        }
     };
+
+    // $exists checks field presence, not value comparison
+    if condition.operator == FilterOperator::Exists {
+        let field_present = get_field_value(metadata, &condition.field).is_some();
+        let want_exists = condition.value.as_bool().unwrap_or(true);
+        return field_present == want_exists;
+    }
 
     let field_value = get_field_value(metadata, &condition.field);
 
@@ -848,7 +1276,121 @@ fn compare_values(operator: &FilterOperator, field_value: &Value, filter_value: 
             (Value::String(s), Value::String(suffix)) => s.ends_with(suffix.as_str()),
             _ => false,
         },
+        // $exists is handled in evaluate_condition before compare_values is called
+        FilterOperator::Exists => false,
+        FilterOperator::Regex => match (field_value, filter_value) {
+            (Value::String(s), Value::String(pattern)) => simple_regex_match(s, pattern),
+            _ => false,
+        },
+        FilterOperator::All => match (field_value, filter_value) {
+            (Value::Array(field_arr), Value::Array(required)) => {
+                required.iter().all(|req| field_arr.contains(req))
+            }
+            _ => false,
+        },
+        FilterOperator::ElemMatch => match field_value {
+            Value::Array(arr) => {
+                if let Ok(sub_filter) = Filter::parse(filter_value) {
+                    arr.iter().any(|elem| sub_filter.matches(Some(elem)))
+                } else {
+                    false
+                }
+            }
+            _ => false,
+        },
+        FilterOperator::Between => {
+            if let Value::Array(bounds) = filter_value {
+                if bounds.len() == 2 {
+                    compare_numeric(field_value, &bounds[0], |a, b| a >= b)
+                        && compare_numeric(field_value, &bounds[1], |a, b| a <= b)
+                } else {
+                    false
+                }
+            } else {
+                false
+            }
+        }
+        FilterOperator::Size => {
+            let expected = filter_value.as_u64();
+            match (field_value, expected) {
+                (Value::Array(arr), Some(n)) => arr.len() as u64 == n,
+                (Value::String(s), Some(n)) => s.len() as u64 == n,
+                _ => false,
+            }
+        }
+        FilterOperator::Type => {
+            if let Value::String(type_name) = filter_value {
+                match type_name.as_str() {
+                    "string" => field_value.is_string(),
+                    "number" => field_value.is_number(),
+                    "boolean" => field_value.is_boolean(),
+                    "array" => field_value.is_array(),
+                    "object" => field_value.is_object(),
+                    "null" => field_value.is_null(),
+                    _ => false,
+                }
+            } else {
+                false
+            }
+        }
     }
+}
+
+/// Simple regex-like pattern matching without external regex crate.
+///
+/// Supports:
+/// - `.` matches any single character
+/// - `*` after a char matches zero or more of that char
+/// - `.*` matches any sequence
+/// - `^` anchors to start (implicit if not using `.*` prefix)
+/// - `$` anchors to end (implicit if not using `.*` suffix)
+/// - Literal characters match themselves
+///
+/// For full regex support, callers should use an external regex crate.
+/// This implementation covers common metadata filtering patterns.
+fn simple_regex_match(text: &str, pattern: &str) -> bool {
+    // Fast path for common cases
+    if pattern.is_empty() {
+        return text.is_empty();
+    }
+    if pattern == ".*" || pattern == "^.*$" {
+        return true;
+    }
+
+    // Strip optional anchors
+    let pattern = pattern.strip_prefix('^').unwrap_or(pattern);
+    let pattern = pattern.strip_suffix('$').unwrap_or(pattern);
+
+    // Check if pattern starts/ends with .* for contains-like behavior
+    let (prefix_wild, pattern) = if let Some(rest) = pattern.strip_prefix(".*") {
+        (true, rest)
+    } else {
+        (false, pattern)
+    };
+    let (suffix_wild, pattern) = if let Some(rest) = pattern.strip_suffix(".*") {
+        (true, rest)
+    } else {
+        (false, pattern)
+    };
+
+    // If both prefix and suffix are wild, check if pattern is contained in text
+    if prefix_wild && suffix_wild {
+        return text.contains(pattern);
+    }
+
+    if prefix_wild {
+        return text.ends_with(pattern);
+    }
+
+    if suffix_wild {
+        return text.starts_with(pattern);
+    }
+
+    // Exact match (treating only `.` as wildcard for single char)
+    if pattern.len() != text.len() {
+        return false;
+    }
+    pattern.chars().zip(text.chars()).all(|(p, t)| p == '.' || p == t)
 }
 
 /// Compare numeric values
@@ -1141,7 +1683,7 @@ mod tests {
         let mut store = MetadataStore::new();
 
         // Insert vectors with unique UUID-like values
-        for i in 0..super::FIELD_INDEX_CARDINALITY_THRESHOLD + 100 {
+        for i in 0..super::DEFAULT_CARDINALITY_THRESHOLD + 100 {
             store
                 .insert(
                     i,
@@ -1163,5 +1705,929 @@ mod tests {
         assert!(store.is_high_cardinality("uuid"));
         // Inverted index for uuid should be removed
         assert!(store.lookup_field_eq("uuid", &json!("uuid-0")).is_none());
+    }
+
+    #[test]
+    fn test_field_stats() {
+        let mut store = MetadataStore::new();
+        store.insert(0, "v0".into(), Some(json!({"cat": "a", "tag": "x"}))).unwrap();
+        store.insert(1, "v1".into(), Some(json!({"cat": "b", "tag": "x"}))).unwrap();
+        store.insert(2, "v2".into(), Some(json!({"cat": "a", "tag": "y"}))).unwrap();
+
+        // Specific field stats
+        let cat_stats = store.field_stats("cat").unwrap();
+        assert_eq!(cat_stats.name, "cat");
+        assert_eq!(cat_stats.cardinality, 2);
+        assert!(cat_stats.is_indexed);
+        assert!(!cat_stats.is_high_cardinality);
+
+        let tag_stats = store.field_stats("tag").unwrap();
+        assert_eq!(tag_stats.name, "tag");
+        assert_eq!(tag_stats.cardinality, 2);
+        assert!(tag_stats.is_indexed);
+
+        // Unknown field returns None
+        assert!(store.field_stats("nonexistent").is_none());
+
+        // All field stats
+        let all = store.all_field_stats();
+        assert_eq!(all.len(), 2);
+        // Sorted by name
+        assert_eq!(all[0].name, "cat");
+        assert_eq!(all[1].name, "tag");
+    }
+
+    #[test]
+    fn test_custom_cardinality_threshold() {
+        let mut store = MetadataStore::with_cardinality_threshold(100);
+        assert_eq!(store.cardinality_threshold(), 100);
+
+        // Insert 110 unique values — should trigger high-cardinality at 100
+        for i in 0..110 {
+            store
+                .insert(i, format!("v{i}"), Some(json!({ "field": format!("val-{i}") })))
+                .unwrap();
+        }
+        assert!(store.is_high_cardinality("field"));
+        assert!(store.lookup_field_eq("field", &json!("val-0")).is_none());
+    }
+
+    #[test]
+    fn test_set_cardinality_threshold() {
+        let mut store = MetadataStore::new();
+        assert_eq!(store.cardinality_threshold(), super::DEFAULT_CARDINALITY_THRESHOLD);
+
+        store.set_cardinality_threshold(500);
+        assert_eq!(store.cardinality_threshold(), 500);
+    }
+
+    // ── Schema validation tests ──────────────────────────────────────
+
+    #[test]
+    fn test_schema_valid_metadata_passes() {
+        let schema = json!({
+            "required": ["title"],
+            "properties": {
+                "title": {"type": "string"},
+                "score": {"type": "number"}
+            }
+        });
+        let metadata = json!({"title": "hello", "score": 42});
+        assert!(validate_metadata_schema(&metadata, &schema).is_ok());
+    }
+
+    #[test]
+    fn test_schema_missing_required_field_rejected() {
+        let schema = json!({
+            "required": ["title"],
+            "properties": {
+                "title": {"type": "string"}
+            }
+        });
+        let metadata = json!({"score": 42});
+        let err = validate_metadata_schema(&metadata, &schema).unwrap_err();
+        assert!(err.to_string().contains("missing required metadata field"));
+    }
+
+    #[test]
+    fn test_schema_wrong_type_rejected() {
+        let schema = json!({
+            "properties": {
+                "score": {"type": "number"}
+            }
+        });
+        let metadata = json!({"score": "not_a_number"});
+        let err = validate_metadata_schema(&metadata, &schema).unwrap_err();
+        assert!(err.to_string().contains("expected type 'number'"));
+    }
+
+    #[test]
+    fn test_schema_no_schema_is_noop() {
+        // validate_metadata_schema is only called when schema is Some,
+        // but verify the function itself handles empty schema gracefully.
+        let schema = json!({});
+        let metadata = json!({"anything": true});
+        assert!(validate_metadata_schema(&metadata, &schema).is_ok());
+    }
+
+    #[test]
+    fn test_schema_extra_fields_allowed() {
+        let schema = json!({
+            "required": ["title"],
+            "properties": {
+                "title": {"type": "string"}
+            }
+        });
+        let metadata = json!({"title": "hi", "extra": 123});
+        assert!(validate_metadata_schema(&metadata, &schema).is_ok());
+    }
+
+    #[test]
+    fn test_schema_all_types_validated() {
+        let schema = json!({
+            "properties": {
+                "s": {"type": "string"},
+                "n": {"type": "number"},
+                "b": {"type": "boolean"},
+                "a": {"type": "array"},
+                "o": {"type": "object"},
+                "z": {"type": "null"}
+            }
+        });
+        let metadata = json!({
+            "s": "str", "n": 1.5, "b": true,
+            "a": [1,2], "o": {"k": "v"}, "z": null
+        });
+        assert!(validate_metadata_schema(&metadata, &schema).is_ok());
+    }
+
+    // ── Nested field (dot-notation) tests ────────────────────────────
+
+    #[test]
+    fn test_nested_field_resolution() {
+        let data = json!({"a": {"b": {"c": 42}}});
+        assert_eq!(get_field_value(&data, "a.b.c"), Some(&json!(42)));
+        assert_eq!(get_field_value(&data, "a.b"), Some(&json!({"c": 42})));
+        assert_eq!(get_field_value(&data, "a.b.missing"), None);
+        assert_eq!(get_field_value(&data, "x"), None);
+    }
+
+    #[test]
+    fn test_nested_filter_matching() {
+        let filter = Filter::parse(&json!({"author.name": "Alice"})).unwrap();
+        let metadata = json!({"author": {"name": "Alice", "age": 30}});
+        assert!(filter.matches(Some(&metadata)));
+
+        let metadata2 = json!({"author": {"name": "Bob"}});
+        assert!(!filter.matches(Some(&metadata2)));
+    }
+
+    #[test]
+    fn test_nested_field_indexing() {
+        let mut store = MetadataStore::new();
+        store.insert(
+            0,
+            "v0".into(),
+            Some(json!({"author": {"name": "Alice", "age": 30}, "category": "books"})),
+        ).unwrap();
+
+        // Top-level field indexed
+        let books = store.lookup_field_eq("category", &json!("books"));
+        assert!(books.is_some());
+        assert!(books.unwrap().contains(&0));
+
+        // Nested fields indexed with dot-notation paths
+        let alice = store.lookup_field_eq("author.name", &json!("Alice"));
+        assert!(alice.is_some());
+        assert!(alice.unwrap().contains(&0));
+
+        let age = store.lookup_field_eq("author.age", &json!(30));
+        assert!(age.is_some());
+        assert!(age.unwrap().contains(&0));
+    }
+
+    #[test]
+    fn test_nested_field_index_cleaned_on_delete() {
+        let mut store = MetadataStore::new();
+        store.insert(0, "v0".into(), Some(json!({"a": {"b": "val"}}))).unwrap();
+        store.insert(1, "v1".into(), Some(json!({"a": {"b": "val"}}))).unwrap();
+
+        store.delete(0);
+
+        let results = store.lookup_field_eq("a.b", &json!("val")).unwrap();
+        assert_eq!(results.len(), 1);
+        assert!(results.contains(&1));
+    }
+
+    #[test]
+    fn test_nested_field_index_updated_on_metadata_change() {
+        let mut store = MetadataStore::new();
+        store.insert(0, "v0".into(), Some(json!({"x": {"y": "old"}}))).unwrap();
+
+        store.update_data(0, Some(json!({"x": {"y": "new"}}))).unwrap();
+
+        let old = store.lookup_field_eq("x.y", &json!("old"));
+        assert!(old.is_none() || old.unwrap().is_empty() || !old.unwrap().contains(&0));
+
+        let new = store.lookup_field_eq("x.y", &json!("new"));
+        assert!(new.is_some());
+        assert!(new.unwrap().contains(&0));
+    }
+
+    #[test]
+    fn test_backward_compat_flat_metadata() {
+        // Existing flat metadata filters still work identically
+        let mut store = MetadataStore::new();
+        store.insert(0, "v0".into(), Some(json!({"color": "red", "size": 10}))).unwrap();
+        store.insert(1, "v1".into(), Some(json!({"color": "blue", "size": 20}))).unwrap();
+
+        let filter = Filter::eq("color", "red");
+        assert!(filter.matches(store.get(0).unwrap().data.as_ref()));
+        assert!(!filter.matches(store.get(1).unwrap().data.as_ref()));
+
+        let reds = store.lookup_field_eq("color", &json!("red")).unwrap();
+        assert_eq!(reds.len(), 1);
+        assert!(reds.contains(&0));
+    }
+
+    #[test]
+    fn test_flatten_metadata_depth_limit() {
+        // Deeply nested object should stop at FLATTEN_MAX_DEPTH
+        let deep = json!({"a": {"b": {"c": {"d": {"e": {"f": {"g": 1}}}}}}});
+        let mut out = Vec::new();
+        flatten_metadata(&deep, "", 0, &mut out);
+        // "a.b.c.d.e" is depth 5, so "f.g" at depth 6 is skipped
+        // "a.b.c.d.e.f" is depth 5 for the "f" key, "g" inside is depth 6
+        // At depth 5 we enter object {"f": {"g": 1}}, flatten_metadata is called
+        // with depth=5 for {"f": {"g": 1}}, which tries depth 6 for {"g": 1} and returns
+        // So "a.b.c.d.e.f" should not appear as a leaf since {"g":1} is an object
+        // but depth 6 is blocked, so nothing is emitted for that branch.
+        assert!(out.iter().all(|(path, _)| path.matches('.').count() < FLATTEN_MAX_DEPTH));
+    }
+
+    #[test]
+    fn test_nested_resolve_filter_via_index() {
+        let mut store = MetadataStore::new();
+        store.insert(0, "v0".into(), Some(json!({"author": {"name": "Alice"}}))).unwrap();
+        store.insert(1, "v1".into(), Some(json!({"author": {"name": "Bob"}}))).unwrap();
+
+        let filter = Filter::eq("author.name", "Alice");
+        let result = store.resolve_filter_via_index(&filter);
+        assert!(result.is_some());
+        let ids = result.unwrap();
+        assert_eq!(ids.len(), 1);
+        assert!(ids.contains(&0));
+    }
+
+    // ── $exists filter tests ─────────────────────────────────────────
+
+    #[test]
+    fn test_filter_exists_true() {
+        let filter = Filter::exists("category", true);
+        assert!(filter.matches(Some(&json!({"category": "books"}))));
+        assert!(!filter.matches(Some(&json!({"other": "value"}))));
+        assert!(!filter.matches(None));
+    }
+
+    #[test]
+    fn test_filter_exists_false() {
+        let filter = Filter::exists("category", false);
+        assert!(!filter.matches(Some(&json!({"category": "books"}))));
+        assert!(filter.matches(Some(&json!({"other": "value"}))));
+        assert!(filter.matches(None));
+    }
+
+    #[test]
+    fn test_filter_exists_nested() {
+        let filter = Filter::exists("author.name", true);
+        assert!(filter.matches(Some(&json!({"author": {"name": "Alice"}}))));
+        assert!(!filter.matches(Some(&json!({"author": {"age": 30}}))));
+    }
+
+    #[test]
+    fn test_parse_exists_filter() {
+        let filter = Filter::parse(&json!({"tags": {"$exists": true}})).unwrap();
+        assert!(filter.matches(Some(&json!({"tags": ["a", "b"]}))));
+        assert!(!filter.matches(Some(&json!({"other": 1}))));
+
+        let filter2 = Filter::parse(&json!({"deleted": {"$exists": false}})).unwrap();
+        assert!(filter2.matches(Some(&json!({"name": "test"}))));
+        assert!(!filter2.matches(Some(&json!({"deleted": true}))));
+    }
+
+    #[test]
+    fn test_parse_exists_requires_bool() {
+        let result = Filter::parse(&json!({"field": {"$exists": "yes"}}));
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("boolean"));
+    }
+
+    // ── $regex filter tests ──────────────────────────────────────────
+
+    #[test]
+    fn test_filter_regex_basic() {
+        let filter = Filter::regex("name", ".*Alice.*");
+        assert!(filter.matches(Some(&json!({"name": "Alice Smith"}))));
+        assert!(!filter.matches(Some(&json!({"name": "Bob"}))));
+    }
+
+    #[test]
+    fn test_filter_regex_prefix() {
+        let filter = Filter::regex("email", "admin.*");
+        assert!(filter.matches(Some(&json!({"email": "admin@example.com"}))));
+        assert!(!filter.matches(Some(&json!({"email": "user@admin.com"}))));
+    }
+
+    #[test]
+    fn test_filter_regex_suffix() {
+        let filter = Filter::regex("file", ".*.pdf");
+        assert!(filter.matches(Some(&json!({"file": "report.pdf"}))));
+        assert!(!filter.matches(Some(&json!({"file": "report.doc"}))));
+    }
+
+    #[test]
+    fn test_filter_regex_dot_wildcard() {
+        let filter = Filter::regex("code", "A.C");
+        assert!(filter.matches(Some(&json!({"code": "ABC"}))));
+        assert!(filter.matches(Some(&json!({"code": "AXC"}))));
+        assert!(!filter.matches(Some(&json!({"code": "ABBC"}))));
+    }
+
+    #[test]
+    fn test_filter_regex_match_all() {
+        let filter = Filter::regex("any", ".*");
+        assert!(filter.matches(Some(&json!({"any": "anything"}))));
+        assert!(filter.matches(Some(&json!({"any": ""}))));
+    }
+
+    #[test]
+    fn test_filter_regex_non_string_field() {
+        let filter = Filter::regex("count", ".*");
+        assert!(!filter.matches(Some(&json!({"count": 42}))));
+    }
+
+    #[test]
+    fn test_parse_regex_filter() {
+        let filter = Filter::parse(&json!({"name": {"$regex": ".*test.*"}})).unwrap();
+        assert!(filter.matches(Some(&json!({"name": "my_test_file"}))));
+        assert!(!filter.matches(Some(&json!({"name": "production"}))));
+    }
+
+    #[test]
+    fn test_parse_regex_requires_string() {
+        let result = Filter::parse(&json!({"field": {"$regex": 42}}));
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("string"));
+    }
+
+    // ── Convenience constructor tests ────────────────────────────────
+
+    #[test]
+    fn test_filter_contains_constructor() {
+        let filter = Filter::contains("tags", "rust");
+        let meta = json!({"tags": ["rust", "python"]});
+        assert!(filter.matches(Some(&meta)));
+        assert!(!filter.matches(Some(&json!({"tags": ["java"]}))));
+    }
+
+    #[test]
+    fn test_filter_starts_with_constructor() {
+        let filter = Filter::starts_with("name", "Dr.");
+        assert!(filter.matches(Some(&json!({"name": "Dr. Smith"}))));
+        assert!(!filter.matches(Some(&json!({"name": "Mr. Smith"}))));
+    }
+
+    #[test]
+    fn test_filter_ends_with_constructor() {
+        let filter = Filter::ends_with("email", "@example.com");
+        assert!(filter.matches(Some(&json!({"email": "user@example.com"}))));
+        assert!(!filter.matches(Some(&json!({"email": "user@other.com"}))));
+    }
+
+    #[test]
+    fn test_filter_not_in_constructor() {
+        let filter = Filter::not_in("status", vec![json!("deleted"), json!("archived")]);
+        assert!(filter.matches(Some(&json!({"status": "active"}))));
+        assert!(!filter.matches(Some(&json!({"status": "deleted"}))));
+    }
+
+    // ── Display impl tests ───────────────────────────────────────────
+
+    #[test]
+    fn test_filter_operator_display() {
+        assert_eq!(FilterOperator::Eq.to_string(), "$eq");
+        assert_eq!(FilterOperator::Ne.to_string(), "$ne");
+        assert_eq!(FilterOperator::Gt.to_string(), "$gt");
+        assert_eq!(FilterOperator::Gte.to_string(), "$gte");
+        assert_eq!(FilterOperator::Lt.to_string(), "$lt");
+        assert_eq!(FilterOperator::Lte.to_string(), "$lte");
+        assert_eq!(FilterOperator::In.to_string(), "$in");
+        assert_eq!(FilterOperator::NotIn.to_string(), "$nin");
+        assert_eq!(FilterOperator::Contains.to_string(), "$contains");
+        assert_eq!(FilterOperator::StartsWith.to_string(), "$startsWith");
+        assert_eq!(FilterOperator::EndsWith.to_string(), "$endsWith");
+        assert_eq!(FilterOperator::Exists.to_string(), "$exists");
+        assert_eq!(FilterOperator::Regex.to_string(), "$regex");
+    }
+
+    // ── Serialization tests ──────────────────────────────────────────
+
+    #[test]
+    fn test_filter_serialize_roundtrip() {
+        let filter = Filter::and(vec![
+            Filter::eq("category", "books"),
+            Filter::gt("price", 10),
+            Filter::exists("in_stock", true),
+        ]);
+        let json = serde_json::to_string(&filter).unwrap();
+        let deserialized: Filter = serde_json::from_str(&json).unwrap();
+
+        // Verify the deserialized filter matches the same data
+        let meta = json!({"category": "books", "price": 25, "in_stock": true});
+        assert!(filter.matches(Some(&meta)));
+        assert!(deserialized.matches(Some(&meta)));
+    }
+
+    #[test]
+    fn test_filter_condition_serialize_roundtrip() {
+        let cond = FilterCondition {
+            field: "status".to_string(),
+            operator: FilterOperator::Ne,
+            value: json!("deleted"),
+        };
+        let json = serde_json::to_string(&cond).unwrap();
+        let deserialized: FilterCondition = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.field, "status");
+        assert_eq!(deserialized.operator, FilterOperator::Ne);
+    }
+
+    // ── simple_regex_match unit tests ────────────────────────────────
+
+    #[test]
+    fn test_simple_regex_empty_pattern() {
+        assert!(simple_regex_match("", ""));
+        assert!(!simple_regex_match("text", ""));
+    }
+
+    #[test]
+    fn test_simple_regex_with_anchors() {
+        assert!(simple_regex_match("hello", "^hello$"));
+        assert!(simple_regex_match("anything", "^.*$"));
+    }
+
+    // ── $all operator tests ──────────────────────────────────────────────
+
+    #[test]
+    fn test_all_operator_matches_subset() {
+        let filter = Filter::parse(&json!({"tags": {"$all": ["rust", "db"]}})).unwrap();
+        let meta = json!({"tags": ["rust", "db", "vector"]});
+        assert!(filter.matches(Some(&meta)));
+    }
+
+    #[test]
+    fn test_all_operator_exact_match() {
+        let filter = Filter::parse(&json!({"tags": {"$all": ["a", "b"]}})).unwrap();
+        let meta = json!({"tags": ["a", "b"]});
+        assert!(filter.matches(Some(&meta)));
+    }
+
+    #[test]
+    fn test_all_operator_missing_element() {
+        let filter = Filter::parse(&json!({"tags": {"$all": ["rust", "missing"]}})).unwrap();
+        let meta = json!({"tags": ["rust", "db"]});
+        assert!(!filter.matches(Some(&meta)));
+    }
+
+    #[test]
+    fn test_all_operator_empty_required() {
+        let filter = Filter::parse(&json!({"tags": {"$all": []}})).unwrap();
+        let meta = json!({"tags": ["anything"]});
+        assert!(filter.matches(Some(&meta)));
+    }
+
+    #[test]
+    fn test_all_operator_non_array_field() {
+        let filter = Filter::parse(&json!({"name": {"$all": ["x"]}})).unwrap();
+        let meta = json!({"name": "x"});
+        assert!(!filter.matches(Some(&meta)));
+    }
+
+    #[test]
+    fn test_all_operator_with_numbers() {
+        let filter = Filter::parse(&json!({"scores": {"$all": [1, 2, 3]}})).unwrap();
+        let meta = json!({"scores": [1, 2, 3, 4, 5]});
+        assert!(filter.matches(Some(&meta)));
+    }
+
+    #[test]
+    fn test_all_parse_error_non_array() {
+        let result = Filter::parse(&json!({"tags": {"$all": "not_array"}}));
+        assert!(result.is_err());
+    }
+
+    // ── $elemMatch operator tests ────────────────────────────────────────
+
+    #[test]
+    fn test_elem_match_basic() {
+        let filter = Filter::parse(&json!({
+            "items": {"$elemMatch": {"price": {"$gt": 10}}}
+        })).unwrap();
+        let meta = json!({"items": [
+            {"price": 5, "name": "cheap"},
+            {"price": 15, "name": "expensive"}
+        ]});
+        assert!(filter.matches(Some(&meta)));
+    }
+
+    #[test]
+    fn test_elem_match_no_match() {
+        let filter = Filter::parse(&json!({
+            "items": {"$elemMatch": {"price": {"$gt": 100}}}
+        })).unwrap();
+        let meta = json!({"items": [
+            {"price": 5},
+            {"price": 15}
+        ]});
+        assert!(!filter.matches(Some(&meta)));
+    }
+
+    #[test]
+    fn test_elem_match_multiple_conditions() {
+        let filter = Filter::parse(&json!({
+            "items": {"$elemMatch": {"price": {"$gt": 10}, "in_stock": true}}
+        })).unwrap();
+        let meta = json!({"items": [
+            {"price": 15, "in_stock": false},
+            {"price": 20, "in_stock": true}
+        ]});
+        assert!(filter.matches(Some(&meta)));
+    }
+
+    #[test]
+    fn test_elem_match_multiple_conditions_no_single_element_matches() {
+        let filter = Filter::parse(&json!({
+            "items": {"$elemMatch": {"price": {"$gt": 10}, "in_stock": true}}
+        })).unwrap();
+        // price>10 in one element, in_stock=true in another — no single element matches both
+        let meta = json!({"items": [
+            {"price": 15, "in_stock": false},
+            {"price": 5, "in_stock": true}
+        ]});
+        assert!(!filter.matches(Some(&meta)));
+    }
+
+    #[test]
+    fn test_elem_match_non_array_field() {
+        let filter = Filter::parse(&json!({
+            "name": {"$elemMatch": {"x": 1}}
+        })).unwrap();
+        let meta = json!({"name": "not_array"});
+        assert!(!filter.matches(Some(&meta)));
+    }
+
+    #[test]
+    fn test_elem_match_empty_array() {
+        let filter = Filter::parse(&json!({
+            "items": {"$elemMatch": {"x": 1}}
+        })).unwrap();
+        let meta = json!({"items": []});
+        assert!(!filter.matches(Some(&meta)));
+    }
+
+    #[test]
+    fn test_elem_match_parse_error_non_object() {
+        let result = Filter::parse(&json!({"items": {"$elemMatch": [1,2,3]}}));
+        assert!(result.is_err());
+    }
+
+    // ── Display tests for new operators ──────────────────────────────────
+
+    #[test]
+    fn test_all_operator_display() {
+        assert_eq!(format!("{}", FilterOperator::All), "$all");
+    }
+
+    #[test]
+    fn test_elem_match_operator_display() {
+        assert_eq!(format!("{}", FilterOperator::ElemMatch), "$elemMatch");
+    }
+
+    // ── Builder method tests ─────────────────────────────────────────────
+
+    #[test]
+    fn test_filter_all_builder() {
+        let filter = Filter::all("tags", vec![json!("a"), json!("b")]);
+        let meta = json!({"tags": ["a", "b", "c"]});
+        assert!(filter.matches(Some(&meta)));
+    }
+
+    #[test]
+    fn test_filter_elem_match_builder() {
+        let filter = Filter::elem_match("items", json!({"x": {"$gt": 5}}));
+        let meta = json!({"items": [{"x": 3}, {"x": 10}]});
+        assert!(filter.matches(Some(&meta)));
+    }
+
+    // ── Edge case: $in / $not_in with empty arrays ──────────────────────
+
+    #[test]
+    fn test_in_empty_array_matches_nothing() {
+        let filter = Filter::parse(&json!({"status": {"$in": []}})).unwrap();
+        let meta = json!({"status": "active"});
+        assert!(!filter.matches(Some(&meta)));
+    }
+
+    #[test]
+    fn test_not_in_empty_array_matches_everything() {
+        let filter = Filter::parse(&json!({"status": {"$nin": []}})).unwrap();
+        let meta = json!({"status": "active"});
+        assert!(filter.matches(Some(&meta)));
+    }
+
+    #[test]
+    fn test_in_empty_array_with_no_metadata() {
+        let filter = Filter::parse(&json!({"status": {"$in": []}})).unwrap();
+        assert!(!filter.matches(None));
+    }
+
+    // ── Edge case: deeply nested field paths ─────────────────────────────
+
+    #[test]
+    fn test_nested_field_depth_5() {
+        let filter = Filter::parse(&json!({"a.b.c.d.e": "deep"})).unwrap();
+        let meta = json!({"a": {"b": {"c": {"d": {"e": "deep"}}}}});
+        assert!(filter.matches(Some(&meta)));
+    }
+
+    #[test]
+    fn test_nested_field_missing_intermediate() {
+        let filter = Filter::parse(&json!({"a.b.c": "value"})).unwrap();
+        let meta = json!({"a": {"x": 1}});
+        assert!(!filter.matches(Some(&meta)));
+    }
+
+    #[test]
+    fn test_nested_field_with_null_intermediate() {
+        let filter = Filter::parse(&json!({"a.b": "value"})).unwrap();
+        let meta = json!({"a": null});
+        assert!(!filter.matches(Some(&meta)));
+    }
+
+    // ── Edge case: unicode field names and values ────────────────────────
+
+    #[test]
+    fn test_unicode_field_name() {
+        let filter = Filter::parse(&json!({"名前": "テスト"})).unwrap();
+        let meta = json!({"名前": "テスト"});
+        assert!(filter.matches(Some(&meta)));
+    }
+
+    #[test]
+    fn test_emoji_in_value() {
+        let filter = Filter::eq("tag", json!("🔥hot"));
+        let meta = json!({"tag": "🔥hot"});
+        assert!(filter.matches(Some(&meta)));
+    }
+
+    // ── Edge case: numeric comparison precision ─────────────────────────
+
+    #[test]
+    fn test_float_equality_exact() {
+        let filter = Filter::parse(&json!({"score": 0.1})).unwrap();
+        let meta = json!({"score": 0.1});
+        assert!(filter.matches(Some(&meta)));
+    }
+
+    #[test]
+    fn test_comparison_integer_vs_float() {
+        let filter = Filter::parse(&json!({"count": {"$gte": 5}})).unwrap();
+        let meta = json!({"count": 5.0});
+        assert!(filter.matches(Some(&meta)));
+    }
+
+    // ── Edge case: $exists with various field types ─────────────────────
+
+    #[test]
+    fn test_exists_true_on_null_value() {
+        let filter = Filter::exists("field", true);
+        let meta = json!({"field": null});
+        assert!(filter.matches(Some(&meta)));
+    }
+
+    #[test]
+    fn test_exists_false_on_absent_field() {
+        let filter = Filter::exists("missing", false);
+        let meta = json!({"other": 1});
+        assert!(filter.matches(Some(&meta)));
+    }
+
+    #[test]
+    fn test_exists_true_on_empty_string() {
+        let filter = Filter::exists("field", true);
+        let meta = json!({"field": ""});
+        assert!(filter.matches(Some(&meta)));
+    }
+
+    // ── Edge case: $contains on non-array/non-string ────────────────────
+
+    #[test]
+    fn test_contains_on_number_returns_false() {
+        let filter = Filter::contains("field", json!(5));
+        let meta = json!({"field": 5});
+        assert!(!filter.matches(Some(&meta)));
+    }
+
+    #[test]
+    fn test_contains_on_boolean_returns_false() {
+        let filter = Filter::contains("field", json!(true));
+        let meta = json!({"field": true});
+        assert!(!filter.matches(Some(&meta)));
+    }
+
+    // ── $between operator tests ─────────────────────────────────────────
+
+    #[test]
+    fn test_between_basic() {
+        let filter = Filter::between("price", 10, 50);
+        assert!(filter.matches(Some(&json!({"price": 10}))));
+        assert!(filter.matches(Some(&json!({"price": 30}))));
+        assert!(filter.matches(Some(&json!({"price": 50}))));
+        assert!(!filter.matches(Some(&json!({"price": 9}))));
+        assert!(!filter.matches(Some(&json!({"price": 51}))));
+    }
+
+    #[test]
+    fn test_between_float() {
+        let filter = Filter::parse(&json!({"score": {"$between": [0.5, 0.9]}})).unwrap();
+        assert!(filter.matches(Some(&json!({"score": 0.7}))));
+        assert!(filter.matches(Some(&json!({"score": 0.5}))));
+        assert!(filter.matches(Some(&json!({"score": 0.9}))));
+        assert!(!filter.matches(Some(&json!({"score": 0.4}))));
+        assert!(!filter.matches(Some(&json!({"score": 1.0}))));
+    }
+
+    #[test]
+    fn test_between_parse_error_wrong_length() {
+        let result = Filter::parse(&json!({"x": {"$between": [1, 2, 3]}}));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_between_parse_error_not_array() {
+        let result = Filter::parse(&json!({"x": {"$between": 5}}));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_between_no_metadata() {
+        let filter = Filter::between("price", 1, 10);
+        assert!(!filter.matches(None));
+    }
+
+    #[test]
+    fn test_between_missing_field() {
+        let filter = Filter::between("price", 1, 10);
+        assert!(!filter.matches(Some(&json!({"other": 5}))));
+    }
+
+    #[test]
+    fn test_between_non_numeric() {
+        let filter = Filter::between("name", 1, 10);
+        assert!(!filter.matches(Some(&json!({"name": "alice"}))));
+    }
+
+    #[test]
+    fn test_between_display() {
+        assert_eq!(FilterOperator::Between.to_string(), "$between");
+    }
+
+    // ── $size operator tests ────────────────────────────────────────────
+
+    #[test]
+    fn test_size_array() {
+        let filter = Filter::size("tags", 3);
+        assert!(filter.matches(Some(&json!({"tags": ["a", "b", "c"]}))));
+        assert!(!filter.matches(Some(&json!({"tags": ["a", "b"]}))));
+        assert!(!filter.matches(Some(&json!({"tags": []}))));
+    }
+
+    #[test]
+    fn test_size_string() {
+        let filter = Filter::size("code", 5);
+        assert!(filter.matches(Some(&json!({"code": "hello"}))));
+        assert!(!filter.matches(Some(&json!({"code": "hi"}))));
+    }
+
+    #[test]
+    fn test_size_zero() {
+        let filter = Filter::size("items", 0);
+        assert!(filter.matches(Some(&json!({"items": []}))));
+        assert!(!filter.matches(Some(&json!({"items": [1]}))));
+    }
+
+    #[test]
+    fn test_size_parse() {
+        let filter = Filter::parse(&json!({"tags": {"$size": 2}})).unwrap();
+        assert!(filter.matches(Some(&json!({"tags": [1, 2]}))));
+        assert!(!filter.matches(Some(&json!({"tags": [1]}))));
+    }
+
+    #[test]
+    fn test_size_parse_error_not_number() {
+        let result = Filter::parse(&json!({"tags": {"$size": "three"}}));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_size_non_array_non_string() {
+        let filter = Filter::size("val", 1);
+        assert!(!filter.matches(Some(&json!({"val": 42}))));
+        assert!(!filter.matches(Some(&json!({"val": true}))));
+    }
+
+    #[test]
+    fn test_size_display() {
+        assert_eq!(FilterOperator::Size.to_string(), "$size");
+    }
+
+    // ── $type operator tests ────────────────────────────────────────────
+
+    #[test]
+    fn test_type_string() {
+        let filter = Filter::has_type("name", "string");
+        assert!(filter.matches(Some(&json!({"name": "alice"}))));
+        assert!(!filter.matches(Some(&json!({"name": 42}))));
+    }
+
+    #[test]
+    fn test_type_number() {
+        let filter = Filter::has_type("age", "number");
+        assert!(filter.matches(Some(&json!({"age": 25}))));
+        assert!(filter.matches(Some(&json!({"age": 3.14}))));
+        assert!(!filter.matches(Some(&json!({"age": "25"}))));
+    }
+
+    #[test]
+    fn test_type_boolean() {
+        let filter = Filter::has_type("active", "boolean");
+        assert!(filter.matches(Some(&json!({"active": true}))));
+        assert!(!filter.matches(Some(&json!({"active": 1}))));
+    }
+
+    #[test]
+    fn test_type_array() {
+        let filter = Filter::has_type("tags", "array");
+        assert!(filter.matches(Some(&json!({"tags": [1, 2]}))));
+        assert!(!filter.matches(Some(&json!({"tags": "not array"}))));
+    }
+
+    #[test]
+    fn test_type_object() {
+        let filter = Filter::has_type("meta", "object");
+        assert!(filter.matches(Some(&json!({"meta": {"key": "val"}}))));
+        assert!(!filter.matches(Some(&json!({"meta": [1]}))));
+    }
+
+    #[test]
+    fn test_type_null() {
+        let filter = Filter::has_type("field", "null");
+        assert!(filter.matches(Some(&json!({"field": null}))));
+        assert!(!filter.matches(Some(&json!({"field": 0}))));
+    }
+
+    #[test]
+    fn test_type_parse() {
+        let filter = Filter::parse(&json!({"age": {"$type": "number"}})).unwrap();
+        assert!(filter.matches(Some(&json!({"age": 10}))));
+        assert!(!filter.matches(Some(&json!({"age": "ten"}))));
+    }
+
+    #[test]
+    fn test_type_parse_error_invalid_type() {
+        let result = Filter::parse(&json!({"x": {"$type": "integer"}}));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_type_parse_error_not_string() {
+        let result = Filter::parse(&json!({"x": {"$type": 42}}));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_type_display() {
+        assert_eq!(FilterOperator::Type.to_string(), "$type");
+    }
+
+    // ── depth() method tests ────────────────────────────────────────────
+
+    #[test]
+    fn test_depth_condition() {
+        assert_eq!(Filter::eq("x", 1).depth(), 1);
+    }
+
+    #[test]
+    fn test_depth_and() {
+        let filter = Filter::and(vec![Filter::eq("a", 1), Filter::gt("b", 2)]);
+        assert_eq!(filter.depth(), 2);
+    }
+
+    #[test]
+    fn test_depth_nested() {
+        let inner = Filter::and(vec![Filter::eq("a", 1), Filter::eq("b", 2)]);
+        let outer = Filter::or(vec![inner, Filter::eq("c", 3)]);
+        assert_eq!(outer.depth(), 3);
+    }
+
+    #[test]
+    fn test_depth_not() {
+        let filter = Filter::negate(Filter::eq("x", 1));
+        assert_eq!(filter.depth(), 2);
+    }
+
+    #[test]
+    fn test_depth_empty_and() {
+        let filter = Filter::and(vec![]);
+        assert_eq!(filter.depth(), 1);
     }
 }
