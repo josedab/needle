@@ -73,6 +73,7 @@
 //! assert!((dot - 1.0).abs() < 0.001);
 //! ```
 
+use crate::error::{NeedleError, Result};
 use ordered_float::OrderedFloat;
 use serde::{Deserialize, Serialize};
 use std::cmp::Reverse;
@@ -92,51 +93,92 @@ impl SparseVector {
     ///
     /// # Panics
     /// Panics if indices and values have different lengths, or if any value is NaN or infinite.
+    /// Use [`try_new`](Self::try_new) for a non-panicking alternative.
     pub fn new(indices: Vec<u32>, values: Vec<f32>) -> Self {
-        assert_eq!(
-            indices.len(),
-            values.len(),
-            "Indices and values must have the same length"
-        );
-        for (i, &v) in values.iter().enumerate() {
-            assert!(v.is_finite(), "Value at index {} is not finite: {}", i, v);
+        Self::try_new(indices, values).expect("SparseVector::new: invalid input")
+    }
+
+    /// Create a new sparse vector, returning an error on invalid input.
+    pub fn try_new(indices: Vec<u32>, values: Vec<f32>) -> Result<Self> {
+        if indices.len() != values.len() {
+            return Err(NeedleError::InvalidVector(format!(
+                "Indices length ({}) != values length ({})",
+                indices.len(),
+                values.len()
+            )));
         }
-        Self { indices, values }
+        for (i, &v) in values.iter().enumerate() {
+            if !v.is_finite() {
+                return Err(NeedleError::InvalidVector(format!(
+                    "Value at index {i} is not finite: {v}"
+                )));
+            }
+        }
+        Ok(Self { indices, values })
     }
 
     /// Create a sparse vector from a HashMap
     ///
     /// # Panics
     /// Panics if any value is NaN or infinite.
+    /// Use [`try_from_hashmap`](Self::try_from_hashmap) for a non-panicking alternative.
     pub fn from_hashmap(map: &HashMap<u32, f32>) -> Self {
+        Self::try_from_hashmap(map).expect("SparseVector::from_hashmap: invalid input")
+    }
+
+    /// Create a sparse vector from a HashMap, returning an error on invalid input.
+    pub fn try_from_hashmap(map: &HashMap<u32, f32>) -> Result<Self> {
         for (&idx, &v) in map.iter() {
-            assert!(v.is_finite(), "Value at index {} is not finite: {}", idx, v);
+            if !v.is_finite() {
+                return Err(NeedleError::InvalidVector(format!(
+                    "Value at index {idx} is not finite: {v}"
+                )));
+            }
         }
         let mut pairs: Vec<(u32, f32)> = map.iter().map(|(&i, &v)| (i, v)).collect();
         pairs.sort_by_key(|(i, _)| *i);
-        Self {
+        Ok(Self {
             indices: pairs.iter().map(|(i, _)| *i).collect(),
             values: pairs.iter().map(|(_, v)| *v).collect(),
-        }
+        })
     }
 
     /// Create a sparse vector from a dense vector (only non-zero values)
     ///
     /// # Panics
     /// Panics if any value is NaN or infinite.
+    /// Use [`try_from_dense`](Self::try_from_dense) for a non-panicking alternative.
     pub fn from_dense(dense: &[f32], threshold: f32) -> Self {
+        Self::try_from_dense(dense, threshold).expect("SparseVector::from_dense: invalid input")
+    }
+
+    /// Create a sparse vector from a dense vector, returning an error on invalid input.
+    ///
+    /// Returns an error if any value is non-finite or if the dense vector exceeds
+    /// `u32::MAX` elements.
+    pub fn try_from_dense(dense: &[f32], threshold: f32) -> Result<Self> {
+        if dense.len() > u32::MAX as usize {
+            return Err(NeedleError::InvalidVector(format!(
+                "Dense vector length ({}) exceeds u32::MAX",
+                dense.len()
+            )));
+        }
         let mut indices = Vec::new();
         let mut values = Vec::new();
 
         for (i, &v) in dense.iter().enumerate() {
-            assert!(v.is_finite(), "Value at index {} is not finite: {}", i, v);
+            if !v.is_finite() {
+                return Err(NeedleError::InvalidVector(format!(
+                    "Value at index {i} is not finite: {v}"
+                )));
+            }
             if v.abs() > threshold {
                 indices.push(i as u32);
                 values.push(v);
             }
         }
 
-        Self { indices, values }
+        Ok(Self { indices, values })
     }
 
     /// Convert to a dense vector
@@ -615,21 +657,41 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Indices and values must have the same length")]
+    #[should_panic(expected = "invalid input")]
     fn test_sparse_mismatched_lengths() {
         SparseVector::new(vec![0, 1, 2], vec![1.0, 2.0]);
     }
 
     #[test]
-    #[should_panic(expected = "not finite")]
+    #[should_panic(expected = "invalid input")]
     fn test_sparse_nan_value() {
         SparseVector::new(vec![0], vec![f32::NAN]);
     }
 
     #[test]
-    #[should_panic(expected = "not finite")]
+    #[should_panic(expected = "invalid input")]
     fn test_sparse_infinity_value() {
         SparseVector::new(vec![0], vec![f32::INFINITY]);
+    }
+
+    #[test]
+    fn test_try_new_mismatched_lengths() {
+        let result = SparseVector::try_new(vec![0, 1, 2], vec![1.0, 2.0]);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("length"));
+    }
+
+    #[test]
+    fn test_try_new_nan() {
+        let result = SparseVector::try_new(vec![0], vec![f32::NAN]);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("not finite"));
+    }
+
+    #[test]
+    fn test_try_from_dense_valid() {
+        let sv = SparseVector::try_from_dense(&[0.0, 0.5, 0.0, 0.8], 0.1).unwrap();
+        assert_eq!(sv.len(), 2);
     }
 
     // ========================================================================
