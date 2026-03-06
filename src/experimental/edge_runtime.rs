@@ -348,22 +348,120 @@ impl IndexSegment {
         serde_json::from_slice(bytes).map_err(NeedleError::Serialization)
     }
 
-    /// Compress segment data (placeholder - returns uncompressed bytes)
+    /// Compress segment data.
+    ///
+    /// Uses LZ4 compression (via `lz4_flex`) when available, falling back to
+    /// simple RLE encoding. Format markers:
+    /// - `0x04` = LZ4 compressed
+    /// - `0x01` = RLE compressed
+    /// - anything else = raw JSON (backwards compatible)
     #[allow(dead_code)]
     pub fn compress(&self) -> Result<Vec<u8>> {
         let bytes = self.to_bytes()?;
-        // FIXME(#34): placeholder — returns uncompressed bytes until a compression
-        // feature (LZ4 or similar) is added to the edge runtime.
-        Ok(bytes)
+        Ok(compress_bytes(&bytes))
     }
 
-    /// Decompress segment data (placeholder - assumes uncompressed bytes)
+    /// Decompress segment data, auto-detecting the compression format.
     #[allow(dead_code)]
     pub fn decompress(bytes: &[u8]) -> Result<Self> {
-        // FIXME(#34): placeholder — assumes uncompressed bytes until a compression
-        // feature (LZ4 or similar) is added to the edge runtime.
-        Self::from_bytes(bytes)
+        let raw = decompress_bytes(bytes)?;
+        Self::from_bytes(&raw)
     }
+}
+
+// ── Compression helpers ─────────────────────────────────────────────────────
+
+/// LZ4 marker byte.
+const LZ4_MARKER: u8 = 0x04;
+/// RLE marker byte (legacy).
+const RLE_MARKER: u8 = 0x01;
+
+/// Compress bytes using LZ4 if available, falling back to RLE.
+fn compress_bytes(input: &[u8]) -> Vec<u8> {
+    #[cfg(feature = "experimental")]
+    {
+        let compressed = lz4_flex::compress_prepend_size(input);
+        let mut out = Vec::with_capacity(1 + compressed.len());
+        out.push(LZ4_MARKER);
+        out.extend_from_slice(&compressed);
+        out
+    }
+    #[cfg(not(feature = "experimental"))]
+    {
+        rle_compress(input)
+    }
+}
+
+/// Decompress bytes, auto-detecting format from the leading marker.
+fn decompress_bytes(bytes: &[u8]) -> Result<Vec<u8>> {
+    match bytes.first() {
+        Some(&LZ4_MARKER) => {
+            #[cfg(feature = "experimental")]
+            {
+                lz4_flex::decompress_size_prepended(&bytes[1..]).map_err(|e| {
+                    NeedleError::Serialization(serde_json::Error::io(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        format!("LZ4 decompression failed: {e}"),
+                    )))
+                })
+            }
+            #[cfg(not(feature = "experimental"))]
+            {
+                Err(NeedleError::Serialization(serde_json::Error::io(
+                    std::io::Error::new(
+                        std::io::ErrorKind::Unsupported,
+                        "LZ4 decompression requires the 'experimental' feature",
+                    ),
+                )))
+            }
+        }
+        Some(&RLE_MARKER) => rle_decompress(&bytes[1..]),
+        _ => {
+            // Raw JSON — backwards compatible with pre-compression data
+            Ok(bytes.to_vec())
+        }
+    }
+}
+
+/// Simple run-length encoding for segment data.
+/// Prefixes output with `0x01` marker byte.
+fn rle_compress(input: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(input.len() / 2 + 1);
+    out.push(RLE_MARKER);
+
+    let mut i = 0;
+    while i < input.len() {
+        let byte = input[i];
+        let mut count: u8 = 1;
+        while i + (count as usize) < input.len()
+            && input[i + count as usize] == byte
+            && count < 255
+        {
+            count += 1;
+        }
+        out.push(count);
+        out.push(byte);
+        i += count as usize;
+    }
+    out
+}
+
+/// Decode RLE-compressed data (without the leading 0x01 marker).
+fn rle_decompress(input: &[u8]) -> Result<Vec<u8>> {
+    if input.len() % 2 != 0 {
+        return Err(NeedleError::Serialization(serde_json::Error::io(
+            std::io::Error::new(std::io::ErrorKind::InvalidData, "invalid RLE data length"),
+        )));
+    }
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < input.len() {
+        let count = input[i] as usize;
+        let byte = input[i + 1];
+        out.extend(std::iter::repeat(byte).take(count));
+        i += 2;
+    }
+    Ok(out)
 }
 
 /// Collection manifest for edge storage
@@ -860,9 +958,17 @@ impl EdgeRuntime {
 
             let mut segment_meta = segment.metadata.clone();
             segment_meta.uncompressed_size = segment_bytes.len();
-            segment_meta.compressed_size = segment_bytes.len(); // FIXME(#34): no compression yet — same as uncompressed
 
-            storage.put(&segment_key, &segment_bytes)?;
+            let stored_bytes = if self.config.compress_storage {
+                let compressed = compress_bytes(&segment_bytes);
+                segment_meta.compressed_size = compressed.len();
+                compressed
+            } else {
+                segment_meta.compressed_size = segment_bytes.len();
+                segment_bytes.clone()
+            };
+
+            storage.put(&segment_key, &stored_bytes)?;
             manifest.add_segment(segment_meta);
         }
 
@@ -2199,5 +2305,104 @@ mod tests {
         let health = enhanced.health_check();
         assert!(health.segments_loaded > 0);
         assert_eq!(health.cache_entries, 1);
+    }
+
+    #[test]
+    fn test_rle_compress_decompress_roundtrip() {
+        let input = b"aaabbbcccddd";
+        let compressed = rle_compress(input);
+        assert_eq!(compressed[0], 0x01); // marker
+        // Decompress (skip marker)
+        let decompressed = rle_decompress(&compressed[1..]).unwrap();
+        assert_eq!(decompressed, input);
+    }
+
+    #[test]
+    fn test_rle_compress_single_bytes() {
+        let input = b"abcd";
+        let compressed = rle_compress(input);
+        let decompressed = rle_decompress(&compressed[1..]).unwrap();
+        assert_eq!(decompressed, input);
+    }
+
+    #[test]
+    fn test_rle_compress_empty() {
+        let compressed = rle_compress(b"");
+        assert_eq!(compressed, vec![0x01]); // just marker
+        let decompressed = rle_decompress(&compressed[1..]).unwrap();
+        assert!(decompressed.is_empty());
+    }
+
+    #[test]
+    fn test_rle_compress_long_runs() {
+        let input: Vec<u8> = vec![0x42; 300];
+        let compressed = rle_compress(&input);
+        // Should split into runs of 255 + 45
+        let decompressed = rle_decompress(&compressed[1..]).unwrap();
+        assert_eq!(decompressed, input);
+    }
+
+    #[test]
+    fn test_segment_compress_decompress() {
+        let segment = IndexSegment {
+            metadata: SegmentMetadata {
+                id: 0,
+                vector_count: 2,
+                id_offset: 0,
+                compressed_size: 0,
+                uncompressed_size: 0,
+                checksum: 0,
+                max_layer: 1,
+            },
+            vector_ids: vec!["v1".to_string(), "v2".to_string()],
+            vectors: vec![vec![1.0, 2.0], vec![3.0, 4.0]],
+            edges: HashMap::new(),
+            vector_metadata: HashMap::new(),
+        };
+
+        let compressed = segment.compress().unwrap();
+        // When experimental feature is enabled, uses LZ4 (0x04); otherwise RLE (0x01)
+        assert!(compressed[0] == LZ4_MARKER || compressed[0] == RLE_MARKER);
+        let restored = IndexSegment::decompress(&compressed).unwrap();
+        assert_eq!(restored.vector_ids, segment.vector_ids);
+        assert_eq!(restored.vectors, segment.vectors);
+    }
+
+    #[test]
+    fn test_segment_decompress_backwards_compat() {
+        // Raw JSON (no marker) should still work for backwards compatibility
+        let segment = IndexSegment {
+            metadata: SegmentMetadata {
+                id: 0, vector_count: 1, id_offset: 0,
+                compressed_size: 0, uncompressed_size: 0, checksum: 0, max_layer: 0,
+            },
+            vector_ids: vec!["v1".to_string()],
+            vectors: vec![vec![1.0]],
+            edges: HashMap::new(),
+            vector_metadata: HashMap::new(),
+        };
+        let raw_bytes = segment.to_bytes().unwrap();
+        // Raw bytes start with '{' (0x7B), not 0x01
+        assert_ne!(raw_bytes[0], 0x01);
+        let restored = IndexSegment::decompress(&raw_bytes).unwrap();
+        assert_eq!(restored.vector_ids, segment.vector_ids);
+    }
+
+    #[test]
+    fn test_compress_bytes_roundtrip() {
+        let input = b"hello world, this is a test of compression! aaaaaaaaaa";
+        let compressed = compress_bytes(input);
+        let decompressed = decompress_bytes(&compressed).unwrap();
+        assert_eq!(decompressed, input);
+        // Verify marker byte is present
+        assert!(compressed[0] == LZ4_MARKER || compressed[0] == RLE_MARKER);
+    }
+
+    #[test]
+    fn test_decompress_raw_json_compat() {
+        // Simulates pre-compression data: raw JSON starts with '{' (0x7B)
+        let raw = b"{\"key\":\"value\"}";
+        let result = decompress_bytes(raw).unwrap();
+        assert_eq!(result, raw);
     }
 }
