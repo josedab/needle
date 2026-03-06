@@ -397,6 +397,60 @@ groups:
 
 ---
 
+## TLS / HTTPS Configuration
+
+Needle's HTTP server does **not** handle TLS termination directly. For production deployments, use a reverse proxy or load balancer to terminate TLS in front of Needle.
+
+### Option 1: Nginx Reverse Proxy
+
+```nginx
+server {
+    listen 443 ssl http2;
+    server_name needle.example.com;
+
+    ssl_certificate     /etc/ssl/certs/needle.pem;
+    ssl_certificate_key /etc/ssl/private/needle.key;
+    ssl_protocols       TLSv1.2 TLSv1.3;
+
+    location / {
+        proxy_pass http://127.0.0.1:8080;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+```
+
+### Option 2: Caddy (Automatic HTTPS)
+
+```caddyfile
+needle.example.com {
+    reverse_proxy 127.0.0.1:8080
+}
+```
+
+Caddy automatically provisions and renews TLS certificates via Let's Encrypt.
+
+### Option 3: Kubernetes Ingress
+
+See the [Helm Chart section](#helm-chart) — the included ingress template supports TLS:
+
+```yaml
+ingress:
+  enabled: true
+  tls:
+    - secretName: needle-tls
+      hosts:
+        - needle.example.com
+```
+
+### Trusted Proxies
+
+When running behind a reverse proxy, configure Needle to trust proxy headers for correct client IP extraction. The server trusts `127.0.0.1` and `::1` by default. Configure additional trusted proxies via `ServerConfig::trusted_proxies`.
+
+---
+
 ## Production Checklist
 
 ### Security

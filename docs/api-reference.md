@@ -4,6 +4,15 @@
 
 Complete API reference for Needle vector database.
 
+## API Versioning
+
+All REST endpoints are served under the `/v1` prefix (recommended) and at the root path (legacy).
+
+- **Recommended**: `POST /v1/collections`
+- **Legacy**: `POST /collections` (will be deprecated in v2)
+
+New integrations should always use the `/v1` prefix.
+
 ## REST API (OpenAPI)
 
 The HTTP server includes a built-in OpenAPI 3.1 spec available at `/openapi.json` when running:
