@@ -44,18 +44,53 @@
 use crate::collection::{Collection, CollectionConfig, SearchResult as RustSearchResult};
 use crate::database::Database;
 use crate::distance::DistanceFunction;
-use crate::error::NeedleError;
+use crate::error::{NeedleError, Recoverable};
 use crate::metadata::Filter;
-use pyo3::exceptions::{PyIOError, PyKeyError, PyValueError};
+use pyo3::exceptions::{PyIOError, PyKeyError, PyPermissionError, PyTimeoutError, PyValueError};
 use pyo3::prelude::*;
 use serde_json::Value;
 use std::sync::{Arc, RwLock};
 
-/// Convert NeedleError to PyErr
+/// Convert NeedleError to PyErr with structured error information
 fn to_pyerr(err: NeedleError) -> PyErr {
-    match err {
-        NeedleError::Io(_) => PyIOError::new_err(err.to_string()),
-        _ => PyValueError::new_err(err.to_string()),
+    let code = err.error_code().code();
+    let category = err.error_code().category().to_string();
+    let hints: Vec<String> = err.recovery_hints().iter().map(|h| h.to_string()).collect();
+    let message = err.to_string();
+
+    let detail = format!(
+        "{} [code: {} ({})]{}",
+        message,
+        code,
+        category,
+        if hints.is_empty() {
+            String::new()
+        } else {
+            format!(" | hints: {}", hints.join("; "))
+        }
+    );
+
+    match &err {
+        NeedleError::Io(_) => PyIOError::new_err(detail),
+        NeedleError::CollectionNotFound(_)
+        | NeedleError::VectorNotFound(_)
+        | NeedleError::NotFound(_)
+        | NeedleError::AliasNotFound(_) => PyKeyError::new_err(detail),
+        NeedleError::CollectionAlreadyExists(_)
+        | NeedleError::VectorAlreadyExists(_)
+        | NeedleError::AliasAlreadyExists(_)
+        | NeedleError::DuplicateId(_)
+        | NeedleError::InvalidVector(_)
+        | NeedleError::InvalidInput(_)
+        | NeedleError::InvalidArgument(_)
+        | NeedleError::InvalidConfig(_)
+        | NeedleError::DimensionMismatch { .. }
+        | NeedleError::CapacityExceeded(_) => PyValueError::new_err(detail),
+        NeedleError::Unauthorized(_) => PyPermissionError::new_err(detail),
+        NeedleError::Timeout(_) | NeedleError::LockTimeout(_) => {
+            PyTimeoutError::new_err(detail)
+        }
+        _ => pyo3::exceptions::PyRuntimeError::new_err(detail),
     }
 }
 
@@ -105,6 +140,45 @@ impl SearchResult {
             self.id,
             self.distance,
             self.metadata_json.is_some()
+        )
+    }
+}
+
+/// Cursor for paginated search, representing the position of the last returned result.
+#[pyclass]
+#[derive(Clone)]
+pub struct SearchCursor {
+    #[pyo3(get)]
+    pub distance: f32,
+    #[pyo3(get)]
+    pub id: String,
+}
+
+#[pymethods]
+impl SearchCursor {
+    fn __repr__(&self) -> String {
+        format!("SearchCursor(distance={}, id='{}')", self.distance, self.id)
+    }
+}
+
+/// A page of search results with an optional cursor to fetch the next page.
+#[pyclass]
+pub struct SearchPage {
+    #[pyo3(get)]
+    pub results: Vec<SearchResult>,
+    #[pyo3(get)]
+    pub next_cursor: Option<SearchCursor>,
+    #[pyo3(get)]
+    pub has_more: bool,
+}
+
+#[pymethods]
+impl SearchPage {
+    fn __repr__(&self) -> String {
+        format!(
+            "SearchPage(results={}, has_more={})",
+            self.results.len(),
+            self.has_more
         )
     }
 }
@@ -258,6 +332,100 @@ impl PyCollection {
             .collect())
     }
 
+    /// Search with GIL released, suitable for use with Python threading/asyncio.
+    ///
+    /// Performs the same search as `search()` but releases the GIL during the
+    /// blocking operation, allowing other Python threads to run concurrently.
+    ///
+    /// Usage with asyncio:
+    /// ```python
+    /// import asyncio
+    /// results = await asyncio.to_thread(collection.search_async, query, k)
+    /// ```
+    #[pyo3(signature = (query, k=10))]
+    fn search_async(
+        &self,
+        py: Python<'_>,
+        query: Vec<f32>,
+        k: usize,
+    ) -> PyResult<Vec<SearchResult>> {
+        let inner = Arc::clone(&self.inner);
+        py.allow_threads(move || {
+            let coll = inner
+                .read()
+                .map_err(|_| PyValueError::new_err("Lock poisoned"))?;
+            let results = coll.search(&query, k).map_err(to_pyerr)?;
+            Ok(results.into_iter().map(SearchResult::from_rust).collect())
+        })
+    }
+
+    /// Insert with GIL released, suitable for use with Python threading/asyncio.
+    ///
+    /// Performs the same insertion as `insert()` but releases the GIL during the
+    /// blocking operation. Metadata is deserialized before releasing the GIL.
+    ///
+    /// Usage with asyncio:
+    /// ```python
+    /// import asyncio
+    /// await asyncio.to_thread(collection.insert_async, "id1", vector, {"key": "value"})
+    /// ```
+    #[pyo3(signature = (id, vector, metadata=None))]
+    fn insert_async(
+        &self,
+        py: Python<'_>,
+        id: String,
+        vector: Vec<f32>,
+        metadata: Option<PyObject>,
+    ) -> PyResult<()> {
+        // Deserialize metadata while we still hold the GIL
+        let meta_value: Option<Value> = if let Some(obj) = metadata {
+            Some(
+                pythonize::depythonize(&obj.into_bound(py))
+                    .map_err(|e| PyValueError::new_err(e.to_string()))?,
+            )
+        } else {
+            None
+        };
+
+        let inner = Arc::clone(&self.inner);
+        py.allow_threads(move || {
+            let mut coll = inner
+                .write()
+                .map_err(|_| PyValueError::new_err("Lock poisoned"))?;
+            coll.insert(&id, &vector, meta_value).map_err(to_pyerr)
+        })
+    }
+
+    /// Batch search with GIL released, suitable for use with Python threading/asyncio.
+    ///
+    /// Performs the same batch search as `batch_search()` but releases the GIL
+    /// during the blocking operation, allowing other Python threads to run concurrently.
+    ///
+    /// Usage with asyncio:
+    /// ```python
+    /// import asyncio
+    /// results = await asyncio.to_thread(collection.batch_search_async, queries, k)
+    /// ```
+    #[pyo3(signature = (queries, k=10))]
+    fn batch_search_async(
+        &self,
+        py: Python<'_>,
+        queries: Vec<Vec<f32>>,
+        k: usize,
+    ) -> PyResult<Vec<Vec<SearchResult>>> {
+        let inner = Arc::clone(&self.inner);
+        py.allow_threads(move || {
+            let coll = inner
+                .read()
+                .map_err(|_| PyValueError::new_err("Lock poisoned"))?;
+            let results = coll.batch_search(&queries, k).map_err(to_pyerr)?;
+            Ok(results
+                .into_iter()
+                .map(|batch| batch.into_iter().map(SearchResult::from_rust).collect())
+                .collect())
+        })
+    }
+
     /// Search with a metadata filter
     #[pyo3(signature = (query, k=10, filter=None))]
     fn search_with_filter(
@@ -285,6 +453,60 @@ impl PyCollection {
             .search_with_filter(&query, k, &parsed_filter)
             .map_err(to_pyerr)?;
         Ok(results.into_iter().map(SearchResult::from_rust).collect())
+    }
+
+    /// Search with cursor-based pagination.
+    ///
+    /// Returns a `SearchPage` with results and an optional cursor for the next page.
+    /// Pass the `next_cursor` from one page as `search_after` to get the next page.
+    #[pyo3(signature = (query, k=10, search_after=None))]
+    fn search_paginated(
+        &self,
+        query: Vec<f32>,
+        k: usize,
+        search_after: Option<SearchCursor>,
+    ) -> PyResult<SearchPage> {
+        let fetch_k = k.saturating_add(1);
+
+        let coll = self
+            .inner
+            .read()
+            .map_err(|_| PyValueError::new_err("Lock poisoned"))?;
+
+        let raw_results = coll.search(&query, fetch_k).map_err(to_pyerr)?;
+
+        let filtered: Vec<SearchResult> = if let Some(ref cursor) = search_after {
+            raw_results
+                .into_iter()
+                .map(SearchResult::from_rust)
+                .filter(|r| {
+                    r.distance > cursor.distance
+                        || (r.distance == cursor.distance && r.id > cursor.id)
+                })
+                .collect()
+        } else {
+            raw_results
+                .into_iter()
+                .map(SearchResult::from_rust)
+                .collect()
+        };
+
+        let has_more = filtered.len() > k;
+        let page_results: Vec<SearchResult> = filtered.into_iter().take(k).collect();
+        let next_cursor = if has_more {
+            page_results.last().map(|r| SearchCursor {
+                distance: r.distance,
+                id: r.id.clone(),
+            })
+        } else {
+            None
+        };
+
+        Ok(SearchPage {
+            results: page_results,
+            next_cursor,
+            has_more,
+        })
     }
 
     /// Get a vector by ID
@@ -324,6 +546,69 @@ impl PyCollection {
             .write()
             .map_err(|_| PyValueError::new_err("Lock poisoned"))?;
         coll.delete(id).map_err(to_pyerr)
+    }
+
+    /// Insert a vector with an optional TTL (time-to-live) in seconds.
+    ///
+    /// The vector will automatically expire after the specified duration.
+    /// If ttl_seconds is None, the collection's default TTL is used (if any).
+    #[pyo3(signature = (id, vector, metadata=None, ttl_seconds=None))]
+    fn insert_with_ttl(
+        &self,
+        py: Python<'_>,
+        id: &str,
+        vector: Vec<f32>,
+        metadata: Option<PyObject>,
+        ttl_seconds: Option<u64>,
+    ) -> PyResult<()> {
+        let meta_value: Option<Value> = if let Some(obj) = metadata {
+            Some(
+                pythonize::depythonize(&obj.into_bound(py))
+                    .map_err(|e| PyValueError::new_err(e.to_string()))?,
+            )
+        } else {
+            None
+        };
+
+        let mut coll = self
+            .inner
+            .write()
+            .map_err(|_| PyValueError::new_err("Lock poisoned"))?;
+        coll.insert_with_ttl(id, &vector, meta_value, ttl_seconds)
+            .map_err(to_pyerr)
+    }
+
+    /// Get the TTL (time-to-live) expiration timestamp for a vector.
+    ///
+    /// Returns the Unix timestamp when the vector expires, or None if no TTL is set.
+    fn get_ttl(&self, id: &str) -> PyResult<Option<u64>> {
+        let coll = self
+            .inner
+            .read()
+            .map_err(|_| PyValueError::new_err("Lock poisoned"))?;
+        Ok(coll.get_ttl(id))
+    }
+
+    /// Set or remove the TTL for an existing vector.
+    ///
+    /// Pass a duration in seconds to set the TTL, or None to remove it.
+    fn set_ttl(&self, id: &str, ttl_seconds: Option<u64>) -> PyResult<()> {
+        let mut coll = self
+            .inner
+            .write()
+            .map_err(|_| PyValueError::new_err("Lock poisoned"))?;
+        coll.set_ttl(id, ttl_seconds).map_err(to_pyerr)
+    }
+
+    /// Remove expired vectors from the collection.
+    ///
+    /// Returns the number of vectors that were expired and removed.
+    fn expire_vectors(&self) -> PyResult<usize> {
+        let mut coll = self
+            .inner
+            .write()
+            .map_err(|_| PyValueError::new_err("Lock poisoned"))?;
+        coll.expire_vectors().map_err(to_pyerr)
     }
 
     /// Set ef_search parameter for queries
@@ -462,6 +747,221 @@ impl PyCollection {
         Ok(Self {
             inner: Arc::new(RwLock::new(collection)),
         })
+    }
+
+    /// Update metadata for an existing vector without re-inserting the vector data.
+    ///
+    /// Args:
+    ///     id: Vector identifier
+    ///     metadata: New metadata (replaces existing metadata)
+    ///
+    /// Returns:
+    ///     bool: True if the vector existed and was updated
+    #[pyo3(signature = (id, metadata))]
+    fn update_metadata(&self, py: Python<'_>, id: &str, metadata: PyObject) -> PyResult<bool> {
+        let meta_value: serde_json::Value =
+            pythonize::depythonize_bound(metadata.into_bound(py))
+                .map_err(|e| PyValueError::new_err(format!("Invalid metadata: {}", e)))?;
+
+        let mut coll = self
+            .inner
+            .write()
+            .map_err(|_| PyValueError::new_err("Lock poisoned"))?;
+        coll.update(id, Some(meta_value)).map_err(to_pyerr)
+    }
+
+    /// Get collection statistics.
+    ///
+    /// Returns:
+    ///     dict: Dictionary with keys: name, dimensions, vector_count, deleted_count,
+    ///           empty, needs_compaction
+    fn stats(&self) -> PyResult<PyObject> {
+        let coll = self
+            .inner
+            .read()
+            .map_err(|_| PyValueError::new_err("Lock poisoned"))?;
+
+        Python::with_gil(|py| {
+            let dict = pyo3::types::PyDict::new(py);
+            dict.set_item("name", coll.name())?;
+            dict.set_item("dimensions", coll.dimensions())?;
+            dict.set_item("vector_count", coll.len())?;
+            dict.set_item("deleted_count", coll.deleted_count())?;
+            dict.set_item("empty", coll.is_empty())?;
+            dict.set_item("needs_compaction", coll.needs_compaction(0.2))?;
+            Ok(dict.into())
+        })
+    }
+
+    /// Get all vector IDs in the collection.
+    ///
+    /// Returns:
+    ///     list[str]: List of all vector IDs
+    fn list_ids(&self) -> PyResult<Vec<String>> {
+        let coll = self
+            .inner
+            .read()
+            .map_err(|_| PyValueError::new_err("Lock poisoned"))?;
+        Ok(coll.ids().map(|s| s.to_string()).collect())
+    }
+
+    /// Get multiple vectors by their IDs.
+    ///
+    /// Args:
+    ///     ids: List of vector IDs to retrieve
+    ///
+    /// Returns:
+    ///     list[tuple]: List of (id, vector, metadata) tuples for found vectors
+    fn get_batch(&self, py: Python<'_>, ids: Vec<String>) -> PyResult<Vec<(String, Vec<f32>, Option<PyObject>)>> {
+        let coll = self
+            .inner
+            .read()
+            .map_err(|_| PyValueError::new_err("Lock poisoned"))?;
+
+        let mut results = Vec::new();
+        for id in &ids {
+            if let Some((vector, metadata)) = coll.get(id) {
+                let py_meta = metadata
+                    .map(|m| pythonize::pythonize(py, &m))
+                    .transpose()
+                    .map_err(|e| PyValueError::new_err(format!("Metadata conversion error: {}", e)))?;
+                results.push((id.clone(), vector.to_vec(), py_meta));
+            }
+        }
+        Ok(results)
+    }
+
+    /// Get the number of deleted (soft-deleted) vectors.
+    ///
+    /// Returns:
+    ///     int: Number of deleted vectors
+    fn deleted_count(&self) -> PyResult<usize> {
+        let coll = self
+            .inner
+            .read()
+            .map_err(|_| PyValueError::new_err("Lock poisoned"))?;
+        Ok(coll.deleted_count())
+    }
+
+    /// Compact the collection, permanently removing soft-deleted vectors.
+    ///
+    /// Returns:
+    ///     int: Number of vectors removed
+    fn compact(&self) -> PyResult<usize> {
+        let mut coll = self
+            .inner
+            .write()
+            .map_err(|_| PyValueError::new_err("Lock poisoned"))?;
+        coll.compact().map_err(to_pyerr)
+    }
+
+    /// Check if the collection needs compaction.
+    ///
+    /// Args:
+    ///     threshold: Deletion ratio threshold (0.0-1.0, default 0.2)
+    ///
+    /// Returns:
+    ///     bool: True if deletion ratio exceeds threshold
+    #[pyo3(signature = (threshold=0.2))]
+    fn needs_compaction(&self, threshold: f64) -> PyResult<bool> {
+        let coll = self
+            .inner
+            .read()
+            .map_err(|_| PyValueError::new_err("Lock poisoned"))?;
+        Ok(coll.needs_compaction(threshold))
+    }
+
+    /// Upsert a vector: insert it if it doesn't exist, or replace it if it does.
+    ///
+    /// Args:
+    ///     id: Vector identifier
+    ///     vector: Embedding vector
+    ///     metadata: Optional JSON-serializable metadata
+    #[pyo3(signature = (id, vector, metadata=None))]
+    fn upsert(&self, py: Python<'_>, id: &str, vector: Vec<f32>, metadata: Option<PyObject>) -> PyResult<()> {
+        let meta_value = metadata
+            .map(|m| {
+                pythonize::depythonize_bound(m.into_bound(py))
+                    .map_err(|e| PyValueError::new_err(e.to_string()))
+            })
+            .transpose()?;
+
+        let mut coll = self
+            .inner
+            .write()
+            .map_err(|_| PyValueError::new_err("Lock poisoned"))?;
+
+        // Delete if exists (ignore result), then insert
+        let _ = coll.delete(id);
+        coll.insert(id, &vector, meta_value).map_err(to_pyerr)
+    }
+
+    /// Export all vectors from the collection.
+    ///
+    /// Returns:
+    ///     list[dict]: List of dicts with keys "id", "vector", "metadata"
+    fn export_all(&self, py: Python<'_>) -> PyResult<Vec<PyObject>> {
+        let coll = self
+            .inner
+            .read()
+            .map_err(|_| PyValueError::new_err("Lock poisoned"))?;
+
+        let entries = coll.export_all().map_err(to_pyerr)?;
+        let mut results = Vec::with_capacity(entries.len());
+
+        for (id, vector, metadata) in entries {
+            let dict = pyo3::types::PyDict::new(py);
+            dict.set_item("id", &id)?;
+            dict.set_item("vector", vector.to_vec())?;
+            let py_meta = metadata
+                .map(|m| pythonize::pythonize(py, &m))
+                .transpose()
+                .map_err(|e| PyValueError::new_err(e.to_string()))?;
+            dict.set_item("metadata", py_meta)?;
+            results.push(dict.into());
+        }
+        Ok(results)
+    }
+
+    /// Search with profiling information (explain mode).
+    ///
+    /// Args:
+    ///     query: Query vector
+    ///     k: Number of results to return
+    ///
+    /// Returns:
+    ///     tuple: (results, explain_dict) where explain_dict contains profiling data
+    #[pyo3(signature = (query, k=10))]
+    fn search_explain(&self, py: Python<'_>, query: Vec<f32>, k: usize) -> PyResult<(Vec<SearchResult>, PyObject)> {
+        let coll = self
+            .inner
+            .read()
+            .map_err(|_| PyValueError::new_err("Lock poisoned"))?;
+
+        let (results, explain) = coll.search_explain(&query, k).map_err(to_pyerr)?;
+
+        let py_results: Vec<SearchResult> = results
+            .into_iter()
+            .map(|r| SearchResult {
+                id: r.id,
+                distance: r.distance,
+                metadata: r.metadata,
+            })
+            .collect();
+
+        let explain_dict = pyo3::types::PyDict::new(py);
+        explain_dict.set_item("total_time_us", explain.total_time_us)?;
+        explain_dict.set_item("index_time_us", explain.index_time_us)?;
+        explain_dict.set_item("filter_time_us", explain.filter_time_us)?;
+        explain_dict.set_item("enrich_time_us", explain.enrich_time_us)?;
+        explain_dict.set_item("collection_size", explain.collection_size)?;
+        explain_dict.set_item("dimensions", explain.dimensions)?;
+        explain_dict.set_item("requested_k", explain.requested_k)?;
+        explain_dict.set_item("effective_k", explain.effective_k)?;
+        explain_dict.set_item("ef_search", explain.ef_search)?;
+        explain_dict.set_item("distance_function", explain.distance_function)?;
+
+        Ok((py_results, explain_dict.into()))
     }
 }
 
@@ -628,6 +1128,19 @@ impl PyDatabase {
         Ok(db.list_collections())
     }
 
+    /// Rename a collection
+    ///
+    /// Args:
+    ///     old_name (str): Current collection name
+    ///     new_name (str): New collection name
+    fn rename_collection(&self, old_name: &str, new_name: &str) -> PyResult<()> {
+        let db = self
+            .inner
+            .read()
+            .map_err(|_| PyValueError::new_err("Lock poisoned"))?;
+        db.rename_collection(old_name, new_name).map_err(to_pyerr)
+    }
+
     /// Save the database to disk
     ///
     /// Args:
@@ -789,22 +1302,17 @@ impl PyFilter {
 
 /// Parse distance function string
 fn parse_distance(distance: &str) -> PyResult<DistanceFunction> {
-    match distance.to_lowercase().as_str() {
-        "cosine" => Ok(DistanceFunction::Cosine),
-        "euclidean" | "l2" => Ok(DistanceFunction::Euclidean),
-        "dot" | "dotproduct" | "inner_product" => Ok(DistanceFunction::DotProduct),
-        "manhattan" | "l1" => Ok(DistanceFunction::Manhattan),
-        _ => Err(PyValueError::new_err(format!(
-            "Unknown distance function: {}. Use: cosine, euclidean, dot, manhattan",
-            distance
-        ))),
-    }
+    distance
+        .parse()
+        .map_err(|msg: String| PyValueError::new_err(msg))
 }
 
 /// Python module definition
 #[pymodule]
 pub fn needle(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<SearchResult>()?;
+    m.add_class::<SearchCursor>()?;
+    m.add_class::<SearchPage>()?;
     m.add_class::<PyCollection>()?;
     m.add_class::<PyDatabase>()?;
     m.add_class::<PyBatchResult>()?;

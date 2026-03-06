@@ -42,6 +42,7 @@
 use crate::collection::{Collection, CollectionConfig, SearchResult as RustSearchResult};
 use crate::database::Database;
 use crate::distance::DistanceFunction;
+use crate::error::{NeedleError, Recoverable};
 use crate::metadata::Filter;
 use serde_json::Value;
 use std::sync::{Arc, RwLock};
@@ -54,6 +55,21 @@ fn js_set(obj: &js_sys::Object, key: &JsValue, value: &JsValue) {
         #[cfg(debug_assertions)]
         web_sys::console::warn_1(&format!("Failed to set JS property: {:?}", _e).into());
     }
+}
+
+/// Convert a `NeedleError` into a structured JS object `{error, code, help}`.
+fn needle_err_to_js(err: NeedleError) -> JsValue {
+    let code = err.error_code().code();
+    let message = err.to_string();
+    let help = err.help();
+
+    let obj = js_sys::Object::new();
+    js_set(&obj, &"error".into(), &message.into());
+    js_set(&obj, &"code".into(), &code.into());
+    if !help.is_empty() {
+        js_set(&obj, &"help".into(), &help.into());
+    }
+    obj.into()
 }
 
 /// Search result for JavaScript
@@ -119,18 +135,11 @@ impl WasmCollection {
         dimensions: usize,
         distance: Option<String>,
     ) -> Result<WasmCollection, JsValue> {
-        let dist_fn = match distance.as_deref().unwrap_or("cosine") {
-            "cosine" => DistanceFunction::Cosine,
-            "euclidean" | "l2" => DistanceFunction::Euclidean,
-            "dot" | "dotproduct" | "inner_product" => DistanceFunction::DotProduct,
-            "manhattan" | "l1" => DistanceFunction::Manhattan,
-            d => {
-                return Err(JsValue::from_str(&format!(
-                    "Unknown distance function: {}",
-                    d
-                )))
-            }
-        };
+        let dist_fn: DistanceFunction = distance
+            .as_deref()
+            .unwrap_or("cosine")
+            .parse()
+            .map_err(|msg: String| JsValue::from_str(&msg))?;
 
         let config = CollectionConfig::new(name, dimensions).with_distance(dist_fn);
         Ok(Self {
@@ -191,7 +200,7 @@ impl WasmCollection {
             .write()
             .map_err(|_| JsValue::from_str("Lock poisoned"))?
             .insert(id, &vector, meta_value)
-            .map_err(|e| JsValue::from_str(&e.to_string()))
+            .map_err(needle_err_to_js)
     }
 
     /// Insert a vector with metadata as JavaScript object
@@ -217,7 +226,7 @@ impl WasmCollection {
             .write()
             .map_err(|_| JsValue::from_str("Lock poisoned"))?
             .insert(id, &vector, meta_value)
-            .map_err(|e| JsValue::from_str(&e.to_string()))
+            .map_err(needle_err_to_js)
     }
 
     /// Insert multiple vectors in batch (JSON metadata array)
@@ -283,7 +292,7 @@ impl WasmCollection {
             .write()
             .map_err(|_| JsValue::from_str("Lock poisoned"))?
             .insert_batch(ids, vectors, meta_values)
-            .map_err(|e| JsValue::from_str(&e.to_string()))
+            .map_err(needle_err_to_js)
     }
 
     /// Search for k nearest neighbors
@@ -293,7 +302,7 @@ impl WasmCollection {
             .read()
             .map_err(|_| JsValue::from_str("Lock poisoned"))?
             .search(&query, k)
-            .map_err(|e| JsValue::from_str(&e.to_string()))?;
+            .map_err(needle_err_to_js)?;
 
         Ok(results.into_iter().map(SearchResult::from).collect())
     }
@@ -317,7 +326,7 @@ impl WasmCollection {
             .read()
             .map_err(|_| JsValue::from_str("Lock poisoned"))?
             .search_with_filter(&query, k, &filter)
-            .map_err(|e| JsValue::from_str(&e.to_string()))?;
+            .map_err(needle_err_to_js)?;
 
         Ok(results.into_iter().map(SearchResult::from).collect())
     }
@@ -361,7 +370,65 @@ impl WasmCollection {
             .write()
             .map_err(|_| JsValue::from_str("Lock poisoned"))?
             .delete(id)
-            .map_err(|e| JsValue::from_str(&e.to_string()))
+            .map_err(needle_err_to_js)
+    }
+
+    /// Delete multiple vectors by ID.
+    ///
+    /// Non-existent IDs are silently skipped. Returns the count of deleted vectors.
+    #[wasm_bindgen(js_name = "batchDelete")]
+    pub fn batch_delete(&self, ids: Vec<String>) -> Result<usize, JsValue> {
+        let mut coll = self
+            .inner
+            .write()
+            .map_err(|_| JsValue::from_str("Lock poisoned"))?;
+        let mut deleted = 0usize;
+        for id in &ids {
+            if coll.delete(id).unwrap_or(false) {
+                deleted += 1;
+            }
+        }
+        Ok(deleted)
+    }
+
+    /// Update the metadata of an existing vector via JSON merge patch.
+    ///
+    /// The `metadata_json` parameter should be a JSON string. Its fields
+    /// are merged into the vector's existing metadata.
+    #[wasm_bindgen(js_name = "updateMetadata")]
+    pub fn update_metadata(&self, id: &str, metadata_json: &str) -> Result<(), JsValue> {
+        let new_meta: serde_json::Value = serde_json::from_str(metadata_json)
+            .map_err(|e| JsValue::from_str(&format!("Invalid JSON: {e}")))?;
+
+        let mut coll = self
+            .inner
+            .write()
+            .map_err(|_| JsValue::from_str("Lock poisoned"))?;
+
+        let (vector_ref, existing_meta) = coll
+            .get(id)
+            .ok_or_else(|| JsValue::from_str(&format!("Vector '{id}' not found")))?;
+        let vector = vector_ref.to_vec();
+        let existing_meta_owned = existing_meta.cloned();
+
+        let merged = match existing_meta_owned {
+            Some(mut existing) => {
+                if let (Some(base_obj), Some(new_obj)) =
+                    (existing.as_object_mut(), new_meta.as_object())
+                {
+                    for (k, v) in new_obj {
+                        base_obj.insert(k.clone(), v.clone());
+                    }
+                }
+                existing
+            }
+            None => new_meta,
+        };
+
+        coll.delete(id).map_err(needle_err_to_js)?;
+        coll.insert(id, &vector, Some(merged)).map_err(needle_err_to_js)?;
+
+        Ok(())
     }
 
     /// Set ef_search parameter
@@ -381,14 +448,14 @@ impl WasmCollection {
             .read()
             .map_err(|_| JsValue::from_str("Lock poisoned"))?
             .to_bytes()
-            .map_err(|e| JsValue::from_str(&e.to_string()))
+            .map_err(needle_err_to_js)
     }
 
     /// Deserialize from bytes
     #[wasm_bindgen(js_name = "fromBytes")]
     pub fn from_bytes(bytes: &[u8]) -> Result<WasmCollection, JsValue> {
         let collection =
-            Collection::from_bytes(bytes).map_err(|e| JsValue::from_str(&e.to_string()))?;
+            Collection::from_bytes(bytes).map_err(needle_err_to_js)?;
         Ok(Self {
             inner: Arc::new(RwLock::new(collection)),
         })
@@ -714,7 +781,7 @@ impl WasmCollection {
 
         let results = coll
             .search(&query, k)
-            .map_err(|e| JsValue::from_str(&e.to_string()))?;
+            .map_err(needle_err_to_js)?;
 
         let duration_ms = js_sys::Date::now() - start;
 
@@ -754,7 +821,7 @@ impl WasmCollection {
 
         let results = coll
             .search(&query, k)
-            .map_err(|e| JsValue::from_str(&e.to_string()))?;
+            .map_err(needle_err_to_js)?;
 
         let chunks_array = js_sys::Array::new();
         let chunk_count = (results.len() + chunk_size - 1) / chunk_size;
@@ -823,7 +890,7 @@ impl WasmCollection {
         // Get all IDs and delete them
         let ids: Vec<String> = guard.all_ids();
         for id in ids {
-            guard.delete(&id).map_err(|e| JsValue::from_str(&e.to_string()))?;
+            guard.delete(&id).map_err(needle_err_to_js)?;
         }
         Ok(())
     }
@@ -1404,7 +1471,7 @@ impl WasmDatabase {
     pub fn create_collection(&self, name: &str, dimensions: usize) -> Result<(), JsValue> {
         self.inner
             .create_collection(name, dimensions)
-            .map_err(|e| JsValue::from_str(&e.to_string()))
+            .map_err(needle_err_to_js)
     }
 
     /// Get a reference to a collection by name
@@ -1412,7 +1479,7 @@ impl WasmDatabase {
     pub fn get_collection(&self, name: &str) -> Result<WasmCollectionRef, JsValue> {
         // Verify the collection exists
         let _coll = self.inner.collection(name)
-            .map_err(|e| JsValue::from_str(&e.to_string()))?;
+            .map_err(needle_err_to_js)?;
         Ok(WasmCollectionRef {
             name: name.to_string(),
         })
@@ -1434,11 +1501,19 @@ impl WasmDatabase {
         self.inner.drop_collection(name).unwrap_or(false)
     }
 
+    /// Rename a collection
+    #[wasm_bindgen(js_name = "renameCollection")]
+    pub fn rename_collection(&self, old_name: &str, new_name: &str) -> Result<(), JsValue> {
+        self.inner
+            .rename_collection(old_name, new_name)
+            .map_err(needle_err_to_js)
+    }
+
     /// Serialize the entire database to a JSON string for IndexedDB persistence
     #[wasm_bindgen(js_name = "toBytes")]
     pub fn to_bytes(&self) -> Result<Vec<u8>, JsValue> {
         let json = self.inner.export_all_json()
-            .map_err(|e| JsValue::from_str(&e.to_string()))?;
+            .map_err(needle_err_to_js)?;
         Ok(json.into_bytes())
     }
 
@@ -1449,7 +1524,7 @@ impl WasmDatabase {
             .map_err(|e| JsValue::from_str(&format!("Invalid UTF-8: {e}")))?;
         let db = Database::in_memory();
         db.import_all_json(json)
-            .map_err(|e| JsValue::from_str(&e.to_string()))?;
+            .map_err(needle_err_to_js)?;
         Ok(WasmDatabase { inner: db })
     }
 
@@ -1470,9 +1545,9 @@ impl WasmDatabase {
             None
         };
         let coll = self.inner.collection(collection)
-            .map_err(|e| JsValue::from_str(&e.to_string()))?;
+            .map_err(needle_err_to_js)?;
         coll.insert(id, &vector, meta_value)
-            .map_err(|e| JsValue::from_str(&e.to_string()))
+            .map_err(needle_err_to_js)
     }
 
     /// Search within a named collection
@@ -1483,10 +1558,10 @@ impl WasmDatabase {
         k: usize,
     ) -> Result<Vec<SearchResult>, JsValue> {
         let coll = self.inner.collection(collection)
-            .map_err(|e| JsValue::from_str(&e.to_string()))?;
+            .map_err(needle_err_to_js)?;
         let results = coll
             .search(&query, k)
-            .map_err(|e| JsValue::from_str(&e.to_string()))?;
+            .map_err(needle_err_to_js)?;
         Ok(results.into_iter().map(SearchResult::from).collect())
     }
 
@@ -1497,9 +1572,9 @@ impl WasmDatabase {
         id: &str,
     ) -> Result<bool, JsValue> {
         let coll = self.inner.collection(collection)
-            .map_err(|e| JsValue::from_str(&e.to_string()))?;
+            .map_err(needle_err_to_js)?;
         coll.delete(id)
-            .map_err(|e| JsValue::from_str(&e.to_string()))
+            .map_err(needle_err_to_js)
     }
 
     /// Get a vector by ID from a named collection
@@ -1509,7 +1584,7 @@ impl WasmDatabase {
         id: &str,
     ) -> Result<JsValue, JsValue> {
         let coll = self.inner.collection(collection)
-            .map_err(|e| JsValue::from_str(&e.to_string()))?;
+            .map_err(needle_err_to_js)?;
         match coll.get(id) {
             Some((vector, metadata)) => {
                 let obj = js_sys::Object::new();
@@ -1536,14 +1611,14 @@ impl WasmDatabase {
         filter_json: &str,
     ) -> Result<Vec<SearchResult>, JsValue> {
         let coll = self.inner.collection(collection)
-            .map_err(|e| JsValue::from_str(&e.to_string()))?;
+            .map_err(needle_err_to_js)?;
         let filter_value: Value = serde_json::from_str(filter_json)
             .map_err(|e| JsValue::from_str(&format!("Invalid filter JSON: {e}")))?;
         let filter = Filter::parse(&filter_value)
             .map_err(|e| JsValue::from_str(&format!("Invalid filter: {e}")))?;
         let results = coll
             .search_with_filter(&query, k, &filter)
-            .map_err(|e| JsValue::from_str(&e.to_string()))?;
+            .map_err(needle_err_to_js)?;
         Ok(results.into_iter().map(SearchResult::from).collect())
     }
 
@@ -1926,7 +2001,7 @@ impl WasmCollection {
         for (query, &k) in request.queries.iter().zip(request.ks.iter()) {
             let results = coll
                 .search(query, k)
-                .map_err(|e| JsValue::from_str(&e.to_string()))?;
+                .map_err(needle_err_to_js)?;
             all_results.push(results.into_iter().map(SearchResult::from).collect());
         }
 
@@ -1965,10 +2040,10 @@ impl WasmCollection {
             let filter = Filter::parse(&filter_value)
                 .map_err(|e| JsValue::from_str(&format!("Invalid filter: {}", e)))?;
             coll.search_with_filter(&query, options.k, &filter)
-                .map_err(|e| JsValue::from_str(&e.to_string()))?
+                .map_err(needle_err_to_js)?
         } else {
             coll.search(&query, options.k)
-                .map_err(|e| JsValue::from_str(&e.to_string()))?
+                .map_err(needle_err_to_js)?
         };
 
         // Restore previous ef_search is not strictly needed since we hold a write lock,

@@ -200,17 +200,9 @@ impl NeedleCollection {
     /// Create a new collection
     #[uniffi::constructor]
     pub fn new(name: String, dimensions: u32, distance: String) -> Result<Arc<Self>, NeedleError> {
-        let dist_fn = match distance.to_lowercase().as_str() {
-            "cosine" => DistanceFunction::Cosine,
-            "euclidean" | "l2" => DistanceFunction::Euclidean,
-            "dot" | "dotproduct" | "inner_product" => DistanceFunction::DotProduct,
-            "manhattan" | "l1" => DistanceFunction::Manhattan,
-            _ => {
-                return Err(NeedleError::InvalidConfig {
-                    msg: format!("Unknown distance function: {}", distance),
-                })
-            }
-        };
+        let dist_fn: DistanceFunction = distance.parse().map_err(|msg: String| {
+            NeedleError::InvalidConfig { msg }
+        })?;
 
         let config = CollectionConfig::new(name, dimensions as usize).with_distance(dist_fn);
         Ok(Arc::new(Self {
