@@ -2,6 +2,7 @@
 //!
 //! This module contains the output types from vector similarity searches.
 
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 /// A single result from a vector similarity search.
@@ -34,7 +35,7 @@ use serde_json::Value;
 /// }
 /// ```
 #[must_use]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SearchResult {
     /// The unique string identifier of the vector.
     pub id: String,

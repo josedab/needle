@@ -40,7 +40,6 @@
 //! collection.save("/path/to/collection.bin")
 //! ```
 
-#![allow(clippy::unwrap_used)] // tech debt: 17 unwrap() calls remaining
 use crate::collection::{Collection, CollectionConfig, SearchResult as RustSearchResult};
 use crate::database::Database;
 use crate::distance::DistanceFunction;
@@ -1326,6 +1325,7 @@ pub fn needle(m: &Bound<'_, PyModule>) -> PyResult<()> {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 

@@ -8,7 +8,7 @@ use crate::hnsw::HnswConfig;
 
 /// Collection statistics
 #[must_use]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct CollectionStats {
     /// Collection name
     pub name: String,
@@ -115,6 +115,7 @@ impl Default for SemanticQueryCacheConfig {
 
 impl SemanticQueryCacheConfig {
     /// Create a new semantic query cache configuration.
+    #[must_use]
     pub fn new(capacity: usize, similarity_threshold: f32) -> Self {
         Self {
             capacity,
@@ -328,11 +329,13 @@ impl QueryCacheConfig {
     /// # Arguments
     ///
     /// * `capacity` - Maximum number of query results to cache
+    #[must_use]
     pub fn new(capacity: usize) -> Self {
         Self { capacity }
     }
 
     /// Create a disabled cache configuration.
+    #[must_use]
     pub fn disabled() -> Self {
         Self { capacity: 0 }
     }
@@ -434,7 +437,7 @@ const MAX_COLLECTION_NAME_LEN: usize = 256;
 ///
 /// Names must be non-empty, at most 256 characters, and contain only
 /// alphanumeric characters, underscores, or hyphens.
-fn validate_collection_name(name: &str) -> Result<()> {
+pub(crate) fn validate_collection_name(name: &str) -> Result<()> {
     if name.is_empty() {
         return Err(NeedleError::InvalidConfig(
             "Collection name must not be empty".to_string(),
@@ -515,6 +518,13 @@ impl CollectionConfig {
                 "Vector dimensions must be greater than 0".to_string(),
             ));
         }
+        if self.dimensions > 65_536 {
+            tracing::warn!(
+                dimensions = self.dimensions,
+                collection = %self.name,
+                "Very high vector dimensions may cause significant memory usage and slower search"
+            );
+        }
         if self.hnsw.m == 0 {
             return Err(NeedleError::InvalidConfig(
                 "HNSW M parameter must be greater than 0".to_string(),
@@ -523,6 +533,11 @@ impl CollectionConfig {
         if self.hnsw.ef_construction == 0 {
             return Err(NeedleError::InvalidConfig(
                 "HNSW ef_construction must be greater than 0".to_string(),
+            ));
+        }
+        if self.hnsw.ef_search == 0 {
+            return Err(NeedleError::InvalidConfig(
+                "HNSW ef_search must be greater than 0".to_string(),
             ));
         }
         if let Some(ref sc) = self.semantic_cache {

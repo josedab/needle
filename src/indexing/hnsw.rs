@@ -1225,7 +1225,7 @@ impl super::VectorIndex for HnswIndex {
 
 /// HNSW index statistics
 #[must_use]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct HnswStats {
     /// Number of active vectors in the index
     pub num_vectors: usize,
