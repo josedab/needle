@@ -56,6 +56,7 @@ mod sharding;
 use sharding::*;
 mod validation;
 mod insert;
+pub use insert::{ImportError, ImportResult};
 mod mutations;
 mod batch;
 mod ttl;
@@ -73,7 +74,7 @@ use crate::hnsw::{HnswConfig, HnswIndex, VectorId};
 use crate::metadata::{Filter, MetadataStore};
 use crate::storage::VectorStore;
 use ordered_float::OrderedFloat;
-use parking_lot::Mutex;
+use parking_lot::RwLock;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -147,7 +148,7 @@ pub struct Collection {
     /// Semantic query cache (similarity-based cache lookups)
     /// Skipped during serialization - cache is rebuilt on load
     #[serde(skip)]
-    semantic_cache: Option<Mutex<SemanticQueryCache>>,
+    semantic_cache: Option<RwLock<SemanticQueryCache>>,
     /// Provenance tracking store
     #[serde(default)]
     provenance_store: crate::persistence::vector_versioning::ProvenanceStore,
@@ -214,13 +215,22 @@ impl Collection {
         };
 
         let semantic_cache = config.semantic_cache.as_ref().map(|sc_config| {
-            Mutex::new(SemanticQueryCache::new(sc_config, config.dimensions))
+            RwLock::new(SemanticQueryCache::new(sc_config, config.dimensions))
         });
+
+        let mut metadata = if let Some(threshold) = config.cardinality_threshold {
+            MetadataStore::with_cardinality_threshold(threshold)
+        } else {
+            MetadataStore::new()
+        };
+        if !config.high_cardinality_fields.is_empty() {
+            metadata.mark_high_cardinality_fields(&config.high_cardinality_fields);
+        }
 
         Self {
             vectors: VectorStore::new(config.dimensions),
             index: HnswIndex::new(config.hnsw.clone(), config.distance),
-            metadata: MetadataStore::new(),
+            metadata,
             query_cache,
             expirations: HashMap::new(),
             insertion_timestamps: HashMap::new(),

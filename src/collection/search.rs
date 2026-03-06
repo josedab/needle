@@ -88,6 +88,72 @@ impl From<SearchResult> for (String, f32, Option<Value>) {
     }
 }
 
+/// Strategy for normalizing search result scores into a \[0, 1\] range.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ScoreNormalization {
+    /// Min-max normalization: maps the best distance to 1.0, worst to 0.0.
+    /// Best for comparing scores within a single result set.
+    MinMax,
+    /// Inverse-distance normalization: `1 / (1 + distance)`.
+    /// Produces scores in (0, 1] without needing multiple results for context.
+    InverseDistance,
+}
+
+/// Normalize search result distances into similarity scores in \[0, 1\].
+///
+/// Higher scores indicate greater similarity. The original `distance` field is
+/// replaced with the normalized score.
+///
+/// # Examples
+///
+/// ```
+/// use needle::{SearchResult, normalize_scores, ScoreNormalization};
+///
+/// let mut results = vec![
+///     SearchResult::new("closest", 0.1, None),
+///     SearchResult::new("mid", 0.5, None),
+///     SearchResult::new("far", 1.0, None),
+/// ];
+/// normalize_scores(&mut results, ScoreNormalization::MinMax);
+/// assert!((results[0].distance - 1.0).abs() < f32::EPSILON);
+/// assert!((results[2].distance - 0.0).abs() < f32::EPSILON);
+/// ```
+pub fn normalize_scores(results: &mut [SearchResult], method: ScoreNormalization) {
+    if results.is_empty() {
+        return;
+    }
+
+    match method {
+        ScoreNormalization::MinMax => {
+            let min_dist = results
+                .iter()
+                .map(|r| r.distance)
+                .fold(f32::INFINITY, f32::min);
+            let max_dist = results
+                .iter()
+                .map(|r| r.distance)
+                .fold(f32::NEG_INFINITY, f32::max);
+            let range = max_dist - min_dist;
+
+            if range < f32::EPSILON {
+                // All distances equal — assign score 1.0 (perfect match)
+                for r in results.iter_mut() {
+                    r.distance = 1.0;
+                }
+            } else {
+                for r in results.iter_mut() {
+                    r.distance = 1.0 - (r.distance - min_dist) / range;
+                }
+            }
+        }
+        ScoreNormalization::InverseDistance => {
+            for r in results.iter_mut() {
+                r.distance = 1.0 / (1.0 + r.distance);
+            }
+        }
+    }
+}
+
 /// Detailed query execution plan and profiling information.
 ///
 /// Returned by search operations when explain mode is enabled, providing
@@ -351,5 +417,73 @@ mod tests {
         let trace = crate::hnsw::SearchTrace::default();
         let output = format!("{}", trace);
         assert!(output.contains("HNSW Search Trace"));
+    }
+
+    // ── Score normalization tests ─────────────────────────────────────
+
+    #[test]
+    fn test_normalize_scores_minmax_basic() {
+        let mut results = vec![
+            SearchResult::new("a", 0.1, None),
+            SearchResult::new("b", 0.5, None),
+            SearchResult::new("c", 1.0, None),
+        ];
+        normalize_scores(&mut results, ScoreNormalization::MinMax);
+
+        // Closest → 1.0, farthest → 0.0
+        assert!((results[0].distance - 1.0).abs() < f32::EPSILON);
+        assert!((results[2].distance - 0.0).abs() < f32::EPSILON);
+        // Mid should be ~0.444
+        let expected_mid = 1.0 - (0.5 - 0.1) / (1.0 - 0.1);
+        assert!((results[1].distance - expected_mid).abs() < 1e-5);
+    }
+
+    #[test]
+    fn test_normalize_scores_minmax_single_result() {
+        let mut results = vec![SearchResult::new("only", 0.5, None)];
+        normalize_scores(&mut results, ScoreNormalization::MinMax);
+        assert!((results[0].distance - 1.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn test_normalize_scores_minmax_equal_distances() {
+        let mut results = vec![
+            SearchResult::new("a", 0.3, None),
+            SearchResult::new("b", 0.3, None),
+        ];
+        normalize_scores(&mut results, ScoreNormalization::MinMax);
+        assert!((results[0].distance - 1.0).abs() < f32::EPSILON);
+        assert!((results[1].distance - 1.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn test_normalize_scores_minmax_empty() {
+        let mut results: Vec<SearchResult> = vec![];
+        normalize_scores(&mut results, ScoreNormalization::MinMax);
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_normalize_scores_inverse_distance() {
+        let mut results = vec![
+            SearchResult::new("a", 0.0, None),
+            SearchResult::new("b", 1.0, None),
+            SearchResult::new("c", 3.0, None),
+        ];
+        normalize_scores(&mut results, ScoreNormalization::InverseDistance);
+
+        assert!((results[0].distance - 1.0).abs() < f32::EPSILON); // 1/(1+0)
+        assert!((results[1].distance - 0.5).abs() < f32::EPSILON); // 1/(1+1)
+        assert!((results[2].distance - 0.25).abs() < f32::EPSILON); // 1/(1+3)
+    }
+
+    #[test]
+    fn test_normalize_scores_preserves_metadata() {
+        let mut results = vec![
+            SearchResult::new("a", 0.1, Some(serde_json::json!({"key": "val"}))),
+        ];
+        normalize_scores(&mut results, ScoreNormalization::InverseDistance);
+        assert!(results[0].metadata.is_some());
+        assert_eq!(results[0].metadata.as_ref().unwrap()["key"], "val");
     }
 }

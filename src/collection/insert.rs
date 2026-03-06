@@ -122,6 +122,11 @@ impl Collection {
     ) -> Result<()> {
         let id = id.into();
 
+        // Validate metadata against schema if configured
+        if let (Some(meta), Some(schema)) = (&metadata, &self.config.metadata_schema) {
+            crate::metadata::validate_metadata_schema(meta, schema)?;
+        }
+
         // Validate dimensions and vector values
         self.validate_insert_input(&vector)?;
 
@@ -273,6 +278,69 @@ impl Collection {
         self.insert_batch(ids, embeddings, metadata)
     }
 
+    /// Insert a document by text, auto-embedding it using the configured provider.
+    ///
+    /// Requires `auto_embed` to be configured on the collection via
+    /// [`CollectionConfig::with_auto_embed`]. The text is converted to a vector
+    /// using a deterministic hash-based embedding and stored alongside `_text`
+    /// metadata.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - [`NeedleError::InvalidConfig`] - Auto-embed not configured
+    /// - [`NeedleError::VectorAlreadyExists`] - A vector with the same ID exists
+    pub fn insert_auto_text(
+        &mut self,
+        id: impl Into<String>,
+        text: &str,
+        metadata: Option<Value>,
+    ) -> Result<()> {
+        let config = self.config.auto_embed.as_ref().ok_or_else(|| {
+            NeedleError::InvalidConfig(
+                "Auto-embed not configured for this collection. \
+                 Use with_auto_embed() on CollectionConfig."
+                    .into(),
+            )
+        })?;
+
+        let embedding = Self::generate_auto_embedding(text, self.config.dimensions, config)?;
+
+        let mut meta = metadata.unwrap_or_else(|| serde_json::json!({}));
+        if let Some(obj) = meta.as_object_mut() {
+            obj.insert("_text".to_string(), Value::String(text.to_string()));
+        }
+        self.insert_vec_with_ttl(id, embedding, Some(meta), None)
+    }
+
+    /// Generate a deterministic hash-based embedding from text.
+    fn generate_auto_embedding(
+        text: &str,
+        dimensions: usize,
+        _config: &crate::collection::config::AutoEmbedInsertConfig,
+    ) -> Result<Vec<f32>> {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+
+        let mut vector = vec![0.0f32; dimensions];
+        let words: Vec<&str> = text.split_whitespace().collect();
+        for (i, word) in words.iter().enumerate() {
+            let mut hasher = DefaultHasher::new();
+            word.hash(&mut hasher);
+            let hash = hasher.finish();
+            let idx = (hash as usize) % dimensions;
+            vector[idx] += 1.0 / (1.0 + i as f32);
+        }
+        // Normalize
+        let magnitude: f32 = vector.iter().map(|x| x * x).sum::<f32>().sqrt();
+        if magnitude > 0.0 {
+            for v in &mut vector {
+                *v /= magnitude;
+            }
+        }
+        Ok(vector)
+    }
+
     /// Insert multiple text documents in batch, embedding them with the given model.
     pub fn insert_batch_with_text(
         &mut self,
@@ -397,6 +465,74 @@ impl Collection {
     pub fn provenance_store(&self) -> &crate::persistence::vector_versioning::ProvenanceStore {
         &self.provenance_store
     }
+
+    /// Bulk import vectors from a JSON-Lines reader.
+    ///
+    /// Each line should be a JSON object with fields:
+    /// - `"id"`: string (required)
+    /// - `"vector"`: array of floats (required)
+    /// - `"metadata"`: object (optional)
+    ///
+    /// Blank lines and lines starting with `#` are skipped.
+    /// Returns the number of successfully imported vectors and any per-line errors.
+    pub fn import_jsonl<R: std::io::BufRead>(&mut self, reader: R) -> Result<ImportResult> {
+        let mut imported = 0usize;
+        let mut errors = Vec::new();
+
+        for (line_num, line) in reader.lines().enumerate() {
+            let line = line.map_err(NeedleError::Io)?;
+            let trimmed = line.trim();
+            if trimmed.is_empty() || trimmed.starts_with('#') {
+                continue;
+            }
+
+            match serde_json::from_str::<ImportRecord>(trimmed) {
+                Ok(record) => {
+                    match self.insert(record.id.clone(), &record.vector, record.metadata) {
+                        Ok(()) => imported += 1,
+                        Err(e) => errors.push(ImportError {
+                            line: line_num + 1,
+                            message: e.to_string(),
+                        }),
+                    }
+                }
+                Err(e) => {
+                    errors.push(ImportError {
+                        line: line_num + 1,
+                        message: e.to_string(),
+                    });
+                }
+            }
+        }
+
+        Ok(ImportResult { imported, errors })
+    }
+}
+
+/// A single record in a JSONL import file.
+#[derive(Deserialize)]
+struct ImportRecord {
+    id: String,
+    vector: Vec<f32>,
+    metadata: Option<Value>,
+}
+
+/// Result of a bulk JSONL import operation.
+#[derive(Debug, Clone, Serialize)]
+pub struct ImportResult {
+    /// Number of vectors successfully imported.
+    pub imported: usize,
+    /// Per-line errors encountered during import.
+    pub errors: Vec<ImportError>,
+}
+
+/// A single error encountered during JSONL import.
+#[derive(Debug, Clone, Serialize)]
+pub struct ImportError {
+    /// 1-based line number where the error occurred.
+    pub line: usize,
+    /// Description of the error.
+    pub message: String,
 }
 
 #[cfg(test)]
@@ -672,5 +808,127 @@ mod tests {
         let mut col = Collection::with_dimensions("test", 128);
         let result = col.insert_text("doc1", "Hello world", None);
         assert!(result.is_err(), "insert_text should fail when model output dims != collection dims");
+    }
+
+    #[test]
+    fn test_insert_auto_text_without_config_fails() {
+        let mut col = Collection::with_dimensions("test", 64);
+        let result = col.insert_auto_text("doc1", "Hello world", None);
+        assert!(result.is_err());
+        let err_msg = format!("{}", result.unwrap_err());
+        assert!(err_msg.contains("Auto-embed not configured"));
+    }
+
+    #[test]
+    fn test_insert_auto_text_with_config_succeeds() {
+        use crate::collection::config::AutoEmbedInsertConfig;
+
+        let config = CollectionConfig::new("test", 64).with_auto_embed(AutoEmbedInsertConfig {
+            provider: "hash".to_string(),
+            model: None,
+        });
+        let mut col = Collection::new(config);
+        col.insert_auto_text("doc1", "Hello world of vectors", None)
+            .unwrap();
+        assert_eq!(col.len(), 1);
+
+        // Verify _text metadata is stored
+        let (_, meta) = col.get("doc1").unwrap();
+        let meta = meta.unwrap();
+        assert_eq!(meta["_text"], "Hello world of vectors");
+    }
+
+    #[test]
+    fn test_insert_auto_text_is_searchable() {
+        use crate::collection::config::AutoEmbedInsertConfig;
+
+        let config = CollectionConfig::new("test", 64).with_auto_embed(AutoEmbedInsertConfig {
+            provider: "hash".to_string(),
+            model: None,
+        });
+        let mut col = Collection::new(config);
+        col.insert_auto_text("doc1", "machine learning algorithms", None)
+            .unwrap();
+        col.insert_auto_text("doc2", "cooking recipes and food", None)
+            .unwrap();
+        assert_eq!(col.len(), 2);
+
+        // Search using the vector from doc1 — doc1 should be the top result
+        let (doc1_vec, _) = col.get("doc1").unwrap();
+        let doc1_vec = doc1_vec.to_vec();
+        let results = col.search(&doc1_vec, 2).unwrap();
+        assert!(!results.is_empty());
+        assert_eq!(results[0].id, "doc1");
+    }
+
+    // ── JSONL import ────────────────────────────────────────────────────
+
+    #[test]
+    fn test_import_jsonl_basic() {
+        let mut col = Collection::with_dimensions("test", 3);
+        let input = r#"{"id": "v1", "vector": [1.0, 2.0, 3.0], "metadata": {"tag": "a"}}
+{"id": "v2", "vector": [4.0, 5.0, 6.0]}
+"#;
+        let reader = std::io::BufReader::new(input.as_bytes());
+        let result = col.import_jsonl(reader).unwrap();
+
+        assert_eq!(result.imported, 2);
+        assert!(result.errors.is_empty());
+        assert_eq!(col.len(), 2);
+        assert!(col.contains("v1"));
+        assert!(col.contains("v2"));
+
+        let (_, meta) = col.get("v1").unwrap();
+        assert_eq!(meta.unwrap()["tag"], "a");
+    }
+
+    #[test]
+    fn test_import_jsonl_skips_blanks_and_comments() {
+        let mut col = Collection::with_dimensions("test", 3);
+        let input = "# header comment\n\n{\"id\": \"v1\", \"vector\": [1.0, 2.0, 3.0]}\n  \n# another comment\n";
+        let reader = std::io::BufReader::new(input.as_bytes());
+        let result = col.import_jsonl(reader).unwrap();
+
+        assert_eq!(result.imported, 1);
+        assert!(result.errors.is_empty());
+    }
+
+    #[test]
+    fn test_import_jsonl_partial_errors() {
+        let mut col = Collection::with_dimensions("test", 3);
+        let input = r#"{"id": "v1", "vector": [1.0, 2.0, 3.0]}
+not valid json
+{"id": "v2", "vector": [4.0, 5.0, 6.0]}
+"#;
+        let reader = std::io::BufReader::new(input.as_bytes());
+        let result = col.import_jsonl(reader).unwrap();
+
+        assert_eq!(result.imported, 2);
+        assert_eq!(result.errors.len(), 1);
+        assert_eq!(result.errors[0].line, 2);
+    }
+
+    #[test]
+    fn test_import_jsonl_duplicate_id_error() {
+        let mut col = Collection::with_dimensions("test", 3);
+        let input = r#"{"id": "v1", "vector": [1.0, 2.0, 3.0]}
+{"id": "v1", "vector": [4.0, 5.0, 6.0]}
+"#;
+        let reader = std::io::BufReader::new(input.as_bytes());
+        let result = col.import_jsonl(reader).unwrap();
+
+        assert_eq!(result.imported, 1);
+        assert_eq!(result.errors.len(), 1);
+        assert_eq!(result.errors[0].line, 2);
+    }
+
+    #[test]
+    fn test_import_jsonl_empty_input() {
+        let mut col = Collection::with_dimensions("test", 3);
+        let reader = std::io::BufReader::new(b"" as &[u8]);
+        let result = col.import_jsonl(reader).unwrap();
+
+        assert_eq!(result.imported, 0);
+        assert!(result.errors.is_empty());
     }
 }

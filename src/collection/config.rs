@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::fmt;
 
 use crate::distance::DistanceFunction;
@@ -57,6 +58,21 @@ impl fmt::Display for CollectionStats {
             format_bytes(self.index_memory_bytes),
         )
     }
+}
+
+/// Estimated memory usage breakdown for a collection.
+#[derive(Debug, Clone, Serialize)]
+pub struct MemoryStats {
+    /// Memory used by raw vector data (bytes)
+    pub vectors_bytes: usize,
+    /// Memory used by the HNSW index graph (bytes)
+    pub index_bytes: usize,
+    /// Memory used by metadata storage (bytes)
+    pub metadata_bytes: usize,
+    /// Memory used by query caches (bytes)
+    pub cache_bytes: usize,
+    /// Total estimated memory usage (bytes)
+    pub total_bytes: usize,
 }
 
 /// Query cache statistics
@@ -333,6 +349,20 @@ impl Default for QueryCacheConfig {
     }
 }
 
+/// Configuration for automatic text embedding on insert.
+///
+/// When set on a collection, enables `insert_auto_text()` which converts
+/// text into a deterministic vector using hash-based embedding (no external
+/// provider required).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AutoEmbedInsertConfig {
+    /// Name of the embedding provider (e.g., "hash", "ollama")
+    pub provider: String,
+    /// Model name for the provider
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+}
+
 /// Collection configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CollectionConfig {
@@ -370,6 +400,27 @@ pub struct CollectionConfig {
     /// Multi-modal fusion search configuration
     #[serde(default)]
     pub modal_fusion: Option<ModalFusionConfig>,
+    /// Optional metadata schema for validation on insert.
+    /// When set, inserted metadata must conform to this schema.
+    /// The schema is a JSON object specifying required fields and their expected types.
+    /// Example: `{"required": ["title"], "properties": {"title": {"type": "string"}, "score": {"type": "number"}}}`
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata_schema: Option<Value>,
+    /// Optional embedding configuration for auto-embedding text on insert.
+    /// When configured, text can be inserted directly via `insert_auto_text()`
+    /// and will be automatically embedded using a deterministic hash-based method.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_embed: Option<AutoEmbedInsertConfig>,
+    /// Metadata fields known to have high cardinality (e.g., UUIDs, timestamps).
+    /// These fields are excluded from the inverted index from the start, avoiding
+    /// the overhead of indexing then discarding after the auto-detection threshold.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub high_cardinality_fields: Vec<String>,
+    /// Maximum distinct values per field before the inverted index stops adding
+    /// new values for that field. Prevents high-cardinality fields from bloating
+    /// the index. Defaults to 10,000 if not set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cardinality_threshold: Option<usize>,
 }
 
 fn default_lazy_expiration() -> bool {
@@ -433,6 +484,10 @@ impl CollectionConfig {
             semantic_cache: None,
             dedup: None,
             modal_fusion: None,
+            metadata_schema: None,
+            auto_embed: None,
+            high_cardinality_fields: Vec::new(),
+            cardinality_threshold: None,
         }
     }
 
@@ -446,6 +501,47 @@ impl CollectionConfig {
             ));
         }
         Ok(Self::new(name, dimensions))
+    }
+
+    /// Validate the current configuration, returning an error if any field is invalid.
+    ///
+    /// This checks threshold bounds, HNSW parameter relationships, and optional
+    /// sub-config consistency. Called automatically by the database when creating
+    /// a collection, but can be called manually for early validation.
+    pub fn validate(&self) -> Result<()> {
+        validate_collection_name(&self.name)?;
+        if self.dimensions == 0 {
+            return Err(NeedleError::InvalidConfig(
+                "Vector dimensions must be greater than 0".to_string(),
+            ));
+        }
+        if self.hnsw.m == 0 {
+            return Err(NeedleError::InvalidConfig(
+                "HNSW M parameter must be greater than 0".to_string(),
+            ));
+        }
+        if self.hnsw.ef_construction == 0 {
+            return Err(NeedleError::InvalidConfig(
+                "HNSW ef_construction must be greater than 0".to_string(),
+            ));
+        }
+        if let Some(ref sc) = self.semantic_cache {
+            if !(0.0..=1.0).contains(&sc.similarity_threshold) {
+                return Err(NeedleError::InvalidConfig(format!(
+                    "Semantic cache similarity_threshold must be between 0.0 and 1.0, got {}",
+                    sc.similarity_threshold
+                )));
+            }
+        }
+        if let Some(ref dd) = self.dedup {
+            if dd.distance_threshold < 0.0 {
+                return Err(NeedleError::InvalidConfig(format!(
+                    "Dedup distance_threshold must be non-negative, got {}",
+                    dd.distance_threshold
+                )));
+            }
+        }
+        Ok(())
     }
 
     /// Set the distance function
@@ -611,6 +707,59 @@ impl CollectionConfig {
     #[must_use]
     pub fn with_modal_fusion(mut self, config: ModalFusionConfig) -> Self {
         self.modal_fusion = Some(config);
+        self
+    }
+
+    /// Set a metadata schema for validation on insert.
+    #[must_use]
+    pub fn with_metadata_schema(mut self, schema: Value) -> Self {
+        self.metadata_schema = Some(schema);
+        self
+    }
+
+    /// Set auto-embed configuration for automatic text embedding on insert.
+    #[must_use]
+    pub fn with_auto_embed(mut self, config: AutoEmbedInsertConfig) -> Self {
+        self.auto_embed = Some(config);
+        self
+    }
+
+    /// Set metadata fields known to have high cardinality.
+    ///
+    /// These fields (e.g., UUIDs, timestamps, request IDs) will be excluded
+    /// from the inverted index from the start, avoiding the overhead of
+    /// indexing and then discarding after the auto-detection threshold.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use needle::CollectionConfig;
+    ///
+    /// let config = CollectionConfig::new("events", 384)
+    ///     .with_high_cardinality_fields(vec!["request_id".into(), "timestamp".into()]);
+    /// ```
+    #[must_use]
+    pub fn with_high_cardinality_fields(mut self, fields: Vec<String>) -> Self {
+        self.high_cardinality_fields = fields;
+        self
+    }
+
+    /// Set the auto-detection threshold for high-cardinality metadata fields.
+    ///
+    /// When the number of distinct values for a field exceeds this threshold,
+    /// the field is automatically removed from the inverted index to save memory.
+    /// The default threshold is 10,000.
+    ///
+    /// # Examples
+    /// ```
+    /// use needle::CollectionConfig;
+    ///
+    /// let config = CollectionConfig::new("logs", 384)
+    ///     .with_cardinality_threshold(50_000);
+    /// ```
+    #[must_use]
+    pub fn with_cardinality_threshold(mut self, threshold: usize) -> Self {
+        self.cardinality_threshold = Some(threshold);
         self
     }
 }
@@ -1061,5 +1210,150 @@ mod tests {
         };
         let display = format!("{}", stats);
         assert!(display.contains("KB"));
+    }
+
+    // ── validate() tests ─────────────────────────────────────────────────
+
+    #[test]
+    fn test_validate_valid_config() {
+        let config = CollectionConfig::new("test", 128);
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_validate_semantic_cache_threshold_too_high() {
+        let mut config = CollectionConfig::new("test", 128);
+        config.semantic_cache = Some(SemanticQueryCacheConfig {
+            capacity: 100,
+            similarity_threshold: 1.5,
+            ttl_seconds: Some(60),
+        });
+        let result = config.validate();
+        assert!(result.is_err());
+        let err_msg = format!("{}", result.unwrap_err());
+        assert!(err_msg.contains("similarity_threshold"));
+    }
+
+    #[test]
+    fn test_validate_semantic_cache_threshold_negative() {
+        let mut config = CollectionConfig::new("test", 128);
+        config.semantic_cache = Some(SemanticQueryCacheConfig {
+            capacity: 100,
+            similarity_threshold: -0.1,
+            ttl_seconds: Some(60),
+        });
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_semantic_cache_threshold_boundary_values() {
+        let mut config = CollectionConfig::new("test", 128);
+        config.semantic_cache = Some(SemanticQueryCacheConfig {
+            capacity: 100,
+            similarity_threshold: 0.0,
+            ttl_seconds: Some(60),
+        });
+        assert!(config.validate().is_ok());
+
+        config.semantic_cache = Some(SemanticQueryCacheConfig {
+            capacity: 100,
+            similarity_threshold: 1.0,
+            ttl_seconds: Some(60),
+        });
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_validate_dedup_threshold_negative() {
+        let mut config = CollectionConfig::new("test", 128);
+        config.dedup = Some(SemanticDedupConfig {
+            enabled: true,
+            distance_threshold: -0.5,
+            policy: DedupPolicy::Reject,
+        });
+        let result = config.validate();
+        assert!(result.is_err());
+        let err_msg = format!("{}", result.unwrap_err());
+        assert!(err_msg.contains("distance_threshold"));
+    }
+
+    #[test]
+    fn test_validate_hnsw_m_zero() {
+        let mut config = CollectionConfig::new("test", 128);
+        config.hnsw.m = 0;
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_hnsw_ef_construction_zero() {
+        let mut config = CollectionConfig::new("test", 128);
+        config.hnsw.ef_construction = 0;
+        assert!(config.validate().is_err());
+    }
+
+    // ── high_cardinality_fields tests ────────────────────────────────────
+
+    #[test]
+    fn test_with_high_cardinality_fields() {
+        let config = CollectionConfig::new("test", 128)
+            .with_high_cardinality_fields(vec!["uuid".into(), "timestamp".into()]);
+        assert_eq!(config.high_cardinality_fields, vec!["uuid", "timestamp"]);
+    }
+
+    #[test]
+    fn test_default_high_cardinality_fields_empty() {
+        let config = CollectionConfig::new("test", 128);
+        assert!(config.high_cardinality_fields.is_empty());
+    }
+
+    #[test]
+    fn test_high_cardinality_fields_serialization() {
+        let config = CollectionConfig::new("test", 128)
+            .with_high_cardinality_fields(vec!["id".into()]);
+        let json = serde_json::to_string(&config).unwrap();
+        assert!(json.contains("high_cardinality_fields"));
+
+        let deserialized: CollectionConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.high_cardinality_fields, vec!["id"]);
+    }
+
+    #[test]
+    fn test_empty_high_cardinality_fields_not_serialized() {
+        let config = CollectionConfig::new("test", 128);
+        let json = serde_json::to_string(&config).unwrap();
+        assert!(!json.contains("high_cardinality_fields"));
+    }
+
+    // ── cardinality_threshold tests ──────────────────────────────────────
+
+    #[test]
+    fn test_default_cardinality_threshold_is_none() {
+        let config = CollectionConfig::new("test", 128);
+        assert!(config.cardinality_threshold.is_none());
+    }
+
+    #[test]
+    fn test_with_cardinality_threshold() {
+        let config = CollectionConfig::new("test", 128)
+            .with_cardinality_threshold(50_000);
+        assert_eq!(config.cardinality_threshold, Some(50_000));
+    }
+
+    #[test]
+    fn test_cardinality_threshold_serialization() {
+        let config = CollectionConfig::new("test", 128)
+            .with_cardinality_threshold(5_000);
+        let json = serde_json::to_string(&config).unwrap();
+        assert!(json.contains("cardinality_threshold"));
+
+        let deserialized: CollectionConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.cardinality_threshold, Some(5_000));
+    }
+
+    #[test]
+    fn test_none_cardinality_threshold_not_serialized() {
+        let config = CollectionConfig::new("test", 128);
+        let json = serde_json::to_string(&config).unwrap();
+        assert!(!json.contains("cardinality_threshold"));
     }
 }

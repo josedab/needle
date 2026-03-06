@@ -92,6 +92,28 @@ impl Collection {
         }
     }
 
+    /// Get estimated memory usage breakdown for this collection.
+    pub fn memory_usage(&self) -> MemoryStats {
+        let vector_count = self.vectors.len();
+        let dimensions = self.config.dimensions;
+
+        let vectors_bytes = vector_count * dimensions * std::mem::size_of::<f32>();
+        let index_bytes = self.index.estimated_memory();
+        let metadata_bytes = self.metadata.estimated_memory();
+        let cache_bytes = self
+            .query_cache
+            .as_ref()
+            .map_or(0, |c| c.capacity * std::mem::size_of::<usize>());
+
+        MemoryStats {
+            vectors_bytes,
+            index_bytes,
+            metadata_bytes,
+            cache_bytes,
+            total_bytes: vectors_bytes + index_bytes + metadata_bytes + cache_bytes,
+        }
+    }
+
     /// Count vectors matching an optional filter
     pub fn count(&self, filter: Option<&Filter>) -> usize {
         match filter {
@@ -218,6 +240,16 @@ impl Collection {
     /// ```
     pub fn needs_compaction(&self, threshold: f64) -> bool {
         self.index.needs_compaction(threshold)
+    }
+
+    /// Get statistics for a specific metadata field.
+    pub fn field_stats(&self, field: &str) -> Option<crate::metadata::FieldStats> {
+        self.metadata.field_stats(field)
+    }
+
+    /// Get statistics for all known metadata fields.
+    pub fn all_field_stats(&self) -> Vec<crate::metadata::FieldStats> {
+        self.metadata.all_field_stats()
     }
 }
 
@@ -399,6 +431,30 @@ mod tests {
         assert_eq!(stats.vector_count, 3);
         assert_eq!(stats.dimensions, 4);
         assert!(stats.total_memory_bytes > 0);
+    }
+
+    // ── memory_usage ────────────────────────────────────────────────────
+
+    #[test]
+    fn test_memory_usage_populated() {
+        let col = populated_collection();
+        let mem = col.memory_usage();
+        assert!(mem.vectors_bytes > 0);
+        assert!(mem.index_bytes > 0);
+        assert!(mem.total_bytes > 0);
+        assert_eq!(
+            mem.total_bytes,
+            mem.vectors_bytes + mem.index_bytes + mem.metadata_bytes + mem.cache_bytes
+        );
+    }
+
+    #[test]
+    fn test_memory_usage_empty() {
+        let col = Collection::with_dimensions("test", 4);
+        let mem = col.memory_usage();
+        assert_eq!(mem.vectors_bytes, 0);
+        assert_eq!(mem.cache_bytes, 0);
+        assert_eq!(mem.total_bytes, mem.index_bytes + mem.metadata_bytes);
     }
 
     // ── count ───────────────────────────────────────────────────────────
