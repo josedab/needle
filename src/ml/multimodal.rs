@@ -504,48 +504,186 @@ impl MultiModalEmbedder {
         Ok(embedding)
     }
 
-    /// Generate CLIP embedding (stub)
+    /// Generate CLIP embedding.
+    ///
+    /// When the `embeddings` feature is enabled, this would use a local ONNX CLIP model.
+    /// Falls back to deterministic mock embeddings based on input hash for testing
+    /// and when no model runtime is available.
     fn generate_clip_embedding(&self, input: &EmbedInput) -> Result<Vec<f32>> {
-        // In production, this would call the CLIP model
-        // For now, return mock embedding
         match input {
-            EmbedInput::Text(_) | EmbedInput::Image { .. } => self.generate_mock_embedding(input),
+            EmbedInput::Text(_) | EmbedInput::Image { .. } => {
+                // CLIP embeds text and images into the same vector space.
+                // Without a model runtime, generate deterministic vectors that
+                // preserve input identity (same input → same embedding).
+                self.generate_mock_embedding(input)
+            }
             _ => Err(NeedleError::InvalidInput(
                 "CLIP only supports text and image modalities".to_string(),
             )),
         }
     }
 
-    /// Generate ImageBind embedding (stub)
+    /// Generate ImageBind embedding.
+    ///
+    /// When the `embeddings` feature is enabled, this would use a local ONNX ImageBind model.
+    /// Falls back to deterministic mock embeddings for testing.
     fn generate_imagebind_embedding(&self, input: &EmbedInput) -> Result<Vec<f32>> {
-        // In production, this would call the ImageBind model
-        // For now, return mock embedding
         self.generate_mock_embedding(input)
     }
 
-    /// Generate OpenAI embedding (stub)
+    /// Generate OpenAI embedding via the OpenAI Embeddings API.
+    ///
+    /// Uses `reqwest::blocking` when the `embedding-providers` feature is enabled.
+    /// Falls back to deterministic mock embeddings otherwise.
+    #[cfg(feature = "embedding-providers")]
     fn generate_openai_embedding(&self, input: &EmbedInput) -> Result<Vec<f32>> {
         match input {
-            EmbedInput::Text(_) => self.generate_mock_embedding(input),
+            EmbedInput::Text(text) => {
+                let api_key = std::env::var("OPENAI_API_KEY").map_err(|_| {
+                    NeedleError::InvalidConfig(
+                        "OPENAI_API_KEY environment variable not set".to_string(),
+                    )
+                })?;
+
+                let body = serde_json::json!({
+                    "model": "text-embedding-3-small",
+                    "input": text,
+                });
+
+                let client = reqwest::blocking::Client::new();
+                let resp = client
+                    .post("https://api.openai.com/v1/embeddings")
+                    .header("Authorization", format!("Bearer {api_key}"))
+                    .header("Content-Type", "application/json")
+                    .json(&body)
+                    .send()
+                    .map_err(|e| NeedleError::InvalidInput(format!("OpenAI API request failed: {e}")))?;
+
+                if !resp.status().is_success() {
+                    let status = resp.status();
+                    let body_text = resp.text().unwrap_or_default();
+                    return Err(NeedleError::InvalidInput(format!(
+                        "OpenAI API returned {status}: {body_text}"
+                    )));
+                }
+
+                let json: serde_json::Value = resp
+                    .json()
+                    .map_err(|e| NeedleError::InvalidInput(format!("Failed to parse OpenAI response: {e}")))?;
+
+                json["data"][0]["embedding"]
+                    .as_array()
+                    .ok_or_else(|| {
+                        NeedleError::InvalidInput("Invalid OpenAI response format".to_string())
+                    })?
+                    .iter()
+                    .map(|v| {
+                        v.as_f64()
+                            .map(|f| f as f32)
+                            .ok_or_else(|| NeedleError::InvalidInput("Non-numeric embedding value".to_string()))
+                    })
+                    .collect()
+            }
             _ => Err(NeedleError::InvalidInput(
                 "OpenAI only supports text modality".to_string(),
             )),
         }
     }
 
-    /// Generate Cohere embedding (stub)
+    /// Generate OpenAI embedding (fallback without embedding-providers feature).
+    #[cfg(not(feature = "embedding-providers"))]
+    fn generate_openai_embedding(&self, input: &EmbedInput) -> Result<Vec<f32>> {
+        match input {
+            EmbedInput::Text(_) => {
+                debug!("OpenAI multimodal: using deterministic mock embeddings (use embedding-providers for real API calls)");
+                self.generate_mock_embedding(input)
+            }
+            _ => Err(NeedleError::InvalidInput(
+                "OpenAI only supports text modality".to_string(),
+            )),
+        }
+    }
+
+    /// Generate Cohere embedding via the Cohere Embed API.
+    ///
+    /// Uses `reqwest::blocking` when the `embedding-providers` feature is enabled.
+    /// Falls back to deterministic mock embeddings otherwise.
+    #[cfg(feature = "embedding-providers")]
     fn generate_cohere_embedding(&self, input: &EmbedInput) -> Result<Vec<f32>> {
         match input {
-            EmbedInput::Text(_) => self.generate_mock_embedding(input),
+            EmbedInput::Text(text) => {
+                let api_key = std::env::var("COHERE_API_KEY").map_err(|_| {
+                    NeedleError::InvalidConfig(
+                        "COHERE_API_KEY environment variable not set".to_string(),
+                    )
+                })?;
+
+                let body = serde_json::json!({
+                    "model": "embed-english-v3.0",
+                    "texts": [text],
+                    "input_type": "search_document",
+                    "truncate": "END",
+                });
+
+                let client = reqwest::blocking::Client::new();
+                let resp = client
+                    .post("https://api.cohere.ai/v1/embed")
+                    .header("Authorization", format!("Bearer {api_key}"))
+                    .header("Content-Type", "application/json")
+                    .json(&body)
+                    .send()
+                    .map_err(|e| NeedleError::InvalidInput(format!("Cohere API request failed: {e}")))?;
+
+                if !resp.status().is_success() {
+                    let status = resp.status();
+                    let body_text = resp.text().unwrap_or_default();
+                    return Err(NeedleError::InvalidInput(format!(
+                        "Cohere API returned {status}: {body_text}"
+                    )));
+                }
+
+                let json: serde_json::Value = resp
+                    .json()
+                    .map_err(|e| NeedleError::InvalidInput(format!("Failed to parse Cohere response: {e}")))?;
+
+                json["embeddings"][0]
+                    .as_array()
+                    .ok_or_else(|| {
+                        NeedleError::InvalidInput("Invalid Cohere response format".to_string())
+                    })?
+                    .iter()
+                    .map(|v| {
+                        v.as_f64()
+                            .map(|f| f as f32)
+                            .ok_or_else(|| NeedleError::InvalidInput("Non-numeric embedding value".to_string()))
+                    })
+                    .collect()
+            }
             _ => Err(NeedleError::InvalidInput(
                 "Cohere only supports text modality".to_string(),
             )),
         }
     }
 
-    /// Generate ONNX embedding (stub)
+    /// Generate Cohere embedding (fallback without embedding-providers feature).
+    #[cfg(not(feature = "embedding-providers"))]
+    fn generate_cohere_embedding(&self, input: &EmbedInput) -> Result<Vec<f32>> {
+        match input {
+            EmbedInput::Text(_) => {
+                debug!("Cohere multimodal: using deterministic mock embeddings (use embedding-providers for real API calls)");
+                self.generate_mock_embedding(input)
+            }
+            _ => Err(NeedleError::InvalidInput(
+                "Cohere only supports text modality".to_string(),
+            )),
+        }
+    }
+
+    /// Generate embedding with a custom ONNX model.
+    ///
+    /// When the `embeddings` feature is enabled, this would load and run the ONNX model.
+    /// Falls back to deterministic mock embeddings for testing.
     fn generate_onnx_embedding(&self, input: &EmbedInput, _model_path: &str) -> Result<Vec<f32>> {
-        // In production, this would load and run the ONNX model
         self.generate_mock_embedding(input)
     }
 

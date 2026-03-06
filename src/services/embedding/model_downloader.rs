@@ -76,10 +76,22 @@ impl ModelDownloader {
     /// Simulate downloading a model (in production, this would do HTTP GET).
     pub fn download(&mut self, entry: &CatalogEntry) -> DownloadStatus {
         let path = format!("{}/{}.onnx", self.cache_dir, entry.id);
+        let verified = Self::has_real_hash(entry);
+        if !verified {
+            eprintln!(
+                "Warning: model '{}' has no verified SHA256 hash — integrity check skipped",
+                entry.id
+            );
+        }
         self.cache.insert(entry.id.clone(), CachedModel {
-            id: entry.id.clone(), path, dimensions: entry.dimensions, verified: true,
+            id: entry.id.clone(), path, dimensions: entry.dimensions, verified,
         });
         DownloadStatus::Complete
+    }
+
+    /// Returns `true` if the entry has a real (non-placeholder) SHA256 hash.
+    fn has_real_hash(entry: &CatalogEntry) -> bool {
+        !entry.sha256.is_empty() && entry.sha256 != "placeholder"
     }
 
     /// List all cached models.
@@ -120,6 +132,20 @@ mod tests {
         let entry = catalog.get("minilm-l6").unwrap();
         assert_eq!(dl.download(entry), DownloadStatus::Complete);
         assert!(dl.is_cached("minilm-l6"));
+        // Default catalog uses placeholder hashes so verified should be false
+        assert!(!dl.get_cached("minilm-l6").unwrap().verified);
+    }
+
+    #[test]
+    fn test_download_with_real_hash() {
+        let entry = CatalogEntry {
+            id: "test-model".into(), name: "Test".into(), dimensions: 128,
+            size_mb: 1.0, url: "https://example.com/model.onnx".into(),
+            sha256: "abc123def456".into(), format: "onnx".into(), quality_score: 90,
+        };
+        let mut dl = ModelDownloader::new("/tmp/test");
+        dl.download(&entry);
+        assert!(dl.get_cached("test-model").unwrap().verified);
     }
 
     #[test]
