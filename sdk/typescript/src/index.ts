@@ -54,9 +54,30 @@ export interface InsertOptions {
   ttl_seconds?: number;
 }
 
+export interface RateLimitInfo {
+  /** Maximum requests per second for this tier */
+  limit: number | null;
+  /** Remaining requests in current window */
+  remaining: number | null;
+  /** Seconds until rate limit resets */
+  retryAfter: number | null;
+}
+
 export interface NeedleClientOptions {
   apiKey?: string;
   timeout?: number;
+  /** Callback invoked with rate limit info on each response */
+  onRateLimit?: (info: RateLimitInfo) => void;
+}
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
+function extractRateLimitInfo(headers: Headers): RateLimitInfo {
+  return {
+    limit: headers.has("x-ratelimit-limit") ? parseInt(headers.get("x-ratelimit-limit")!, 10) : null,
+    remaining: headers.has("x-ratelimit-remaining") ? parseInt(headers.get("x-ratelimit-remaining")!, 10) : null,
+    retryAfter: headers.has("retry-after") ? parseInt(headers.get("retry-after")!, 10) : null,
+  };
 }
 
 // ── Client ───────────────────────────────────────────────────────────────────
@@ -65,14 +86,22 @@ export class NeedleClient {
   private baseUrl: string;
   private headers: Record<string, string>;
   private timeout: number;
+  private onRateLimit?: (info: RateLimitInfo) => void;
+  private _lastRateLimitInfo: RateLimitInfo | null = null;
 
   constructor(baseUrl: string, options?: NeedleClientOptions) {
     this.baseUrl = baseUrl.replace(/\/$/, "");
     this.headers = { "Content-Type": "application/json" };
     this.timeout = options?.timeout ?? 30000;
+    this.onRateLimit = options?.onRateLimit;
     if (options?.apiKey) {
       this.headers["X-API-Key"] = options.apiKey;
     }
+  }
+
+  /** Returns rate limit info from the most recent response, or null if unavailable. */
+  get lastRateLimitInfo(): RateLimitInfo | null {
+    return this._lastRateLimitInfo;
   }
 
   private async request<T>(method: string, path: string, body?: unknown): Promise<T> {
@@ -86,6 +115,11 @@ export class NeedleClient {
       init.body = JSON.stringify(body);
     }
     const resp = await fetch(url, init);
+    const rateLimitInfo = extractRateLimitInfo(resp.headers);
+    if (rateLimitInfo.limit !== null || rateLimitInfo.remaining !== null || rateLimitInfo.retryAfter !== null) {
+      this._lastRateLimitInfo = rateLimitInfo;
+      this.onRateLimit?.(rateLimitInfo);
+    }
     if (!resp.ok) {
       const error = await resp.json().catch(() => ({ error: resp.statusText }));
       throw new NeedleApiError(resp.status, error.error, error.code, error.help);
