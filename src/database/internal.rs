@@ -1,5 +1,5 @@
 use super::{Database, ExportEntry};
-use crate::collection::{Collection, SearchResult};
+use crate::collection::{Collection, ImportResult, SearchResult};
 use crate::error::{NeedleError, Result};
 use crate::metadata::Filter;
 use crate::tuning::{RecommendedIndex, WorkloadObservation};
@@ -72,6 +72,30 @@ impl Database {
         }
 
         Ok(())
+    }
+
+    pub(crate) fn batch_insert_internal(
+        &self,
+        collection: &str,
+        items: Vec<(String, Vec<f32>, Option<Value>)>,
+    ) -> Result<usize> {
+        let ids: Vec<String> = items.iter().map(|(id, _, _)| id.clone()).collect();
+        let vectors: Vec<Vec<f32>> = items.iter().map(|(_, v, _)| v.clone()).collect();
+        let metadata: Vec<Option<Value>> = items.into_iter().map(|(_, _, m)| m).collect();
+
+        let mut state = self.state.write();
+        let coll = state
+            .collections
+            .get_mut(collection)
+            .ok_or_else(|| NeedleError::CollectionNotFound(collection.to_string()))?;
+
+        let count = ids.len();
+        coll.insert_batch(ids, vectors, metadata)?;
+        drop(state);
+
+        self.mark_modified();
+
+        Ok(count)
     }
 
     pub(crate) fn insert_with_ttl_internal(
@@ -159,6 +183,25 @@ impl Database {
         let runtime = crate::ml::embedded_runtime::EmbeddingRuntime::new();
         let embedding = runtime.embed_text(text)?;
         self.search_internal(collection, &embedding, k)
+    }
+
+    pub(crate) fn insert_auto_text_internal(
+        &self,
+        collection: &str,
+        id: impl Into<String>,
+        text: &str,
+        metadata: Option<Value>,
+    ) -> Result<()> {
+        let mut state = self.state.write();
+        let coll = state
+            .collections
+            .get_mut(collection)
+            .ok_or_else(|| NeedleError::CollectionNotFound(collection.to_string()))?;
+
+        coll.insert_auto_text(id, text, metadata)?;
+        drop(state);
+        self.mark_modified();
+        Ok(())
     }
 
     pub(crate) fn update_internal(
@@ -526,6 +569,39 @@ impl Database {
         Ok(coll.stats())
     }
 
+    pub(crate) fn collection_memory_usage_internal(
+        &self,
+        collection: &str,
+    ) -> Result<crate::collection::MemoryStats> {
+        let state = self.state.read();
+        let coll = state
+            .collections
+            .get(collection)
+            .ok_or_else(|| NeedleError::CollectionNotFound(collection.to_string()))?;
+        Ok(coll.memory_usage())
+    }
+
+    pub(crate) fn collection_field_stats_internal(
+        &self,
+        collection: &str,
+        field: &str,
+    ) -> Option<crate::metadata::FieldStats> {
+        let state = self.state.read();
+        let coll = state.collections.get(collection)?;
+        coll.field_stats(field)
+    }
+
+    pub(crate) fn collection_all_field_stats_internal(
+        &self,
+        collection: &str,
+    ) -> Vec<crate::metadata::FieldStats> {
+        let state = self.state.read();
+        state
+            .collections
+            .get(collection)
+            .map_or_else(Vec::new, |c| c.all_field_stats())
+    }
+
     pub(crate) fn get_provenance_internal(
         &self,
         collection: &str,
@@ -745,6 +821,27 @@ impl Database {
         self.mark_modified();
 
         Ok(manifest)
+    }
+
+    pub(crate) fn import_jsonl_internal<R: std::io::BufRead>(
+        &self,
+        collection: &str,
+        reader: R,
+    ) -> Result<ImportResult> {
+        let mut state = self.state.write();
+        let coll = state
+            .collections
+            .get_mut(collection)
+            .ok_or_else(|| NeedleError::CollectionNotFound(collection.to_string()))?;
+
+        let result = coll.import_jsonl(reader)?;
+        drop(state);
+
+        if result.imported > 0 {
+            self.mark_modified();
+        }
+
+        Ok(result)
     }
 }
 

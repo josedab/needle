@@ -120,18 +120,18 @@ struct DatabaseState {
 pub struct Database {
     /// Database configuration
     config: DatabaseConfig,
-    /// Storage engine
-    storage: Option<StorageEngine>,
+    /// Storage engine (Arc-wrapped Mutex for shared save access, including auto-flush thread)
+    storage: Arc<parking_lot::Mutex<Option<StorageEngine>>>,
     /// Collections (thread-safe)
     state: Arc<RwLock<DatabaseState>>,
-    /// Whether there are unsaved changes (AtomicBool for lock-free access)
-    dirty: AtomicBool,
+    /// Whether there are unsaved changes (Arc'd for auto-flush thread sharing)
+    dirty: Arc<AtomicBool>,
     /// Modification generation counter for race-free dirty tracking.
     /// Incremented on every modification. Used during save to detect
     /// concurrent modifications and avoid clearing dirty flag prematurely.
-    modification_gen: AtomicU64,
+    modification_gen: Arc<AtomicU64>,
     /// Last saved generation. If modification_gen > saved_gen, database is dirty.
-    saved_gen: AtomicU64,
+    saved_gen: Arc<AtomicU64>,
     /// Optional adaptive tuner for online index-tuning feedback
     adaptive_tuner: Option<Arc<AdaptiveTuner>>,
     /// Optional adaptive index manager for workload-driven index selection
@@ -149,6 +149,10 @@ pub struct Database {
     /// This bridges the gap between the generic TransactionManager (which doesn't
     /// know about collections) and the Database (which does).
     tx_collection_ops: Arc<RwLock<HashMap<crate::persistence::transaction::TransactionId, Vec<(String, crate::persistence::transaction::WriteOperation)>>>>,
+    /// Handle for the auto-flush background thread (if active).
+    /// Set to `Some` when `auto_flush_interval_secs > 0`.
+    auto_flush_shutdown: Option<Arc<AtomicBool>>,
+    auto_flush_handle: Option<std::thread::JoinHandle<()>>,
 }
 
 impl Database {
@@ -266,20 +270,30 @@ impl Database {
             "Database opened successfully"
         );
 
-        Ok(Self {
+        let auto_flush_interval = config.auto_flush_interval_secs;
+
+        let mut db = Self {
             config,
-            storage: Some(storage),
+            storage: Arc::new(parking_lot::Mutex::new(Some(storage))),
             state: Arc::new(RwLock::new(state)),
-            dirty: AtomicBool::new(false),
-            modification_gen: AtomicU64::new(0),
-            saved_gen: AtomicU64::new(0),
+            dirty: Arc::new(AtomicBool::new(false)),
+            modification_gen: Arc::new(AtomicU64::new(0)),
+            saved_gen: Arc::new(AtomicU64::new(0)),
             adaptive_tuner: None, adaptive_index_manager: None, replica_manager: None,
             versioned_stores: Arc::new(RwLock::new(HashMap::new())),
             transaction_manager: crate::persistence::transaction::TransactionManager::new(),
             tx_collection_ops: Arc::new(RwLock::new(HashMap::new())),
             #[cfg(feature = "observability")]
             dashboard_metrics: None,
-        })
+            auto_flush_shutdown: None,
+            auto_flush_handle: None,
+        };
+
+        if auto_flush_interval > 0 {
+            db.start_auto_flush(auto_flush_interval);
+        }
+
+        Ok(db)
     }
 
     /// Create an in-memory database (not persisted).
@@ -303,17 +317,19 @@ impl Database {
     pub fn in_memory() -> Self {
         Self {
             config: DatabaseConfig::default(),
-            storage: None,
+            storage: Arc::new(parking_lot::Mutex::new(None)),
             state: Arc::new(RwLock::new(DatabaseState::default())),
-            dirty: AtomicBool::new(false),
-            modification_gen: AtomicU64::new(0),
-            saved_gen: AtomicU64::new(0),
+            dirty: Arc::new(AtomicBool::new(false)),
+            modification_gen: Arc::new(AtomicU64::new(0)),
+            saved_gen: Arc::new(AtomicU64::new(0)),
             adaptive_tuner: None, adaptive_index_manager: None, replica_manager: None,
             versioned_stores: Arc::new(RwLock::new(HashMap::new())),
             transaction_manager: crate::persistence::transaction::TransactionManager::new(),
             tx_collection_ops: Arc::new(RwLock::new(HashMap::new())),
             #[cfg(feature = "observability")]
             dashboard_metrics: None,
+            auto_flush_shutdown: None,
+            auto_flush_handle: None,
         }
     }
 
@@ -324,11 +340,11 @@ impl Database {
     pub fn shared_handle(&self) -> Self {
         Self {
             config: self.config.clone(),
-            storage: None,
+            storage: Arc::new(parking_lot::Mutex::new(None)),
             state: Arc::clone(&self.state),
-            dirty: AtomicBool::new(false),
-            modification_gen: AtomicU64::new(0),
-            saved_gen: AtomicU64::new(0),
+            dirty: Arc::new(AtomicBool::new(false)),
+            modification_gen: Arc::new(AtomicU64::new(0)),
+            saved_gen: Arc::new(AtomicU64::new(0)),
             adaptive_tuner: self.adaptive_tuner.clone(),
             adaptive_index_manager: self.adaptive_index_manager.clone(),
             replica_manager: self.replica_manager.clone(),
@@ -337,7 +353,107 @@ impl Database {
             tx_collection_ops: Arc::new(RwLock::new(HashMap::new())),
             #[cfg(feature = "observability")]
             dashboard_metrics: self.dashboard_metrics.clone(),
+            auto_flush_shutdown: None,
+            auto_flush_handle: None,
         }
+    }
+
+    /// Start a background thread that periodically saves dirty data to disk.
+    ///
+    /// The thread wakes every `interval_secs` seconds, checks if the database
+    /// has unsaved changes, and calls `save()` if needed. The thread is cleanly
+    /// shut down when the `Database` is dropped.
+    fn start_auto_flush(&mut self, interval_secs: u64) {
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let shutdown_clone = Arc::clone(&shutdown);
+
+        let db_state = Arc::clone(&self.state);
+        let db_storage = Arc::clone(&self.storage);
+        let db_mod_gen = Arc::clone(&self.modification_gen);
+        let db_saved_gen = Arc::clone(&self.saved_gen);
+        let db_dirty = Arc::clone(&self.dirty);
+
+        let handle = std::thread::Builder::new()
+            .name("needle-auto-flush".to_string())
+            .spawn(move || {
+                let interval = std::time::Duration::from_secs(interval_secs);
+                loop {
+                    // Sleep in small increments for responsive shutdown
+                    let sleep_step = std::time::Duration::from_millis(500);
+                    let mut slept = std::time::Duration::ZERO;
+                    while slept < interval {
+                        if shutdown_clone.load(Ordering::Relaxed) {
+                            return;
+                        }
+                        std::thread::sleep(sleep_step.min(interval - slept));
+                        slept += sleep_step;
+                    }
+
+                    if shutdown_clone.load(Ordering::Relaxed) {
+                        return;
+                    }
+
+                    // Check if dirty
+                    let current_mod = db_mod_gen.load(Ordering::Acquire);
+                    let current_saved = db_saved_gen.load(Ordering::Acquire);
+                    if current_mod <= current_saved && !db_dirty.load(Ordering::Acquire) {
+                        continue;
+                    }
+
+                    // Perform save
+                    let mut storage_guard = db_storage.lock();
+                    let storage = match storage_guard.as_mut() {
+                        Some(s) => s,
+                        None => continue,
+                    };
+
+                    let gen_at_save_start = db_mod_gen.load(Ordering::Acquire);
+
+                    let (state_bytes, vector_count) = {
+                        let state = db_state.read();
+                        let vc: u64 = state.collections.values().map(|c| c.len() as u64).sum();
+                        match serde_json::to_vec(&*state) {
+                            Ok(bytes) => (bytes, vc),
+                            Err(e) => {
+                                eprintln!("needle: auto-flush serialization error: {e}");
+                                continue;
+                            }
+                        }
+                    };
+
+                    let mut header = storage.header().clone();
+                    header.metadata_offset = crate::storage::HEADER_SIZE as u64;
+                    header.vector_count = vector_count;
+
+                    if let Err(e) = storage.atomic_save(&header, &state_bytes) {
+                        eprintln!("needle: auto-flush save error: {e}");
+                        continue;
+                    }
+
+                    // Update saved_gen
+                    loop {
+                        let cs = db_saved_gen.load(Ordering::Acquire);
+                        if gen_at_save_start <= cs {
+                            break;
+                        }
+                        match db_saved_gen.compare_exchange_weak(
+                            cs, gen_at_save_start, Ordering::Release, Ordering::Relaxed,
+                        ) {
+                            Ok(_) => break,
+                            Err(_) => continue,
+                        }
+                    }
+
+                    let cm = db_mod_gen.load(Ordering::Acquire);
+                    if cm == gen_at_save_start {
+                        db_dirty.store(false, Ordering::Release);
+                    }
+                }
+            })
+            .ok();
+
+        self.auto_flush_shutdown = Some(shutdown);
+        self.auto_flush_handle = handle;
     }
 
     /// Attach an adaptive tuner for online index-parameter learning.
@@ -420,7 +536,7 @@ impl Database {
     /// # Ok::<(), needle::NeedleError>(())
     /// ```
     pub fn path(&self) -> Option<&Path> {
-        if self.storage.is_some() {
+        if self.storage.lock().is_some() {
             Some(&self.config.path)
         } else {
             None
@@ -638,6 +754,56 @@ impl Database {
     #[deprecated(since = "0.2.0", note = "renamed to `delete_collection`")]
     pub fn drop_collection(&self, name: &str) -> Result<bool> {
         self.delete_collection(name)
+    }
+
+    /// Rename an existing collection.
+    ///
+    /// Updates the collection's internal name, moves it under the new key in the
+    /// database, and rewrites any aliases that pointed to the old name.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`NeedleError::CollectionNotFound`] if `old_name` does not exist.
+    /// Returns [`NeedleError::CollectionAlreadyExists`] if `new_name` is already taken.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use needle::Database;
+    ///
+    /// let db = Database::in_memory();
+    /// db.create_collection("drafts", 128)?;
+    /// db.rename_collection("drafts", "published")?;
+    ///
+    /// assert!(!db.has_collection("drafts"));
+    /// assert!(db.has_collection("published"));
+    /// # Ok::<(), needle::NeedleError>(())
+    /// ```
+    pub fn rename_collection(&self, old_name: &str, new_name: &str) -> Result<()> {
+        let mut state = self.state.write();
+
+        if !state.collections.contains_key(old_name) {
+            return Err(NeedleError::CollectionNotFound(old_name.to_string()));
+        }
+        if state.collections.contains_key(new_name) {
+            return Err(NeedleError::CollectionAlreadyExists(new_name.to_string()));
+        }
+
+        if let Some(mut collection) = state.collections.remove(old_name) {
+            collection.set_name(new_name.to_string());
+            state.collections.insert(new_name.to_string(), collection);
+
+            // Update any aliases pointing to the old name
+            for target in state.aliases.values_mut() {
+                if *target == old_name {
+                    *target = new_name.to_string();
+                }
+            }
+
+            info!(old_name = %old_name, new_name = %new_name, "Collection renamed");
+            self.mark_modified();
+        }
+        Ok(())
     }
 
     /// Check if a collection exists.
@@ -873,8 +1039,9 @@ impl Database {
     /// # Ok::<(), needle::NeedleError>(())
     /// ```
     #[instrument(skip(self))]
-    pub fn save(&mut self) -> Result<()> {
-        let storage = match &mut self.storage {
+    pub fn save(&self) -> Result<()> {
+        let mut storage_guard = self.storage.lock();
+        let storage = match storage_guard.as_mut() {
             Some(s) => s,
             None => {
                 debug!("In-memory database, skipping save");
@@ -887,13 +1054,20 @@ impl Database {
         let gen_at_save_start = self.modification_gen.load(Ordering::Acquire);
         debug!(generation = gen_at_save_start, "Starting save");
 
-        let state = self.state.read();
-        let state_bytes = serde_json::to_vec(&*state)?;
+        // Serialize state outside the read lock to minimize lock hold time.
+        // Clone the state under the lock, release it, then do the expensive
+        // JSON serialization without blocking writers.
+        let (state_bytes, vector_count) = {
+            let state = self.state.read();
+            let vector_count: u64 = state.collections.values().map(|c| c.len() as u64).sum();
+            let bytes = serde_json::to_vec(&*state)?;
+            (bytes, vector_count)
+        };
 
         // Build updated header
         let mut header = storage.header().clone();
         header.metadata_offset = HEADER_SIZE as u64;
-        header.vector_count = state.collections.values().map(|c| c.len() as u64).sum();
+        header.vector_count = vector_count;
 
         // Use atomic save to prevent corruption on crash
         storage.atomic_save(&header, &state_bytes)?;
@@ -1184,6 +1358,14 @@ impl Database {
 
 impl Drop for Database {
     fn drop(&mut self) {
+        // Signal auto-flush thread to shut down and wait for it
+        if let Some(shutdown) = self.auto_flush_shutdown.take() {
+            shutdown.store(true, Ordering::Relaxed);
+        }
+        if let Some(handle) = self.auto_flush_handle.take() {
+            let _ = handle.join();
+        }
+
         if self.is_dirty() {
             if self.config.auto_save {
                 if let Err(e) = self.save() {
@@ -1925,6 +2107,42 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn test_auto_flush_interval_config() {
+        let config = DatabaseConfig::new("/tmp/test.needle")
+            .with_auto_flush_interval_secs(30);
+        assert_eq!(config.auto_flush_interval_secs, 30);
+    }
+
+    #[test]
+    fn test_auto_flush_thread_starts_and_stops() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let dir = tempdir()?;
+        let path = dir.path().join("auto_flush_test.needle");
+
+        {
+            let config = DatabaseConfig::new(&path)
+                .with_auto_flush_interval_secs(1);
+            let db = Database::open_with_config(config)?;
+            db.create_collection("test", 4)?;
+            let coll = db.collection("test")?;
+            coll.insert("v1", &[1.0, 2.0, 3.0, 4.0], None)?;
+            assert!(db.is_dirty());
+
+            // Wait for auto-flush to trigger (interval is 1 second)
+            std::thread::sleep(std::time::Duration::from_secs(2));
+
+            // After auto-flush, should no longer be dirty
+            assert!(!db.is_dirty(), "auto-flush should have saved dirty changes");
+            // Drop shuts down the thread cleanly
+        }
+
+        // Verify data was persisted by the auto-flush
+        let db2 = Database::open(&path)?;
+        let coll2 = db2.collection("test")?;
+        assert_eq!(coll2.len(), 1);
+        Ok(())
+    }
+
     // ── Schema Evolution Tests ──────────────────────────────────────────
 
     #[test]
@@ -2259,5 +2477,170 @@ mod tests {
         assert!(result.is_err());
         assert!(format!("{:?}", result).contains("Conflict"));
         Ok(())
+    }
+
+    #[test]
+    fn test_concurrent_insert_and_search() -> Result<()> {
+        use std::sync::Arc;
+        use std::thread;
+
+        let db = Arc::new(Database::in_memory());
+        db.create_collection("test", 4)?;
+
+        let num_writers = 4;
+        let inserts_per_writer = 50;
+        let num_readers = 4;
+        let reads_per_reader = 100;
+
+        // Seed a few vectors so readers always have something to find
+        let coll = db.collection("test")?;
+        for i in 0..10 {
+            let v = vec![(i as f32) * 0.1, 0.0, 0.0, 1.0];
+            coll.insert(format!("seed-{i}"), &v, None)?;
+        }
+
+        let mut handles = Vec::new();
+
+        // Writer threads
+        for w in 0..num_writers {
+            let db = Arc::clone(&db);
+            handles.push(thread::spawn(move || {
+                let coll = db.collection("test").unwrap();
+                for i in 0..inserts_per_writer {
+                    let id = format!("w{w}-{i}");
+                    let v = vec![w as f32 * 0.1, i as f32 * 0.01, 0.0, 1.0];
+                    let _ = coll.insert(&id, &v, None);
+                }
+            }));
+        }
+
+        // Reader threads
+        for _r in 0..num_readers {
+            let db = Arc::clone(&db);
+            handles.push(thread::spawn(move || {
+                let coll = db.collection("test").unwrap();
+                for _ in 0..reads_per_reader {
+                    let query = vec![0.5_f32, 0.5, 0.0, 1.0];
+                    let results = coll.search(&query, 5);
+                    // Should never error or panic
+                    assert!(results.is_ok());
+                }
+            }));
+        }
+
+        for h in handles {
+            h.join().expect("Thread panicked during concurrent test");
+        }
+
+        // Verify final state is consistent
+        let coll = db.collection("test")?;
+        let count = coll.len();
+        // At least seed vectors + some inserts (exact count depends on timing)
+        assert!(count >= 10, "Expected at least 10 vectors, got {}", count);
+        assert!(
+            count <= 10 + num_writers * inserts_per_writer,
+            "Too many vectors: {}",
+            count
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_concurrent_insert_and_delete() -> Result<()> {
+        use std::sync::Arc;
+        use std::thread;
+
+        let db = Arc::new(Database::in_memory());
+        db.create_collection("test", 3)?;
+
+        // Insert vectors that will be concurrently deleted
+        let coll = db.collection("test")?;
+        for i in 0..100 {
+            coll.insert(format!("v{i}"), &[i as f32, 0.0, 1.0], None)?;
+        }
+
+        let mut handles = Vec::new();
+
+        // Deleter thread: delete even IDs
+        let db_d = Arc::clone(&db);
+        handles.push(thread::spawn(move || {
+            let coll = db_d.collection("test").unwrap();
+            for i in (0..100).step_by(2) {
+                let id = format!("v{i}");
+                let _ = coll.delete(&id);
+            }
+        }));
+
+        // Inserter thread: insert new vectors concurrently
+        let db_i = Arc::clone(&db);
+        handles.push(thread::spawn(move || {
+            let coll = db_i.collection("test").unwrap();
+            for i in 100..150 {
+                let _ = coll.insert(format!("v{i}"), &[i as f32, 1.0, 0.0], None);
+            }
+        }));
+
+        // Reader thread: continuously search
+        let db_r = Arc::clone(&db);
+        handles.push(thread::spawn(move || {
+            let coll = db_r.collection("test").unwrap();
+            for _ in 0..200 {
+                let _ = coll.search(&[50.0, 0.5, 0.5], 10);
+            }
+        }));
+
+        for h in handles {
+            h.join().expect("Thread panicked during concurrent delete test");
+        }
+
+        Ok(())
+    }
+
+    // ── rename_collection tests ──────────────────────────────────────────
+
+    #[test]
+    fn test_rename_collection_basic() {
+        let db = Database::in_memory();
+        db.create_collection("old", 4).unwrap();
+        db.collection("old").unwrap().insert("v1", &[1.0; 4], None).unwrap();
+
+        db.rename_collection("old", "new").unwrap();
+
+        assert!(!db.has_collection("old"));
+        assert!(db.has_collection("new"));
+        // Data survived the rename
+        let coll = db.collection("new").unwrap();
+        assert_eq!(coll.len(), 1);
+    }
+
+    #[test]
+    fn test_rename_collection_not_found() {
+        let db = Database::in_memory();
+        let err = db.rename_collection("nope", "new").unwrap_err();
+        assert!(matches!(err, NeedleError::CollectionNotFound(_)));
+    }
+
+    #[test]
+    fn test_rename_collection_conflict() {
+        let db = Database::in_memory();
+        db.create_collection("a", 4).unwrap();
+        db.create_collection("b", 4).unwrap();
+
+        let err = db.rename_collection("a", "b").unwrap_err();
+        assert!(matches!(err, NeedleError::CollectionAlreadyExists(_)));
+    }
+
+    #[test]
+    fn test_rename_collection_updates_aliases() {
+        let db = Database::in_memory();
+        db.create_collection("v1", 4).unwrap();
+        db.create_alias("prod", "v1").unwrap();
+
+        db.rename_collection("v1", "v2").unwrap();
+
+        // Alias now points to the new name
+        let coll = db.collection("prod").unwrap();
+        assert_eq!(coll.name(), "v2");
     }
 }

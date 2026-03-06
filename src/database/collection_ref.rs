@@ -368,6 +368,21 @@ impl<'a> CollectionRef<'a> {
         self.db.collection_stats_internal(&self.name)
     }
 
+    /// Get estimated memory usage breakdown for this collection.
+    pub fn memory_usage(&self) -> Result<crate::collection::MemoryStats> {
+        self.db.collection_memory_usage_internal(&self.name)
+    }
+
+    /// Get statistics for a specific metadata field.
+    pub fn field_stats(&self, field: &str) -> Option<crate::metadata::FieldStats> {
+        self.db.collection_field_stats_internal(&self.name, field)
+    }
+
+    /// Get statistics for all known metadata fields.
+    pub fn all_field_stats(&self) -> Vec<crate::metadata::FieldStats> {
+        self.db.collection_all_field_stats_internal(&self.name)
+    }
+
     /// Insert a vector into the collection.
     ///
     /// # Arguments
@@ -443,6 +458,62 @@ impl<'a> CollectionRef<'a> {
             .insert_vec_with_ttl_internal(&self.name, id, vector, metadata, ttl_seconds)
     }
 
+    /// Insert multiple vectors in a single batch operation.
+    ///
+    /// All vectors are validated before any are inserted. If any vector is invalid
+    /// (wrong dimensions, NaN, duplicate ID), the entire batch is rejected.
+    ///
+    /// # Arguments
+    ///
+    /// * `items` - Vector of `(id, vector, metadata)` tuples
+    ///
+    /// # Returns
+    ///
+    /// The number of vectors inserted on success.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any vector fails validation. On error, no vectors
+    /// from the batch are inserted (atomic batch semantics).
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use needle::Database;
+    /// use serde_json::json;
+    ///
+    /// let db = Database::in_memory();
+    /// db.create_collection("docs", 3)?;
+    /// let coll = db.collection("docs")?;
+    ///
+    /// let items = vec![
+    ///     ("a".into(), vec![1.0, 0.0, 0.0], Some(json!({"topic": "rust"}))),
+    ///     ("b".into(), vec![0.0, 1.0, 0.0], None),
+    ///     ("c".into(), vec![0.0, 0.0, 1.0], Some(json!({"topic": "python"}))),
+    /// ];
+    /// let count = coll.batch_insert(items)?;
+    /// assert_eq!(count, 3);
+    /// assert_eq!(coll.len(), 3);
+    /// # Ok::<(), needle::error::NeedleError>(())
+    /// ```
+    pub fn batch_insert(
+        &self,
+        items: Vec<(String, Vec<f32>, Option<Value>)>,
+    ) -> Result<usize> {
+        self.db.batch_insert_internal(&self.name, items)
+    }
+
+    /// Bulk import vectors from a JSON-Lines reader.
+    ///
+    /// Each line should be a JSON object with `"id"`, `"vector"`, and optional `"metadata"` fields.
+    /// Blank lines and lines starting with `#` are skipped.
+    pub fn import_jsonl<R: std::io::BufRead>(
+        &self,
+        reader: R,
+    ) -> Result<crate::collection::ImportResult> {
+        self.db.import_jsonl_internal(&self.name, reader)
+    }
+
     /// Insert a text document, automatically embedding it using the built-in model runtime.
     ///
     /// Uses the embedded model runtime (feature: `embedded-models`) to generate
@@ -474,6 +545,25 @@ impl<'a> CollectionRef<'a> {
     #[cfg(feature = "embedded-models")]
     pub fn search_text(&self, text: &str, k: usize) -> Result<Vec<SearchResult>> {
         self.db.search_text_internal(&self.name, text, k)
+    }
+
+    /// Insert a document by text, auto-embedding it using the collection's
+    /// configured auto-embed provider.
+    ///
+    /// Requires `auto_embed` to be set on the collection config.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if auto-embed is not configured, the ID already exists,
+    /// or the generated vector is invalid.
+    pub fn insert_auto_text(
+        &self,
+        id: impl Into<String>,
+        text: &str,
+        metadata: Option<Value>,
+    ) -> Result<()> {
+        self.db
+            .insert_auto_text_internal(&self.name, id, text, metadata)
     }
 
     /// Search for the k most similar vectors to the query.
@@ -806,6 +896,42 @@ impl<'a> CollectionRef<'a> {
     /// ```
     pub fn delete(&self, id: &str) -> Result<bool> {
         self.db.delete_internal(&self.name, id)
+    }
+
+    /// Delete multiple vectors by ID in a single operation.
+    ///
+    /// Returns the count of vectors that were actually deleted (IDs that
+    /// didn't exist are silently skipped).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`NeedleError::CollectionNotFound`] if the collection no longer exists.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use needle::Database;
+    ///
+    /// let db = Database::in_memory();
+    /// db.create_collection("docs", 3)?;
+    /// let coll = db.collection("docs")?;
+    /// coll.insert("a", &[1.0, 0.0, 0.0], None)?;
+    /// coll.insert("b", &[0.0, 1.0, 0.0], None)?;
+    /// coll.insert("c", &[0.0, 0.0, 1.0], None)?;
+    ///
+    /// let deleted = coll.batch_delete(&["a", "b", "nonexistent"])?;
+    /// assert_eq!(deleted, 2);
+    /// assert_eq!(coll.len(), 1);
+    /// # Ok::<(), needle::error::NeedleError>(())
+    /// ```
+    pub fn batch_delete(&self, ids: &[&str]) -> Result<usize> {
+        let mut count = 0;
+        for id in ids {
+            if self.db.delete_internal(&self.name, id)? {
+                count += 1;
+            }
+        }
+        Ok(count)
     }
 
     /// Export all vectors from the collection.
@@ -1961,5 +2087,112 @@ mod tests {
         let diff = tree.diff("experiment", "main")?;
         assert!(!diff.is_empty());
         Ok(())
+    }
+
+    #[test]
+    fn test_batch_delete() -> Result<()> {
+        let db = Database::in_memory();
+        db.create_collection("test", 3)?;
+        let coll = db.collection("test")?;
+        coll.insert("a", &[1.0, 0.0, 0.0], None)?;
+        coll.insert("b", &[0.0, 1.0, 0.0], None)?;
+        coll.insert("c", &[0.0, 0.0, 1.0], None)?;
+
+        let deleted = coll.batch_delete(&["a", "c", "nonexistent"])?;
+        assert_eq!(deleted, 2);
+        assert_eq!(coll.len(), 1);
+        assert!(coll.contains("b"));
+        assert!(!coll.contains("a"));
+        assert!(!coll.contains("c"));
+        Ok(())
+    }
+
+    #[test]
+    fn test_batch_delete_empty_ids() -> Result<()> {
+        let db = Database::in_memory();
+        db.create_collection("test", 3)?;
+        let coll = db.collection("test")?;
+        coll.insert("a", &[1.0, 0.0, 0.0], None)?;
+
+        let deleted = coll.batch_delete(&[])?;
+        assert_eq!(deleted, 0);
+        assert_eq!(coll.len(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn test_batch_delete_all_nonexistent() -> Result<()> {
+        let db = Database::in_memory();
+        db.create_collection("test", 3)?;
+        let coll = db.collection("test")?;
+
+        let deleted = coll.batch_delete(&["x", "y", "z"])?;
+        assert_eq!(deleted, 0);
+        Ok(())
+    }
+
+    // ── batch_insert tests ───────────────────────────────────────────────
+
+    #[test]
+    fn test_batch_insert() -> Result<()> {
+        let db = Database::in_memory();
+        db.create_collection("test", 3)?;
+        let coll = db.collection("test")?;
+
+        let items = vec![
+            ("a".into(), vec![1.0, 0.0, 0.0], None),
+            ("b".into(), vec![0.0, 1.0, 0.0], Some(json!({"x": 1}))),
+            ("c".into(), vec![0.0, 0.0, 1.0], None),
+        ];
+        let count = coll.batch_insert(items)?;
+        assert_eq!(count, 3);
+        assert_eq!(coll.len(), 3);
+        assert!(coll.contains("a"));
+        assert!(coll.contains("b"));
+        assert!(coll.contains("c"));
+        Ok(())
+    }
+
+    #[test]
+    fn test_batch_insert_empty() -> Result<()> {
+        let db = Database::in_memory();
+        db.create_collection("test", 3)?;
+        let coll = db.collection("test")?;
+
+        let count = coll.batch_insert(vec![])?;
+        assert_eq!(count, 0);
+        assert_eq!(coll.len(), 0);
+        Ok(())
+    }
+
+    #[test]
+    fn test_batch_insert_rejects_duplicate_ids() {
+        let db = Database::in_memory();
+        db.create_collection("test", 3).unwrap();
+        let coll = db.collection("test").unwrap();
+
+        let items = vec![
+            ("dup".into(), vec![1.0, 0.0, 0.0], None),
+            ("dup".into(), vec![0.0, 1.0, 0.0], None),
+        ];
+        let result = coll.batch_insert(items);
+        assert!(result.is_err());
+        // Atomic: no vectors should be inserted on failure
+        assert_eq!(coll.len(), 0);
+    }
+
+    #[test]
+    fn test_batch_insert_rejects_wrong_dimensions() {
+        let db = Database::in_memory();
+        db.create_collection("test", 3).unwrap();
+        let coll = db.collection("test").unwrap();
+
+        let items = vec![
+            ("a".into(), vec![1.0, 0.0, 0.0], None),
+            ("b".into(), vec![1.0, 0.0], None), // wrong dims
+        ];
+        let result = coll.batch_insert(items);
+        assert!(result.is_err());
+        assert_eq!(coll.len(), 0);
     }
 }

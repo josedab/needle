@@ -16,10 +16,9 @@ pub struct DatabaseConfig {
     #[serde(default)]
     pub auto_save: bool,
     /// Interval in seconds for automatic background flush of dirty data to disk.
-    /// When set, a background thread/task will periodically call `save()` if
-    /// there are unsaved changes. Set to `0` to disable.
-    /// Defaults to `0` (disabled) for the sync API. The async/server API
-    /// defaults to `30` seconds.
+    /// When set to a value > 0, a background thread will periodically call `save()`
+    /// if there are unsaved changes. Set to `0` to disable.
+    /// Defaults to `0` (disabled).
     #[serde(default)]
     pub auto_flush_interval_secs: u64,
 }
@@ -58,8 +57,8 @@ impl DatabaseConfig {
 
     /// Set the auto-flush interval in seconds.
     ///
-    /// When > 0, a background task will periodically save dirty data to disk.
-    /// Set to `0` to disable. Only effective with the async API or server mode.
+    /// When > 0, a background thread will periodically save dirty data to disk.
+    /// Set to `0` to disable.
     #[must_use]
     pub fn with_auto_flush_interval_secs(mut self, secs: u64) -> Self {
         self.auto_flush_interval_secs = secs;
