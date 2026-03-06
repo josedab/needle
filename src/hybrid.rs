@@ -17,11 +17,35 @@ pub struct Bm25Config {
     pub k1: f32,
     /// Length normalization parameter (typically 0.75)
     pub b: f32,
+    /// Custom stop words. If `None`, uses a built-in English stop word list.
+    /// Set to `Some(HashSet::new())` to disable stop word filtering entirely.
+    #[serde(default)]
+    pub stop_words: Option<HashSet<String>>,
 }
 
 impl Default for Bm25Config {
     fn default() -> Self {
-        Self { k1: 1.5, b: 0.75 }
+        Self {
+            k1: 1.5,
+            b: 0.75,
+            stop_words: None,
+        }
+    }
+}
+
+impl Bm25Config {
+    /// Use a custom set of stop words instead of the built-in English list.
+    #[must_use]
+    pub fn with_stop_words(mut self, words: HashSet<String>) -> Self {
+        self.stop_words = Some(words);
+        self
+    }
+
+    /// Disable stop word filtering entirely.
+    #[must_use]
+    pub fn with_no_stop_words(mut self) -> Self {
+        self.stop_words = Some(HashSet::new());
+        self
     }
 }
 
@@ -148,13 +172,17 @@ impl Default for Bm25Index {
 impl Bm25Index {
     /// Create a new BM25 index
     pub fn new(config: Bm25Config) -> Self {
+        let stop_words = config
+            .stop_words
+            .clone()
+            .unwrap_or_else(Self::default_stop_words);
         Self {
             config,
             documents: HashMap::new(),
             doc_freqs: HashMap::new(),
             doc_count: 0,
             avg_doc_length: 0.0,
-            stop_words: Self::default_stop_words(),
+            stop_words,
         }
     }
 
@@ -1273,5 +1301,47 @@ mod tests {
         // Default weights should never be all zero
         let weights = fusion.get_weights("test query");
         assert!(weights.vector_weight + weights.bm25_weight > 0.0);
+    }
+
+    #[test]
+    fn test_bm25_custom_stop_words() {
+        let mut custom: HashSet<String> = HashSet::new();
+        custom.insert("rust".to_string());
+
+        let config = Bm25Config::default().with_stop_words(custom);
+        let mut index = Bm25Index::new(config);
+
+        // "rust" is now a stop word, so only "programming" should be indexed
+        index.index_document("doc1", "rust programming");
+        let results = index.search("programming", 10);
+        assert_eq!(results.len(), 1);
+
+        // Searching for "rust" should return nothing (it's a stop word)
+        let results = index.search("rust", 10);
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_bm25_no_stop_words() {
+        let config = Bm25Config::default().with_no_stop_words();
+        let mut index = Bm25Index::new(config);
+
+        // "the" would normally be filtered as a stop word
+        index.index_document("doc1", "the quick brown fox");
+        let results = index.search("the", 10);
+        assert_eq!(results.len(), 1, "with no stop words, 'the' should be indexed");
+    }
+
+    #[test]
+    fn test_bm25_default_stop_words_filter() {
+        let mut index = Bm25Index::default();
+        index.index_document("doc1", "the cat is on the mat");
+
+        // "the", "is", "on" are stop words — only "cat" and "mat" indexed
+        let results = index.search("is", 10);
+        assert!(results.is_empty(), "'is' should be filtered as a stop word");
+
+        let results = index.search("cat", 10);
+        assert_eq!(results.len(), 1, "'cat' should be found");
     }
 }
