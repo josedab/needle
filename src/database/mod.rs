@@ -220,11 +220,22 @@ impl Database {
             let header = storage.header().clone();
             if header.metadata_offset >= HEADER_SIZE as u64 {
                 // Prefer state_size from header if available, otherwise compute from file size
+                let file_size = storage.file_size()?;
                 let state_len = if header.state_size > 0 {
                     header.state_size as usize
                 } else {
-                    (storage.file_size()? - header.metadata_offset) as usize
+                    (file_size - header.metadata_offset) as usize
                 };
+
+                // Validate that the claimed state region fits within the file
+                if header.metadata_offset.saturating_add(state_len as u64) > file_size {
+                    return Err(NeedleError::Corruption(
+                        format!(
+                            "State region (offset={}, size={}) exceeds file size ({})",
+                            header.metadata_offset, state_len, file_size,
+                        ),
+                    ));
+                }
 
                 if state_len > 0 {
                     let state_bytes = storage.read_at(header.metadata_offset, state_len)?;
@@ -780,6 +791,8 @@ impl Database {
     /// # Ok::<(), needle::NeedleError>(())
     /// ```
     pub fn rename_collection(&self, old_name: &str, new_name: &str) -> Result<()> {
+        crate::collection::config::validate_collection_name(new_name)?;
+
         let mut state = self.state.write();
 
         if !state.collections.contains_key(old_name) {
@@ -1300,21 +1313,25 @@ impl Database {
         self.transaction_manager.commit(tx_id)?;
 
         // Apply operations — the transaction is now committed in the manager,
-        // so we must apply all operations. Failures are logged but not fatal.
+        // so we must apply all operations. Failures are collected and reported.
+        let mut apply_errors: Vec<String> = Vec::new();
         for (collection_name, op) in &collection_ops {
             let coll = match state.collections.get_mut(collection_name) {
                 Some(c) => c,
-                None => continue,
+                None => {
+                    apply_errors.push(format!("collection '{collection_name}' not found"));
+                    continue;
+                }
             };
             match op {
                 crate::persistence::transaction::WriteOperation::Insert { id, vector, metadata } => {
                     if let Err(e) = coll.insert(id, vector, metadata.clone()) {
-                        tracing::warn!("Transaction {tx_id}: insert '{}' failed: {}", id, e);
+                        apply_errors.push(format!("insert '{id}': {e}"));
                     }
                 }
                 crate::persistence::transaction::WriteOperation::Delete { id } => {
                     if let Err(e) = coll.delete(id) {
-                        tracing::warn!("Transaction {tx_id}: delete '{}' failed: {}", id, e);
+                        apply_errors.push(format!("delete '{id}': {e}"));
                     }
                 }
                 crate::persistence::transaction::WriteOperation::Update { id, vector, metadata } => {
@@ -1322,7 +1339,7 @@ impl Database {
                         let _ = coll.delete(id);
                         if let Some(vec) = vector {
                             if let Err(e) = coll.insert(id, vec, metadata.clone()) {
-                                tracing::warn!("Transaction {tx_id}: update '{}' failed: {}", id, e);
+                                apply_errors.push(format!("update '{id}': {e}"));
                             }
                         }
                     }
@@ -1332,7 +1349,20 @@ impl Database {
         drop(state);
 
         self.mark_modified();
-        Ok(())
+
+        if apply_errors.is_empty() {
+            Ok(())
+        } else {
+            tracing::warn!(
+                "Transaction {tx_id}: {} operation(s) failed during apply",
+                apply_errors.len()
+            );
+            Err(NeedleError::InvalidOperation(format!(
+                "Transaction committed but {} operation(s) failed: {}",
+                apply_errors.len(),
+                apply_errors.join("; ")
+            )))
+        }
     }
 
     /// Roll back a transaction, discarding all buffered operations.

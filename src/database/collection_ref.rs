@@ -792,6 +792,11 @@ impl<'a> CollectionRef<'a> {
         max_distance: f32,
         limit: usize,
     ) -> Result<Vec<SearchResult>> {
+        if max_distance < 0.0 {
+            return Err(crate::error::NeedleError::InvalidInput(
+                format!("max_distance must be non-negative, got {max_distance}"),
+            ));
+        }
         self.db
             .search_radius_internal(&self.name, query, max_distance, limit)
     }
