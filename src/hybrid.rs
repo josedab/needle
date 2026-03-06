@@ -322,7 +322,11 @@ impl Bm25Index {
             // Length normalization: penalizes long documents so that a term
             // occurring once in a short document scores higher than the same
             // term occurring once in a long document.
-            let length_norm = 1.0 - b + b * (doc.length as f32 / self.avg_doc_length);
+            let length_norm = if self.avg_doc_length > 0.0 {
+                1.0 - b + b * (doc.length as f32 / self.avg_doc_length)
+            } else {
+                1.0
+            };
 
             // TF saturation: raw TF is dampened so that repeating a term many
             // times has diminishing returns (controlled by k1).
@@ -1343,5 +1347,26 @@ mod tests {
 
         let results = index.search("cat", 10);
         assert_eq!(results.len(), 1, "'cat' should be found");
+    }
+
+    #[test]
+    fn test_bm25_empty_corpus_search() {
+        let index = Bm25Index::default();
+        // Search on empty corpus should return empty, not NaN scores
+        let results = index.search("anything", 10);
+        assert!(results.is_empty());
+        for (_, score) in &results {
+            assert!(score.is_finite(), "Score must not be NaN or Inf");
+        }
+    }
+
+    #[test]
+    fn test_bm25_search_after_removing_all_docs() {
+        let mut index = Bm25Index::default();
+        index.index_document("d1", "hello world");
+        index.remove_document("d1");
+        // After removing all docs, avg_doc_length == 0; should not produce NaN
+        let results = index.search("hello", 10);
+        assert!(results.is_empty());
     }
 }
