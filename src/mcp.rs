@@ -32,7 +32,10 @@
 //! | `get_vector` | Retrieve a vector by ID |
 //! | `delete_vector` | Delete a vector by ID |
 //! | `delete_collection` | Delete a collection |
+//! | `rename_collection` | Rename a collection |
 //! | `save_database` | Persist all changes to disk |
+//! | `batch_delete` | Delete multiple vectors by ID |
+//! | `update_metadata` | Update metadata on an existing vector |
 //! | `remember` | Store a memory for an AI agent |
 //! | `recall` | Retrieve relevant memories by vector similarity |
 //! | `forget` | Delete a specific memory by ID |
@@ -137,7 +140,7 @@ fn tool_definitions() -> Value {
                         },
                         "distance": {
                             "type": "string",
-                            "enum": ["cosine", "euclidean", "dot_product", "manhattan"],
+                            "enum": ["cosine", "euclidean", "dot_product", "manhattan", "hamming", "chebyshev"],
                             "description": "Distance function for similarity measurement",
                             "default": "cosine"
                         }
@@ -272,12 +275,71 @@ fn tool_definitions() -> Value {
                 }
             },
             {
+                "name": "rename_collection",
+                "description": "Rename an existing collection. Updates all aliases that reference it.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "old_name": {
+                            "type": "string",
+                            "description": "Current name of the collection"
+                        },
+                        "new_name": {
+                            "type": "string",
+                            "description": "New name for the collection"
+                        }
+                    },
+                    "required": ["old_name", "new_name"]
+                }
+            },
+            {
                 "name": "save_database",
                 "description": "Persist all changes to disk. Call after inserting or deleting vectors.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {},
                     "required": []
+                }
+            },
+            {
+                "name": "batch_delete",
+                "description": "Delete multiple vectors from a collection by their IDs. Non-existent IDs are silently skipped.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "collection": {
+                            "type": "string",
+                            "description": "Name of the collection"
+                        },
+                        "ids": {
+                            "type": "array",
+                            "items": { "type": "string" },
+                            "description": "Array of vector IDs to delete"
+                        }
+                    },
+                    "required": ["collection", "ids"]
+                }
+            },
+            {
+                "name": "update_metadata",
+                "description": "Update the metadata of an existing vector. Performs a JSON merge patch by default.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "collection": {
+                            "type": "string",
+                            "description": "Name of the collection"
+                        },
+                        "id": {
+                            "type": "string",
+                            "description": "Vector ID to update"
+                        },
+                        "metadata": {
+                            "type": "object",
+                            "description": "New metadata fields to merge into existing metadata"
+                        }
+                    },
+                    "required": ["collection", "id", "metadata"]
                 }
             },
             {
@@ -531,7 +593,10 @@ impl McpServer {
             "get_vector" => self.tool_get_vector(&arguments),
             "delete_vector" => self.tool_delete_vector(&arguments),
             "delete_collection" => self.tool_delete_collection(&arguments),
+            "rename_collection" => self.tool_rename_collection(&arguments),
             "save_database" => Self::tool_save_database(),
+            "batch_delete" => self.tool_batch_delete(&arguments),
+            "update_metadata" => self.tool_update_metadata(&arguments),
             "remember" => self.tool_remember(&arguments),
             "recall" => self.tool_recall(&arguments),
             "forget" => self.tool_forget(&arguments),
@@ -588,12 +653,11 @@ impl McpServer {
             .ok_or_else(|| NeedleError::InvalidInput("Missing 'dimensions' parameter".to_string()))?
             as usize;
 
-        let distance = match args.get("distance").and_then(|v| v.as_str()) {
-            Some("euclidean") => crate::DistanceFunction::Euclidean,
-            Some("dot_product") => crate::DistanceFunction::DotProduct,
-            Some("manhattan") => crate::DistanceFunction::Manhattan,
-            _ => crate::DistanceFunction::Cosine,
-        };
+        let distance: crate::DistanceFunction = args
+            .get("distance")
+            .and_then(|v| v.as_str())
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(crate::DistanceFunction::Cosine);
 
         let config = crate::CollectionConfig::new(name, dimensions).with_distance(distance);
         self.db.create_collection_with_config(config)?;
@@ -760,6 +824,27 @@ impl McpServer {
         }))
     }
 
+    fn tool_rename_collection(&self, args: &Value) -> Result<Value> {
+        if self.read_only {
+            return Err(NeedleError::InvalidInput("Database is read-only".to_string()));
+        }
+
+        let old_name = args.get("old_name")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| NeedleError::InvalidInput("Missing 'old_name' parameter".to_string()))?;
+        let new_name = args.get("new_name")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| NeedleError::InvalidInput("Missing 'new_name' parameter".to_string()))?;
+
+        self.db.rename_collection(old_name, new_name)?;
+
+        Ok(json!({
+            "old_name": old_name,
+            "new_name": new_name,
+            "renamed": true,
+        }))
+    }
+
     fn tool_save_database() -> Result<Value> {
         // Database::save requires &mut self, but we hold Arc<Database>.
         // For the MCP server, we acknowledge the save request.
@@ -767,6 +852,74 @@ impl McpServer {
         Ok(json!({
             "acknowledged": true,
             "message": "Save request acknowledged. Use file-backed database for persistence.",
+        }))
+    }
+
+    fn tool_batch_delete(&self, args: &Value) -> Result<Value> {
+        if self.read_only {
+            return Err(NeedleError::InvalidInput("Database is read-only".to_string()));
+        }
+
+        let collection_name = args.get("collection")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| NeedleError::InvalidInput("Missing 'collection' parameter".to_string()))?;
+        let ids: Vec<String> = args.get("ids")
+            .and_then(|v| v.as_array())
+            .ok_or_else(|| NeedleError::InvalidInput("Missing 'ids' array".to_string()))?
+            .iter()
+            .filter_map(|v| v.as_str().map(String::from))
+            .collect();
+
+        let coll = self.db.collection(collection_name)?;
+        let id_refs: Vec<&str> = ids.iter().map(String::as_str).collect();
+        let deleted_count = coll.batch_delete(&id_refs)?;
+
+        Ok(json!({
+            "deleted_count": deleted_count,
+            "collection": collection_name,
+        }))
+    }
+
+    fn tool_update_metadata(&self, args: &Value) -> Result<Value> {
+        if self.read_only {
+            return Err(NeedleError::InvalidInput("Database is read-only".to_string()));
+        }
+
+        let collection_name = args.get("collection")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| NeedleError::InvalidInput("Missing 'collection' parameter".to_string()))?;
+        let id = args.get("id")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| NeedleError::InvalidInput("Missing 'id' parameter".to_string()))?;
+        let new_metadata = args.get("metadata")
+            .ok_or_else(|| NeedleError::InvalidInput("Missing 'metadata' parameter".to_string()))?;
+
+        let coll = self.db.collection(collection_name)?;
+
+        let (vector, existing_metadata) = coll.get(id)
+            .ok_or_else(|| NeedleError::VectorNotFound(id.to_string()))?;
+
+        // Merge new metadata into existing
+        let merged = if let Some(existing) = existing_metadata {
+            let mut base = existing;
+            if let (Some(base_obj), Some(new_obj)) = (base.as_object_mut(), new_metadata.as_object()) {
+                for (k, v) in new_obj {
+                    base_obj.insert(k.clone(), v.clone());
+                }
+            }
+            base
+        } else {
+            new_metadata.clone()
+        };
+
+        // Re-insert with updated metadata (delete + insert)
+        coll.delete(id)?;
+        coll.insert(id, &vector, Some(merged.clone()))?;
+
+        Ok(json!({
+            "id": id,
+            "updated": true,
+            "metadata": merged,
         }))
     }
 
