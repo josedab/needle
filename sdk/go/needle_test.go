@@ -371,7 +371,7 @@ func TestRateLimitHeaders(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewClient(server.URL)
+	client := NewClient(server.URL, WithMaxRetries(0))
 	_, err := client.ListCollections(context.Background())
 	if err == nil {
 		t.Fatal("expected error, got nil")
@@ -459,5 +459,201 @@ func TestWithTimeout(t *testing.T) {
 	_, err := client.Health(ctx)
 	if err == nil {
 		t.Fatal("expected timeout error, got nil")
+	}
+}
+
+func TestRetryOn500(t *testing.T) {
+	attempts := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		if attempts < 3 {
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(map[string]string{"error": "temporary failure"})
+			return
+		}
+		json.NewEncoder(w).Encode(HealthResponse{Status: "ok", Version: "0.1.0"})
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, WithMaxRetries(3))
+	resp, err := client.Health(context.Background())
+	if err != nil {
+		t.Fatalf("expected success after retries, got: %v", err)
+	}
+	if resp.Status != "ok" {
+		t.Errorf("expected status 'ok', got '%s'", resp.Status)
+	}
+	if attempts != 3 {
+		t.Errorf("expected 3 attempts, got %d", attempts)
+	}
+}
+
+func TestNoRetryOn404(t *testing.T) {
+	attempts := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		w.WriteHeader(http.StatusNotFound)
+		json.NewEncoder(w).Encode(map[string]string{"error": "not found"})
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, WithMaxRetries(3))
+	_, err := client.GetCollection(context.Background(), "missing")
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if attempts != 1 {
+		t.Errorf("expected 1 attempt (no retry on 404), got %d", attempts)
+	}
+}
+
+func TestSearchAll(t *testing.T) {
+	page := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		page++
+		var body map[string]interface{}
+		json.NewDecoder(r.Body).Decode(&body)
+
+		if page == 1 {
+			json.NewEncoder(w).Encode(SearchResponse{
+				Results: []SearchResult{
+					{ID: "v1", Distance: 0.1},
+					{ID: "v2", Distance: 0.2},
+				},
+				HasMore:    true,
+				NextCursor: &SearchCursor{Distance: 0.2, ID: "v2"},
+			})
+		} else if page == 2 {
+			// Verify cursor was sent
+			sa, ok := body["search_after"].(map[string]interface{})
+			if !ok {
+				t.Fatal("expected search_after in second page request")
+			}
+			if sa["id"] != "v2" {
+				t.Errorf("expected cursor id 'v2', got %v", sa["id"])
+			}
+			json.NewEncoder(w).Encode(SearchResponse{
+				Results: []SearchResult{
+					{ID: "v3", Distance: 0.3},
+				},
+				HasMore: false,
+			})
+		} else {
+			t.Errorf("unexpected page %d", page)
+		}
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL)
+	results, err := client.SearchAll(context.Background(), "docs", SearchOptions{
+		Vector: []float32{0.1, 0.2, 0.3},
+		K:      2,
+	}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 3 {
+		t.Fatalf("expected 3 total results across pages, got %d", len(results))
+	}
+	if results[0].ID != "v1" || results[2].ID != "v3" {
+		t.Errorf("unexpected result ordering: %v", results)
+	}
+	if page != 2 {
+		t.Errorf("expected 2 pages, got %d", page)
+	}
+}
+
+func TestSearchAllWithMaxResults(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(SearchResponse{
+			Results: []SearchResult{
+				{ID: "v1", Distance: 0.1},
+				{ID: "v2", Distance: 0.2},
+				{ID: "v3", Distance: 0.3},
+			},
+			HasMore:    true,
+			NextCursor: &SearchCursor{Distance: 0.3, ID: "v3"},
+		})
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL)
+	results, err := client.SearchAll(context.Background(), "docs", SearchOptions{
+		Vector: []float32{0.1},
+		K:      3,
+	}, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("expected maxResults=2, got %d", len(results))
+	}
+}
+
+func TestUpdateMetadata(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" {
+			t.Errorf("expected POST, got %s", r.Method)
+		}
+		if r.URL.Path != "/v1/collections/docs/vectors/vec1/metadata" {
+			t.Errorf("expected /v1/collections/docs/vectors/vec1/metadata, got %s", r.URL.Path)
+		}
+		var body map[string]interface{}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("failed to decode body: %v", err)
+		}
+		meta, ok := body["metadata"].(map[string]interface{})
+		if !ok {
+			t.Fatalf("expected metadata map, got %T", body["metadata"])
+		}
+		if meta["color"] != "blue" {
+			t.Errorf("expected color 'blue', got %v", meta["color"])
+		}
+		if body["replace"] != true {
+			t.Errorf("expected replace=true, got %v", body["replace"])
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL)
+	err := client.UpdateMetadata(context.Background(), "docs", "vec1",
+		map[string]interface{}{"color": "blue"}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestBatchInsert(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" {
+			t.Errorf("expected POST, got %s", r.Method)
+		}
+		if r.URL.Path != "/v1/collections/docs/vectors/batch" {
+			t.Errorf("expected batch path, got %s", r.URL.Path)
+		}
+		var body map[string]interface{}
+		json.NewDecoder(r.Body).Decode(&body)
+		vectors, ok := body["vectors"].([]interface{})
+		if !ok {
+			t.Fatalf("expected vectors array, got %T", body["vectors"])
+		}
+		if len(vectors) != 2 {
+			t.Errorf("expected 2 vectors, got %d", len(vectors))
+		}
+		json.NewEncoder(w).Encode(map[string]interface{}{"inserted": 2})
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL)
+	result, err := client.BatchInsert(context.Background(), "docs", []*Vector{
+		{ID: "v1", Values: []float32{0.1, 0.2}},
+		{ID: "v2", Values: []float32{0.3, 0.4}, Metadata: map[string]interface{}{"tag": "test"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Inserted != 2 {
+		t.Errorf("expected 2 inserted, got %d", result.Inserted)
 	}
 }

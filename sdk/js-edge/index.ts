@@ -116,15 +116,6 @@ export class NeedleEdge {
     return this.vectors.size;
   }
 
-  /** Save the index to the storage adapter. */
-  async save(): Promise<void> {
-    if (!this.adapter) {
-      throw new Error('No storage adapter configured');
-    }
-    const data = this.serialize();
-    await this.adapter.put('needle-index', data);
-  }
-
   /** Load the index from the storage adapter. */
   async load(): Promise<void> {
     if (!this.adapter) {

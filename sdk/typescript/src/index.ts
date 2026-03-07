@@ -66,6 +66,8 @@ export interface RateLimitInfo {
 export interface NeedleClientOptions {
   apiKey?: string;
   timeout?: number;
+  /** Maximum number of retries for transient errors (429, 5xx). Default: 3. Set to 0 to disable. */
+  maxRetries?: number;
   /** Callback invoked with rate limit info on each response */
   onRateLimit?: (info: RateLimitInfo) => void;
 }
@@ -86,6 +88,7 @@ export class NeedleClient {
   private baseUrl: string;
   private headers: Record<string, string>;
   private timeout: number;
+  private maxRetries: number;
   private onRateLimit?: (info: RateLimitInfo) => void;
   private _lastRateLimitInfo: RateLimitInfo | null = null;
 
@@ -93,6 +96,7 @@ export class NeedleClient {
     this.baseUrl = baseUrl.replace(/\/$/, "");
     this.headers = { "Content-Type": "application/json" };
     this.timeout = options?.timeout ?? 30000;
+    this.maxRetries = options?.maxRetries ?? 3;
     this.onRateLimit = options?.onRateLimit;
     if (options?.apiKey) {
       this.headers["X-API-Key"] = options.apiKey;
@@ -114,17 +118,32 @@ export class NeedleClient {
     if (body !== undefined) {
       init.body = JSON.stringify(body);
     }
-    const resp = await fetch(url, init);
-    const rateLimitInfo = extractRateLimitInfo(resp.headers);
-    if (rateLimitInfo.limit !== null || rateLimitInfo.remaining !== null || rateLimitInfo.retryAfter !== null) {
-      this._lastRateLimitInfo = rateLimitInfo;
-      this.onRateLimit?.(rateLimitInfo);
+
+    let lastError: NeedleApiError | undefined;
+    for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
+      if (attempt > 0 && lastError) {
+        const delay = retryDelay(attempt, lastError.retryAfter);
+        await sleep(delay);
+      }
+
+      const resp = await fetch(url, init);
+      const rateLimitInfo = extractRateLimitInfo(resp.headers);
+      if (rateLimitInfo.limit !== null || rateLimitInfo.remaining !== null || rateLimitInfo.retryAfter !== null) {
+        this._lastRateLimitInfo = rateLimitInfo;
+        this.onRateLimit?.(rateLimitInfo);
+      }
+      if (!resp.ok) {
+        const error = await resp.json().catch(() => ({ error: resp.statusText }));
+        lastError = new NeedleApiError(resp.status, error.error, error.code, error.help, rateLimitInfo.retryAfter);
+        if (isRetryable(resp.status) && attempt < this.maxRetries) {
+          continue;
+        }
+        throw lastError;
+      }
+      return resp.json() as Promise<T>;
     }
-    if (!resp.ok) {
-      const error = await resp.json().catch(() => ({ error: resp.statusText }));
-      throw new NeedleApiError(resp.status, error.error, error.code, error.help);
-    }
-    return resp.json() as Promise<T>;
+
+    throw lastError ?? new NeedleApiError(0, "Request failed after retries");
   }
 
   // ── Collections ──────────────────────────────────────────────────────────
@@ -153,6 +172,12 @@ export class NeedleClient {
       vector,
       metadata: options?.metadata,
       ttl_seconds: options?.ttl_seconds,
+    });
+  }
+
+  async batchInsert(collection: string, vectors: Array<{ id: string; vector: number[]; metadata?: Record<string, unknown>; ttl_seconds?: number }>): Promise<{ inserted: number; errors?: unknown[] }> {
+    return this.request("POST", `/collections/${encodeURIComponent(collection)}/vectors/batch`, {
+      vectors,
     });
   }
 
@@ -217,18 +242,40 @@ export class NeedleClient {
   }
 }
 
+// ── Retry helpers ────────────────────────────────────────────────────────────
+
+/** Returns true for status codes that are safe to retry. */
+function isRetryable(status: number): boolean {
+  return status === 429 || status >= 500;
+}
+
+/** Computes retry delay in ms with exponential backoff and jitter. */
+function retryDelay(attempt: number, retryAfterSeconds: number | null): number {
+  if (retryAfterSeconds !== null && retryAfterSeconds > 0) {
+    return retryAfterSeconds * 1000;
+  }
+  const base = Math.min(1000 * 2 ** (attempt - 1), 30000);
+  return base + Math.random() * base * 0.5;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 // ── Errors ──────────────────────────────────────────────────────────────────
 
 export class NeedleApiError extends Error {
   status: number;
   code?: string;
   help?: string;
+  retryAfter: number | null;
 
-  constructor(status: number, message: string, code?: string, help?: string) {
+  constructor(status: number, message: string, code?: string, help?: string, retryAfter?: number | null) {
     super(message);
     this.name = "NeedleApiError";
     this.status = status;
     this.code = code;
     this.help = help;
+    this.retryAfter = retryAfter ?? null;
   }
 }

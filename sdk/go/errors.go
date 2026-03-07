@@ -8,6 +8,9 @@ type APIError struct {
 	Code       string `json:"code"`
 	Message    string `json:"error"`
 	Help       string `json:"help,omitempty"`
+	// RetryAfter is the number of seconds to wait before retrying, from the
+	// Retry-After response header. Zero if not set.
+	RetryAfter int `json:"-"`
 }
 
 func (e *APIError) Error() string {

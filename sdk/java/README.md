@@ -1,6 +1,6 @@
 # Needle Java SDK
 
-Java client for the [Needle](https://github.com/needle-ai/needle) vector database REST API.
+Java client for the [Needle](https://github.com/anthropics/needle) vector database REST API.
 
 **Java 11+** — uses `java.net.http.HttpClient` with zero external dependencies.
 
