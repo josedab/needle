@@ -146,7 +146,7 @@ pub(in crate::server) async fn delete_collection(
         .map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
 
     if dropped {
-        Ok(Json(json!({"deleted": name})))
+        Ok(StatusCode::NO_CONTENT.into_response())
     } else {
         Err((
             StatusCode::NOT_FOUND,

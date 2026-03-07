@@ -117,7 +117,7 @@ pub(in crate::server) async fn batch_insert(
             Ok(_) => inserted += 1,
             Err(e) => {
                 warn!(id = %item.id, error = %e, "Batch insert failed for vector");
-                errors.push(json!({"id": item.id, "error": "Insert failed"}));
+                errors.push(json!({"id": item.id, "error": e.to_string()}));
             }
         }
     }
@@ -225,7 +225,7 @@ pub(in crate::server) async fn delete_vector(
         .map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
 
     if deleted {
-        Ok(Json(json!({"deleted": id})))
+        Ok(StatusCode::NO_CONTENT.into_response())
     } else {
         Err((
             StatusCode::NOT_FOUND,
@@ -327,7 +327,7 @@ pub(in crate::server) async fn streaming_insert_handler(
             Ok(()) => inserted += 1,
             Err(e) => {
                 warn!(id = %v.id, error = %e, "Batch insert failed for vector");
-                errors.push(json!({ "id": v.id, "error": "Insert failed" }));
+                errors.push(json!({ "id": v.id, "error": e.to_string() }));
             }
         }
     }
@@ -471,7 +471,7 @@ pub(in crate::server) async fn batch_insert_text_handler(
             Ok(()) => { inserted += 1; embed_method = method; },
             Err(e) => {
                 warn!(id = %item.id, error = %e, "Batch embed insert failed for vector");
-                errors.push(json!({ "id": item.id, "error": "Insert failed" }));
+                errors.push(json!({ "id": item.id, "error": e.to_string() }));
             }
         }
     }

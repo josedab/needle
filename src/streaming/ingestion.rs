@@ -456,6 +456,7 @@ pub struct WebSocketSource {
     config: WebSocketSourceConfig,
     buffer: Arc<Mutex<VecDeque<IngestionRecord>>>,
     closed: Arc<AtomicBool>,
+    acknowledged: Arc<Mutex<Vec<SourceOffset>>>,
 }
 
 impl WebSocketSource {
@@ -465,15 +466,18 @@ impl WebSocketSource {
     pub fn new(config: WebSocketSourceConfig) -> (Self, WebSocketPushHandle) {
         let buffer = Arc::new(Mutex::new(VecDeque::with_capacity(config.buffer_capacity)));
         let closed = Arc::new(AtomicBool::new(false));
+        let acknowledged = Arc::new(Mutex::new(Vec::new()));
         let source = Self {
             name: "websocket".into(),
             config,
             buffer: Arc::clone(&buffer),
             closed: Arc::clone(&closed),
+            acknowledged: Arc::clone(&acknowledged),
         };
         let handle = WebSocketPushHandle {
             buffer,
             closed,
+            acknowledged,
         };
         (source, handle)
     }
@@ -483,6 +487,7 @@ impl WebSocketSource {
 pub struct WebSocketPushHandle {
     buffer: Arc<Mutex<VecDeque<IngestionRecord>>>,
     closed: Arc<AtomicBool>,
+    acknowledged: Arc<Mutex<Vec<SourceOffset>>>,
 }
 
 impl WebSocketPushHandle {
@@ -493,6 +498,12 @@ impl WebSocketPushHandle {
         }
         self.buffer.lock().push_back(record);
         Ok(())
+    }
+
+    /// Drain all acknowledged offsets for confirmation to the remote client.
+    pub fn drain_acknowledged(&self) -> Vec<SourceOffset> {
+        let mut acked = self.acknowledged.lock();
+        std::mem::take(&mut *acked)
     }
 }
 
@@ -505,7 +516,10 @@ impl IngestionSource for WebSocketSource {
         Ok(buf.drain(..count).collect())
     }
 
-    fn acknowledge(&self, _offset: &SourceOffset) -> Result<()> { Ok(()) }
+    fn acknowledge(&self, offset: &SourceOffset) -> Result<()> {
+        self.acknowledged.lock().push(offset.clone());
+        Ok(())
+    }
 
     fn is_healthy(&self) -> bool { !self.closed.load(Ordering::Acquire) }
 
@@ -538,6 +552,8 @@ pub struct PushHandleSource<C: PushSourceConfig> {
     _config: C,
     buffer: Arc<Mutex<VecDeque<IngestionRecord>>>,
     closed: Arc<AtomicBool>,
+    /// Acknowledged offsets, available for the external consumer to commit.
+    acknowledged: Arc<Mutex<Vec<SourceOffset>>>,
 }
 
 /// Handle for pushing records into a `PushHandleSource` from a consumer thread.
@@ -546,6 +562,8 @@ pub struct PushHandle<C: PushSourceConfig> {
     buffer: Arc<Mutex<VecDeque<IngestionRecord>>>,
     closed: Arc<AtomicBool>,
     closed_label: &'static str,
+    /// Shared reference to acknowledged offsets for commit by external consumer.
+    acknowledged: Arc<Mutex<Vec<SourceOffset>>>,
 }
 
 impl<C: PushSourceConfig> PushHandleSource<C> {
@@ -560,6 +578,7 @@ impl<C: PushSourceConfig> PushHandleSource<C> {
         );
         let buffer = Arc::new(Mutex::new(VecDeque::with_capacity(config.buffer_capacity())));
         let closed = Arc::new(AtomicBool::new(false));
+        let acknowledged = Arc::new(Mutex::new(Vec::new()));
         let name = config.source_name();
         let closed_label = config.closed_label();
         let source = Self {
@@ -567,12 +586,14 @@ impl<C: PushSourceConfig> PushHandleSource<C> {
             _config: config,
             buffer: Arc::clone(&buffer),
             closed: Arc::clone(&closed),
+            acknowledged: Arc::clone(&acknowledged),
         };
         let handle = PushHandle {
             _marker: std::marker::PhantomData,
             buffer,
             closed,
             closed_label,
+            acknowledged,
         };
         (source, handle)
     }
@@ -589,6 +610,15 @@ impl<C: PushSourceConfig> PushHandle<C> {
         self.buffer.lock().push_back(record);
         Ok(())
     }
+
+    /// Drain all acknowledged offsets for external commit (e.g., Kafka offset commit, Redis XACK).
+    ///
+    /// Call this periodically from your consumer to learn which offsets the pipeline
+    /// has successfully processed, then commit them to the external system.
+    pub fn drain_acknowledged(&self) -> Vec<SourceOffset> {
+        let mut acked = self.acknowledged.lock();
+        std::mem::take(&mut *acked)
+    }
 }
 
 impl<C: PushSourceConfig> IngestionSource for PushHandleSource<C> {
@@ -602,7 +632,8 @@ impl<C: PushSourceConfig> IngestionSource for PushHandleSource<C> {
         Ok(buf.drain(..count).collect())
     }
 
-    fn acknowledge(&self, _offset: &SourceOffset) -> Result<()> {
+    fn acknowledge(&self, offset: &SourceOffset) -> Result<()> {
+        self.acknowledged.lock().push(offset.clone());
         Ok(())
     }
 
@@ -615,10 +646,6 @@ impl<C: PushSourceConfig> IngestionSource for PushHandleSource<C> {
         Ok(())
     }
 }
-
-// ============================================================================
-// Redis Streams Source
-// ============================================================================
 
 /// Redis Streams ingestion source configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
