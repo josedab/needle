@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import json
+import math
+import urllib.error
+import urllib.request
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple, Type
 
@@ -31,6 +35,8 @@ class NeedleVectorStoreConfig:
     distance: str = "cosine"
     content_key: str = "page_content"
     metadata_key: str = "metadata"
+    server_url: Optional[str] = None
+    api_key: Optional[str] = None
 
 
 class Document:
@@ -41,16 +47,131 @@ class Document:
         self.metadata = metadata or {}
 
 
+class NeedleHttpError(Exception):
+    """Raised when the Needle HTTP server returns a non-2xx response."""
+
+    def __init__(self, status_code: int, body: str, url: str) -> None:
+        self.status_code = status_code
+        self.body = body
+        self.url = url
+        super().__init__(
+            f"Needle server error: {status_code} for {url}: {body}"
+        )
+
+
+class _NeedleHttpClient:
+    """Minimal HTTP client for the Needle REST API using only stdlib."""
+
+    def __init__(self, base_url: str, api_key: Optional[str] = None) -> None:
+        self._base_url = base_url.rstrip("/")
+        self._api_key = api_key
+
+    def _headers(self) -> Dict[str, str]:
+        headers: Dict[str, str] = {"Content-Type": "application/json"}
+        if self._api_key:
+            headers["X-API-Key"] = self._api_key
+        return headers
+
+    def _request(
+        self,
+        method: str,
+        path: str,
+        body: Optional[Dict[str, Any]] = None,
+    ) -> Optional[Dict[str, Any]]:
+        url = f"{self._base_url}{path}"
+        data = json.dumps(body).encode("utf-8") if body is not None else None
+        req = urllib.request.Request(url, data=data, headers=self._headers(), method=method)
+        try:
+            with urllib.request.urlopen(req) as resp:
+                raw = resp.read()
+                if raw:
+                    return json.loads(raw)  # type: ignore[no-any-return]
+                return None
+        except urllib.error.HTTPError as exc:
+            raise NeedleHttpError(exc.code, exc.read().decode("utf-8", errors="replace"), url) from exc
+        except urllib.error.URLError as exc:
+            raise NeedleHttpError(
+                503, f"Connection failed: {exc.reason}", url
+            ) from exc
+
+    def create_collection(
+        self, name: str, dimensions: int, distance: str
+    ) -> Optional[Dict[str, Any]]:
+        return self._request("POST", "/v1/collections", {
+            "name": name,
+            "dimensions": dimensions,
+            "distance": distance,
+        })
+
+    def insert_vector(
+        self, collection: str, doc_id: str, vector: List[float], metadata: Dict[str, Any]
+    ) -> Optional[Dict[str, Any]]:
+        return self._request("POST", f"/v1/collections/{collection}/vectors", {
+            "id": doc_id,
+            "vector": vector,
+            "metadata": metadata,
+        })
+
+    def search(
+        self,
+        collection: str,
+        vector: List[float],
+        k: int,
+        filter: Optional[Dict[str, Any]] = None,
+    ) -> List[Dict[str, Any]]:
+        body: Dict[str, Any] = {"vector": vector, "k": k}
+        if filter is not None:
+            body["filter"] = filter
+        resp = self._request("POST", f"/v1/collections/{collection}/search", body)
+        if resp and "results" in resp:
+            return resp["results"]  # type: ignore[no-any-return]
+        return []
+
+    def get_vector(self, collection: str, doc_id: str) -> Optional[Dict[str, Any]]:
+        try:
+            return self._request("GET", f"/v1/collections/{collection}/vectors/{doc_id}")
+        except NeedleHttpError as exc:
+            if exc.status_code == 404:
+                return None
+            raise
+
+    def delete_vector(self, collection: str, doc_id: str) -> bool:
+        try:
+            self._request("DELETE", f"/v1/collections/{collection}/vectors/{doc_id}")
+            return True
+        except NeedleHttpError as exc:
+            if exc.status_code == 404:
+                return False
+            raise
+
+    def batch_insert(
+        self, collection: str, vectors: List[Dict[str, Any]]
+    ) -> Optional[Dict[str, Any]]:
+        """Insert multiple vectors in a single batch request."""
+        return self._request("POST", f"/v1/collections/{collection}/vectors/batch", {
+            "vectors": vectors,
+        })
+
+
 class NeedleVectorStore:
     """LangChain-compatible vector store backed by Needle.
 
+    When *server_url* is provided, all operations are forwarded to a running
+    Needle HTTP server.  Otherwise the store operates entirely in-memory
+    (useful for tests and offline usage).
+
     Usage::
 
-        from needle_langchain import NeedleVectorStore
-
+        # In-memory (no server required)
         store = NeedleVectorStore(collection_name="docs", dimensions=384)
-        store.add_texts(["Hello world", "Goodbye world"], metadatas=[{"k": "v"}])
-        results = store.similarity_search_with_score(query_vector=[0.1]*384, k=5)
+
+        # Server-backed
+        store = NeedleVectorStore(
+            collection_name="docs",
+            dimensions=384,
+            server_url="http://localhost:8080",
+            api_key="my-secret",
+        )
     """
 
     def __init__(
@@ -60,6 +181,8 @@ class NeedleVectorStore:
         distance: str = "cosine",
         content_key: str = "page_content",
         embedding_function: Optional[Any] = None,
+        server_url: Optional[str] = None,
+        api_key: Optional[str] = None,
         **kwargs: Any,
     ) -> None:
         self._config = NeedleVectorStoreConfig(
@@ -67,10 +190,34 @@ class NeedleVectorStore:
             dimensions=dimensions,
             distance=distance,
             content_key=content_key,
+            server_url=server_url,
+            api_key=api_key,
         )
-        self._vectors: Dict[str, Tuple[List[float], Dict[str, Any]]] = {}
-        self._next_id = 0
         self._embedding_function = embedding_function
+
+        if server_url is not None:
+            self._client: Optional[_NeedleHttpClient] = _NeedleHttpClient(server_url, api_key)
+            self._vectors: Dict[str, Tuple[List[float], Dict[str, Any]]] = {}
+            self._next_id = 0
+            # Ensure the collection exists on the server.
+            try:
+                self._client.create_collection(collection_name, dimensions, distance)
+            except NeedleHttpError as exc:
+                # 409 means collection already exists — that's fine.
+                if exc.status_code != 409:
+                    raise
+        else:
+            self._client = None
+            self._vectors = {}
+            self._next_id = 0
+
+    # ── Properties ───────────────────────────────────────────────────────
+
+    @property
+    def _is_server_mode(self) -> bool:
+        return self._client is not None
+
+    # ── Class constructors ───────────────────────────────────────────────
 
     @classmethod
     def from_texts(
@@ -79,6 +226,8 @@ class NeedleVectorStore:
         embedding: Any,
         metadatas: Optional[List[Dict[str, Any]]] = None,
         collection_name: str = "langchain",
+        server_url: Optional[str] = None,
+        api_key: Optional[str] = None,
         **kwargs: Any,
     ) -> "NeedleVectorStore":
         """Create a NeedleVectorStore from texts with an embedding function.
@@ -90,6 +239,8 @@ class NeedleVectorStore:
             embedding: Embedding function with embed_documents() method.
             metadatas: Optional list of metadata dicts for each text.
             collection_name: Name for the collection.
+            server_url: Optional Needle server URL for server-backed storage.
+            api_key: Optional API key for server authentication.
         """
         embeddings = embedding.embed_documents(texts)
         dimensions = len(embeddings[0]) if embeddings else 384
@@ -97,6 +248,8 @@ class NeedleVectorStore:
             collection_name=collection_name,
             dimensions=dimensions,
             embedding_function=embedding,
+            server_url=server_url,
+            api_key=api_key,
             **kwargs,
         )
         documents = [
@@ -112,6 +265,8 @@ class NeedleVectorStore:
         documents: List[Document],
         embedding: Any,
         collection_name: str = "langchain",
+        server_url: Optional[str] = None,
+        api_key: Optional[str] = None,
         **kwargs: Any,
     ) -> "NeedleVectorStore":
         """Create a NeedleVectorStore from documents with an embedding function."""
@@ -119,7 +274,8 @@ class NeedleVectorStore:
         metadatas = [doc.metadata for doc in documents]
         return cls.from_texts(
             texts, embedding, metadatas=metadatas,
-            collection_name=collection_name, **kwargs,
+            collection_name=collection_name,
+            server_url=server_url, api_key=api_key, **kwargs,
         )
 
     def similarity_search_by_text(
@@ -150,7 +306,14 @@ class NeedleVectorStore:
             self._next_id += 1
             meta = metadatas[i] if metadatas and i < len(metadatas) else {}
             meta[self._config.content_key] = text
-            self._vectors[doc_id] = ([], meta)
+
+            if self._is_server_mode:
+                assert self._client is not None
+                self._client.insert_vector(
+                    self._config.collection_name, doc_id, [], meta,
+                )
+            else:
+                self._vectors[doc_id] = ([], meta)
             added_ids.append(doc_id)
         return added_ids
 
@@ -163,13 +326,28 @@ class NeedleVectorStore:
     ) -> List[str]:
         """Add pre-computed vectors with associated documents."""
         added_ids: List[str] = []
+        batch_items: List[Dict[str, Any]] = []
+
         for i, (vec, doc) in enumerate(zip(vectors, documents)):
             doc_id = ids[i] if ids and i < len(ids) else f"doc_{self._next_id}"
             self._next_id += 1
             meta = dict(doc.metadata)
             meta[self._config.content_key] = doc.page_content
-            self._vectors[doc_id] = (vec, meta)
+
+            if self._is_server_mode:
+                batch_items.append({
+                    "id": doc_id,
+                    "vector": vec,
+                    "metadata": meta,
+                })
+            else:
+                self._vectors[doc_id] = (vec, meta)
             added_ids.append(doc_id)
+
+        if self._is_server_mode and batch_items:
+            assert self._client is not None
+            self._client.batch_insert(self._config.collection_name, batch_items)
+
         return added_ids
 
     def similarity_search_with_score(
@@ -180,25 +358,9 @@ class NeedleVectorStore:
         **kwargs: Any,
     ) -> List[Tuple[Document, float]]:
         """Return top-k documents with similarity scores."""
-        results: List[Tuple[str, float]] = []
-        for doc_id, (vec, meta) in self._vectors.items():
-            if not vec:
-                continue
-            if filter and not self._matches_filter(meta, filter):
-                continue
-            dist = self._cosine_distance(query_vector, vec)
-            results.append((doc_id, dist))
-
-        results.sort(key=lambda x: x[1])
-        output: List[Tuple[Document, float]] = []
-        for doc_id, dist in results[:k]:
-            _, meta = self._vectors[doc_id]
-            content = meta.get(self._config.content_key, "")
-            doc = Document(page_content=content, metadata={
-                k: v for k, v in meta.items() if k != self._config.content_key
-            })
-            output.append((doc, dist))
-        return output
+        if self._is_server_mode:
+            return self._server_search_with_score(query_vector, k, filter)
+        return self._local_search_with_score(query_vector, k, filter)
 
     def similarity_search(
         self,
@@ -213,13 +375,27 @@ class NeedleVectorStore:
         """Delete documents by ID."""
         deleted = False
         for doc_id in ids:
-            if doc_id in self._vectors:
-                del self._vectors[doc_id]
-                deleted = True
+            if self._is_server_mode:
+                assert self._client is not None
+                if self._client.delete_vector(self._config.collection_name, doc_id):
+                    deleted = True
+            else:
+                if doc_id in self._vectors:
+                    del self._vectors[doc_id]
+                    deleted = True
         return deleted
 
     def get_by_id(self, doc_id: str) -> Optional[Document]:
         """Retrieve a document by ID."""
+        if self._is_server_mode:
+            assert self._client is not None
+            resp = self._client.get_vector(self._config.collection_name, doc_id)
+            if resp is None:
+                return None
+            meta = resp.get("metadata", {})
+            content = meta.pop(self._config.content_key, "")
+            return Document(page_content=content, metadata=meta)
+
         if doc_id not in self._vectors:
             return None
         _, meta = self._vectors[doc_id]
@@ -249,6 +425,13 @@ class NeedleVectorStore:
         candidates = self.similarity_search_with_score(query_vector, fetch_k, filter=filter)
         if not candidates:
             return []
+
+        if self._is_server_mode:
+            # In server mode we don't have raw vectors locally; fall back to
+            # distance-only ranking (relevance without diversity re-ranking)
+            # unless the server returned vectors.  For now, return top-k by
+            # relevance as a safe degradation.
+            return [doc for doc, _ in candidates[:k]]
 
         selected: List[int] = []
         candidate_vecs = [
@@ -335,11 +518,54 @@ class NeedleVectorStore:
     def count(self) -> int:
         return len(self._vectors)
 
-    # ── Helpers ──────────────────────────────────────────────────────────
+    # ── Server-mode helpers ──────────────────────────────────────────────
+
+    def _server_search_with_score(
+        self,
+        query_vector: List[float],
+        k: int,
+        filter: Optional[Dict[str, Any]],
+    ) -> List[Tuple[Document, float]]:
+        assert self._client is not None
+        results = self._client.search(self._config.collection_name, query_vector, k, filter)
+        output: List[Tuple[Document, float]] = []
+        for hit in results:
+            meta = dict(hit.get("metadata", {}))
+            content = meta.pop(self._config.content_key, "")
+            doc = Document(page_content=content, metadata=meta)
+            output.append((doc, float(hit.get("distance", 0.0))))
+        return output
+
+    # ── Local-mode helpers ───────────────────────────────────────────────
+
+    def _local_search_with_score(
+        self,
+        query_vector: List[float],
+        k: int,
+        filter: Optional[Dict[str, Any]],
+    ) -> List[Tuple[Document, float]]:
+        results: List[Tuple[str, float]] = []
+        for doc_id, (vec, meta) in self._vectors.items():
+            if not vec:
+                continue
+            if filter and not self._matches_filter(meta, filter):
+                continue
+            dist = self._cosine_distance(query_vector, vec)
+            results.append((doc_id, dist))
+
+        results.sort(key=lambda x: x[1])
+        output: List[Tuple[Document, float]] = []
+        for doc_id, dist in results[:k]:
+            _, meta = self._vectors[doc_id]
+            content = meta.get(self._config.content_key, "")
+            doc = Document(page_content=content, metadata={
+                k: v for k, v in meta.items() if k != self._config.content_key
+            })
+            output.append((doc, dist))
+        return output
 
     @staticmethod
     def _cosine_distance(a: List[float], b: List[float]) -> float:
-        import math
         dot = sum(x * y for x, y in zip(a, b))
         norm_a = math.sqrt(sum(x * x for x in a))
         norm_b = math.sqrt(sum(x * x for x in b))
@@ -363,6 +589,7 @@ class NeedleVectorStore:
 __all__ = [
     "Document",
     "EmbeddingFunction",
+    "NeedleHttpError",
     "NeedleVectorStore",
     "NeedleVectorStoreConfig",
 ]

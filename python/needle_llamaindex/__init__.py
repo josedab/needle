@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import json
+import urllib.error
+import urllib.request
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 import uuid
@@ -31,6 +34,112 @@ class NodeWithScore:
         self.score = score
 
 
+class NeedleHttpError(Exception):
+    """Raised when the Needle HTTP server returns a non-2xx response."""
+
+    def __init__(self, status_code: int, body: str, url: str) -> None:
+        self.status_code = status_code
+        self.body = body
+        self.url = url
+        super().__init__(
+            f"Needle server error: {status_code} for {url}: {body}"
+        )
+
+
+class _NeedleHttpClient:
+    """Minimal HTTP client for the Needle REST API using only stdlib."""
+
+    def __init__(self, base_url: str, api_key: Optional[str] = None) -> None:
+        self._base_url = base_url.rstrip("/")
+        self._api_key = api_key
+
+    def _headers(self) -> Dict[str, str]:
+        headers: Dict[str, str] = {"Content-Type": "application/json"}
+        if self._api_key:
+            headers["X-API-Key"] = self._api_key
+        return headers
+
+    def _request(
+        self,
+        method: str,
+        path: str,
+        body: Optional[Dict[str, Any]] = None,
+    ) -> Optional[Dict[str, Any]]:
+        url = f"{self._base_url}{path}"
+        data = json.dumps(body).encode("utf-8") if body is not None else None
+        req = urllib.request.Request(url, data=data, headers=self._headers(), method=method)
+        try:
+            with urllib.request.urlopen(req) as resp:
+                raw = resp.read()
+                if raw:
+                    return json.loads(raw)  # type: ignore[no-any-return]
+                return None
+        except urllib.error.HTTPError as exc:
+            raise NeedleHttpError(exc.code, exc.read().decode("utf-8", errors="replace"), url) from exc
+        except urllib.error.URLError as exc:
+            raise NeedleHttpError(
+                503, f"Connection failed: {exc.reason}", url
+            ) from exc
+
+    def create_collection(
+        self, name: str, dimensions: int, distance: str
+    ) -> Optional[Dict[str, Any]]:
+        return self._request("POST", "/v1/collections", {
+            "name": name,
+            "dimensions": dimensions,
+            "distance": distance,
+        })
+
+    def insert_vector(
+        self, collection: str, doc_id: str, vector: List[float], metadata: Dict[str, Any]
+    ) -> Optional[Dict[str, Any]]:
+        return self._request("POST", f"/v1/collections/{collection}/vectors", {
+            "id": doc_id,
+            "vector": vector,
+            "metadata": metadata,
+        })
+
+    def search(
+        self,
+        collection: str,
+        vector: List[float],
+        k: int,
+        filter: Optional[Dict[str, Any]] = None,
+    ) -> List[Dict[str, Any]]:
+        body: Dict[str, Any] = {"vector": vector, "k": k}
+        if filter is not None:
+            body["filter"] = filter
+        resp = self._request("POST", f"/v1/collections/{collection}/search", body)
+        if resp and "results" in resp:
+            return resp["results"]  # type: ignore[no-any-return]
+        return []
+
+    def get_vector(self, collection: str, doc_id: str) -> Optional[Dict[str, Any]]:
+        try:
+            return self._request("GET", f"/v1/collections/{collection}/vectors/{doc_id}")
+        except NeedleHttpError as exc:
+            if exc.status_code == 404:
+                return None
+            raise
+
+    def delete_vector(self, collection: str, doc_id: str) -> bool:
+        try:
+            self._request("DELETE", f"/v1/collections/{collection}/vectors/{doc_id}")
+            return True
+        except NeedleHttpError as exc:
+            if exc.status_code == 404:
+                return False
+            raise
+
+    def batch_insert(
+        self, collection: str, vectors: List[Dict[str, Any]]
+    ) -> Optional[Dict[str, Any]]:
+        """Insert multiple vectors in a single batch request."""
+        return self._request("POST", f"/v1/collections/{collection}/vectors/batch", {
+            "vectors": vectors,
+        })
+
+
 @dataclass
 class NeedleIndexConfig:
     """Configuration for NeedleVectorStoreIndex."""
@@ -38,6 +147,8 @@ class NeedleIndexConfig:
     collection_name: str = "llamaindex"
     dimensions: int = 384
     distance: str = "cosine"
+    server_url: Optional[str] = None
+    api_key: Optional[str] = None
 
 
 class NeedleVectorStoreIndex:
@@ -59,42 +170,76 @@ class NeedleVectorStoreIndex:
         dimensions: int = 384,
         distance: str = "cosine",
         embed_model: Optional[Any] = None,
+        server_url: Optional[str] = None,
+        api_key: Optional[str] = None,
         **kwargs: Any,
     ) -> None:
         self._config = NeedleIndexConfig(
             collection_name=collection_name,
             dimensions=dimensions,
             distance=distance,
+            server_url=server_url,
+            api_key=api_key,
         )
         self._nodes: Dict[str, TextNode] = {}
         self._embed_model = embed_model
+        self._http: Optional[_NeedleHttpClient] = None
+        if server_url:
+            self._http = _NeedleHttpClient(server_url, api_key=api_key)
+            self._http.create_collection(collection_name, dimensions, distance)
 
     @classmethod
     def from_nodes(
         cls,
         nodes: List[TextNode],
         collection_name: str = "llamaindex",
+        server_url: Optional[str] = None,
+        api_key: Optional[str] = None,
         **kwargs: Any,
     ) -> "NeedleVectorStoreIndex":
         """Create an index from pre-embedded nodes."""
         dims = 384
         if nodes and nodes[0].embedding:
             dims = len(nodes[0].embedding)
-        index = cls(collection_name=collection_name, dimensions=dims, **kwargs)
+        index = cls(
+            collection_name=collection_name,
+            dimensions=dims,
+            server_url=server_url,
+            api_key=api_key,
+            **kwargs,
+        )
         index.add(nodes)
         return index
 
     def add(self, nodes: List[TextNode], **kwargs: Any) -> List[str]:
         """Add nodes to the index. Returns node IDs."""
         ids: List[str] = []
+        batch_items: List[Dict[str, Any]] = []
+
         for node in nodes:
-            self._nodes[node.id_] = node
+            if self._http and node.embedding is not None:
+                meta = dict(node.metadata)
+                meta["_text"] = node.text
+                batch_items.append({
+                    "id": node.id_,
+                    "vector": node.embedding,
+                    "metadata": meta,
+                })
+            else:
+                self._nodes[node.id_] = node
             ids.append(node.id_)
+
+        if self._http and batch_items:
+            self._http.batch_insert(self._config.collection_name, batch_items)
+
         return ids
 
     def delete(self, ref_doc_id: str, **kwargs: Any) -> None:
         """Delete a node by ID."""
-        self._nodes.pop(ref_doc_id, None)
+        if self._http:
+            self._http.delete_vector(self._config.collection_name, ref_doc_id)
+        else:
+            self._nodes.pop(ref_doc_id, None)
 
     def query(
         self,
@@ -104,6 +249,9 @@ class NeedleVectorStoreIndex:
         **kwargs: Any,
     ) -> List[NodeWithScore]:
         """Query the index with a vector embedding."""
+        if self._http:
+            return self._query_server(query_embedding, similarity_top_k, filters)
+
         scored: List[Tuple[str, float]] = []
 
         for node_id, node in self._nodes.items():
@@ -121,8 +269,47 @@ class NeedleVectorStoreIndex:
             results.append(NodeWithScore(node=self._nodes[node_id], score=score))
         return results
 
+    def _query_server(
+        self,
+        query_embedding: List[float],
+        similarity_top_k: int,
+        filters: Optional[Dict[str, Any]],
+    ) -> List[NodeWithScore]:
+        """Execute a query against the Needle HTTP server."""
+        assert self._http is not None
+        hits = self._http.search(
+            self._config.collection_name,
+            query_embedding,
+            similarity_top_k,
+            filter=filters,
+        )
+        results: List[NodeWithScore] = []
+        for hit in hits:
+            meta = hit.get("metadata", {})
+            text = meta.pop("_text", "")
+            node = TextNode(
+                text=text,
+                id_=hit.get("id", ""),
+                metadata=meta,
+            )
+            score = 1.0 - float(hit.get("distance", 0.0))
+            results.append(NodeWithScore(node=node, score=score))
+        return results
+
     def get_by_id(self, node_id: str) -> Optional[TextNode]:
         """Get a node by ID."""
+        if self._http:
+            resp = self._http.get_vector(self._config.collection_name, node_id)
+            if resp is None:
+                return None
+            meta = resp.get("metadata", {})
+            text = meta.pop("_text", "")
+            return TextNode(
+                text=text,
+                id_=resp.get("id", node_id),
+                metadata=meta,
+                embedding=resp.get("vector"),
+            )
         return self._nodes.get(node_id)
 
     def query_with_mmr(
@@ -256,6 +443,7 @@ class DocumentChunker:
 
 __all__ = [
     "DocumentChunker",
+    "NeedleHttpError",
     "NeedleIndexConfig",
     "NeedleVectorStoreIndex",
     "NodeWithScore",
