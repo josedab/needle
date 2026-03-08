@@ -1,3 +1,4 @@
+use crate::error::{NeedleError, Result};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -45,6 +46,16 @@ impl DatabaseConfig {
         }
     }
 
+    /// Enable or disable read-only mode.
+    ///
+    /// When enabled, [`save()`](crate::Database::save) returns an error and
+    /// auto-save / auto-flush are rejected at validation time.
+    #[must_use]
+    pub fn with_read_only(mut self, read_only: bool) -> Self {
+        self.read_only = read_only;
+        self
+    }
+
     /// Enable or disable auto-save on drop.
     ///
     /// When enabled, the database will attempt to persist unsaved changes
@@ -63,6 +74,24 @@ impl DatabaseConfig {
     pub fn with_auto_flush_interval_secs(mut self, secs: u64) -> Self {
         self.auto_flush_interval_secs = secs;
         self
+    }
+
+    /// Validate the configuration for internal consistency.
+    ///
+    /// Returns an error if conflicting options are set, e.g. `read_only` combined
+    /// with `auto_save` or a non-zero `auto_flush_interval_secs`.
+    pub fn validate(&self) -> Result<()> {
+        if self.read_only && self.auto_save {
+            return Err(NeedleError::InvalidConfig(
+                "read_only is incompatible with auto_save".to_string(),
+            ));
+        }
+        if self.read_only && self.auto_flush_interval_secs > 0 {
+            return Err(NeedleError::InvalidConfig(
+                "read_only is incompatible with auto_flush_interval_secs > 0".to_string(),
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -96,5 +125,44 @@ mod tests {
     fn test_with_auto_save_false() {
         let config = DatabaseConfig::new("test.db").with_auto_save(false);
         assert!(!config.auto_save);
+    }
+
+    #[test]
+    fn test_with_read_only() {
+        let config = DatabaseConfig::new("test.db").with_read_only(true);
+        assert!(config.read_only);
+    }
+
+    #[test]
+    fn test_validate_default_ok() {
+        assert!(DatabaseConfig::default().validate().is_ok());
+    }
+
+    #[test]
+    fn test_validate_read_only_with_auto_save_fails() {
+        let config = DatabaseConfig::new("test.db")
+            .with_read_only(true)
+            .with_auto_save(true);
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_read_only_with_auto_flush_fails() {
+        let mut config = DatabaseConfig::new("test.db");
+        config.read_only = true;
+        config.auto_flush_interval_secs = 30;
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_read_only_alone_ok() {
+        let config = DatabaseConfig::new("test.db").with_read_only(true);
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_validate_auto_save_alone_ok() {
+        let config = DatabaseConfig::new("test.db").with_auto_save(true);
+        assert!(config.validate().is_ok());
     }
 }

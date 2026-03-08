@@ -201,6 +201,8 @@ impl Database {
     /// - I/O error during file operations
     #[instrument(skip(config), fields(path = ?config.path))]
     pub fn open_with_config(config: DatabaseConfig) -> Result<Self> {
+        config.validate()?;
+
         let exists = config.path.exists();
         info!(exists = exists, "Opening database");
 
@@ -1053,6 +1055,12 @@ impl Database {
     /// ```
     #[instrument(skip(self))]
     pub fn save(&self) -> Result<()> {
+        if self.config.read_only {
+            return Err(NeedleError::InvalidOperation(
+                "Cannot save a read-only database".to_string(),
+            ));
+        }
+
         let mut storage_guard = self.storage.lock();
         let storage = match storage_guard.as_mut() {
             Some(s) => s,
@@ -2170,6 +2178,62 @@ mod tests {
         let db2 = Database::open(&path)?;
         let coll2 = db2.collection("test")?;
         assert_eq!(coll2.len(), 1);
+        Ok(())
+    }
+
+    // ── Read-Only / Conflicting Flag Tests ───────────────────────────────
+
+    #[test]
+    fn test_read_only_save_returns_error() {
+        let db = Database::in_memory();
+        db.create_collection("test", 4).unwrap();
+        // Simulate read_only by mutating the config field directly
+        // (in-memory DB has no storage so save() would be a no-op;
+        // use a file-backed DB instead)
+    }
+
+    #[test]
+    fn test_read_only_rejects_auto_save() {
+        let config = DatabaseConfig::new("/tmp/ro_test.needle")
+            .with_read_only(true)
+            .with_auto_save(true);
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_read_only_rejects_auto_flush() {
+        let config = DatabaseConfig::new("/tmp/ro_test.needle")
+            .with_read_only(true)
+            .with_auto_flush_interval_secs(30);
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_read_only_open_rejects_conflicting_config() {
+        let config = DatabaseConfig::new("/tmp/ro_test.needle")
+            .with_read_only(true)
+            .with_auto_save(true);
+        assert!(Database::open_with_config(config).is_err());
+    }
+
+    #[test]
+    fn test_save_read_only_file_backed() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let dir = tempdir()?;
+        let path = dir.path().join("readonly_save.needle");
+
+        // Create a normal DB first
+        {
+            let db = Database::open(&path)?;
+            db.create_collection("test", 4)?;
+            db.save()?;
+        }
+
+        // Reopen as read-only and verify save() fails
+        let mut config = DatabaseConfig::new(&path);
+        config.read_only = true;
+        let db = Database::open_with_config(config)?;
+        let result = db.save();
+        assert!(result.is_err(), "save() on read-only database should fail");
         Ok(())
     }
 

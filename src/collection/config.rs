@@ -525,21 +525,10 @@ impl CollectionConfig {
                 "Very high vector dimensions may cause significant memory usage and slower search"
             );
         }
-        if self.hnsw.m == 0 {
-            return Err(NeedleError::InvalidConfig(
-                "HNSW M parameter must be greater than 0".to_string(),
-            ));
-        }
-        if self.hnsw.ef_construction == 0 {
-            return Err(NeedleError::InvalidConfig(
-                "HNSW ef_construction must be greater than 0".to_string(),
-            ));
-        }
-        if self.hnsw.ef_search == 0 {
-            return Err(NeedleError::InvalidConfig(
-                "HNSW ef_search must be greater than 0".to_string(),
-            ));
-        }
+
+        // Delegate HNSW parameter validation
+        self.hnsw.validate()?;
+
         if let Some(ref sc) = self.semantic_cache {
             if !(0.0..=1.0).contains(&sc.similarity_threshold) {
                 return Err(NeedleError::InvalidConfig(format!(
@@ -556,6 +545,19 @@ impl CollectionConfig {
                 )));
             }
         }
+
+        // Check for duplicate high-cardinality field names
+        if self.high_cardinality_fields.len() > 1 {
+            let mut seen = std::collections::HashSet::new();
+            for field in &self.high_cardinality_fields {
+                if !seen.insert(field.as_str()) {
+                    return Err(NeedleError::InvalidConfig(format!(
+                        "Duplicate high_cardinality_field: '{field}'"
+                    )));
+                }
+            }
+        }
+
         Ok(())
     }
 
@@ -1304,6 +1306,42 @@ mod tests {
         let mut config = CollectionConfig::new("test", 128);
         config.hnsw.ef_construction = 0;
         assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_hnsw_m_max_0_less_than_m() {
+        let mut config = CollectionConfig::new("test", 128);
+        config.hnsw.m = 16;
+        config.hnsw.m_max_0 = 8;
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_hnsw_ml_nan() {
+        let mut config = CollectionConfig::new("test", 128);
+        config.hnsw.ml = f64::NAN;
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_hnsw_ml_zero() {
+        let mut config = CollectionConfig::new("test", 128);
+        config.hnsw.ml = 0.0;
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_duplicate_high_cardinality_fields() {
+        let config = CollectionConfig::new("test", 128)
+            .with_high_cardinality_fields(vec!["id".into(), "id".into()]);
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_unique_high_cardinality_fields_ok() {
+        let config = CollectionConfig::new("test", 128)
+            .with_high_cardinality_fields(vec!["id".into(), "timestamp".into()]);
+        assert!(config.validate().is_ok());
     }
 
     // ── high_cardinality_fields tests ────────────────────────────────────
