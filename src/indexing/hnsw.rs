@@ -123,7 +123,7 @@
 //!    maximum layer, the new node becomes the new global entry point.
 
 use crate::distance::DistanceFunction;
-use crate::error::Result;
+use crate::error::{NeedleError, Result};
 use ordered_float::OrderedFloat;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
@@ -313,6 +313,45 @@ impl HnswConfig {
     pub fn ml(mut self, ml: f64) -> Self {
         self.ml = ml;
         self
+    }
+
+    /// Validate the HNSW configuration parameters.
+    ///
+    /// Returns an error if any parameter is out of its valid range:
+    /// - `m` must be > 0
+    /// - `m_max_0` must be >= `m`
+    /// - `ef_construction` must be > 0
+    /// - `ef_search` must be > 0
+    /// - `ml` must be finite and positive
+    pub fn validate(&self) -> Result<()> {
+        if self.m == 0 {
+            return Err(NeedleError::InvalidConfig(
+                "HNSW M parameter must be greater than 0".to_string(),
+            ));
+        }
+        if self.m_max_0 < self.m {
+            return Err(NeedleError::InvalidConfig(format!(
+                "HNSW m_max_0 ({}) must be >= m ({})",
+                self.m_max_0, self.m
+            )));
+        }
+        if self.ef_construction == 0 {
+            return Err(NeedleError::InvalidConfig(
+                "HNSW ef_construction must be greater than 0".to_string(),
+            ));
+        }
+        if self.ef_search == 0 {
+            return Err(NeedleError::InvalidConfig(
+                "HNSW ef_search must be greater than 0".to_string(),
+            ));
+        }
+        if !self.ml.is_finite() || self.ml <= 0.0 {
+            return Err(NeedleError::InvalidConfig(format!(
+                "HNSW ml must be finite and positive, got {}",
+                self.ml
+            )));
+        }
+        Ok(())
     }
 }
 
@@ -1832,6 +1871,53 @@ mod tests {
     fn test_hnsw_config_builder_custom_ml() {
         let config = HnswConfig::builder().m(16).ml(0.5);
         assert!((config.ml - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_hnsw_config_validate_default() {
+        assert!(HnswConfig::default().validate().is_ok());
+    }
+
+    #[test]
+    fn test_hnsw_config_validate_m_zero() {
+        let config = HnswConfig { m: 0, ..Default::default() };
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_hnsw_config_validate_m_max_0_less_than_m() {
+        let config = HnswConfig { m: 16, m_max_0: 8, ..Default::default() };
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_hnsw_config_validate_ef_construction_zero() {
+        let config = HnswConfig { ef_construction: 0, ..Default::default() };
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_hnsw_config_validate_ef_search_zero() {
+        let config = HnswConfig { ef_search: 0, ..Default::default() };
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_hnsw_config_validate_ml_nan() {
+        let config = HnswConfig { ml: f64::NAN, ..Default::default() };
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_hnsw_config_validate_ml_zero() {
+        let config = HnswConfig { ml: 0.0, ..Default::default() };
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_hnsw_config_validate_ml_negative() {
+        let config = HnswConfig { ml: -1.0, ..Default::default() };
+        assert!(config.validate().is_err());
     }
 
     // ── BitSet edge cases ────────────────────────────────────────────────
