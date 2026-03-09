@@ -317,6 +317,27 @@ impl SparseDistance {
     }
 }
 
+/// Statistics about a [`SparseIndex`] instance.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SparseIndexStats {
+    /// Number of vectors stored.
+    pub num_vectors: usize,
+    /// Number of distinct dimensions with at least one posting.
+    pub num_posting_lists: usize,
+    /// Total number of postings across all lists.
+    pub total_postings: usize,
+    /// Length of the longest posting list.
+    pub max_posting_len: usize,
+    /// Average posting list length.
+    pub avg_posting_len: f64,
+    /// Total non-zero entries across all stored vectors.
+    pub total_nnz: usize,
+    /// Average non-zero entries per vector.
+    pub avg_nnz: f64,
+    /// Estimated heap memory usage in bytes.
+    pub estimated_memory_bytes: usize,
+}
+
 /// Sparse vector index for efficient search
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SparseIndex {
@@ -404,6 +425,83 @@ impl SparseIndex {
     /// Check if empty
     pub fn is_empty(&self) -> bool {
         self.vectors.is_empty()
+    }
+
+    /// Check whether the index contains a vector with the given ID.
+    pub fn contains(&self, id: usize) -> bool {
+        self.vectors.contains_key(&id)
+    }
+
+    /// Return all vector IDs in the index.
+    pub fn ids(&self) -> Vec<usize> {
+        self.vectors.keys().copied().collect()
+    }
+
+    /// Insert multiple sparse vectors, returning their assigned IDs.
+    pub fn batch_insert(&mut self, vectors: Vec<SparseVector>) -> Vec<usize> {
+        vectors.into_iter().map(|v| self.insert(v)).collect()
+    }
+
+    /// Remove multiple vectors by ID. Returns the number of vectors actually removed.
+    pub fn batch_delete(&mut self, ids: &[usize]) -> usize {
+        ids.iter().filter(|&&id| self.remove(id)).count()
+    }
+
+    /// Remove all vectors from the index.
+    pub fn clear(&mut self) {
+        self.inverted_index.clear();
+        self.vectors.clear();
+    }
+
+    /// Compute statistics about the sparse index.
+    pub fn stats(&self) -> SparseIndexStats {
+        let num_posting_lists = self.inverted_index.len();
+        let total_postings: usize = self.inverted_index.values().map(|p| p.len()).sum();
+        let max_posting_len = self.inverted_index.values().map(|p| p.len()).max().unwrap_or(0);
+        let avg_posting_len = if num_posting_lists > 0 {
+            total_postings as f64 / num_posting_lists as f64
+        } else {
+            0.0
+        };
+        let total_nnz: usize = self.vectors.values().map(|v| v.len()).sum();
+        let avg_nnz = if self.vectors.is_empty() {
+            0.0
+        } else {
+            total_nnz as f64 / self.vectors.len() as f64
+        };
+
+        SparseIndexStats {
+            num_vectors: self.vectors.len(),
+            num_posting_lists,
+            total_postings,
+            max_posting_len,
+            avg_posting_len,
+            total_nnz,
+            avg_nnz,
+            estimated_memory_bytes: self.estimated_memory(),
+        }
+    }
+
+    /// Estimate heap memory usage in bytes.
+    pub fn estimated_memory(&self) -> usize {
+        let posting_mem: usize = self
+            .inverted_index
+            .values()
+            .map(|p| p.capacity() * std::mem::size_of::<(usize, f32)>())
+            .sum();
+        let hashmap_overhead =
+            self.inverted_index.capacity() * std::mem::size_of::<(u32, Vec<(usize, f32)>)>();
+        let vector_mem: usize = self
+            .vectors
+            .values()
+            .map(|v| {
+                v.indices.capacity() * std::mem::size_of::<u32>()
+                    + v.values.capacity() * std::mem::size_of::<f32>()
+            })
+            .sum();
+        let vector_hashmap_overhead =
+            self.vectors.capacity() * std::mem::size_of::<(usize, SparseVector)>();
+        posting_mem + hashmap_overhead + vector_mem + vector_hashmap_overhead
     }
 
     /// Search for similar vectors using dot product
@@ -500,6 +598,55 @@ impl SparseIndex {
         }
 
         // Extract results sorted by score descending
+        let mut results: Vec<(usize, f32)> = heap
+            .into_iter()
+            .map(|(Reverse(OrderedFloat(score)), id)| (id, score))
+            .collect();
+        results.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        results
+    }
+
+    /// Search using dot product with a minimum score threshold.
+    ///
+    /// Only returns results with a score >= `min_score`, which avoids
+    /// accumulating and ranking irrelevant candidates.
+    pub fn search_with_threshold(
+        &self,
+        query: &SparseVector,
+        k: usize,
+        min_score: f32,
+    ) -> Vec<(usize, f32)> {
+        if k == 0 {
+            return Vec::new();
+        }
+
+        let mut scores: HashMap<usize, f32> = HashMap::new();
+
+        for (&idx, &val) in query.indices.iter().zip(query.values.iter()) {
+            if let Some(postings) = self.inverted_index.get(&idx) {
+                for &(vec_id, vec_val) in postings {
+                    *scores.entry(vec_id).or_default() += val * vec_val;
+                }
+            }
+        }
+
+        let mut heap: BinaryHeap<(Reverse<OrderedFloat<f32>>, usize)> =
+            BinaryHeap::with_capacity(k + 1);
+
+        for (id, score) in scores {
+            if score < min_score {
+                continue;
+            }
+            if heap.len() < k {
+                heap.push((Reverse(OrderedFloat(score)), id));
+            } else if let Some(&(Reverse(OrderedFloat(heap_min)), _)) = heap.peek() {
+                if score > heap_min {
+                    heap.pop();
+                    heap.push((Reverse(OrderedFloat(score)), id));
+                }
+            }
+        }
+
         let mut results: Vec<(usize, f32)> = heap
             .into_iter()
             .map(|(Reverse(OrderedFloat(score)), id)| (id, score))
@@ -827,5 +974,197 @@ mod tests {
         assert!(index.is_empty());
         index.insert(SparseVector::new(vec![0], vec![1.0]));
         assert!(!index.is_empty());
+    }
+
+    // ========================================================================
+    // SparseIndex batch, contains, clear, and ids
+    // ========================================================================
+
+    #[test]
+    fn test_sparse_index_contains() {
+        let mut index = SparseIndex::new();
+        let id = index.insert(SparseVector::new(vec![0], vec![1.0]));
+        assert!(index.contains(id));
+        assert!(!index.contains(id + 1));
+    }
+
+    #[test]
+    fn test_sparse_index_ids() {
+        let mut index = SparseIndex::new();
+        let id1 = index.insert(SparseVector::new(vec![0], vec![1.0]));
+        let id2 = index.insert(SparseVector::new(vec![1], vec![2.0]));
+        let mut ids = index.ids();
+        ids.sort();
+        assert_eq!(ids, vec![id1, id2]);
+    }
+
+    #[test]
+    fn test_sparse_index_batch_insert() {
+        let mut index = SparseIndex::new();
+        let vecs = vec![
+            SparseVector::new(vec![0], vec![1.0]),
+            SparseVector::new(vec![1], vec![2.0]),
+            SparseVector::new(vec![2], vec![3.0]),
+        ];
+        let ids = index.batch_insert(vecs);
+        assert_eq!(ids.len(), 3);
+        assert_eq!(index.len(), 3);
+        for &id in &ids {
+            assert!(index.contains(id));
+        }
+    }
+
+    #[test]
+    fn test_sparse_index_batch_delete() {
+        let mut index = SparseIndex::new();
+        let ids = index.batch_insert(vec![
+            SparseVector::new(vec![0], vec![1.0]),
+            SparseVector::new(vec![1], vec![2.0]),
+            SparseVector::new(vec![2], vec![3.0]),
+        ]);
+        let removed = index.batch_delete(&[ids[0], ids[2], 999]);
+        assert_eq!(removed, 2);
+        assert_eq!(index.len(), 1);
+        assert!(index.contains(ids[1]));
+    }
+
+    #[test]
+    fn test_sparse_index_clear() {
+        let mut index = SparseIndex::new();
+        index.batch_insert(vec![
+            SparseVector::new(vec![0, 1], vec![1.0, 2.0]),
+            SparseVector::new(vec![2, 3], vec![3.0, 4.0]),
+        ]);
+        assert_eq!(index.len(), 2);
+        index.clear();
+        assert!(index.is_empty());
+        // Search should return nothing after clear
+        let results = index.search(&SparseVector::new(vec![0], vec![1.0]), 5);
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_sparse_index_batch_delete_empty() {
+        let mut index = SparseIndex::new();
+        index.insert(SparseVector::new(vec![0], vec![1.0]));
+        let removed = index.batch_delete(&[]);
+        assert_eq!(removed, 0);
+        assert_eq!(index.len(), 1);
+    }
+
+    #[test]
+    fn test_sparse_index_search_after_batch_delete() {
+        let mut index = SparseIndex::new();
+        let ids = index.batch_insert(vec![
+            SparseVector::new(vec![0], vec![1.0]),
+            SparseVector::new(vec![0], vec![2.0]),
+            SparseVector::new(vec![0], vec![3.0]),
+        ]);
+        // Delete the top scorer
+        index.batch_delete(&[ids[2]]);
+        let results = index.search(&SparseVector::new(vec![0], vec![1.0]), 3);
+        assert_eq!(results.len(), 2);
+        // Highest remaining score is id1 with val 2.0
+        assert_eq!(results[0].0, ids[1]);
+    }
+
+    // ========================================================================
+    // SparseIndex threshold search
+    // ========================================================================
+
+    #[test]
+    fn test_search_with_threshold_filters_low_scores() {
+        let mut index = SparseIndex::new();
+        index.insert(SparseVector::new(vec![0], vec![0.1])); // score 0.1
+        index.insert(SparseVector::new(vec![0], vec![0.5])); // score 0.5
+        index.insert(SparseVector::new(vec![0], vec![1.0])); // score 1.0
+
+        let query = SparseVector::new(vec![0], vec![1.0]);
+        let results = index.search_with_threshold(&query, 10, 0.4);
+        // Only vectors with score >= 0.4 should appear
+        assert_eq!(results.len(), 2);
+        assert!(results.iter().all(|(_, s)| *s >= 0.4));
+    }
+
+    #[test]
+    fn test_search_with_threshold_zero_returns_all() {
+        let mut index = SparseIndex::new();
+        index.insert(SparseVector::new(vec![0], vec![0.01]));
+        index.insert(SparseVector::new(vec![0], vec![1.0]));
+
+        let query = SparseVector::new(vec![0], vec![1.0]);
+        let all = index.search(&query, 10);
+        let thresholded = index.search_with_threshold(&query, 10, 0.0);
+        assert_eq!(all.len(), thresholded.len());
+    }
+
+    #[test]
+    fn test_search_with_threshold_high_filters_everything() {
+        let mut index = SparseIndex::new();
+        index.insert(SparseVector::new(vec![0], vec![1.0]));
+
+        let query = SparseVector::new(vec![0], vec![1.0]);
+        let results = index.search_with_threshold(&query, 10, 100.0);
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_search_with_threshold_k_zero() {
+        let mut index = SparseIndex::new();
+        index.insert(SparseVector::new(vec![0], vec![1.0]));
+        let results = index.search_with_threshold(&SparseVector::new(vec![0], vec![1.0]), 0, 0.0);
+        assert!(results.is_empty());
+    }
+
+    // ========================================================================
+    // SparseIndex stats and memory estimation
+    // ========================================================================
+
+    #[test]
+    fn test_sparse_index_stats_empty() {
+        let index = SparseIndex::new();
+        let stats = index.stats();
+        assert_eq!(stats.num_vectors, 0);
+        assert_eq!(stats.num_posting_lists, 0);
+        assert_eq!(stats.total_postings, 0);
+        assert_eq!(stats.max_posting_len, 0);
+        assert_eq!(stats.avg_posting_len, 0.0);
+        assert_eq!(stats.total_nnz, 0);
+        assert_eq!(stats.avg_nnz, 0.0);
+    }
+
+    #[test]
+    fn test_sparse_index_stats_populated() {
+        let mut index = SparseIndex::new();
+        // v0: dims [0, 1] → 2 nnz
+        index.insert(SparseVector::new(vec![0, 1], vec![1.0, 2.0]));
+        // v1: dims [1, 2] → 2 nnz
+        index.insert(SparseVector::new(vec![1, 2], vec![3.0, 4.0]));
+
+        let stats = index.stats();
+        assert_eq!(stats.num_vectors, 2);
+        // Posting lists for dims 0, 1, 2
+        assert_eq!(stats.num_posting_lists, 3);
+        // dim0: [v0], dim1: [v0, v1], dim2: [v1] → total 4
+        assert_eq!(stats.total_postings, 4);
+        assert_eq!(stats.max_posting_len, 2); // dim 1 has 2 entries
+        assert!((stats.avg_posting_len - 4.0 / 3.0).abs() < 1e-6);
+        assert_eq!(stats.total_nnz, 4);
+        assert!((stats.avg_nnz - 2.0).abs() < 1e-6);
+        assert!(stats.estimated_memory_bytes > 0);
+    }
+
+    #[test]
+    fn test_sparse_index_memory_grows_with_data() {
+        let mut index = SparseIndex::new();
+        let mem_empty = index.estimated_memory();
+        index.insert(SparseVector::new(vec![0, 1, 2, 3], vec![1.0, 2.0, 3.0, 4.0]));
+        let mem_one = index.estimated_memory();
+        assert!(mem_one > mem_empty);
+        for i in 1..100 {
+            index.insert(SparseVector::new(vec![0, 1, 2, 3], vec![i as f32; 4]));
+        }
+        let mem_hundred = index.estimated_memory();
+        assert!(mem_hundred > mem_one);
     }
 }
