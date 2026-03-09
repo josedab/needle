@@ -856,6 +856,36 @@ impl<'a> CollectionRef<'a> {
         self.db.get_internal(&self.name, id)
     }
 
+    /// Fetch multiple vectors by their IDs in a single operation.
+    ///
+    /// More efficient than calling [`get()`](Self::get) in a loop because it
+    /// acquires the read lock only once. IDs that do not exist are silently
+    /// skipped — the returned Vec contains only found entries.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`NeedleError::CollectionNotFound`] if the collection no longer
+    /// exists.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use needle::Database;
+    ///
+    /// let db = Database::in_memory();
+    /// db.create_collection("docs", 4)?;
+    /// let coll = db.collection("docs")?;
+    /// coll.insert("v1", &[1.0, 0.0, 0.0, 0.0], None)?;
+    /// coll.insert("v2", &[0.0, 1.0, 0.0, 0.0], None)?;
+    ///
+    /// let found = coll.get_many(&["v1", "v2", "missing"])?;
+    /// assert_eq!(found.len(), 2); // "missing" is skipped
+    /// # Ok::<(), needle::NeedleError>(())
+    /// ```
+    pub fn get_many(&self, ids: &[&str]) -> Result<Vec<(String, Vec<f32>, Option<Value>)>> {
+        self.db.get_many_internal(&self.name, ids)
+    }
+
     /// Get provenance record for a vector.
     ///
     /// Returns the provenance metadata (source document, embedding model, pipeline, etc.)
@@ -2199,5 +2229,68 @@ mod tests {
         let result = coll.batch_insert(items);
         assert!(result.is_err());
         assert_eq!(coll.len(), 0);
+    }
+
+    // ── get_many tests ────────────────────────────────────────────────
+
+    #[test]
+    fn test_get_many_basic() {
+        let db = Database::in_memory();
+        db.create_collection("test", 4).unwrap();
+        let coll = db.collection("test").unwrap();
+        coll.insert("v1", &[1.0, 0.0, 0.0, 0.0], None).unwrap();
+        coll.insert("v2", &[0.0, 1.0, 0.0, 0.0], None).unwrap();
+        coll.insert("v3", &[0.0, 0.0, 1.0, 0.0], None).unwrap();
+
+        let found = coll.get_many(&["v1", "v3"]).unwrap();
+        assert_eq!(found.len(), 2);
+        assert_eq!(found[0].0, "v1");
+        assert_eq!(found[1].0, "v3");
+    }
+
+    #[test]
+    fn test_get_many_skips_missing() {
+        let db = Database::in_memory();
+        db.create_collection("test", 4).unwrap();
+        let coll = db.collection("test").unwrap();
+        coll.insert("v1", &[1.0, 0.0, 0.0, 0.0], None).unwrap();
+
+        let found = coll.get_many(&["v1", "nonexistent", "also_missing"]).unwrap();
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].0, "v1");
+    }
+
+    #[test]
+    fn test_get_many_empty_ids() {
+        let db = Database::in_memory();
+        db.create_collection("test", 4).unwrap();
+        let coll = db.collection("test").unwrap();
+        coll.insert("v1", &[1.0, 0.0, 0.0, 0.0], None).unwrap();
+
+        let found = coll.get_many(&[]).unwrap();
+        assert!(found.is_empty());
+    }
+
+    #[test]
+    fn test_get_many_all_missing() {
+        let db = Database::in_memory();
+        db.create_collection("test", 4).unwrap();
+        let coll = db.collection("test").unwrap();
+
+        let found = coll.get_many(&["a", "b", "c"]).unwrap();
+        assert!(found.is_empty());
+    }
+
+    #[test]
+    fn test_get_many_preserves_metadata() {
+        let db = Database::in_memory();
+        db.create_collection("test", 4).unwrap();
+        let coll = db.collection("test").unwrap();
+        coll.insert("v1", &[1.0, 0.0, 0.0, 0.0], Some(serde_json::json!({"key": "val"}))).unwrap();
+
+        let found = coll.get_many(&["v1"]).unwrap();
+        assert_eq!(found.len(), 1);
+        let meta = found[0].2.as_ref().unwrap();
+        assert_eq!(meta["key"], "val");
     }
 }

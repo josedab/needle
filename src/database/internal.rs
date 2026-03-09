@@ -4,6 +4,7 @@ use crate::error::{NeedleError, Result};
 use crate::metadata::Filter;
 use crate::tuning::{RecommendedIndex, WorkloadObservation};
 use serde_json::Value;
+use tracing::warn;
 
 impl Database {
     // Internal methods for CollectionRef
@@ -29,7 +30,9 @@ impl Database {
 
         // Record version if versioning is enabled
         if let Ok(mut store) = self.versioned_store_mut(collection) {
-            let _ = store.put(&id, vector, None);
+            if let Err(e) = store.put(&id, vector, None) {
+                warn!(collection, id = %id, error = %e, "Failed to record version on insert");
+            }
         }
 
         Ok(())
@@ -68,7 +71,9 @@ impl Database {
 
         // Record version if versioning is enabled for this collection
         if let Ok(mut store) = self.versioned_store_mut(collection) {
-            let _ = store.put(&id, &version_vec, version_meta);
+            if let Err(e) = store.put(&id, &version_vec, version_meta) {
+                warn!(collection, id = %id, error = %e, "Failed to record version on insert_vec");
+            }
         }
 
         Ok(())
@@ -119,7 +124,9 @@ impl Database {
         self.mark_modified();
 
         if let Ok(mut store) = self.versioned_store_mut(collection) {
-            let _ = store.put(&id, vector, None);
+            if let Err(e) = store.put(&id, vector, None) {
+                warn!(collection, id = %id, error = %e, "Failed to record version on insert_with_ttl");
+            }
         }
 
         Ok(())
@@ -148,7 +155,9 @@ impl Database {
         self.mark_modified();
 
         if let Ok(mut store) = self.versioned_store_mut(collection) {
-            let _ = store.put(&id, &version_vec, None);
+            if let Err(e) = store.put(&id, &version_vec, None) {
+                warn!(collection, id = %id, error = %e, "Failed to record version on insert_vec_with_ttl");
+            }
         }
 
         Ok(())
@@ -226,7 +235,9 @@ impl Database {
 
         // Record new version if versioning is enabled
         if let Ok(mut store) = self.versioned_store_mut(collection) {
-            let _ = store.put(id, vector, version_meta);
+            if let Err(e) = store.put(id, vector, version_meta) {
+                warn!(collection, id = %id, error = %e, "Failed to record version on update");
+            }
         }
 
         Ok(())
@@ -521,6 +532,27 @@ impl Database {
         Some((vec.to_vec(), meta.cloned()))
     }
 
+    /// Fetch multiple vectors by ID in a single read-lock acquisition.
+    pub(crate) fn get_many_internal(
+        &self,
+        collection: &str,
+        ids: &[&str],
+    ) -> Result<Vec<(String, Vec<f32>, Option<Value>)>> {
+        let state = self.state.read();
+        let coll = state
+            .collections
+            .get(collection)
+            .ok_or_else(|| NeedleError::CollectionNotFound(collection.to_string()))?;
+
+        Ok(ids
+            .iter()
+            .filter_map(|id| {
+                coll.get(id)
+                    .map(|(vec, meta)| ((*id).to_string(), vec.to_vec(), meta.cloned()))
+            })
+            .collect())
+    }
+
     pub(crate) fn delete_internal(&self, collection: &str, id: &str) -> Result<bool> {
         let mut state = self.state.write();
         let coll = state
@@ -535,7 +567,9 @@ impl Database {
 
             // Record version tombstone if versioning is enabled
             if let Ok(mut store) = self.versioned_store_mut(collection) {
-                let _ = store.delete(id);
+                if let Err(e) = store.delete(id) {
+                    warn!(collection, id = %id, error = %e, "Failed to record version tombstone on delete");
+                }
             }
         }
         Ok(deleted)
