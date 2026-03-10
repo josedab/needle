@@ -135,8 +135,23 @@ struct Document {
     length: u32,
 }
 
+/// Statistics about a [`Bm25Index`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Bm25IndexStats {
+    /// Number of indexed documents.
+    pub document_count: usize,
+    /// Number of unique terms across all documents.
+    pub unique_terms: usize,
+    /// Average document length in tokens.
+    pub avg_document_length: f32,
+    /// Number of stop words configured.
+    pub stop_word_count: usize,
+    /// Estimated heap memory usage in bytes.
+    pub estimated_memory_bytes: usize,
+}
+
 /// BM25 text index
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize)]
 pub struct Bm25Index {
     /// Configuration
     config: Bm25Config,
@@ -148,9 +163,42 @@ pub struct Bm25Index {
     doc_count: u32,
     /// Average document length
     avg_doc_length: f32,
-    /// Stop words
+    /// Stop words (rebuilt from config on deserialization)
     #[serde(skip)]
     stop_words: HashSet<String>,
+}
+
+// Custom Deserialize that rebuilds stop_words from config
+impl<'de> serde::Deserialize<'de> for Bm25Index {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct Bm25IndexRaw {
+            config: Bm25Config,
+            documents: HashMap<String, Document>,
+            doc_freqs: HashMap<String, u32>,
+            doc_count: u32,
+            avg_doc_length: f32,
+        }
+
+        let raw = Bm25IndexRaw::deserialize(deserializer)?;
+        let stop_words = raw
+            .config
+            .stop_words
+            .clone()
+            .unwrap_or_else(Self::default_stop_words);
+
+        Ok(Bm25Index {
+            config: raw.config,
+            documents: raw.documents,
+            doc_freqs: raw.doc_freqs,
+            doc_count: raw.doc_count,
+            avg_doc_length: raw.avg_doc_length,
+            stop_words,
+        })
+    }
 }
 
 impl std::fmt::Debug for Bm25Index {
@@ -344,6 +392,10 @@ impl Bm25Index {
     /// scores every indexed document with [`score_document`](Self::score_document),
     /// and returns the top `limit` results sorted by BM25 score descending.
     pub fn search(&self, query: &str, limit: usize) -> Vec<(String, f32)> {
+        if limit == 0 {
+            return Vec::new();
+        }
+
         let query_terms = self.tokenize(query);
 
         if query_terms.is_empty() {
@@ -371,6 +423,85 @@ impl Bm25Index {
     /// Check if index is empty
     pub fn is_empty(&self) -> bool {
         self.documents.is_empty()
+    }
+
+    /// Index multiple documents at once.
+    ///
+    /// More efficient than calling [`index_document`](Self::index_document) in
+    /// a loop because the average document length is recomputed only once at
+    /// the end rather than after every insertion.
+    pub fn batch_index_documents(&mut self, docs: impl IntoIterator<Item = (String, String)>) {
+        for (id, text) in docs {
+            let terms = self.tokenize(&text);
+            let doc_length = terms.len() as u32;
+
+            // Remove old version if exists
+            if let Some(old_doc) = self.documents.remove(&id) {
+                self.doc_count -= 1;
+                for term in old_doc.term_freqs.keys() {
+                    if let Some(freq) = self.doc_freqs.get_mut(term) {
+                        *freq = freq.saturating_sub(1);
+                    }
+                }
+            }
+
+            // Count term frequencies
+            let mut term_freqs: HashMap<String, u32> = HashMap::new();
+            for term in &terms {
+                *term_freqs.entry(term.clone()).or_insert(0) += 1;
+            }
+
+            // Update doc freqs
+            for term in term_freqs.keys() {
+                *self.doc_freqs.entry(term.clone()).or_insert(0) += 1;
+            }
+
+            self.documents.insert(
+                id.clone(),
+                Document {
+                    id,
+                    term_freqs,
+                    length: doc_length,
+                },
+            );
+            self.doc_count += 1;
+        }
+
+        // Recompute average document length once
+        if self.doc_count > 0 {
+            let total: u32 = self.documents.values().map(|d| d.length).sum();
+            self.avg_doc_length = total as f32 / self.doc_count as f32;
+        } else {
+            self.avg_doc_length = 0.0;
+        }
+    }
+
+    /// Return statistics about the index.
+    pub fn stats(&self) -> Bm25IndexStats {
+        Bm25IndexStats {
+            document_count: self.doc_count as usize,
+            unique_terms: self.doc_freqs.len(),
+            avg_document_length: self.avg_doc_length,
+            stop_word_count: self.stop_words.len(),
+            estimated_memory_bytes: self.estimated_memory(),
+        }
+    }
+
+    /// Estimate heap memory usage in bytes.
+    pub fn estimated_memory(&self) -> usize {
+        let doc_mem: usize = self.documents.values().map(|d| {
+            d.id.len()
+                + d.term_freqs.capacity()
+                    * (std::mem::size_of::<String>() + std::mem::size_of::<u32>())
+                + std::mem::size_of::<Document>()
+        }).sum();
+
+        let freq_mem = self.doc_freqs.capacity()
+            * (std::mem::size_of::<String>() + std::mem::size_of::<u32>());
+
+        let stop_mem = self.stop_words.len() * std::mem::size_of::<String>();
+
+        doc_mem + freq_mem + stop_mem + std::mem::size_of::<Self>()
     }
 
     /// Clear the index
@@ -1368,5 +1499,159 @@ mod tests {
         // After removing all docs, avg_doc_length == 0; should not produce NaN
         let results = index.search("hello", 10);
         assert!(results.is_empty());
+    }
+
+    // ── search limit=0 guard ──────────────────────────────────────────
+
+    #[test]
+    fn test_bm25_search_limit_zero() {
+        let mut index = Bm25Index::default();
+        index.index_document("d1", "machine learning");
+        let results = index.search("machine", 0);
+        assert!(results.is_empty());
+    }
+
+    // ── batch operations ──────────────────────────────────────────────
+
+    #[test]
+    fn test_bm25_batch_index_documents() {
+        let mut index = Bm25Index::default();
+        index.batch_index_documents(vec![
+            ("d1".to_string(), "machine learning is great".to_string()),
+            ("d2".to_string(), "deep learning models".to_string()),
+            ("d3".to_string(), "vector databases rock".to_string()),
+        ]);
+        assert_eq!(index.len(), 3);
+        let results = index.search("learning", 10);
+        assert_eq!(results.len(), 2);
+    }
+
+    #[test]
+    fn test_bm25_batch_index_empty() {
+        let mut index = Bm25Index::default();
+        index.batch_index_documents(Vec::<(String, String)>::new());
+        assert!(index.is_empty());
+    }
+
+    #[test]
+    fn test_bm25_batch_index_overwrites() {
+        let mut index = Bm25Index::default();
+        index.index_document("d1", "old content");
+        index.batch_index_documents(vec![
+            ("d1".to_string(), "new content about vectors".to_string()),
+        ]);
+        assert_eq!(index.len(), 1);
+        let results = index.search("vectors", 10);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].0, "d1");
+        let old_results = index.search("old", 10);
+        assert!(old_results.is_empty());
+    }
+
+    #[test]
+    fn test_bm25_batch_equivalent_to_sequential() {
+        let mut batch_idx = Bm25Index::default();
+        let mut seq_idx = Bm25Index::default();
+
+        let docs = vec![
+            ("d1".to_string(), "machine learning".to_string()),
+            ("d2".to_string(), "deep learning".to_string()),
+        ];
+        batch_idx.batch_index_documents(docs.clone());
+        for (id, text) in &docs {
+            seq_idx.index_document(id, text);
+        }
+
+        let batch_results = batch_idx.search("learning", 10);
+        let seq_results = seq_idx.search("learning", 10);
+        assert_eq!(batch_results.len(), seq_results.len());
+        for (b, s) in batch_results.iter().zip(seq_results.iter()) {
+            assert_eq!(b.0, s.0);
+            assert!((b.1 - s.1).abs() < 1e-6);
+        }
+    }
+
+    // ── stats and memory ──────────────────────────────────────────────
+
+    #[test]
+    fn test_bm25_stats_empty() {
+        let index = Bm25Index::default();
+        let stats = index.stats();
+        assert_eq!(stats.document_count, 0);
+        assert_eq!(stats.unique_terms, 0);
+        assert_eq!(stats.avg_document_length, 0.0);
+        assert!(stats.stop_word_count > 0);
+    }
+
+    #[test]
+    fn test_bm25_stats_populated() {
+        let mut index = Bm25Index::default();
+        index.index_document("d1", "machine learning");
+        index.index_document("d2", "deep learning models");
+        let stats = index.stats();
+        assert_eq!(stats.document_count, 2);
+        assert!(stats.unique_terms > 0);
+        assert!(stats.avg_document_length > 0.0);
+        assert!(stats.estimated_memory_bytes > 0);
+    }
+
+    #[test]
+    fn test_bm25_memory_grows() {
+        let mut index = Bm25Index::default();
+        let m0 = index.estimated_memory();
+        for i in 0..50 {
+            index.index_document(&format!("d{i}"), &format!("term{i} is a search term"));
+        }
+        let m50 = index.estimated_memory();
+        assert!(m50 > m0);
+    }
+
+    // ── serialization round-trip ──────────────────────────────────────
+
+    #[test]
+    fn test_bm25_serde_preserves_stop_words() {
+        let mut index = Bm25Index::default();
+        index.index_document("d1", "the machine learning model");
+        // "the" is a stop word — should be filtered
+        let results_before = index.search("the", 10);
+        assert!(results_before.is_empty(), "stop word query should return empty");
+
+        // Serialize and deserialize
+        let json = serde_json::to_string(&index).unwrap();
+        let restored: Bm25Index = serde_json::from_str(&json).unwrap();
+
+        // After deserialization, stop words should still work
+        let results_after = restored.search("the", 10);
+        assert!(
+            results_after.is_empty(),
+            "stop words should be restored after deserialization"
+        );
+
+        // Non-stop-word queries should still work
+        let ml_results = restored.search("machine", 10);
+        assert_eq!(ml_results.len(), 1);
+    }
+
+    #[test]
+    fn test_bm25_serde_preserves_custom_stop_words() {
+        let config = Bm25Config::default()
+            .with_stop_words(["filtered".to_string()].into_iter().collect());
+        let mut index = Bm25Index::new(config);
+        index.index_document("d1", "filtered word is here");
+
+        // "filtered" should be a stop word
+        let results_before = index.search("filtered", 10);
+        assert!(results_before.is_empty(), "custom stop word should be filtered before serde");
+
+        let json = serde_json::to_string(&index).unwrap();
+        let restored: Bm25Index = serde_json::from_str(&json).unwrap();
+
+        // Custom stop word should still be filtered after round-trip
+        let results = restored.search("filtered", 10);
+        assert!(results.is_empty(), "custom stop word should be filtered after deser");
+
+        // Non-stop words should still work
+        let word_results = restored.search("word", 10);
+        assert_eq!(word_results.len(), 1);
     }
 }
