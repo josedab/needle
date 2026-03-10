@@ -66,6 +66,10 @@ pub struct MultiVectorConfig {
     pub normalize: bool,
     /// Centroid pooling for initial filtering
     pub use_centroid: bool,
+    /// Default candidate multiplier for two-stage search.
+    /// Controls the ratio of candidates to final `k` in the first stage.
+    /// Higher values improve recall at the cost of latency.
+    pub default_candidate_multiplier: usize,
 }
 
 impl Default for MultiVectorConfig {
@@ -75,6 +79,7 @@ impl Default for MultiVectorConfig {
             distance: DistanceFunction::Cosine,
             normalize: true,
             use_centroid: true,
+            default_candidate_multiplier: 4,
         }
     }
 }
@@ -92,6 +97,13 @@ impl MultiVectorConfig {
     #[must_use]
     pub fn with_dot_product(mut self) -> Self {
         self.distance = DistanceFunction::DotProduct;
+        self
+    }
+
+    /// Set the default candidate multiplier for two-stage search.
+    #[must_use]
+    pub fn with_candidate_multiplier(mut self, multiplier: usize) -> Self {
+        self.default_candidate_multiplier = multiplier.max(1);
         self
     }
 }
@@ -311,6 +323,14 @@ impl MultiVectorIndex {
         });
         results.truncate(k);
         results
+    }
+
+    /// Two-stage search using the configured default candidate multiplier.
+    ///
+    /// Equivalent to calling
+    /// `search_two_stage(query, k, config.default_candidate_multiplier)`.
+    pub fn search_auto(&self, query: &[Vec<f32>], k: usize) -> Vec<MultiVectorSearchResult> {
+        self.search_two_stage(query, k, self.config.default_candidate_multiplier)
     }
 
     /// Get detailed matching info between query and document
@@ -694,5 +714,172 @@ mod tests {
         assert_eq!(index.len(), 1);
         let doc = index.get("doc1").unwrap();
         assert_eq!(doc.vectors[0], vec![0.0, 1.0, 0.0]);
+    }
+
+    // ========================================================================
+    // Two-stage search quality validation
+    // ========================================================================
+
+    /// Measure recall: fraction of brute-force top-k results found by two-stage.
+    fn recall(brute: &[MultiVectorSearchResult], two_stage: &[MultiVectorSearchResult]) -> f64 {
+        let brute_ids: std::collections::HashSet<_> = brute.iter().map(|r| &r.id).collect();
+        let hits = two_stage.iter().filter(|r| brute_ids.contains(&r.id)).count();
+        if brute_ids.is_empty() {
+            1.0
+        } else {
+            hits as f64 / brute_ids.len() as f64
+        }
+    }
+
+    #[test]
+    fn test_two_stage_recall_small() {
+        let dim = 16;
+        let mut index = MultiVectorIndex::with_dimensions(dim);
+
+        // Insert 50 docs with 3-5 token vectors each
+        for i in 0..50 {
+            let ntokens = 3 + (i % 3);
+            let vecs: Vec<Vec<f32>> = (0..ntokens).map(|_| random_vector(dim)).collect();
+            index.insert(MultiVector::new(format!("d{i}"), vecs)).unwrap();
+        }
+
+        let k = 5;
+        let query: Vec<Vec<f32>> = (0..3).map(|_| random_vector(dim)).collect();
+
+        let brute_results = index.search(&query, k);
+        let two_stage_results = index.search_two_stage(&query, k, 4);
+
+        // Verify two-stage returns k results
+        assert_eq!(two_stage_results.len(), k);
+        // Verify results are a subset of all documents
+        for r in &two_stage_results {
+            assert!(index.get(&r.id).is_some());
+        }
+        // With 4× candidates, recall is typically good (not perfect on random data)
+        let r = recall(&brute_results, &two_stage_results);
+        assert!(
+            r >= 0.4,
+            "Two-stage recall {r:.2} is unexpectedly low (expected >= 0.4)"
+        );
+    }
+
+    #[test]
+    fn test_two_stage_recall_medium() {
+        let dim = 32;
+        let mut index = MultiVectorIndex::with_dimensions(dim);
+
+        // Insert 200 docs
+        for i in 0..200 {
+            let ntokens = 2 + (i % 5);
+            let vecs: Vec<Vec<f32>> = (0..ntokens).map(|_| random_vector(dim)).collect();
+            index.insert(MultiVector::new(format!("d{i}"), vecs)).unwrap();
+        }
+
+        let k = 10;
+        let query: Vec<Vec<f32>> = (0..4).map(|_| random_vector(dim)).collect();
+
+        let brute_results = index.search(&query, k);
+
+        // With a large multiplier, recall should improve
+        let large_results = index.search_two_stage(&query, k, 10);
+        let r = recall(&brute_results, &large_results);
+        assert!(
+            r >= 0.4,
+            "Two-stage recall {r:.2} with mult=10 too low (expected >= 0.4)"
+        );
+    }
+
+    #[test]
+    fn test_two_stage_score_ordering() {
+        let dim = 8;
+        let mut index = MultiVectorIndex::with_dimensions(dim);
+
+        for i in 0..30 {
+            let vecs: Vec<Vec<f32>> = (0..3).map(|_| random_vector(dim)).collect();
+            index.insert(MultiVector::new(format!("d{i}"), vecs)).unwrap();
+        }
+
+        let query: Vec<Vec<f32>> = (0..2).map(|_| random_vector(dim)).collect();
+        let results = index.search_two_stage(&query, 10, 3);
+
+        // Verify scores are in descending order
+        for w in results.windows(2) {
+            assert!(
+                w[0].score >= w[1].score,
+                "Results not sorted: {} > {}",
+                w[0].score,
+                w[1].score
+            );
+        }
+    }
+
+    #[test]
+    fn test_two_stage_full_candidate_set_equals_brute_force() {
+        let dim = 8;
+        let n = 20;
+        let mut index = MultiVectorIndex::with_dimensions(dim);
+
+        for i in 0..n {
+            let vecs = vec![random_vector(dim), random_vector(dim)];
+            index.insert(MultiVector::new(format!("d{i}"), vecs)).unwrap();
+        }
+
+        let query = vec![random_vector(dim)];
+        let k = 5;
+
+        // When candidate_multiplier is large enough to cover all docs, recall is 100%
+        let brute = index.search(&query, k);
+        let two_stage = index.search_two_stage(&query, k, n);
+
+        let r = recall(&brute, &two_stage);
+        assert!(
+            (r - 1.0).abs() < f64::EPSILON,
+            "Full candidate set should give perfect recall, got {r:.2}"
+        );
+    }
+
+    // ========================================================================
+    // Config builder and search_auto
+    // ========================================================================
+
+    #[test]
+    fn test_config_default_candidate_multiplier() {
+        let config = MultiVectorConfig::new(128);
+        assert_eq!(config.default_candidate_multiplier, 4);
+    }
+
+    #[test]
+    fn test_config_with_candidate_multiplier() {
+        let config = MultiVectorConfig::new(128).with_candidate_multiplier(8);
+        assert_eq!(config.default_candidate_multiplier, 8);
+    }
+
+    #[test]
+    fn test_config_candidate_multiplier_clamps_to_one() {
+        let config = MultiVectorConfig::new(128).with_candidate_multiplier(0);
+        assert_eq!(config.default_candidate_multiplier, 1);
+    }
+
+    #[test]
+    fn test_search_auto_uses_config() {
+        let dim = 8;
+        let config = MultiVectorConfig::new(dim).with_candidate_multiplier(10);
+        let mut index = MultiVectorIndex::new(config);
+
+        for i in 0..30 {
+            let vecs = vec![random_vector(dim), random_vector(dim)];
+            index.insert(MultiVector::new(format!("d{i}"), vecs)).unwrap();
+        }
+
+        let query = vec![random_vector(dim)];
+        let auto_results = index.search_auto(&query, 5);
+        let manual_results = index.search_two_stage(&query, 5, 10);
+
+        // search_auto with mult=10 should give same results as manual two-stage with mult=10
+        assert_eq!(auto_results.len(), manual_results.len());
+        for (a, m) in auto_results.iter().zip(manual_results.iter()) {
+            assert_eq!(a.id, m.id);
+            assert!((a.score - m.score).abs() < 1e-6);
+        }
     }
 }
