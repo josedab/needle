@@ -312,25 +312,36 @@ impl CrossCollectionSearch {
         }
     }
 
-    /// Merge using minimum score (best match)
+    /// Merge using minimum score (best match), deduplicating across collections
     fn merge_min_score(
         &self,
         collection_results: Vec<(String, Vec<SearchResult>)>,
         k: usize,
     ) -> Result<Vec<CrossCollectionResult>> {
-        let mut all_results: Vec<CrossCollectionResult> = Vec::new();
+        // Deduplicate: keep the entry with the lowest score for each ID
+        let mut best: HashMap<String, CrossCollectionResult> = HashMap::new();
 
         for (collection, results) in collection_results {
             for (rank, result) in results.into_iter().enumerate() {
-                all_results.push(CrossCollectionResult {
-                    id: result.id,
+                let entry = CrossCollectionResult {
+                    id: result.id.clone(),
                     score: result.distance,
                     collection: collection.clone(),
                     metadata: result.metadata,
                     rank_in_collection: rank + 1,
-                });
+                };
+
+                best.entry(result.id)
+                    .and_modify(|existing| {
+                        if entry.score < existing.score {
+                            *existing = entry.clone();
+                        }
+                    })
+                    .or_insert(entry);
             }
         }
+
+        let mut all_results: Vec<CrossCollectionResult> = best.into_values().collect();
 
         // Normalize scores if requested
         if self.config.normalize_scores && !all_results.is_empty() {
@@ -1206,6 +1217,43 @@ mod tests {
 
         assert_eq!(results.len(), 5);
         assert_eq!(stats.collections_searched, 2);
+    }
+
+    #[test]
+    fn test_min_score_dedup_same_id_across_collections() {
+        let db = create_test_db();
+        db.create_collection("col1", 4).unwrap();
+        db.create_collection("col2", 4).unwrap();
+
+        let col1 = db.collection("col1").unwrap();
+        let col2 = db.collection("col2").unwrap();
+
+        // Insert the SAME ID into both collections with different vectors
+        let vec_a = vec![1.0, 0.0, 0.0, 0.0];
+        let vec_b = vec![0.0, 1.0, 0.0, 0.0];
+        col1.insert("shared_id", &vec_a, None).unwrap();
+        col2.insert("shared_id", &vec_b, None).unwrap();
+        // Also insert unique vectors
+        col1.insert("unique1", &[0.5, 0.5, 0.0, 0.0], None).unwrap();
+        col2.insert("unique2", &[0.0, 0.0, 0.5, 0.5], None).unwrap();
+
+        let mut config = CrossCollectionConfig::default();
+        config.aggregation = ScoreAggregation::MinScore;
+        let search = CrossCollectionSearch::new(db, config);
+
+        let query = vec![1.0, 0.0, 0.0, 0.0];
+        let (results, _) = search
+            .search(&query, 10, CollectionFilter::All, None)
+            .unwrap();
+
+        // "shared_id" should appear exactly ONCE (deduplicated, keeping best score)
+        let shared_count = results.iter().filter(|r| r.id == "shared_id").count();
+        assert_eq!(
+            shared_count, 1,
+            "shared_id should appear exactly once after dedup, got {shared_count}"
+        );
+        // Total unique IDs: shared_id, unique1, unique2 = 3
+        assert_eq!(results.len(), 3);
     }
 
     #[test]
