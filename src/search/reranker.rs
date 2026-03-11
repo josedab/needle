@@ -7,7 +7,7 @@
 //! ## Available Rerankers
 //!
 //! - **CohereReranker**: Uses Cohere's rerank API
-//! - **HuggingFaceReranker**: Uses local HuggingFace cross-encoder models
+//! - **TermOverlapReranker**: Lightweight TF-IDF term-overlap scoring (also exported as `HuggingFaceReranker` for backwards compatibility)
 //! - **CrossEncoderReranker**: Generic local cross-encoder implementation
 //!
 //! ## Example
@@ -354,13 +354,24 @@ impl HuggingFaceConfig {
     }
 }
 
-/// HuggingFace cross-encoder reranker
-pub struct HuggingFaceReranker {
+/// Reranker that uses TF-IDF weighted term overlap scoring.
+///
+/// This is a lightweight reranker that scores documents by how well their terms
+/// match the query, weighted by inverse document frequency. Use this when a
+/// full cross-encoder model is not available or not needed.
+pub struct TermOverlapReranker {
     config: HuggingFaceConfig,
 }
 
-impl HuggingFaceReranker {
-    /// Create a new HuggingFace reranker
+/// Backwards-compatible alias. This reranker uses term-overlap scoring,
+/// not a HuggingFace cross-encoder model.
+pub type HuggingFaceReranker = TermOverlapReranker;
+
+impl TermOverlapReranker {
+    /// Create a new term-overlap reranker.
+    ///
+    /// The `model` parameter is accepted for API compatibility but is not
+    /// used — scoring is based on TF-IDF term overlap, not neural inference.
     pub fn new(model: impl Into<String>) -> Self {
         Self {
             config: HuggingFaceConfig::new(model),
@@ -373,7 +384,7 @@ impl HuggingFaceReranker {
     }
 }
 
-impl Reranker for HuggingFaceReranker {
+impl Reranker for TermOverlapReranker {
     fn rerank<'a>(
         &'a self,
         query: &'a str,
@@ -393,7 +404,7 @@ impl Reranker for HuggingFaceReranker {
     }
 
     fn name(&self) -> &str {
-        "huggingface"
+        "term_overlap"
     }
 
     fn max_batch_size(&self) -> usize {

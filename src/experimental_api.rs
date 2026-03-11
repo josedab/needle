@@ -315,7 +315,7 @@ pub use crate::rag::{
 pub use crate::reranker::{
     CohereConfig as CohereRerankerConfig, CohereReranker, EnsembleReranker,
     HuggingFaceConfig as HuggingFaceRerankerConfig, HuggingFaceReranker, NoOpReranker,
-    RerankResult, Reranker, RerankerError, RerankerResult,
+    RerankResult, Reranker, RerankerError, RerankerResult, TermOverlapReranker,
 };
 pub use crate::routing::{LoadBalancing, QueryRouter, RouteConfig, RoutingError, RoutingResult};
 pub use crate::security::{
