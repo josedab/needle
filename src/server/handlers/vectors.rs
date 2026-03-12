@@ -315,7 +315,7 @@ pub(in crate::server) async fn streaming_insert_handler(
     let db = state.db.read().await;
     let coll = match db.collection(&collection) {
         Ok(c) => c,
-        Err(e) => return (StatusCode::NOT_FOUND, Json(json!({ "error": e.to_string() }))),
+        Err(e) => return (StatusCode::NOT_FOUND, Json(json!(ApiError::new(e.to_string(), "NOT_FOUND")))),
     };
 
     let total = body.vectors.len();
@@ -362,16 +362,23 @@ pub(in crate::server) async fn insert_text_handler(
     let db = state.db.read().await;
     let coll = match db.collection(&collection) {
         Ok(c) => c,
-        Err(e) => return (StatusCode::NOT_FOUND, Json(json!({ "error": e.to_string() }))),
+        Err(e) => return (StatusCode::NOT_FOUND, Json(json!(ApiError::new(e.to_string(), "NOT_FOUND")))),
     };
 
     if body.text.is_empty() {
-        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "Text cannot be empty" })));
+        return (StatusCode::BAD_REQUEST, Json(json!(ApiError::new("Text cannot be empty", "EMPTY_TEXT"))));
+    }
+
+    if body.text.len() > MAX_TEXT_BYTES {
+        return (StatusCode::BAD_REQUEST, Json(json!(ApiError::new(
+            format!("Text exceeds maximum size of {MAX_TEXT_BYTES} bytes"),
+            "TEXT_TOO_LARGE",
+        ))));
     }
 
     let dims = match coll.dimensions() {
         Some(d) => d,
-        None => return (StatusCode::BAD_REQUEST, Json(json!({ "error": "Collection has no dimensions" }))),
+        None => return (StatusCode::BAD_REQUEST, Json(json!(ApiError::new("Collection has no dimensions", "INVALID_COLLECTION")))),
     };
 
     // Try native embedding provider first, fall back to deterministic hash
@@ -391,7 +398,7 @@ pub(in crate::server) async fn insert_text_handler(
             "text_length": body.text.len(),
             "embed_method": embed_method,
         }))),
-        Err(e) => (StatusCode::BAD_REQUEST, Json(json!({ "error": e.to_string() }))),
+        Err(e) => (StatusCode::BAD_REQUEST, Json(json!(ApiError::new(e.to_string(), "BAD_REQUEST")))),
     }
 }
 
@@ -433,16 +440,16 @@ pub(in crate::server) async fn batch_insert_text_handler(
     let db = state.db.read().await;
     let coll = match db.collection(&collection) {
         Ok(c) => c,
-        Err(e) => return (StatusCode::NOT_FOUND, Json(json!({ "error": e.to_string() }))),
+        Err(e) => return (StatusCode::NOT_FOUND, Json(json!(ApiError::new(e.to_string(), "NOT_FOUND")))),
     };
 
     let dims = match coll.dimensions() {
         Some(d) => d,
-        None => return (StatusCode::BAD_REQUEST, Json(json!({ "error": "Collection has no dimensions" }))),
+        None => return (StatusCode::BAD_REQUEST, Json(json!(ApiError::new("Collection has no dimensions", "INVALID_COLLECTION")))),
     };
 
     if body.texts.len() > 1000 {
-        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "Batch size exceeds limit of 1000" })));
+        return (StatusCode::BAD_REQUEST, Json(json!(ApiError::new("Batch size exceeds limit of 1000", "BATCH_TOO_LARGE"))));
     }
 
     let mut inserted = 0usize;
@@ -496,16 +503,16 @@ pub(in crate::server) async fn search_text_handler(
     let db = state.db.read().await;
     let coll = match db.collection(&collection) {
         Ok(c) => c,
-        Err(e) => return (StatusCode::NOT_FOUND, Json(json!({ "error": e.to_string() }))),
+        Err(e) => return (StatusCode::NOT_FOUND, Json(json!(ApiError::new(e.to_string(), "NOT_FOUND")))),
     };
 
     let dims = match coll.dimensions() {
         Some(d) => d,
-        None => return (StatusCode::BAD_REQUEST, Json(json!({ "error": "Collection has no dimensions" }))),
+        None => return (StatusCode::BAD_REQUEST, Json(json!(ApiError::new("Collection has no dimensions", "INVALID_COLLECTION")))),
     };
 
     if body.text.is_empty() {
-        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "Query text cannot be empty" })));
+        return (StatusCode::BAD_REQUEST, Json(json!(ApiError::new("Query text cannot be empty", "EMPTY_TEXT"))));
     }
 
     let (query_vector, _) = embed_text(&state, &body.text, dims).await;
@@ -513,7 +520,7 @@ pub(in crate::server) async fn search_text_handler(
     let results = if let Some(filter_value) = &body.filter {
         match Filter::parse(filter_value) {
             Ok(filter) => coll.search_with_filter(&query_vector, body.k, &filter),
-            Err(e) => return (StatusCode::BAD_REQUEST, Json(json!({ "error": format!("Invalid filter: {}", e) }))),
+            Err(e) => return (StatusCode::BAD_REQUEST, Json(json!(ApiError::new(format!("Invalid filter: {e}"), "INVALID_FILTER")))),
         }
     } else {
         coll.search(&query_vector, body.k)
@@ -537,7 +544,7 @@ pub(in crate::server) async fn search_text_handler(
                 "query_text": body.text,
             })))
         }
-        Err(e) => (StatusCode::BAD_REQUEST, Json(json!({ "error": e.to_string() }))),
+        Err(e) => (StatusCode::BAD_REQUEST, Json(json!(ApiError::new(e.to_string(), "BAD_REQUEST")))),
     }
 }
 

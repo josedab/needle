@@ -328,7 +328,7 @@ pub(in crate::server) async fn snapshot_diff_handler(
     let db = state.db.read().await;
     let coll = match db.collection(&collection) {
         Ok(c) => c,
-        Err(e) => return (StatusCode::NOT_FOUND, Json(json!({ "error": e.to_string() }))),
+        Err(e) => return (StatusCode::NOT_FOUND, Json(json!(ApiError::new(e.to_string(), "NOT_FOUND")))),
     };
 
     let snapshots = coll.list_snapshots();
@@ -358,12 +358,12 @@ pub(in crate::server) async fn cost_estimate_handler(
     let db = state.db.read().await;
     let coll = match db.collection(&collection) {
         Ok(c) => c,
-        Err(e) => return (StatusCode::NOT_FOUND, Json(json!({ "error": e.to_string() }))),
+        Err(e) => return (StatusCode::NOT_FOUND, Json(json!(ApiError::new(e.to_string(), "NOT_FOUND")))),
     };
 
     let stats = match coll.stats() {
         Ok(s) => s,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e.to_string() }))),
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!(ApiError::new(e.to_string(), "INTERNAL_ERROR")))),
     };
 
     let col_stats = CollectionStatistics::new(
@@ -420,11 +420,11 @@ pub(in crate::server) async fn vector_diff_handler(
 
     let coll_a = match db.collection(&collection) {
         Ok(c) => c,
-        Err(e) => return (StatusCode::NOT_FOUND, Json(json!({ "error": format!("Source: {}", e) }))),
+        Err(e) => return (StatusCode::NOT_FOUND, Json(json!(ApiError::new(format!("Source: {e}"), "NOT_FOUND")))),
     };
     let coll_b = match db.collection(&body.other_collection) {
         Ok(c) => c,
-        Err(e) => return (StatusCode::NOT_FOUND, Json(json!({ "error": format!("Target: {}", e) }))),
+        Err(e) => return (StatusCode::NOT_FOUND, Json(json!(ApiError::new(format!("Target: {e}"), "NOT_FOUND")))),
     };
 
     if coll_a.len() > MAX_DIFF_VECTORS || coll_b.len() > MAX_DIFF_VECTORS {
@@ -488,7 +488,7 @@ pub(in crate::server) async fn change_feed_handler(
 
     let coll = match db.collection(&collection) {
         Ok(c) => c,
-        Err(e) => return (StatusCode::NOT_FOUND, Json(json!({ "error": e.to_string() }))),
+        Err(e) => return (StatusCode::NOT_FOUND, Json(json!(ApiError::new(e.to_string(), "NOT_FOUND")))),
     };
 
     let after_cursor = params.after.unwrap_or(0);
@@ -641,12 +641,12 @@ pub(in crate::server) async fn benchmark_handler(
     let db = state.db.read().await;
     let coll = match db.collection(&collection) {
         Ok(c) => c,
-        Err(e) => return (StatusCode::NOT_FOUND, Json(json!({ "error": e.to_string() }))),
+        Err(e) => return (StatusCode::NOT_FOUND, Json(json!(ApiError::new(e.to_string(), "NOT_FOUND")))),
     };
 
     let dims = coll.dimensions().unwrap_or(0);
     if dims == 0 || coll.is_empty() {
-        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "Collection is empty or has no dimensions" })));
+        return (StatusCode::BAD_REQUEST, Json(json!(ApiError::new("Collection is empty or has no dimensions", "INVALID_COLLECTION"))));
     }
 
     let num_queries = body.num_queries.min(10_000);
@@ -696,7 +696,7 @@ pub(in crate::server) async fn index_status_handler(
     let db = state.db.read().await;
     let coll = match db.collection(&collection) {
         Ok(c) => c,
-        Err(e) => return (StatusCode::NOT_FOUND, Json(json!({ "error": e.to_string() }))),
+        Err(e) => return (StatusCode::NOT_FOUND, Json(json!(ApiError::new(e.to_string(), "NOT_FOUND")))),
     };
 
     let stats = coll.stats().map_err(|e| {
@@ -811,7 +811,7 @@ pub(in crate::server) async fn remember_handler(
     let db = state.db.read().await;
     let coll = match db.collection(&collection) {
         Ok(c) => c,
-        Err(e) => return (StatusCode::NOT_FOUND, Json(json!({ "error": e.to_string() }))),
+        Err(e) => return (StatusCode::NOT_FOUND, Json(json!(ApiError::new(e.to_string(), "NOT_FOUND")))),
     };
 
     // Store memory as a vector with enriched metadata
@@ -834,7 +834,7 @@ pub(in crate::server) async fn remember_handler(
             "tier": body.tier,
             "importance": body.importance,
         }))),
-        Err(e) => (StatusCode::BAD_REQUEST, Json(json!({ "error": e.to_string() }))),
+        Err(e) => (StatusCode::BAD_REQUEST, Json(json!(ApiError::new(e.to_string(), "BAD_REQUEST")))),
     }
 }
 
@@ -850,7 +850,7 @@ pub(in crate::server) async fn recall_handler(
     let db = state.db.read().await;
     let coll = match db.collection(&collection) {
         Ok(c) => c,
-        Err(e) => return (StatusCode::NOT_FOUND, Json(json!({ "error": e.to_string() }))),
+        Err(e) => return (StatusCode::NOT_FOUND, Json(json!(ApiError::new(e.to_string(), "NOT_FOUND")))),
     };
 
     // Build filter for tier/session/importance constraints
@@ -877,7 +877,7 @@ pub(in crate::server) async fn recall_handler(
     let results = if let Some(filter_val) = filter_json {
         match Filter::parse(&filter_val) {
             Ok(filter) => coll.search_with_filter(&body.vector, body.k, &filter),
-            Err(e) => return (StatusCode::BAD_REQUEST, Json(json!({ "error": format!("Filter error: {}", e) }))),
+            Err(e) => return (StatusCode::BAD_REQUEST, Json(json!(ApiError::new(format!("Filter error: {e}"), "INVALID_FILTER")))),
         }
     } else {
         coll.search(&body.vector, body.k)
@@ -904,7 +904,7 @@ pub(in crate::server) async fn recall_handler(
                 "count": memories.len(),
             })))
         }
-        Err(e) => (StatusCode::BAD_REQUEST, Json(json!({ "error": e.to_string() }))),
+        Err(e) => (StatusCode::BAD_REQUEST, Json(json!(ApiError::new(e.to_string(), "BAD_REQUEST")))),
     }
 }
 
@@ -918,13 +918,13 @@ pub(in crate::server) async fn forget_handler(
     let db = state.db.read().await;
     let coll = match db.collection(&collection) {
         Ok(c) => c,
-        Err(e) => return (StatusCode::NOT_FOUND, Json(json!({ "error": e.to_string() }))),
+        Err(e) => return (StatusCode::NOT_FOUND, Json(json!(ApiError::new(e.to_string(), "NOT_FOUND")))),
     };
 
     match coll.delete(&memory_id) {
         Ok(true) => (StatusCode::OK, Json(json!({ "forgotten": true, "memory_id": memory_id }))),
-        Ok(false) => (StatusCode::NOT_FOUND, Json(json!({ "error": "Memory not found", "memory_id": memory_id }))),
-        Err(e) => (StatusCode::BAD_REQUEST, Json(json!({ "error": e.to_string() }))),
+        Ok(false) => (StatusCode::NOT_FOUND, Json(json!(ApiError::new(format!("Memory not found: {memory_id}"), "NOT_FOUND")))),
+        Err(e) => (StatusCode::BAD_REQUEST, Json(json!(ApiError::new(e.to_string(), "BAD_REQUEST")))),
     }
 }
 
@@ -1035,7 +1035,7 @@ pub(in crate::server) async fn embedding_router_status_handler() -> impl IntoRes
 /// Embedding router status stub (experimental feature not enabled).
 #[cfg(not(feature = "experimental"))]
 pub(in crate::server) async fn embedding_router_status_handler() -> impl IntoResponse {
-    (StatusCode::NOT_IMPLEMENTED, Json(json!({ "error": "Requires 'experimental' feature" })))
+    (StatusCode::NOT_IMPLEMENTED, Json(json!(ApiError::new("Requires 'experimental' feature", "NOT_IMPLEMENTED"))))
 }
 
 /// Get incremental sync delta from a given LSN.

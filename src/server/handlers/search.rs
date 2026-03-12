@@ -507,12 +507,12 @@ pub(in crate::server) async fn matryoshka_search_handler(
     let db = state.db.read().await;
     let coll = match db.collection(&collection) {
         Ok(c) => c,
-        Err(e) => return (StatusCode::NOT_FOUND, Json(json!({ "error": e.to_string() }))),
+        Err(e) => return (StatusCode::NOT_FOUND, Json(json!(ApiError::new(e.to_string(), "NOT_FOUND")))),
     };
 
     let results = match coll.search_matryoshka(&body.vector, body.k, body.coarse_dims, body.oversample) {
         Ok(r) => r,
-        Err(e) => return (StatusCode::BAD_REQUEST, Json(json!({ "error": e.to_string() }))),
+        Err(e) => return (StatusCode::BAD_REQUEST, Json(json!(ApiError::new(e.to_string(), "BAD_REQUEST")))),
     };
 
     let response: Vec<Value> = results.iter().map(|r| {
@@ -555,7 +555,7 @@ pub(in crate::server) async fn time_travel_search_handler(
 
     let coll = match db.collection(&collection) {
         Ok(c) => c,
-        Err(e) => return (StatusCode::NOT_FOUND, Json(json!({ "error": e.to_string() }))),
+        Err(e) => return (StatusCode::NOT_FOUND, Json(json!(ApiError::new(e.to_string(), "NOT_FOUND")))),
     };
 
     // Determine query mode: timestamp, expression, or snapshot name
@@ -566,7 +566,7 @@ pub(in crate::server) async fn time_travel_search_handler(
 
         let results = match index.search_at(&body.vector, body.k, time_expr) {
             Ok(r) => r,
-            Err(e) => return (StatusCode::BAD_REQUEST, Json(json!({ "error": e.to_string() }))),
+            Err(e) => return (StatusCode::BAD_REQUEST, Json(json!(ApiError::new(e.to_string(), "BAD_REQUEST")))),
         };
 
         let response: Vec<Value> = results.iter().map(|r| {
@@ -589,17 +589,17 @@ pub(in crate::server) async fn time_travel_search_handler(
     if let Some(ref expr) = body.as_of_expression {
         let time_expr = match TimeExpression::parse(expr) {
             Ok(t) => t,
-            Err(e) => return (StatusCode::BAD_REQUEST, Json(json!({ "error": e.to_string() }))),
+            Err(e) => return (StatusCode::BAD_REQUEST, Json(json!(ApiError::new(e.to_string(), "BAD_REQUEST")))),
         };
         let resolved_ts = match time_expr.resolve() {
             Ok(ts) => ts,
-            Err(e) => return (StatusCode::BAD_REQUEST, Json(json!({ "error": e.to_string() }))),
+            Err(e) => return (StatusCode::BAD_REQUEST, Json(json!(ApiError::new(e.to_string(), "BAD_REQUEST")))),
         };
 
         // Search current state with time annotation
         let results = match coll.search(&body.vector, body.k) {
             Ok(r) => r,
-            Err(e) => return (StatusCode::BAD_REQUEST, Json(json!({ "error": e.to_string() }))),
+            Err(e) => return (StatusCode::BAD_REQUEST, Json(json!(ApiError::new(e.to_string(), "BAD_REQUEST")))),
         };
 
         let response: Vec<Value> = results.iter().map(|r| {
@@ -636,7 +636,7 @@ pub(in crate::server) async fn time_travel_search_handler(
 
     let results = match coll.search(&body.vector, body.k) {
         Ok(r) => r,
-        Err(e) => return (StatusCode::BAD_REQUEST, Json(json!({ "error": e.to_string() }))),
+        Err(e) => return (StatusCode::BAD_REQUEST, Json(json!(ApiError::new(e.to_string(), "BAD_REQUEST")))),
     };
 
     let response: Vec<Value> = results.iter().map(|r| {
@@ -670,7 +670,7 @@ pub(in crate::server) async fn graph_search_handler(
     let db = state.db.read().await;
     let coll = match db.collection(&collection) {
         Ok(c) => c,
-        Err(e) => return (StatusCode::NOT_FOUND, Json(json!({ "error": e.to_string() }))),
+        Err(e) => return (StatusCode::NOT_FOUND, Json(json!(ApiError::new(e.to_string(), "NOT_FOUND")))),
     };
 
     let count = coll.len();
@@ -696,7 +696,7 @@ pub(in crate::server) async fn graph_search_handler(
     // Index collection vectors as entities
     let entries = match coll.export_all() {
         Ok(e) => e,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e.to_string() }))),
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!(ApiError::new(e.to_string(), "INTERNAL_ERROR")))),
     };
 
     for (id, vector, metadata) in &entries {
@@ -724,7 +724,7 @@ pub(in crate::server) async fn graph_search_handler(
 
     let results = match graph.search(&body.vector, body.k, Some(max_hops)) {
         Ok(r) => r,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))),
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!(ApiError::new(e.to_string(), "INTERNAL_ERROR")))),
     };
 
     let result_json: Vec<Value> = results.iter().map(|r| {
@@ -763,12 +763,12 @@ pub(in crate::server) async fn cache_lookup_handler(
     let db = state.db.read().await;
     let coll = match db.collection(&collection) {
         Ok(c) => c,
-        Err(e) => return (StatusCode::NOT_FOUND, Json(json!({ "error": e.to_string() }))),
+        Err(e) => return (StatusCode::NOT_FOUND, Json(json!(ApiError::new(e.to_string(), "NOT_FOUND")))),
     };
 
     let dims = coll.dimensions().unwrap_or(0);
     if dims == 0 {
-        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "Collection has no dimensions" })));
+        return (StatusCode::BAD_REQUEST, Json(json!(ApiError::new("Collection has no dimensions", "INVALID_COLLECTION"))));
     }
 
     let config = CacheConfig {
@@ -796,7 +796,7 @@ pub(in crate::server) async fn cache_lookup_handler(
     Path(_collection): Path<String>,
     Json(_body): Json<CacheLookupRequest>,
 ) -> impl IntoResponse {
-    (StatusCode::NOT_IMPLEMENTED, Json(json!({ "error": "Requires 'experimental' feature" })))
+    (StatusCode::NOT_IMPLEMENTED, Json(json!(ApiError::new("Requires 'experimental' feature", "NOT_IMPLEMENTED"))))
 }
 
 /// Store a response in the semantic cache.
@@ -939,6 +939,7 @@ pub(in crate::server) async fn metadata_query(
     Json(body): Json<Value>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<ApiError>)> {
     let limit = body.get("limit").and_then(|v| v.as_u64()).unwrap_or(100) as usize;
+    let limit = limit.min(MAX_SEARCH_K);
     let offset = body.get("offset").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
 
     let filter = body.get("filter").ok_or_else(|| {
@@ -1051,13 +1052,35 @@ pub(in crate::server) async fn recommend(
         ));
     }
 
+    const MAX_RECOMMEND_IDS: usize = 100;
+    if positive_ids.len() > MAX_RECOMMEND_IDS {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ApiError::new(
+                format!("positive_ids exceeds maximum of {MAX_RECOMMEND_IDS}"),
+                "TOO_MANY_POSITIVE_IDS",
+            )),
+        ));
+    }
+
     let negative_ids: Vec<String> = body
         .get("negative_ids")
         .and_then(|v| v.as_array())
         .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
         .unwrap_or_default();
 
+    if negative_ids.len() > MAX_RECOMMEND_IDS {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ApiError::new(
+                format!("negative_ids exceeds maximum of {MAX_RECOMMEND_IDS}"),
+                "TOO_MANY_NEGATIVE_IDS",
+            )),
+        ));
+    }
+
     let limit = body.get("limit").and_then(|v| v.as_u64()).unwrap_or(10) as usize;
+    let limit = limit.min(MAX_SEARCH_K);
 
     let db = state.db.read().await;
     let coll = db
