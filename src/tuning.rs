@@ -191,6 +191,26 @@ pub struct TuningResult {
 pub fn auto_tune(constraints: &TuningConstraints) -> TuningResult {
     let mut explanation = Vec::new();
 
+    // Guard against degenerate inputs
+    if constraints.expected_vectors == 0 || constraints.dimensions == 0 {
+        explanation.push("Empty dataset: returning minimal default parameters".to_string());
+        return TuningResult {
+            config: HnswConfig {
+                m: 16,
+                m_max_0: 32,
+                ef_construction: 200,
+                ef_search: 50,
+                ml: 1.0 / (16.0_f64).ln(),
+            },
+            ef_search: 50,
+            estimated_memory_per_vector: 0,
+            estimated_total_memory: 0,
+            estimated_recall: 1.0,
+            estimated_latency_ms: 0.0,
+            explanation,
+        };
+    }
+
     // Base parameters from profile
     let (base_m, base_ef_construction, base_ef_search) = match constraints.profile {
         PerformanceProfile::LowLatency => (8, 100, 20),
@@ -305,7 +325,11 @@ pub fn auto_tune(constraints: &TuningConstraints) -> TuningResult {
 
     // Estimate latency based on parameters
     // Rough model: latency ~= log(N) * ef_search * 0.001 ms
-    let estimated_latency = (constraints.expected_vectors as f32).ln() * ef_search as f32 * 0.001;
+    let estimated_latency = if constraints.expected_vectors > 0 {
+        (constraints.expected_vectors as f32).ln() * ef_search as f32 * 0.001
+    } else {
+        0.0
+    };
 
     explanation.push(format!(
         "Final parameters: M={}, ef_construction={}, ef_search={}",
@@ -326,7 +350,7 @@ pub fn auto_tune(constraints: &TuningConstraints) -> TuningResult {
             m_max_0: final_m * 2,
             ef_construction: final_ef_construction,
             ef_search,
-            ml: 1.0 / (final_m as f64).ln(),
+            ml: 1.0 / (final_m.max(2) as f64).ln(),
         },
         ef_search,
         estimated_memory_per_vector: final_memory_per_vector,
@@ -357,7 +381,7 @@ fn estimate_recall(m: usize, ef_construction: usize, ef_search: usize, n: usize)
     let scale_factor = 1.0 - 0.05 * (n as f32 / 1_000_000.0).min(1.0);
 
     let recall = base_recall + 0.1 * m_factor + 0.05 * ef_c_factor + 0.15 * ef_s_factor;
-    (recall * scale_factor).min(0.999)
+    (recall * scale_factor).clamp(0.0, 0.999)
 }
 
 /// Quick function to get recommended config for common scenarios
@@ -868,6 +892,45 @@ mod tests {
 
         let result = auto_tune(&constraints);
         assert!(result.ef_search <= 50);
+    }
+
+    #[test]
+    fn test_auto_tune_zero_vectors() {
+        let result = auto_tune(&TuningConstraints::new(0, 384));
+        assert!(result.estimated_recall >= 0.0);
+        assert!(result.estimated_recall <= 1.0);
+        assert!(result.estimated_latency_ms >= 0.0);
+        assert!(result.config.m > 0);
+    }
+
+    #[test]
+    fn test_auto_tune_zero_dimensions() {
+        let result = auto_tune(&TuningConstraints::new(1000, 0));
+        assert!(result.estimated_recall >= 0.0);
+        assert!(result.config.m > 0);
+    }
+
+    #[test]
+    fn test_auto_tune_ml_no_nan() {
+        // Ensure ml never produces NaN or infinity
+        for &n in &[1, 10, 100, 1000, 1_000_000] {
+            for &d in &[1, 128, 384, 1024] {
+                let result = auto_tune(&TuningConstraints::new(n, d));
+                assert!(result.config.ml.is_finite(), "ml is not finite for n={n}, d={d}");
+                assert!(result.config.ml > 0.0, "ml is not positive for n={n}, d={d}");
+            }
+        }
+    }
+
+    #[test]
+    fn test_estimate_recall_clamped() {
+        // All values should be in [0.0, 0.999]
+        let r = estimate_recall(0, 0, 0, 0);
+        assert!(r >= 0.0 && r <= 0.999, "recall out of bounds: {r}");
+        let r2 = estimate_recall(128, 2000, 2000, 0);
+        assert!(r2 >= 0.0 && r2 <= 0.999, "recall out of bounds: {r2}");
+        let r3 = estimate_recall(4, 50, 10, 100_000_000);
+        assert!(r3 >= 0.0 && r3 <= 0.999, "recall out of bounds: {r3}");
     }
 
     // Index recommendation tests
