@@ -594,6 +594,7 @@ mod tests {
         let result = export_collection(
             State(state),
             axum::extract::Path("nonexistent".to_string()),
+            Query(QueryParams { offset: None, limit: None }),
         ).await;
         match result {
             Err((status, _)) => assert_eq!(status, StatusCode::NOT_FOUND),
@@ -1364,6 +1365,7 @@ mod tests {
         let result = export_collection(
             State(state),
             axum::extract::Path("test".to_string()),
+            Query(QueryParams { offset: None, limit: None }),
         ).await;
         assert!(result.is_ok());
         Ok(())

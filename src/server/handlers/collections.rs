@@ -200,27 +200,34 @@ pub(in crate::server) async fn compact_collection(
     })))
 }
 
-/// Export all vectors from a collection as JSON.
+/// Export vectors from a collection as JSON with optional pagination.
 ///
-/// `GET /collections/:name/export` — returns up to `MAX_EXPORT_VECTORS`
-/// entries with their IDs, vectors, and metadata.
+/// `GET /collections/:name/export` — supports `offset` and `limit` query
+/// parameters for paginated export. Without parameters, exports up to
+/// `MAX_EXPORT_VECTORS` entries for backward compatibility.
+///
+/// With pagination parameters, any collection size can be exported in pages.
 pub(in crate::server) async fn export_collection(
     State(state): State<Arc<AppState>>,
     Path(collection): Path<String>,
+    Query(params): Query<QueryParams>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<ApiError>)> {
     let db = state.db.read().await;
     let coll = db
         .collection(&collection)
         .map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
 
-    let count = coll.len();
-    if count > MAX_EXPORT_VECTORS {
+    let total = coll.len();
+    let is_paginated = params.offset.is_some() || params.limit.is_some();
+
+    // When not using pagination, enforce the legacy size limit
+    if !is_paginated && total > MAX_EXPORT_VECTORS {
         return Err((
             StatusCode::PAYLOAD_TOO_LARGE,
             Json(ApiError::new(
                 format!(
-                    "Collection has {} vectors, exceeding export limit of {}. Use list_vectors + get_vector for large exports.",
-                    count, MAX_EXPORT_VECTORS
+                    "Collection has {total} vectors, exceeding export limit of {MAX_EXPORT_VECTORS}. \
+                     Use ?offset=0&limit=10000 to export in pages.",
                 ),
                 "EXPORT_TOO_LARGE".to_string(),
             )),
@@ -231,8 +238,16 @@ pub(in crate::server) async fn export_collection(
         .export_all()
         .map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
 
-    let export: Vec<Value> = vectors
+    let offset = params.offset.unwrap_or(0);
+    let limit = params
+        .limit
+        .unwrap_or(MAX_EXPORT_VECTORS)
+        .min(MAX_EXPORT_VECTORS);
+
+    let page: Vec<Value> = vectors
         .into_iter()
+        .skip(offset)
+        .take(limit)
         .map(|(id, vec, meta)| {
             json!({
                 "id": id,
@@ -242,11 +257,17 @@ pub(in crate::server) async fn export_collection(
         })
         .collect();
 
+    let page_count = page.len();
+    let has_more = offset + page_count < total;
+
     Ok(Json(json!({
         "collection": collection,
         "dimensions": coll.dimensions(),
-        "count": export.len(),
-        "vectors": export,
+        "count": page_count,
+        "total": total,
+        "offset": offset,
+        "has_more": has_more,
+        "vectors": page,
     })))
 }
 
