@@ -962,6 +962,114 @@ impl PyCollection {
 
         Ok((py_results, explain_dict.into()))
     }
+
+    /// Get all vector IDs in the collection.
+    ///
+    /// Returns:
+    ///     list[str]: All vector IDs
+    fn ids(&self) -> PyResult<Vec<String>> {
+        let coll = self.inner.read().map_err(|_| PyValueError::new_err("Lock poisoned"))?;
+        Ok(coll.ids().map(|s| s.to_string()).collect())
+    }
+
+    /// Fetch multiple vectors by their IDs in a single operation.
+    ///
+    /// More efficient than calling get() in a loop.
+    /// Missing IDs are silently skipped.
+    ///
+    /// Args:
+    ///     ids: List of vector IDs to fetch
+    ///
+    /// Returns:
+    ///     list[dict]: List of dicts with "id", "vector", "metadata" keys
+    fn get_many(&self, py: Python<'_>, ids: Vec<String>) -> PyResult<Vec<PyObject>> {
+        let coll = self.inner.read().map_err(|_| PyValueError::new_err("Lock poisoned"))?;
+        let mut results = Vec::with_capacity(ids.len());
+        for id in &ids {
+            if let Some((vec, meta)) = coll.get(id) {
+                let dict = pyo3::types::PyDict::new(py);
+                dict.set_item("id", id)?;
+                dict.set_item("vector", vec.to_vec())?;
+                let py_meta = meta
+                    .map(|m| pythonize::pythonize(py, m))
+                    .transpose()
+                    .map_err(|e| PyValueError::new_err(e.to_string()))?;
+                dict.set_item("metadata", py_meta)?;
+                results.push(dict.into());
+            }
+        }
+        Ok(results)
+    }
+
+    /// Get memory usage statistics for the collection.
+    ///
+    /// Returns:
+    ///     dict: Memory statistics
+    fn memory_usage(&self, py: Python<'_>) -> PyResult<PyObject> {
+        let coll = self.inner.read().map_err(|_| PyValueError::new_err("Lock poisoned"))?;
+        let stats = coll.memory_usage();
+        pythonize::pythonize(py, &stats).map_err(|e| PyValueError::new_err(e.to_string()))
+    }
+
+    /// Get field statistics for a specific metadata field.
+    ///
+    /// Args:
+    ///     field: The metadata field name
+    ///
+    /// Returns:
+    ///     dict or None: Field statistics if the field exists
+    fn field_stats(&self, py: Python<'_>, field: &str) -> PyResult<Option<PyObject>> {
+        let coll = self.inner.read().map_err(|_| PyValueError::new_err("Lock poisoned"))?;
+        match coll.field_stats(field) {
+            Some(stats) => {
+                let obj = pythonize::pythonize(py, &stats)
+                    .map_err(|e| PyValueError::new_err(e.to_string()))?;
+                Ok(Some(obj))
+            }
+            None => Ok(None),
+        }
+    }
+
+    /// Delete multiple vectors by their IDs.
+    ///
+    /// Args:
+    ///     ids: List of vector IDs to delete
+    ///
+    /// Returns:
+    ///     int: Number of vectors actually deleted
+    fn batch_delete(&self, ids: Vec<String>) -> PyResult<usize> {
+        let mut coll = self.inner.write().map_err(|_| PyValueError::new_err("Lock poisoned"))?;
+        coll.delete_batch(&ids).map_err(to_pyerr)
+    }
+
+    /// Get TTL statistics for the collection.
+    ///
+    /// Returns:
+    ///     dict: TTL stats with "total_with_ttl", "total_expired", "earliest_expiry", "latest_expiry"
+    fn ttl_stats(&self, py: Python<'_>) -> PyResult<PyObject> {
+        let coll = self.inner.read().map_err(|_| PyValueError::new_err("Lock poisoned"))?;
+        let (total_with_ttl, total_expired, earliest, latest) = coll.ttl_stats();
+        let dict = pyo3::types::PyDict::new(py);
+        dict.set_item("total_with_ttl", total_with_ttl)?;
+        dict.set_item("total_expired", total_expired)?;
+        dict.set_item("earliest_expiry", earliest)?;
+        dict.set_item("latest_expiry", latest)?;
+        Ok(dict.into())
+    }
+
+    /// Scan for duplicate vectors based on distance threshold.
+    ///
+    /// Args:
+    ///     threshold: Optional distance threshold override (uses collection config default if None)
+    ///
+    /// Returns:
+    ///     dict: Dedup scan results
+    #[pyo3(signature = (threshold=None))]
+    fn dedup_scan(&self, py: Python<'_>, threshold: Option<f32>) -> PyResult<PyObject> {
+        let coll = self.inner.read().map_err(|_| PyValueError::new_err("Lock poisoned"))?;
+        let result = coll.dedup_scan(threshold);
+        pythonize::pythonize(py, &result).map_err(|e| PyValueError::new_err(e.to_string()))
+    }
 }
 
 // ---------------------------------------------------------------------------
