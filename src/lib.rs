@@ -574,7 +574,7 @@ pub use multivec::{MultiVector, MultiVectorConfig, MultiVectorIndex, MultiVector
 /// Quantization types: scalar, product, and binary quantizers for memory-efficient storage.
 pub use quantization::{BinaryQuantizer, MatryoshkaTruncation, ProductQuantizer, ScalarQuantizer, AdaptiveSearchResult, adaptive_search};
 /// Sparse vector types: distance functions, inverted index, and sparse vector representation.
-pub use sparse::{SparseDistance, SparseIndex, SparseVector};
+pub use sparse::{SparseDistance, SparseIndex, SparseIndexStats, SparseVector};
 /// Auto-tuning types: parameter tuning, index recommendation, workload profiling, and online migration.
 pub use tuning::{
     auto_tune, quick_recommend_index, recommend_index, AdaptiveRecommendation, AdaptiveTuner,
@@ -603,8 +603,9 @@ pub mod experimental_api;
 /// Requires the `hybrid` feature.
 #[cfg(feature = "hybrid")]
 pub use hybrid::{
-    reciprocal_rank_fusion, AdaptiveFusion, AdaptiveFusionStats, Bm25Index, HybridConfig,
-    HybridSearchResult, LearnedWeightStats, QueryFeatures, QueryType, RrfConfig, SearchFeedback,
+    reciprocal_rank_fusion, AdaptiveFusion, AdaptiveFusionStats, Bm25Index, Bm25IndexStats,
+    HybridConfig, HybridSearchResult, LearnedWeightStats, QueryFeatures, QueryType, RrfConfig,
+    SearchFeedback,
 };
 
 /// HTTP server entry point and configuration. Requires the `server` feature.
