@@ -723,7 +723,7 @@ impl Collection {
 
         self.validate_query(query)?;
 
-        if limit == 0 || max_distance < 0.0 {
+        if limit == 0 || max_distance < 0.0 || max_distance.is_nan() {
             return Ok(Vec::new());
         }
 
@@ -798,7 +798,7 @@ impl Collection {
 
         self.validate_query(query)?;
 
-        if limit == 0 || max_distance < 0.0 {
+        if limit == 0 || max_distance < 0.0 || max_distance.is_nan() {
             return Ok(Vec::new());
         }
 
