@@ -2052,6 +2052,88 @@ impl WasmCollection {
 
         Ok(results.into_iter().map(SearchResult::from).collect())
     }
+
+    /// Get all vector IDs in the collection.
+    pub fn ids(&self) -> Result<Vec<String>, JsValue> {
+        let coll = self.inner.read().map_err(|_| JsValue::from_str("Lock poisoned"))?;
+        Ok(coll.ids().map(|s| s.to_string()).collect())
+    }
+
+    /// Get collection statistics.
+    pub fn stats(&self) -> Result<JsValue, JsValue> {
+        let coll = self.inner.read().map_err(|_| JsValue::from_str("Lock poisoned"))?;
+        let stats = coll.stats();
+        let obj = js_sys::Object::new();
+        js_sys::Reflect::set(&obj, &"vector_count".into(), &(stats.vector_count as u32).into())?;
+        js_sys::Reflect::set(&obj, &"dimensions".into(), &(stats.dimensions as u32).into())?;
+        Ok(obj.into())
+    }
+
+    /// Get the number of deleted (tombstoned) vectors awaiting compaction.
+    #[wasm_bindgen(js_name = "deletedCount")]
+    pub fn deleted_count(&self) -> usize {
+        self.inner
+            .read()
+            .map(|guard| guard.deleted_count())
+            .unwrap_or(0)
+    }
+
+    /// Compact the collection, removing deleted vectors and reclaiming space.
+    /// Returns the number of vectors removed.
+    pub fn compact(&self) -> Result<usize, JsValue> {
+        let mut coll = self.inner.write().map_err(|_| JsValue::from_str("Lock poisoned"))?;
+        coll.compact().map_err(needle_err_to_js)
+    }
+
+    /// Check whether compaction would be beneficial.
+    #[wasm_bindgen(js_name = "needsCompaction")]
+    pub fn needs_compaction(&self, threshold: f64) -> bool {
+        self.inner
+            .read()
+            .map(|guard| guard.needs_compaction(threshold))
+            .unwrap_or(false)
+    }
+
+    /// Get memory usage statistics.
+    #[wasm_bindgen(js_name = "memoryUsage")]
+    pub fn memory_usage(&self) -> Result<JsValue, JsValue> {
+        let coll = self.inner.read().map_err(|_| JsValue::from_str("Lock poisoned"))?;
+        let stats = coll.memory_usage();
+        let obj = js_sys::Object::new();
+        js_sys::Reflect::set(&obj, &"total_bytes".into(), &(stats.total_bytes as f64).into())?;
+        js_sys::Reflect::set(&obj, &"vectors_bytes".into(), &(stats.vectors_bytes as f64).into())?;
+        js_sys::Reflect::set(&obj, &"index_bytes".into(), &(stats.index_bytes as f64).into())?;
+        js_sys::Reflect::set(&obj, &"metadata_bytes".into(), &(stats.metadata_bytes as f64).into())?;
+        Ok(obj.into())
+    }
+
+    /// Get TTL statistics.
+    #[wasm_bindgen(js_name = "ttlStats")]
+    pub fn ttl_stats(&self) -> Result<JsValue, JsValue> {
+        let coll = self.inner.read().map_err(|_| JsValue::from_str("Lock poisoned"))?;
+        let (total_with_ttl, total_expired, earliest, latest) = coll.ttl_stats();
+        let obj = js_sys::Object::new();
+        js_sys::Reflect::set(&obj, &"total_with_ttl".into(), &(total_with_ttl as u32).into())?;
+        js_sys::Reflect::set(&obj, &"total_expired".into(), &(total_expired as u32).into())?;
+        js_sys::Reflect::set(
+            &obj,
+            &"earliest_expiry".into(),
+            &earliest.map_or(JsValue::NULL, |v| (v as f64).into()),
+        )?;
+        js_sys::Reflect::set(
+            &obj,
+            &"latest_expiry".into(),
+            &latest.map_or(JsValue::NULL, |v| (v as f64).into()),
+        )?;
+        Ok(obj.into())
+    }
+
+    /// Expire vectors whose TTL has elapsed. Returns the number of expired vectors removed.
+    #[wasm_bindgen(js_name = "expireVectors")]
+    pub fn expire_vectors(&self) -> Result<usize, JsValue> {
+        let mut coll = self.inner.write().map_err(|_| JsValue::from_str("Lock poisoned"))?;
+        coll.expire_vectors().map_err(needle_err_to_js)
+    }
 }
 
 // ============================================================================
