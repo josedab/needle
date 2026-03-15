@@ -451,7 +451,7 @@ pub(crate) fn validate_collection_name(name: &str) -> Result<()> {
     }
     if !name
         .chars()
-        .all(|c| c.is_alphanumeric() || c == '_' || c == '-')
+        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
     {
         return Err(NeedleError::InvalidConfig(
             "Collection name must contain only alphanumeric characters, underscores, or hyphens"
@@ -1095,6 +1095,18 @@ mod tests {
     #[should_panic]
     fn test_new_invalid_name_panics() {
         CollectionConfig::new("bad name!", 128);
+    }
+
+    #[test]
+    fn test_unicode_name_rejected() {
+        // Unicode letters must be rejected — only ASCII alphanumeric + _ + - allowed.
+        // This ensures consistency between the Rust API and REST API.
+        let result = CollectionConfig::try_new("café", 128);
+        assert!(result.is_err());
+        let result = CollectionConfig::try_new("日本語", 128);
+        assert!(result.is_err());
+        let result = CollectionConfig::try_new("naïve", 128);
+        assert!(result.is_err());
     }
 
     // ── Dedup config ────────────────────────────────────────────────────
