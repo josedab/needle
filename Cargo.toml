@@ -264,6 +264,14 @@ harness = false
 name = "index"
 harness = false
 
+[[bench]]
+name = "sparse"
+harness = false
+
+[[bench]]
+name = "multivec"
+harness = false
+
 [[example]]
 name = "hybrid_search"
 required-features = ["hybrid"]
