@@ -50,6 +50,32 @@ impl Collection {
         }
         Self::validate_vector(vector)
     }
+
+    /// Maximum length for a vector ID in bytes.
+    const MAX_VECTOR_ID_BYTES: usize = 1024;
+
+    /// Validate that a vector ID is non-empty, within length bounds, and free of
+    /// control characters. These rules match the server-layer validation so that
+    /// vectors inserted via the Rust API can always be served via HTTP.
+    pub fn validate_vector_id(id: &str) -> Result<()> {
+        if id.is_empty() {
+            return Err(NeedleError::InvalidInput(
+                "Vector ID must not be empty".to_string(),
+            ));
+        }
+        if id.len() > Self::MAX_VECTOR_ID_BYTES {
+            return Err(NeedleError::InvalidInput(format!(
+                "Vector ID exceeds maximum length of {} bytes",
+                Self::MAX_VECTOR_ID_BYTES
+            )));
+        }
+        if id.chars().any(|c| c.is_control()) {
+            return Err(NeedleError::InvalidInput(
+                "Vector ID must not contain control characters".to_string(),
+            ));
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -166,5 +192,56 @@ mod tests {
         let mut col = Collection::with_dimensions("test", 4);
         col.insert("v1", &[1.0, 0.0, 0.0, 0.0], None).unwrap();
         assert_eq!(col.clamp_k(0), 0);
+    }
+
+    // ── validate_vector_id ──────────────────────────────────────────────
+
+    #[test]
+    fn test_validate_vector_id_ok() {
+        assert!(Collection::validate_vector_id("doc-123").is_ok());
+        assert!(Collection::validate_vector_id("a").is_ok());
+    }
+
+    #[test]
+    fn test_validate_vector_id_empty() {
+        let result = Collection::validate_vector_id("");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_validate_vector_id_too_long() {
+        let long_id = "x".repeat(1025);
+        let result = Collection::validate_vector_id(&long_id);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_validate_vector_id_at_max_length() {
+        let max_id = "x".repeat(1024);
+        assert!(Collection::validate_vector_id(&max_id).is_ok());
+    }
+
+    #[test]
+    fn test_validate_vector_id_control_chars() {
+        let result = Collection::validate_vector_id("id\x00null");
+        assert!(result.is_err());
+        let result = Collection::validate_vector_id("id\nnewline");
+        assert!(result.is_err());
+        let result = Collection::validate_vector_id("id\ttab");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_insert_rejects_empty_id() {
+        let mut col = Collection::with_dimensions("test", 3);
+        let result = col.insert("", &[1.0, 2.0, 3.0], None);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_insert_rejects_control_char_id() {
+        let mut col = Collection::with_dimensions("test", 3);
+        let result = col.insert("bad\x00id", &[1.0, 2.0, 3.0], None);
+        assert!(result.is_err());
     }
 }

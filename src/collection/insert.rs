@@ -122,6 +122,9 @@ impl Collection {
     ) -> Result<()> {
         let id = id.into();
 
+        // Validate vector ID format
+        Self::validate_vector_id(&id)?;
+
         // Validate metadata against schema if configured
         if let (Some(meta), Some(schema)) = (&metadata, &self.config.metadata_schema) {
             crate::metadata::validate_metadata_schema(meta, schema)?;
