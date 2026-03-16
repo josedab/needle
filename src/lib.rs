@@ -554,7 +554,7 @@ pub use collection::{
     Collection, CollectionConfig, CollectionIter, CollectionStats, MemoryStats,
     DedupGroup, DedupInsertResult, DedupPolicy, DedupScanResult,
     EvaluationReport, GroundTruthEntry, QueryCacheConfig, QueryCacheStats, QueryMetrics,
-    SearchExplain, SearchResult, ScoreNormalization, normalize_scores,
+    SearchBuilder, SearchExplain, SearchResult, ScoreNormalization, normalize_scores,
     SemanticDedupConfig, SemanticQueryCacheConfig, TimeDecay,
 };
 /// Search parameters for configuring `CollectionRef` queries.

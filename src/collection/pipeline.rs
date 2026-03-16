@@ -161,6 +161,7 @@ pub struct SearchBuilder<'a> {
     filter: Option<&'a Filter>,
     post_filter: Option<&'a Filter>,
     post_filter_factor: usize,
+    filter_oversampling: usize,
     ef_search: Option<usize>,
     include_metadata: bool,
     /// Override the distance function for this query.
@@ -237,6 +238,7 @@ impl<'a> SearchBuilder<'a> {
             filter: None,
             post_filter: None,
             post_filter_factor: 3,
+            filter_oversampling: FILTER_CANDIDATE_MULTIPLIER,
             ef_search: None,
             include_metadata: true,
             distance_override: None,
@@ -284,6 +286,20 @@ impl<'a> SearchBuilder<'a> {
     #[must_use]
     pub fn post_filter_factor(mut self, factor: usize) -> Self {
         self.post_filter_factor = factor.max(1);
+        self
+    }
+
+    /// Set the over-fetch factor for pre-filter candidate generation (default: 10).
+    ///
+    /// When a pre-filter is active, the search fetches `k * factor` candidates
+    /// from the HNSW index before filtering. Higher values improve recall for
+    /// selective filters at the cost of more distance computations.
+    ///
+    /// Typical values: 5 for low selectivity, 10 (default) for moderate, 20+ for
+    /// highly selective filters that match <5% of vectors.
+    #[must_use]
+    pub fn filter_oversampling(mut self, factor: usize) -> Self {
+        self.filter_oversampling = factor.max(1);
         self
     }
 
@@ -450,7 +466,7 @@ impl<'a> SearchBuilder<'a> {
     /// Calculate how many candidates to fetch from the index.
     fn calculate_fetch_count(&self) -> usize {
         let pre_filter_factor = if self.filter.is_some() {
-            FILTER_CANDIDATE_MULTIPLIER
+            self.filter_oversampling
         } else {
             1
         };

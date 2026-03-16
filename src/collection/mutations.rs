@@ -216,6 +216,51 @@ impl Collection {
             Ok(true) // Inserted new
         }
     }
+
+    /// Remove all vectors from the collection.
+    ///
+    /// Resets vectors, index, metadata, expirations, and timestamps to empty
+    /// state. The collection configuration (dimensions, distance function, etc.)
+    /// is preserved.
+    ///
+    /// This is O(1) — much more efficient than iterating and deleting individual
+    /// vectors.
+    ///
+    /// # Returns
+    ///
+    /// The number of vectors that were removed.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use needle::{Collection, CollectionConfig};
+    /// # let config = CollectionConfig::new("test", 4);
+    /// # let mut collection = Collection::new(config);
+    /// collection.insert("v1", &[1.0, 0.0, 0.0, 0.0], None).unwrap();
+    /// collection.insert("v2", &[0.0, 1.0, 0.0, 0.0], None).unwrap();
+    /// assert_eq!(collection.len(), 2);
+    ///
+    /// let removed = collection.clear();
+    /// assert_eq!(removed, 2);
+    /// assert_eq!(collection.len(), 0);
+    /// ```
+    pub fn clear(&mut self) -> usize {
+        let count = self.len();
+
+        self.vectors = crate::storage::VectorStore::new(self.config.dimensions);
+        self.index = crate::hnsw::HnswIndex::new(self.config.hnsw.clone(), self.config.distance);
+        self.metadata = if let Some(threshold) = self.config.cardinality_threshold {
+            crate::metadata::MetadataStore::with_cardinality_threshold(threshold)
+        } else {
+            crate::metadata::MetadataStore::new()
+        };
+        self.expirations.clear();
+        self.insertion_timestamps.clear();
+        self.provenance_store = crate::persistence::vector_versioning::ProvenanceStore::new();
+        self.invalidate_cache();
+
+        count
+    }
 }
 
 #[cfg(test)]
@@ -370,5 +415,59 @@ mod tests {
         let mut col = Collection::with_dimensions("test", 4);
         let result = col.upsert("v1", &[1.0, 0.0], None);
         assert!(result.is_err());
+    }
+
+    // ── Clear ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_clear_empty_collection() {
+        let mut col = Collection::with_dimensions("test", 4);
+        assert_eq!(col.clear(), 0);
+        assert!(col.is_empty());
+    }
+
+    #[test]
+    fn test_clear_with_vectors() {
+        let mut col = Collection::with_dimensions("test", 4);
+        col.insert("v1", &[1.0, 0.0, 0.0, 0.0], None).unwrap();
+        col.insert("v2", &[0.0, 1.0, 0.0, 0.0], None).unwrap();
+        col.insert("v3", &[0.0, 0.0, 1.0, 0.0], None).unwrap();
+
+        let removed = col.clear();
+        assert_eq!(removed, 3);
+        assert_eq!(col.len(), 0);
+        assert!(col.is_empty());
+    }
+
+    #[test]
+    fn test_clear_then_insert() {
+        let mut col = Collection::with_dimensions("test", 4);
+        col.insert("v1", &[1.0, 0.0, 0.0, 0.0], None).unwrap();
+        col.clear();
+
+        // Should be able to insert after clear (including reusing old IDs)
+        col.insert("v1", &[0.0, 1.0, 0.0, 0.0], None).unwrap();
+        assert_eq!(col.len(), 1);
+    }
+
+    #[test]
+    fn test_clear_then_search() {
+        let mut col = Collection::with_dimensions("test", 4);
+        col.insert("v1", &[1.0, 0.0, 0.0, 0.0], None).unwrap();
+        col.clear();
+
+        let results = col.search(&[1.0, 0.0, 0.0, 0.0], 10).unwrap();
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_clear_preserves_config() {
+        let mut col = Collection::with_dimensions("test", 4);
+        col.insert("v1", &[1.0, 0.0, 0.0, 0.0], None).unwrap();
+        col.clear();
+
+        // Config (name, dimensions) should be preserved
+        assert_eq!(col.name(), "test");
+        assert_eq!(col.dimensions(), 4);
     }
 }
