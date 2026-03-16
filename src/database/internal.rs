@@ -243,6 +243,71 @@ impl Database {
         Ok(())
     }
 
+    pub(crate) fn upsert_internal(
+        &self,
+        collection: &str,
+        id: &str,
+        vector: &[f32],
+        metadata: Option<Value>,
+    ) -> Result<bool> {
+        let version_meta = metadata.clone();
+
+        let mut state = self.state.write();
+        let coll = state
+            .collections
+            .get_mut(collection)
+            .ok_or_else(|| NeedleError::CollectionNotFound(collection.to_string()))?;
+
+        let inserted = coll.upsert(id, vector, metadata)?;
+        drop(state);
+
+        self.mark_modified();
+
+        // Record version if versioning is enabled
+        if let Ok(mut store) = self.versioned_store_mut(collection) {
+            if let Err(e) = store.put(id, vector, version_meta) {
+                warn!(collection, id = %id, error = %e, "Failed to record version on upsert");
+            }
+        }
+
+        Ok(inserted)
+    }
+
+    pub(crate) fn update_metadata_internal(
+        &self,
+        collection: &str,
+        id: &str,
+        metadata: Option<Value>,
+    ) -> Result<()> {
+        let mut state = self.state.write();
+        let coll = state
+            .collections
+            .get_mut(collection)
+            .ok_or_else(|| NeedleError::CollectionNotFound(collection.to_string()))?;
+
+        coll.update_metadata(id, metadata)?;
+        drop(state);
+
+        self.mark_modified();
+        Ok(())
+    }
+
+    pub(crate) fn clear_collection_internal(&self, collection: &str) -> Result<usize> {
+        let mut state = self.state.write();
+        let coll = state
+            .collections
+            .get_mut(collection)
+            .ok_or_else(|| NeedleError::CollectionNotFound(collection.to_string()))?;
+
+        let removed = coll.clear();
+        drop(state);
+
+        if removed > 0 {
+            self.mark_modified();
+        }
+        Ok(removed)
+    }
+
     pub(crate) fn search_internal(
         &self,
         collection: &str,
@@ -613,6 +678,27 @@ impl Database {
             .get(collection)
             .ok_or_else(|| NeedleError::CollectionNotFound(collection.to_string()))?;
         Ok(coll.memory_usage())
+    }
+
+    /// Aggregate memory usage across all collections.
+    pub(crate) fn total_memory_usage_internal(&self) -> crate::collection::MemoryStats {
+        let state = self.state.read();
+        let mut total = crate::collection::MemoryStats {
+            vectors_bytes: 0,
+            index_bytes: 0,
+            metadata_bytes: 0,
+            cache_bytes: 0,
+            total_bytes: 0,
+        };
+        for coll in state.collections.values() {
+            let stats = coll.memory_usage();
+            total.vectors_bytes += stats.vectors_bytes;
+            total.index_bytes += stats.index_bytes;
+            total.metadata_bytes += stats.metadata_bytes;
+            total.cache_bytes += stats.cache_bytes;
+            total.total_bytes += stats.total_bytes;
+        }
+        total
     }
 
     pub(crate) fn collection_field_stats_internal(

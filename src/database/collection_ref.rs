@@ -1067,6 +1067,36 @@ impl<'a> CollectionRef<'a> {
         self.db.compact_internal(&self.name)
     }
 
+    /// Remove all vectors from the collection.
+    ///
+    /// Resets vectors, index, metadata, and timestamps to empty state while
+    /// preserving the collection configuration. This is O(1) — much faster
+    /// than iterating and deleting individual vectors.
+    ///
+    /// # Returns
+    ///
+    /// The number of vectors removed.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use needle::Database;
+    ///
+    /// let db = Database::in_memory();
+    /// db.create_collection("docs", 4)?;
+    /// let coll = db.collection("docs")?;
+    /// coll.insert("v1", &[1.0, 0.0, 0.0, 0.0], None)?;
+    /// coll.insert("v2", &[0.0, 1.0, 0.0, 0.0], None)?;
+    ///
+    /// let removed = coll.clear()?;
+    /// assert_eq!(removed, 2);
+    /// assert_eq!(coll.len(), 0);
+    /// # Ok::<(), needle::NeedleError>(())
+    /// ```
+    pub fn clear(&self) -> Result<usize> {
+        self.db.clear_collection_internal(&self.name)
+    }
+
     /// Check if the collection needs compaction.
     ///
     /// Returns `true` if the ratio of deleted vectors to total vectors exceeds
@@ -1297,6 +1327,59 @@ impl<'a> CollectionRef<'a> {
     /// ```
     pub fn update(&self, id: &str, vector: &[f32], metadata: Option<Value>) -> Result<()> {
         self.db.update_internal(&self.name, id, vector, metadata)
+    }
+
+    /// Insert or update a vector.
+    ///
+    /// If a vector with `id` exists, replaces its data and metadata.
+    /// Otherwise inserts a new vector.
+    ///
+    /// Returns `true` if a new vector was inserted, `false` if an existing
+    /// vector was updated.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use needle::Database;
+    /// use serde_json::json;
+    ///
+    /// let db = Database::in_memory();
+    /// db.create_collection("docs", 4).unwrap();
+    /// let coll = db.collection("docs").unwrap();
+    ///
+    /// assert!(coll.upsert("v1", &[1.0, 0.0, 0.0, 0.0], None).unwrap());   // inserted
+    /// assert!(!coll.upsert("v1", &[0.0, 1.0, 0.0, 0.0], None).unwrap());  // updated
+    /// ```
+    pub fn upsert(
+        &self,
+        id: &str,
+        vector: &[f32],
+        metadata: Option<Value>,
+    ) -> Result<bool> {
+        self.db.upsert_internal(&self.name, id, vector, metadata)
+    }
+
+    /// Update only the metadata of an existing vector without touching the
+    /// vector data or re-indexing.
+    ///
+    /// This is more efficient than [`update`](Self::update) when only metadata
+    /// changes, since it skips the HNSW index rebuild.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use needle::Database;
+    /// use serde_json::json;
+    ///
+    /// let db = Database::in_memory();
+    /// db.create_collection("docs", 4).unwrap();
+    /// let coll = db.collection("docs").unwrap();
+    /// coll.insert("v1", &[1.0, 0.0, 0.0, 0.0], Some(json!({"status": "draft"}))).unwrap();
+    ///
+    /// coll.update_metadata("v1", Some(json!({"status": "published"}))).unwrap();
+    /// ```
+    pub fn update_metadata(&self, id: &str, metadata: Option<Value>) -> Result<()> {
+        self.db.update_metadata_internal(&self.name, id, metadata)
     }
 
     /// Search with post-filter support.
