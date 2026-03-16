@@ -465,6 +465,7 @@ pub fn create_router_with_config(state: Arc<AppState>, config: &ServerConfig) ->
         .route("/collections/:name", delete(delete_collection))
         .route("/collections/:name/rename", post(rename_collection))
         .route("/collections/:name/compact", post(compact_collection))
+        .route("/collections/:name/clear", post(clear_collection))
         .route("/collections/:name/export", get(export_collection))
         // Vectors
         .route("/collections/:collection/vectors", get(list_vectors))

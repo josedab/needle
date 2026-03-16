@@ -437,17 +437,12 @@ mod tests {
     #[tokio::test]
     async fn test_delete_vector_not_found() -> Result<(), Box<dyn std::error::Error>> {
         let state = make_state_with_collection("test", 4).await;
+        // DELETE is idempotent: deleting a nonexistent vector returns 204
         let result = delete_vector(
             State(state),
             axum::extract::Path(("test".to_string(), "nonexistent".to_string())),
         ).await;
-        match result {
-            Err((status, err)) => {
-                assert_eq!(status, StatusCode::NOT_FOUND);
-                assert_eq!(err.code, "VECTOR_NOT_FOUND");
-            }
-            Ok(_) => return Err("Expected error".into()),
-        }
+        assert!(result.is_ok(), "DELETE should be idempotent (204 for nonexistent)");
 
         Ok(())
     }
@@ -1467,6 +1462,44 @@ mod tests {
         Ok(())
     }
 
+    // ── clear_collection endpoint ────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_clear_collection_success() -> Result<(), Box<dyn std::error::Error>> {
+        let state = make_state_with_collection("test", 4).await;
+        {
+            let db = state.db.write().await;
+            let coll = db.collection("test")?;
+            coll.insert("v1", &[1.0, 0.0, 0.0, 0.0], None)?;
+            coll.insert("v2", &[0.0, 1.0, 0.0, 0.0], None)?;
+        }
+        let result = clear_collection(
+            State(state.clone()),
+            axum::extract::Path("test".to_string()),
+        ).await;
+        assert!(result.is_ok());
+
+        // Verify collection is empty after clear
+        let db = state.db.read().await;
+        let coll = db.collection("test")?;
+        assert_eq!(coll.len(), 0);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_clear_collection_not_found() -> Result<(), Box<dyn std::error::Error>> {
+        let state = make_state();
+        let result = clear_collection(
+            State(state),
+            axum::extract::Path("nonexistent".to_string()),
+        ).await;
+        match result {
+            Err((status, _)) => assert_eq!(status, StatusCode::NOT_FOUND),
+            Ok(_) => return Err("Expected error".into()),
+        }
+        Ok(())
+    }
+
     // ── get_info endpoint ────────────────────────────────────────────────
 
     #[tokio::test]
@@ -1617,7 +1650,14 @@ mod tests {
             axum::extract::Path("test".to_string()),
             Json(BatchInsertRequest { vectors: vec![] }),
         ).await;
-        assert!(result.is_ok());
+        // Empty batch should be rejected with 400
+        match result {
+            Err((status, err)) => {
+                assert_eq!(status, StatusCode::BAD_REQUEST);
+                assert_eq!(err.code, "EMPTY_BATCH");
+            }
+            Ok(_) => return Err("Expected empty batch to be rejected".into()),
+        }
         Ok(())
     }
 

@@ -66,6 +66,17 @@ pub(in crate::server) async fn batch_insert(
     Path(collection): Path<String>,
     Json(req): Json<BatchInsertRequest>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<ApiError>)> {
+    // Reject empty batches
+    if req.vectors.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ApiError::new(
+                "Batch must contain at least one vector",
+                "EMPTY_BATCH",
+            )),
+        ));
+    }
+
     // Validate batch size to prevent memory exhaustion
     if req.vectors.len() > state.max_batch_size {
         return Err((
@@ -137,6 +148,7 @@ pub(in crate::server) async fn upsert_vector(
     Path(collection): Path<String>,
     Json(req): Json<UpsertRequest>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<ApiError>)> {
+    validate_vector_id(&req.id)?;
     validate_metadata(&req.metadata)?;
     validate_vector_dimensions(&req.vector)?;
 
@@ -161,21 +173,20 @@ pub(in crate::server) async fn upsert_vector(
         }
     }
 
-    // Check if exists and update or insert
-    let existed = if coll.get(&req.id).is_some() {
-        coll.delete(&req.id)
-            .map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
-        true
-    } else {
-        false
-    };
-
-    coll.insert_with_ttl(&req.id, &req.vector, req.metadata, req.ttl_seconds)
+    // Upsert: insert or update atomically
+    let inserted = coll
+        .upsert(&req.id, &req.vector, req.metadata)
         .map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
+
+    // Apply TTL if requested
+    if let Some(ttl) = req.ttl_seconds {
+        coll.set_ttl(&req.id, Some(ttl))
+            .map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
+    }
 
     Ok(Json(json!({
         "id": req.id,
-        "updated": existed,
+        "updated": !inserted,
     })))
 }
 
@@ -220,21 +231,13 @@ pub(in crate::server) async fn delete_vector(
         .collection(&collection)
         .map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
 
-    let deleted = coll
+    // DELETE is idempotent: return 204 whether the vector existed or not.
+    // Only propagate actual errors (I/O, lock, etc.), not "not found".
+    let _deleted = coll
         .delete(&id)
         .map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
 
-    if deleted {
-        Ok(StatusCode::NO_CONTENT.into_response())
-    } else {
-        Err((
-            StatusCode::NOT_FOUND,
-            Json(ApiError::new(
-                format!("Vector '{}' not found", id),
-                "VECTOR_NOT_FOUND".to_string(),
-            )),
-        ))
-    }
+    Ok(StatusCode::NO_CONTENT.into_response())
 }
 
 /// Update the metadata of an existing vector.
@@ -247,6 +250,8 @@ pub(in crate::server) async fn update_metadata(
     Path((collection, id)): Path<(String, String)>,
     Json(req): Json<UpdateMetadataRequest>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<ApiError>)> {
+    validate_vector_id(&id)?;
+
     let db = state.db.write().await;
     let coll = db
         .collection(&collection)
@@ -658,6 +663,27 @@ pub(in crate::server) async fn batch_delete(
         .map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
 
     Ok(Json(json!({ "deleted_count": deleted_count })))
+}
+
+/// Clear all vectors from a collection.
+///
+/// `POST /collections/:name/clear` — removes all vectors, resets the index
+/// and metadata. The collection itself (config, name, dimensions) is preserved.
+/// Returns the count of vectors that were removed.
+pub(in crate::server) async fn clear_collection(
+    State(state): State<Arc<AppState>>,
+    Path(collection): Path<String>,
+) -> Result<impl IntoResponse, (StatusCode, Json<ApiError>)> {
+    let db = state.db.write().await;
+    let coll = db
+        .collection(&collection)
+        .map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
+
+    let removed = coll
+        .clear()
+        .map_err(Into::<(StatusCode, Json<ApiError>)>::into)?;
+
+    Ok(Json(json!({ "cleared": removed })))
 }
 
 #[cfg(test)]
