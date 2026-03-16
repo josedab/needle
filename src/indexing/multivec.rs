@@ -135,16 +135,14 @@ impl MultiVectorIndex {
     }
 
     /// Insert a multi-vector document
-    pub fn insert(&mut self, doc: MultiVector) -> Result<(), String> {
+    pub fn insert(&mut self, doc: MultiVector) -> crate::error::Result<()> {
         // Validate dimensions
         for (i, vec) in doc.vectors.iter().enumerate() {
             if vec.len() != self.config.dimensions {
-                return Err(format!(
-                    "Vector {} has {} dimensions, expected {}",
-                    i,
-                    vec.len(),
-                    self.config.dimensions
-                ));
+                return Err(crate::error::NeedleError::DimensionMismatch {
+                    expected: self.config.dimensions,
+                    got: vec.len(),
+                });
             }
         }
 
@@ -226,21 +224,18 @@ impl MultiVectorIndex {
         total_score
     }
 
-    /// Compute similarity based on distance function
+    /// Compute similarity based on distance function.
+    /// Returns 0.0 if distance computation fails (e.g., dimension mismatch),
+    /// which should not happen if insert() validated dimensions correctly.
     fn similarity(&self, a: &[f32], b: &[f32]) -> f32 {
+        let dist = match self.config.distance.compute(a, b) {
+            Ok(d) => d,
+            Err(_) => return 0.0,
+        };
         match self.config.distance {
-            DistanceFunction::Cosine => {
-                // Cosine similarity = 1 - cosine_distance
-                1.0 - self.config.distance.compute(a, b).unwrap_or(0.0)
-            }
-            DistanceFunction::DotProduct => {
-                // Dot product (negated distance)
-                -self.config.distance.compute(a, b).unwrap_or(0.0)
-            }
-            _ => {
-                // For Euclidean/Manhattan, convert to similarity
-                1.0 / (1.0 + self.config.distance.compute(a, b).unwrap_or(0.0))
-            }
+            DistanceFunction::Cosine => 1.0 - dist,
+            DistanceFunction::DotProduct => -dist,
+            _ => 1.0 / (1.0 + dist),
         }
     }
 
