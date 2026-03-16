@@ -701,6 +701,14 @@ impl Database {
             .collect()
     }
 
+    /// Aggregate memory usage across all collections.
+    ///
+    /// Returns a [`MemoryStats`](crate::collection::MemoryStats) summarizing
+    /// vectors, index, metadata, and cache memory for the entire database.
+    pub fn total_memory_usage(&self) -> crate::collection::MemoryStats {
+        self.total_memory_usage_internal()
+    }
+
     /// Drop a collection and all its data.
     ///
     /// Removes the collection and all vectors it contains. This operation
@@ -1504,6 +1512,38 @@ mod tests {
     }
 
     #[test]
+    fn test_total_memory_usage_empty() {
+        let db = Database::in_memory();
+        let stats = db.total_memory_usage();
+        assert_eq!(stats.total_bytes, 0);
+        assert_eq!(stats.vectors_bytes, 0);
+    }
+
+    #[test]
+    fn test_total_memory_usage_with_data() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let db = Database::in_memory();
+        db.create_collection("a", 4)?;
+        db.create_collection("b", 4)?;
+
+        let ca = db.collection("a")?;
+        ca.insert("v1", &[1.0, 0.0, 0.0, 0.0], None)?;
+
+        let cb = db.collection("b")?;
+        cb.insert("v2", &[0.0, 1.0, 0.0, 0.0], None)?;
+        cb.insert("v3", &[0.0, 0.0, 1.0, 0.0], None)?;
+
+        let stats = db.total_memory_usage();
+        assert!(stats.total_bytes > 0);
+        assert!(stats.vectors_bytes > 0);
+
+        // Should be the sum of both collections
+        let sa = ca.memory_usage()?;
+        let sb = cb.memory_usage()?;
+        assert_eq!(stats.vectors_bytes, sa.vectors_bytes + sb.vectors_bytes);
+        Ok(())
+    }
+
+    #[test]
     fn test_database_search() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let db = Database::in_memory();
         db.create_collection("test", 32)?;
@@ -2231,6 +2271,7 @@ mod tests {
         // Reopen as read-only and verify save() fails
         let mut config = DatabaseConfig::new(&path);
         config.read_only = true;
+        config.create_if_missing = false;
         let db = Database::open_with_config(config)?;
         let result = db.save();
         assert!(result.is_err(), "save() on read-only database should fail");

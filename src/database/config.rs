@@ -91,6 +91,11 @@ impl DatabaseConfig {
                 "read_only is incompatible with auto_flush_interval_secs > 0".to_string(),
             ));
         }
+        if self.read_only && self.create_if_missing {
+            return Err(NeedleError::InvalidConfig(
+                "read_only is incompatible with create_if_missing; set create_if_missing to false for read-only databases".to_string(),
+            ));
+        }
         Ok(())
     }
 }
@@ -156,13 +161,28 @@ mod tests {
 
     #[test]
     fn test_validate_read_only_alone_ok() {
-        let config = DatabaseConfig::new("test.db").with_read_only(true);
+        let mut config = DatabaseConfig::new("test.db").with_read_only(true);
+        config.create_if_missing = false;
         assert!(config.validate().is_ok());
     }
 
     #[test]
     fn test_validate_auto_save_alone_ok() {
         let config = DatabaseConfig::new("test.db").with_auto_save(true);
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_validate_read_only_with_create_if_missing_fails() {
+        let config = DatabaseConfig::new("test.db").with_read_only(true);
+        // create_if_missing defaults to true, which conflicts with read_only
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_read_only_no_create_ok() {
+        let mut config = DatabaseConfig::new("test.db").with_read_only(true);
+        config.create_if_missing = false;
         assert!(config.validate().is_ok());
     }
 }
