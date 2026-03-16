@@ -307,6 +307,28 @@ pub(in crate::server) async fn batch_search(
     Path(collection): Path<String>,
     Json(req): Json<BatchSearchRequest>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<ApiError>)> {
+    // Validate k bounds (matching single search handler)
+    if req.k == 0 || req.k > MAX_SEARCH_K {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ApiError::new(
+                format!("k must be between 1 and {MAX_SEARCH_K}"),
+                "INVALID_K",
+            )),
+        ));
+    }
+
+    // Reject empty batches
+    if req.vectors.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ApiError::new(
+                "Batch must contain at least one query vector",
+                "EMPTY_BATCH",
+            )),
+        ));
+    }
+
     // Validate batch size to prevent memory exhaustion
     if req.vectors.len() > state.max_batch_size {
         return Err((
@@ -408,6 +430,16 @@ pub(in crate::server) async fn radius_search(
             Json(ApiError::new(
                 format!("limit must be between 1 and {MAX_SEARCH_K}"),
                 "INVALID_LIMIT",
+            )),
+        ));
+    }
+
+    if req.max_distance.is_nan() || req.max_distance.is_infinite() || req.max_distance < 0.0 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ApiError::new(
+                "max_distance must be a finite non-negative number",
+                "INVALID_MAX_DISTANCE",
             )),
         ));
     }
