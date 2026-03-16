@@ -102,6 +102,11 @@ pub enum Commands {
         #[arg(long)]
         distance: Option<String>,
 
+        /// Metadata filter as JSON (MongoDB-style query syntax)
+        /// Example: '{"category": "books", "price": {"$lt": 50}}'
+        #[arg(short, long)]
+        filter: Option<String>,
+
         /// Maximum age in seconds for time-weighted search (filters out older vectors)
         #[arg(long)]
         max_age: Option<u64>,

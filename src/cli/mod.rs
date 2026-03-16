@@ -76,6 +76,7 @@ pub fn run(cli: Cli) -> Result<()> {
             k,
             explain,
             distance,
+            filter,
             max_age,
             truncate_dims,
         } => search_command(
@@ -85,6 +86,7 @@ pub fn run(cli: Cli) -> Result<()> {
             k,
             explain,
             distance.as_deref(),
+            filter.as_deref(),
             max_age,
             truncate_dims,
         ),

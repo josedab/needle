@@ -1,4 +1,5 @@
-use needle::{Database, Result};
+use needle::{Database, Filter, Result};
+use needle::error::NeedleError;
 use serde_json::json;
 use std::io::{self, BufRead, BufReader};
 use std::fs::File;
@@ -32,7 +33,13 @@ pub fn insert_command(path: &str, collection_name: &str) -> Result<()> {
             }
         };
 
-        let id = value["id"].as_str().unwrap_or("").to_string();
+        let id = match value["id"].as_str() {
+            Some(s) if !s.is_empty() => s.to_string(),
+            _ => {
+                eprintln!("Skipping entry: missing or empty 'id' field");
+                continue;
+            }
+        };
         let vector: Vec<f32> = match value["vector"].as_array() {
             Some(arr) => arr
                 .iter()
@@ -64,6 +71,7 @@ pub fn search_command(
     k: usize,
     explain: bool,
     distance_override: Option<&str>,
+    filter_json: Option<&str>,
     max_age: Option<u64>,
     truncate_dims: Option<usize>,
 ) -> Result<()> {
@@ -71,6 +79,15 @@ pub fn search_command(
     let coll = db.collection(collection_name)?;
 
     let query = parse_query_vector(query_str)?;
+
+    // Parse optional metadata filter
+    let filter = if let Some(json_str) = filter_json {
+        let value: serde_json::Value = serde_json::from_str(json_str)
+            .map_err(|e| NeedleError::InvalidInput(format!("Invalid filter JSON: {}", e)))?;
+        Some(Filter::parse(&value)?)
+    } else {
+        None
+    };
 
     let distance_fn = distance_override.and_then(|d| match parse_distance(d) {
         Some(parsed) => Some(parsed),
@@ -137,6 +154,9 @@ pub fn search_command(
         if let Some(dist) = distance_fn {
             search = search.distance(dist);
         }
+        if let Some(ref f) = filter {
+            search = search.filter(f);
+        }
         if let Some(dims) = truncate_dims {
             search = search.with_dimensions(dims);
         }
@@ -151,6 +171,9 @@ pub fn search_command(
         println!("Search results (k={}):", k);
         if distance_override.is_some() {
             println!("  (using distance override: {:?})", distance_fn);
+        }
+        if filter_json.is_some() {
+            println!("  (using metadata filter)");
         }
         if truncate_dims.is_some() {
             println!("  (using Matryoshka truncation to {} dims)", truncate_dims.expect("checked"));
@@ -401,14 +424,8 @@ pub fn clear_command(path: &str, collection_name: &str, force: bool) -> Result<(
     let mut db = Database::open(path)?;
     let coll = db.collection(collection_name)?;
 
-    let ids = coll.ids()?;
-    let count = ids.len();
+    let count = coll.clear()?;
 
-    for id in ids {
-        coll.delete(&id)?;
-    }
-
-    coll.compact()?;
     db.save()?;
 
     println!("Deleted {} vectors from '{}'", count, collection_name);
