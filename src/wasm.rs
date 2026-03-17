@@ -229,6 +229,33 @@ impl WasmCollection {
             .map_err(needle_err_to_js)
     }
 
+    /// Insert or update a vector.
+    ///
+    /// If a vector with the given ID exists, replaces its data and metadata.
+    /// Otherwise inserts a new vector. Returns `true` if a new vector was
+    /// inserted, `false` if an existing one was updated.
+    pub fn upsert(
+        &self,
+        id: &str,
+        vector: Vec<f32>,
+        metadata: Option<String>,
+    ) -> Result<bool, JsValue> {
+        let meta_value: Option<Value> = if let Some(json) = metadata {
+            Some(
+                serde_json::from_str(&json)
+                    .map_err(|e| JsValue::from_str(&format!("Invalid JSON metadata: {}", e)))?,
+            )
+        } else {
+            None
+        };
+
+        self.inner
+            .write()
+            .map_err(|_| JsValue::from_str("Lock poisoned"))?
+            .upsert(id, &vector, meta_value)
+            .map_err(needle_err_to_js)
+    }
+
     /// Insert multiple vectors in batch (JSON metadata array)
     /// vectors_js should be a JS array of Float32Arrays
     #[wasm_bindgen(js_name = "insertBatch")]
@@ -327,6 +354,38 @@ impl WasmCollection {
             .map_err(|_| JsValue::from_str("Lock poisoned"))?
             .search_with_filter(&query, k, &filter)
             .map_err(needle_err_to_js)?;
+
+        Ok(results.into_iter().map(SearchResult::from).collect())
+    }
+
+    /// Search for vectors within a distance threshold (range query).
+    ///
+    /// Returns all vectors within `max_distance` of the query, up to `limit`.
+    /// Optionally pass a JSON filter string for metadata filtering.
+    #[wasm_bindgen(js_name = "searchRadius")]
+    pub fn search_radius(
+        &self,
+        query: Vec<f32>,
+        max_distance: f32,
+        limit: usize,
+        filter_json: Option<String>,
+    ) -> Result<Vec<SearchResult>, JsValue> {
+        let coll = self
+            .inner
+            .read()
+            .map_err(|_| JsValue::from_str("Lock poisoned"))?;
+
+        let results = if let Some(json) = filter_json {
+            let filter_value: Value = serde_json::from_str(&json)
+                .map_err(|e| JsValue::from_str(&format!("Invalid filter JSON: {}", e)))?;
+            let filter = Filter::parse(&filter_value)
+                .map_err(|e| JsValue::from_str(&format!("Invalid filter format: {}", e)))?;
+            coll.search_radius_with_filter(&query, max_distance, limit, &filter)
+                .map_err(needle_err_to_js)?
+        } else {
+            coll.search_radius(&query, max_distance, limit)
+                .map_err(needle_err_to_js)?
+        };
 
         Ok(results.into_iter().map(SearchResult::from).collect())
     }
@@ -887,11 +946,7 @@ impl WasmCollection {
             .write()
             .map_err(|_| JsValue::from_str("Lock poisoned"))?;
 
-        // Get all IDs and delete them
-        let ids: Vec<String> = guard.all_ids();
-        for id in ids {
-            guard.delete(&id).map_err(needle_err_to_js)?;
-        }
+        guard.clear();
         Ok(())
     }
 }
@@ -2321,8 +2376,129 @@ export function useNeedleDb(dbName: string) {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 
-    // Tests needed: see docs/TODO-test-coverage.md
+    // ---- base64 encode/decode tests ----
+
+    #[test]
+    fn test_base64_encode_empty() {
+        assert_eq!(base64_encode(&[]), "");
+    }
+
+    #[test]
+    fn test_base64_encode_single_byte() {
+        let encoded = base64_encode(&[0x4D]);
+        assert_eq!(encoded, "TQ==");
+    }
+
+    #[test]
+    fn test_base64_encode_two_bytes() {
+        let encoded = base64_encode(&[0x4D, 0x61]);
+        assert_eq!(encoded, "TWE=");
+    }
+
+    #[test]
+    fn test_base64_encode_three_bytes() {
+        let encoded = base64_encode(&[0x4D, 0x61, 0x6E]);
+        assert_eq!(encoded, "TWFu");
+    }
+
+    #[test]
+    fn test_base64_encode_hello() {
+        let encoded = base64_encode(b"Hello");
+        assert_eq!(encoded, "SGVsbG8=");
+    }
+
+    #[test]
+    fn test_base64_encode_hello_world() {
+        let encoded = base64_encode(b"Hello, World!");
+        assert_eq!(encoded, "SGVsbG8sIFdvcmxkIQ==");
+    }
+
+    #[test]
+    fn test_base64_roundtrip() {
+        let original = b"Needle vector database";
+        let encoded = base64_encode(original);
+        let decoded = base64_decode(&encoded).unwrap();
+        assert_eq!(decoded, original);
+    }
+
+    #[test]
+    fn test_base64_roundtrip_binary() {
+        let original: Vec<u8> = (0..=255).collect();
+        let encoded = base64_encode(&original);
+        let decoded = base64_decode(&encoded).unwrap();
+        assert_eq!(decoded, original);
+    }
+
+    #[test]
+    fn test_base64_decode_empty() {
+        let decoded = base64_decode("").unwrap();
+        assert!(decoded.is_empty());
+    }
+
+    #[test]
+    fn test_base64_decode_padded() {
+        let decoded = base64_decode("SGVsbG8=").unwrap();
+        assert_eq!(decoded, b"Hello");
+    }
+
+    #[test]
+    fn test_base64_decode_invalid_length() {
+        // Length 1 (mod 4) is invalid
+        let result = base64_decode("A");
+        assert!(result.is_err());
+    }
+
+    // ---- React hooks generator tests ----
+
+    #[test]
+    fn test_get_react_hooks_contains_hook_definitions() {
+        let hooks = get_react_hooks();
+        assert!(hooks.contains("useNeedleSearch"));
+        assert!(hooks.contains("useNeedleDb"));
+        assert!(hooks.contains("NeedleSearchResult"));
+        assert!(hooks.contains("UseNeedleSearchOptions"));
+    }
+
+    #[test]
+    fn test_get_react_hooks_contains_react_imports() {
+        let hooks = get_react_hooks();
+        assert!(hooks.contains("useState"));
+        assert!(hooks.contains("useEffect"));
+        assert!(hooks.contains("useCallback"));
+        assert!(hooks.contains("useRef"));
+    }
+
+    #[test]
+    fn test_get_react_hooks_contains_indexeddb_persistence() {
+        let hooks = get_react_hooks();
+        assert!(hooks.contains("indexedDB"));
+        assert!(hooks.contains("toBytes"));
+    }
+
+    #[test]
+    fn test_get_react_hooks_not_empty() {
+        let hooks = get_react_hooks();
+        assert!(hooks.len() > 100);
+    }
+
+    // ---- IndexedDB helpers generator tests ----
+
+    #[test]
+    fn test_get_indexed_db_helpers_contains_functions() {
+        let helpers = get_indexed_db_helpers();
+        assert!(!helpers.is_empty());
+        assert!(helpers.contains("indexedDB") || helpers.contains("IndexedDB"));
+    }
+
+    // ---- Service worker helpers generator tests ----
+
+    #[test]
+    fn test_get_service_worker_helpers_contains_functions() {
+        let helpers = get_service_worker_helpers();
+        assert!(!helpers.is_empty());
+    }
 }

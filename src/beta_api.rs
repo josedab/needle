@@ -34,8 +34,25 @@ pub use crate::streaming::{
 };
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 
-    // Tests needed: see docs/TODO-test-coverage.md
+    #[test]
+    fn test_dimreduce_random_projection_accessible() {
+        let _rp = RandomProjection::new(10, 3);
+    }
+
+    #[test]
+    fn test_namespace_manager_accessible() {
+        let manager = NamespaceManager::new();
+        assert!(manager.list_namespaces().is_empty());
+    }
+
+    #[test]
+    fn test_backup_config_default() {
+        let config = BackupConfig::default();
+        assert!(config.compression);
+        assert!(config.verify);
+    }
 }

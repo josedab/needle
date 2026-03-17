@@ -109,8 +109,143 @@ pub(crate) fn distance_to_score(distance: f32, distance_fn: DistanceFunction) ->
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 
-    // Tests needed: see docs/TODO-test-coverage.md
+    // ---- distance_to_score tests ----
+
+    #[test]
+    fn test_cosine_distance_to_score() {
+        // Cosine: score = 1.0 - distance
+        assert!((distance_to_score(0.0, DistanceFunction::Cosine) - 1.0).abs() < f32::EPSILON);
+        assert!((distance_to_score(0.5, DistanceFunction::Cosine) - 0.5).abs() < f32::EPSILON);
+        assert!((distance_to_score(1.0, DistanceFunction::Cosine) - 0.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn test_cosine_normalized_distance_to_score() {
+        // Same formula as Cosine
+        assert!(
+            (distance_to_score(0.0, DistanceFunction::CosineNormalized) - 1.0).abs()
+                < f32::EPSILON
+        );
+        assert!(
+            (distance_to_score(0.3, DistanceFunction::CosineNormalized) - 0.7).abs()
+                < f32::EPSILON
+        );
+    }
+
+    #[test]
+    fn test_euclidean_distance_to_score() {
+        // Euclidean: score = 1.0 / (1.0 + distance)
+        assert!(
+            (distance_to_score(0.0, DistanceFunction::Euclidean) - 1.0).abs() < f32::EPSILON
+        );
+        assert!(
+            (distance_to_score(1.0, DistanceFunction::Euclidean) - 0.5).abs() < f32::EPSILON
+        );
+        // As distance grows, score approaches 0
+        let large = distance_to_score(1000.0, DistanceFunction::Euclidean);
+        assert!(large > 0.0 && large < 0.01);
+    }
+
+    #[test]
+    fn test_manhattan_distance_to_score() {
+        // Same formula as Euclidean
+        assert!(
+            (distance_to_score(0.0, DistanceFunction::Manhattan) - 1.0).abs() < f32::EPSILON
+        );
+        assert!(
+            (distance_to_score(1.0, DistanceFunction::Manhattan) - 0.5).abs() < f32::EPSILON
+        );
+    }
+
+    #[test]
+    fn test_hamming_distance_to_score() {
+        // Same formula as Euclidean
+        assert!((distance_to_score(0.0, DistanceFunction::Hamming) - 1.0).abs() < f32::EPSILON);
+        assert!((distance_to_score(3.0, DistanceFunction::Hamming) - 0.25).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn test_chebyshev_distance_to_score() {
+        // Same formula as Euclidean
+        assert!(
+            (distance_to_score(0.0, DistanceFunction::Chebyshev) - 1.0).abs() < f32::EPSILON
+        );
+        assert!(
+            (distance_to_score(1.0, DistanceFunction::Chebyshev) - 0.5).abs() < f32::EPSILON
+        );
+    }
+
+    #[test]
+    fn test_dot_product_distance_to_score() {
+        // DotProduct: score = (distance + 1.0) / 2.0
+        assert!(
+            (distance_to_score(1.0, DistanceFunction::DotProduct) - 1.0).abs() < f32::EPSILON
+        );
+        assert!(
+            (distance_to_score(0.0, DistanceFunction::DotProduct) - 0.5).abs() < f32::EPSILON
+        );
+        assert!(
+            (distance_to_score(-1.0, DistanceFunction::DotProduct) - 0.0).abs() < f32::EPSILON
+        );
+    }
+
+    // ---- FrameworkCollection tests ----
+
+    #[test]
+    fn test_new_collection() {
+        let fc = FrameworkCollection::new("test", 4, DistanceFunction::Cosine);
+        assert_eq!(fc.len(), 0);
+        assert!(fc.is_empty());
+    }
+
+    #[test]
+    fn test_from_collection() {
+        let config = CollectionConfig::new("test", 4);
+        let collection = Collection::new(config);
+        let fc = FrameworkCollection::from_collection(collection);
+        assert!(fc.is_empty());
+    }
+
+    #[test]
+    fn test_collection_insert_and_search() {
+        let fc = FrameworkCollection::new("test", 3, DistanceFunction::Cosine);
+
+        {
+            let mut coll = fc.write();
+            coll.insert("v1", &[1.0, 0.0, 0.0], None).unwrap();
+            coll.insert("v2", &[0.0, 1.0, 0.0], None).unwrap();
+        }
+
+        assert_eq!(fc.len(), 2);
+        assert!(!fc.is_empty());
+
+        let results = fc.search(&[1.0, 0.0, 0.0], 1, None).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].id, "v1");
+    }
+
+    #[test]
+    fn test_collection_stats() {
+        let fc = FrameworkCollection::new("test", 3, DistanceFunction::Cosine);
+        let stats = fc.stats();
+        assert_eq!(stats.vector_count, 0);
+        assert_eq!(stats.dimensions, 3);
+    }
+
+    #[test]
+    fn test_collection_serialization_roundtrip() {
+        let fc = FrameworkCollection::new("test", 3, DistanceFunction::Cosine);
+        {
+            let mut coll = fc.write();
+            coll.insert("v1", &[1.0, 2.0, 3.0], None).unwrap();
+        }
+
+        let bytes = fc.to_bytes().unwrap();
+        let fc2 = FrameworkCollection::from_bytes(&bytes).unwrap();
+        assert_eq!(fc2.len(), 1);
+    }
 }

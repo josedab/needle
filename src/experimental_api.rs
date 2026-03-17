@@ -401,8 +401,35 @@ pub use crate::zero_copy::{
 };
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 
-    // Tests needed: see docs/TODO-test-coverage.md
+    #[test]
+    fn test_cross_collection_config_default() {
+        let config = CrossCollectionConfig::default();
+        assert_eq!(config.max_per_collection, 100);
+        assert_eq!(config.total_max_results, 100);
+        assert!(config.normalize_scores);
+    }
+
+    #[test]
+    fn test_embeddings_gateway_config_default() {
+        let config = GatewayConfig::default();
+        assert!(config.providers.is_empty());
+    }
+
+    #[test]
+    fn test_wal_config_default() {
+        let config = WalConfig::default();
+        assert_eq!(config.segment_size, 64 * 1024 * 1024);
+        assert!(config.enable_checksums);
+    }
+
+    #[test]
+    fn test_versioning_repo() {
+        let repo = VectorRepo::new("test", 3);
+        let branches = repo.list_branches();
+        assert!(!branches.is_empty());
+    }
 }
