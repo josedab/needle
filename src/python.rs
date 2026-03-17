@@ -508,6 +508,55 @@ impl PyCollection {
         })
     }
 
+    /// Search for vectors within a distance threshold (range query).
+    ///
+    /// Unlike `search()` which returns the top-k nearest, this returns ALL
+    /// vectors within `max_distance`, up to `limit` results.
+    ///
+    /// Args:
+    ///     query: Query vector
+    ///     max_distance: Maximum distance threshold
+    ///     limit: Maximum number of results to return (default: 100)
+    ///     filter: Optional metadata filter (JSON dict)
+    ///
+    /// Returns:
+    ///     list[SearchResult]: Vectors within the distance threshold
+    #[pyo3(signature = (query, max_distance, limit=100, filter=None))]
+    fn search_radius(
+        &self,
+        py: Python<'_>,
+        query: Vec<f32>,
+        max_distance: f32,
+        limit: usize,
+        filter: Option<PyObject>,
+    ) -> PyResult<Vec<SearchResult>> {
+        let coll = self
+            .inner
+            .read()
+            .map_err(|_| PyValueError::new_err("Lock poisoned"))?;
+
+        let results = if let Some(filter_obj) = filter {
+            let filter_value: serde_json::Value =
+                pythonize::depythonize_bound(filter_obj.into_bound(py))
+                    .map_err(|e| PyValueError::new_err(format!("Invalid filter: {}", e)))?;
+            let filter = crate::metadata::Filter::parse(&filter_value).map_err(to_pyerr)?;
+            coll.search_radius_with_filter(&query, max_distance, limit, &filter)
+                .map_err(to_pyerr)?
+        } else {
+            coll.search_radius(&query, max_distance, limit)
+                .map_err(to_pyerr)?
+        };
+
+        Ok(results
+            .into_iter()
+            .map(|r| SearchResult {
+                id: r.id,
+                distance: r.distance,
+                metadata: r.metadata,
+            })
+            .collect())
+    }
+
     /// Get a vector by ID
     fn get(&self, py: Python<'_>, id: &str) -> PyResult<Option<(Vec<f32>, Option<PyObject>)>> {
         let coll = self
@@ -766,7 +815,18 @@ impl PyCollection {
             .inner
             .write()
             .map_err(|_| PyValueError::new_err("Lock poisoned"))?;
-        coll.update(id, Some(meta_value)).map_err(to_pyerr)
+
+        match coll.update_metadata(id, Some(meta_value)) {
+            Ok(()) => Ok(true),
+            Err(e) => {
+                // VectorNotFound means the ID doesn't exist
+                if matches!(e, crate::error::NeedleError::VectorNotFound(_)) {
+                    Ok(false)
+                } else {
+                    Err(to_pyerr(e))
+                }
+            }
+        }
     }
 
     /// Get collection statistics.
@@ -854,6 +914,22 @@ impl PyCollection {
         coll.compact().map_err(to_pyerr)
     }
 
+    /// Remove all vectors from the collection.
+    ///
+    /// Resets vectors, index, and metadata to empty state while preserving
+    /// the collection configuration (name, dimensions, distance function).
+    /// This is O(1) — much faster than deleting vectors one by one.
+    ///
+    /// Returns:
+    ///     int: Number of vectors that were removed
+    fn clear(&self) -> PyResult<usize> {
+        let mut coll = self
+            .inner
+            .write()
+            .map_err(|_| PyValueError::new_err("Lock poisoned"))?;
+        Ok(coll.clear())
+    }
+
     /// Check if the collection needs compaction.
     ///
     /// Args:
@@ -877,7 +953,7 @@ impl PyCollection {
     ///     vector: Embedding vector
     ///     metadata: Optional JSON-serializable metadata
     #[pyo3(signature = (id, vector, metadata=None))]
-    fn upsert(&self, py: Python<'_>, id: &str, vector: Vec<f32>, metadata: Option<PyObject>) -> PyResult<()> {
+    fn upsert(&self, py: Python<'_>, id: &str, vector: Vec<f32>, metadata: Option<PyObject>) -> PyResult<bool> {
         let meta_value = metadata
             .map(|m| {
                 pythonize::depythonize_bound(m.into_bound(py))
@@ -890,9 +966,7 @@ impl PyCollection {
             .write()
             .map_err(|_| PyValueError::new_err("Lock poisoned"))?;
 
-        // Delete if exists (ignore result), then insert
-        let _ = coll.delete(id);
-        coll.insert(id, &vector, meta_value).map_err(to_pyerr)
+        coll.upsert(id, &vector, meta_value).map_err(to_pyerr)
     }
 
     /// Export all vectors from the collection.
