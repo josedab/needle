@@ -152,8 +152,229 @@ pub struct FederationHealth {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+    use super::super::instance::InstanceConfig;
 
-    // Tests needed: see docs/TODO-test-coverage.md
+    fn make_registry_with_instances(
+        configs: Vec<(InstanceConfig, HealthStatus)>,
+    ) -> Arc<InstanceRegistry> {
+        let registry = Arc::new(InstanceRegistry::new());
+        for (config, status) in configs {
+            let id = config.id.clone();
+            registry.register(config);
+            registry.update_health(&id, status);
+        }
+        registry
+    }
+
+    #[test]
+    fn test_federation_health_all_healthy() {
+        let registry = make_registry_with_instances(vec![
+            (
+                InstanceConfig::new("i1", "http://a:8080"),
+                HealthStatus::Healthy,
+            ),
+            (
+                InstanceConfig::new("i2", "http://b:8080"),
+                HealthStatus::Healthy,
+            ),
+        ]);
+
+        let monitor = HealthMonitor::new(registry, FederationConfig::default());
+        let health = monitor.federation_health();
+
+        assert_eq!(health.status, HealthStatus::Healthy);
+        assert_eq!(health.total_instances, 2);
+        assert_eq!(health.healthy_instances, 2);
+        assert_eq!(health.degraded_instances, 0);
+        assert_eq!(health.unhealthy_instances, 0);
+    }
+
+    #[test]
+    fn test_federation_health_mixed_status() {
+        let registry = make_registry_with_instances(vec![
+            (
+                InstanceConfig::new("i1", "http://a:8080"),
+                HealthStatus::Healthy,
+            ),
+            (
+                InstanceConfig::new("i2", "http://b:8080"),
+                HealthStatus::Degraded,
+            ),
+            (
+                InstanceConfig::new("i3", "http://c:8080"),
+                HealthStatus::Unhealthy,
+            ),
+        ]);
+
+        let config = FederationConfig::default().with_min_instances(1);
+        let monitor = HealthMonitor::new(registry, config);
+        let health = monitor.federation_health();
+
+        // 1 healthy + 1 degraded >= min_instances(1), so Degraded overall
+        assert_eq!(health.status, HealthStatus::Degraded);
+        assert_eq!(health.healthy_instances, 1);
+        assert_eq!(health.degraded_instances, 1);
+        assert_eq!(health.unhealthy_instances, 1);
+    }
+
+    #[test]
+    fn test_federation_health_all_unhealthy() {
+        let registry = make_registry_with_instances(vec![
+            (
+                InstanceConfig::new("i1", "http://a:8080"),
+                HealthStatus::Unhealthy,
+            ),
+            (
+                InstanceConfig::new("i2", "http://b:8080"),
+                HealthStatus::Unhealthy,
+            ),
+        ]);
+
+        let config = FederationConfig::default().with_min_instances(1);
+        let monitor = HealthMonitor::new(registry, config);
+        let health = monitor.federation_health();
+
+        assert_eq!(health.status, HealthStatus::Unhealthy);
+        assert_eq!(health.healthy_instances, 0);
+        assert_eq!(health.unhealthy_instances, 2);
+    }
+
+    #[test]
+    fn test_federation_health_empty_registry() {
+        let registry = Arc::new(InstanceRegistry::new());
+        let monitor = HealthMonitor::new(registry, FederationConfig::default());
+        let health = monitor.federation_health();
+
+        assert_eq!(health.total_instances, 0);
+        assert_eq!(health.healthy_instances, 0);
+        // 0 healthy == 0 total → Healthy status (all match)
+        assert_eq!(health.status, HealthStatus::Healthy);
+    }
+
+    #[test]
+    fn test_record_check_stores_history() {
+        let registry = Arc::new(InstanceRegistry::new());
+        registry.register(InstanceConfig::new("i1", "http://a:8080"));
+
+        let monitor = HealthMonitor::new(registry, FederationConfig::default());
+
+        monitor.record_check(HealthCheckResult {
+            instance_id: "i1".to_string(),
+            status: HealthStatus::Healthy,
+            latency_ms: 5.0,
+            error: None,
+            timestamp: 1000,
+        });
+
+        monitor.record_check(HealthCheckResult {
+            instance_id: "i1".to_string(),
+            status: HealthStatus::Degraded,
+            latency_ms: 50.0,
+            error: None,
+            timestamp: 2000,
+        });
+
+        let history = monitor.get_history("i1");
+        assert_eq!(history.len(), 2);
+        assert_eq!(history[0].status, HealthStatus::Healthy);
+        assert_eq!(history[1].status, HealthStatus::Degraded);
+    }
+
+    #[test]
+    fn test_history_capped_at_100() {
+        let registry = Arc::new(InstanceRegistry::new());
+        registry.register(InstanceConfig::new("i1", "http://a:8080"));
+
+        let monitor = HealthMonitor::new(registry, FederationConfig::default());
+
+        for i in 0..110 {
+            monitor.record_check(HealthCheckResult {
+                instance_id: "i1".to_string(),
+                status: HealthStatus::Healthy,
+                latency_ms: i as f64,
+                error: None,
+                timestamp: i as u64,
+            });
+        }
+
+        let history = monitor.get_history("i1");
+        assert_eq!(history.len(), 100);
+        // First entry should have been evicted (started at 0, now starts at 10)
+        assert!((history[0].latency_ms - 10.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_get_history_unknown_instance() {
+        let registry = Arc::new(InstanceRegistry::new());
+        let monitor = HealthMonitor::new(registry, FederationConfig::default());
+        let history = monitor.get_history("nonexistent");
+        assert!(history.is_empty());
+    }
+
+    #[test]
+    fn test_check_instance_not_found() {
+        let registry = Arc::new(InstanceRegistry::new());
+        let monitor = HealthMonitor::new(registry, FederationConfig::default());
+        let result = monitor.check_instance("nonexistent");
+
+        assert_eq!(result.status, HealthStatus::Unknown);
+        assert!(result.error.is_some());
+        assert_eq!(result.error.as_deref(), Some("Instance not found"));
+    }
+
+    #[test]
+    fn test_check_instance_healthy() {
+        let registry = Arc::new(InstanceRegistry::new());
+        registry.register(InstanceConfig::new("i1", "http://a:8080"));
+        // Reset consecutive_failures to 0 by marking healthy
+        registry.update_health("i1", HealthStatus::Healthy);
+
+        let monitor = HealthMonitor::new(registry, FederationConfig::default());
+        let result = monitor.check_instance("i1");
+
+        assert_eq!(result.status, HealthStatus::Healthy);
+        assert!(result.error.is_none());
+        assert!(result.timestamp > 0);
+    }
+
+    #[test]
+    fn test_check_instance_unhealthy_threshold() {
+        let registry = Arc::new(InstanceRegistry::new());
+        registry.register(InstanceConfig::new("i1", "http://a:8080"));
+        // Simulate consecutive failures reaching threshold (default 3)
+        registry.update_health("i1", HealthStatus::Unhealthy);
+        registry.update_health("i1", HealthStatus::Unhealthy);
+        registry.update_health("i1", HealthStatus::Unhealthy);
+
+        let monitor = HealthMonitor::new(registry, FederationConfig::default());
+        let result = monitor.check_instance("i1");
+
+        assert_eq!(result.status, HealthStatus::Unhealthy);
+    }
+
+    #[test]
+    fn test_avg_latency_calculation() {
+        let registry = make_registry_with_instances(vec![
+            (
+                InstanceConfig::new("i1", "http://a:8080"),
+                HealthStatus::Healthy,
+            ),
+            (
+                InstanceConfig::new("i2", "http://b:8080"),
+                HealthStatus::Healthy,
+            ),
+        ]);
+        // Record latency to set avg_latency_ms
+        registry.record_query("i1", 10.0, true);
+        registry.record_query("i2", 20.0, true);
+
+        let monitor = HealthMonitor::new(registry, FederationConfig::default());
+        let health = monitor.federation_health();
+
+        // avg_latency_ms should be the average of all instances' avg_latency_ms
+        assert!(health.avg_latency_ms > 0.0);
+    }
 }

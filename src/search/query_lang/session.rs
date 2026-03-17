@@ -235,8 +235,274 @@ impl Default for QuerySession {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 
-    // Tests needed: see docs/TODO-test-coverage.md
+    // ---- AggregateFunction tests ----
+
+    #[test]
+    fn test_parse_count_star() {
+        let func = AggregateFunction::parse("COUNT(*)").unwrap();
+        assert!(matches!(func, AggregateFunction::Count));
+    }
+
+    #[test]
+    fn test_parse_count_keyword() {
+        let func = AggregateFunction::parse("COUNT").unwrap();
+        assert!(matches!(func, AggregateFunction::Count));
+    }
+
+    #[test]
+    fn test_parse_count_distinct() {
+        let func = AggregateFunction::parse("COUNT_DISTINCT(category)").unwrap();
+        assert!(matches!(func, AggregateFunction::CountDistinct(ref f) if f == "category"));
+    }
+
+    #[test]
+    fn test_parse_avg() {
+        let func = AggregateFunction::parse("AVG(price)").unwrap();
+        assert!(matches!(func, AggregateFunction::Avg(ref f) if f == "price"));
+    }
+
+    #[test]
+    fn test_parse_min() {
+        let func = AggregateFunction::parse("MIN(score)").unwrap();
+        assert!(matches!(func, AggregateFunction::Min(ref f) if f == "score"));
+    }
+
+    #[test]
+    fn test_parse_max() {
+        let func = AggregateFunction::parse("MAX(score)").unwrap();
+        assert!(matches!(func, AggregateFunction::Max(ref f) if f == "score"));
+    }
+
+    #[test]
+    fn test_parse_sum() {
+        let func = AggregateFunction::parse("SUM(amount)").unwrap();
+        assert!(matches!(func, AggregateFunction::Sum(ref f) if f == "amount"));
+    }
+
+    #[test]
+    fn test_parse_unknown_function() {
+        let result = AggregateFunction::parse("MEDIAN(x)");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_empty_field() {
+        let result = AggregateFunction::parse("AVG()");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_invalid_syntax() {
+        let result = AggregateFunction::parse("not-a-function");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_case_insensitive() {
+        let func = AggregateFunction::parse("avg(price)").unwrap();
+        assert!(matches!(func, AggregateFunction::Avg(_)));
+
+        let func = AggregateFunction::parse("count(*)").unwrap();
+        assert!(matches!(func, AggregateFunction::Count));
+    }
+
+    #[test]
+    fn test_parse_with_whitespace() {
+        let func = AggregateFunction::parse("  AVG( price )  ").unwrap();
+        assert!(matches!(func, AggregateFunction::Avg(_)));
+    }
+
+    // ---- AggregateFunction::apply tests ----
+
+    #[test]
+    fn test_apply_count() {
+        let func = AggregateFunction::Count;
+        let v1 = serde_json::json!(1);
+        let v2 = serde_json::json!(2);
+        let values: Vec<Option<&serde_json::Value>> = vec![Some(&v1), Some(&v2), None];
+        assert_eq!(func.apply(&values), serde_json::json!(3));
+    }
+
+    #[test]
+    fn test_apply_count_distinct() {
+        let v1 = serde_json::json!("a");
+        let v2 = serde_json::json!("b");
+        let v3 = serde_json::json!("a");
+
+        let func = AggregateFunction::CountDistinct("field".to_string());
+        let values: Vec<Option<&serde_json::Value>> = vec![Some(&v1), Some(&v2), Some(&v3), None];
+        assert_eq!(func.apply(&values), serde_json::json!(2));
+    }
+
+    #[test]
+    fn test_apply_avg() {
+        let v1 = serde_json::json!(10.0);
+        let v2 = serde_json::json!(20.0);
+        let v3 = serde_json::json!(30.0);
+
+        let func = AggregateFunction::Avg("price".to_string());
+        let values: Vec<Option<&serde_json::Value>> = vec![Some(&v1), Some(&v2), Some(&v3)];
+        assert_eq!(func.apply(&values), serde_json::json!(20.0));
+    }
+
+    #[test]
+    fn test_apply_avg_empty() {
+        let func = AggregateFunction::Avg("price".to_string());
+        let values: Vec<Option<&serde_json::Value>> = vec![];
+        assert_eq!(func.apply(&values), serde_json::json!(null));
+    }
+
+    #[test]
+    fn test_apply_min() {
+        let v1 = serde_json::json!(5.0);
+        let v2 = serde_json::json!(3.0);
+        let v3 = serde_json::json!(8.0);
+
+        let func = AggregateFunction::Min("score".to_string());
+        let values: Vec<Option<&serde_json::Value>> = vec![Some(&v1), Some(&v2), Some(&v3)];
+        assert_eq!(func.apply(&values), serde_json::json!(3.0));
+    }
+
+    #[test]
+    fn test_apply_max() {
+        let v1 = serde_json::json!(5.0);
+        let v2 = serde_json::json!(3.0);
+        let v3 = serde_json::json!(8.0);
+
+        let func = AggregateFunction::Max("score".to_string());
+        let values: Vec<Option<&serde_json::Value>> = vec![Some(&v1), Some(&v2), Some(&v3)];
+        assert_eq!(func.apply(&values), serde_json::json!(8.0));
+    }
+
+    #[test]
+    fn test_apply_sum() {
+        let v1 = serde_json::json!(10.0);
+        let v2 = serde_json::json!(20.0);
+
+        let func = AggregateFunction::Sum("amount".to_string());
+        let values: Vec<Option<&serde_json::Value>> = vec![Some(&v1), Some(&v2)];
+        assert_eq!(func.apply(&values), serde_json::json!(30.0));
+    }
+
+    #[test]
+    fn test_apply_min_empty() {
+        let func = AggregateFunction::Min("score".to_string());
+        let values: Vec<Option<&serde_json::Value>> = vec![];
+        assert_eq!(func.apply(&values), serde_json::json!(null));
+    }
+
+    #[test]
+    fn test_apply_with_non_numeric() {
+        let v1 = serde_json::json!("not a number");
+        let v2 = serde_json::json!(10.0);
+
+        let func = AggregateFunction::Avg("field".to_string());
+        let values: Vec<Option<&serde_json::Value>> = vec![Some(&v1), Some(&v2)];
+        // Only numeric values are counted
+        assert_eq!(func.apply(&values), serde_json::json!(10.0));
+    }
+
+    // ---- QuerySession tests ----
+
+    #[test]
+    fn test_session_default() {
+        let session = QuerySession::default();
+        assert!(session.default_collection.is_none());
+        assert_eq!(session.default_limit, 10);
+        assert!(session.history().is_empty());
+    }
+
+    #[test]
+    fn test_session_new() {
+        let session = QuerySession::new();
+        assert!(session.default_collection.is_none());
+        assert_eq!(session.default_limit, 10);
+    }
+
+    #[test]
+    fn test_session_set_and_get_param() {
+        let mut session = QuerySession::new();
+        session.set_param("k", LiteralValue::Number(20.0));
+
+        assert_eq!(session.get_param("k"), Some(&LiteralValue::Number(20.0)));
+        assert_eq!(session.get_param("missing"), None);
+    }
+
+    #[test]
+    fn test_session_clear_params() {
+        let mut session = QuerySession::new();
+        session.set_param("a", LiteralValue::String("x".to_string()));
+        session.set_param("b", LiteralValue::Number(1.0));
+
+        session.clear_params();
+        assert_eq!(session.get_param("a"), None);
+        assert_eq!(session.get_param("b"), None);
+    }
+
+    #[test]
+    fn test_session_empty_query_error() {
+        let mut session = QuerySession::new();
+        let result = session.parse_query("");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_session_whitespace_query_error() {
+        let mut session = QuerySession::new();
+        let result = session.parse_query("   ");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_session_repl_command_error() {
+        let mut session = QuerySession::new();
+        let result = session.parse_query("\\help");
+        assert!(result.is_err());
+
+        let result = session.parse_query(".quit");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_session_history_records_queries() {
+        let mut session = QuerySession::new();
+        // Parse a valid query
+        let _ = session.parse_query("SELECT * FROM docs");
+        assert_eq!(session.history().len(), 1);
+        assert_eq!(session.history()[0], "SELECT * FROM docs");
+    }
+
+    #[test]
+    fn test_help_text_not_empty() {
+        let help = QuerySession::help_text();
+        assert!(!help.is_empty());
+        assert!(help.contains(".use"));
+        assert!(help.contains(".help"));
+        assert!(help.contains(".quit"));
+        assert!(help.contains("SELECT"));
+        assert!(help.contains("WHERE"));
+        assert!(help.contains("LIMIT"));
+    }
+
+    #[test]
+    fn test_aggregate_function_serialization() {
+        let funcs = vec![
+            AggregateFunction::Count,
+            AggregateFunction::CountDistinct("f".to_string()),
+            AggregateFunction::Avg("f".to_string()),
+            AggregateFunction::Min("f".to_string()),
+            AggregateFunction::Max("f".to_string()),
+            AggregateFunction::Sum("f".to_string()),
+        ];
+
+        for func in &funcs {
+            let json = serde_json::to_string(func).unwrap();
+            let deserialized: AggregateFunction = serde_json::from_str(&json).unwrap();
+            assert_eq!(*func, deserialized);
+        }
+    }
 }
